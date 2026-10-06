@@ -139,12 +139,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   );
   if (params.onWarning) {
     for (const hit of writableTrustedSafeBinDirs) {
-      const scope =
-        hit.worldWritable || hit.groupWritable
-          ? hit.worldWritable
-            ? "world-writable"
-            : "group-writable"
-          : "writable";
+      const scope = hit.worldWritable ? "world-writable" : "group-writable";
       params.onWarning(
         `exec: safeBinTrustedDirs includes ${scope} directory '${hit.dir}'; remove trust or tighten permissions (for example chmod 755).`,
       );

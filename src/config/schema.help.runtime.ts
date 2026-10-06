@@ -1,4 +1,3 @@
-// Defines user-facing config field help text for docs and UI surfaces.
 import { MEDIA_AUDIO_FIELD_HELP } from "./media-audio-field-metadata.js";
 import { NODE_CAPABILITY_FIELD_HELP } from "./schema.node-capabilities.js";
 
@@ -23,6 +22,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Default browser profile name selected when callers do not explicitly choose a profile. Use a stable low-privilege profile as the default to reduce accidental cross-context state use.",
   "browser.profiles":
     "Named browser profile connection map used for explicit routing to CDP ports or URLs with optional metadata. Keep profile names consistent and avoid overlapping endpoint definitions.",
+  "browser.profiles.*.engine":
+    'Browser engine capability preset: "chromium" (default) or experimental "lightpanda" for semantic DOM browsing. Lightpanda requires an explicit ws/wss cdpUrl dedicated to one profile and attachOnly: true, never launches a local browser, and does not support visual screenshots or other Chromium-only features.',
   "browser.profiles.*.cdpPort":
     "Per-profile local CDP port used when connecting to browser instances by port instead of URL. Use unique ports per profile to avoid connection collisions.",
   "browser.profiles.*.cdpUrl":
@@ -97,6 +98,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.github.gitAuthor.email": "Optional process-local Git author and committer email.",
   "agents.entries.*.tools.github":
     "Complete managed GitHub CLI identity and Git author override for this agent. Omit it to inherit the system identity.",
+  "agents.entries.*.tools.github.allowInSandbox":
+    "Allows this agent's managed GitHub credentials and Git author inside its own Docker or Podman sandbox (default: false). Shared scope refuses identity injection; other backends reject provisioning. Security audit warns while enabled.",
   "tools.exec.host":
     'Selects execution target strategy for shell commands. Use "auto" for runtime-aware behavior (sandbox when available, otherwise gateway), or pin sandbox/gateway/node explicitly when you need a fixed surface.',
   "tools.exec.mode":
@@ -105,10 +108,18 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Model-backed exec reviewer used by auto mode before human approval fallback. Configure a narrow model override here when you want exec review isolated from the main agent model.",
   "tools.exec.reviewer.model":
     "Optional provider/model override for the exec reviewer agent. Omit to reuse the configured primary model for the target agent.",
+  "tools.exec.reviewer.thinking":
+    "Optional reasoning effort for OpenClaw model-backed approval reviews: minimal, low, medium, high, xhigh, or max. Omit to preserve provider defaults. Supported levels are normalized for the selected model. Does not configure native Codex Guardian.",
+  "tools.exec.reviewer.fastMode":
+    "Optional Fast mode for OpenClaw approval reviews: true requests priority processing on supported OpenAI Responses and ChatGPT/OAuth routes; false requests standard processing. Omit to preserve provider defaults. Fast mode may cost more and is subject to provider availability. Does not configure native Codex Guardian.",
   "tools.exec.reviewer.timeoutMs":
     "Per-stage exec reviewer timeout in milliseconds for model preparation and completion before falling back to human approval (default: 30000).",
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
+  "agents.entries.*.tools.agentToAgent":
+    "Outbound-only agent messaging policy. Explicit send destinations do not grant session reads or status access, and remain bounded by global agent-to-agent participation and sandbox restrictions.",
+  "agents.entries.*.tools.agentToAgent.send":
+    "Agent ids or * patterns this agent may contact with sessions_send, even with narrow tools.sessions.visibility. Omitted inherits visibility; [] denies ordinary cross-agent sends. Global tools.agentToAgent and sandbox limits still apply. Does not grant list, history, search, status, or watch access; replies belong only to the sent turn. Requester-owned child session access is unchanged.",
   "tools.agentToAgent":
     "Policy for cross-agent session tool calls: sends, list, history, search, and status reads (default: enabled). Use allow to restrict agent pairs; enabled=false blocks ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.enabled":
@@ -118,35 +129,33 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.updatePlan":
     "Unified `progress_card` status tool for durable plans and narrative notes in parent sessions. Enabled by default; set false to opt out. Always unavailable to subagents.",
   "tools.toolSearch":
-    "Compact large OpenClaw, MCP, and client tool catalogs. Supported local runtimes use structured Tool Search automatically when unset. Set false to disable it, true for the code bridge, or use the object form to choose a mode.",
+    "Compact large OpenClaw, MCP, and client tool catalogs. OpenClaw runtimes use structured Tool Search automatically when unset; engaged Code Mode takes precedence and Codex uses its native search. Set false to disable it, true for structured search, or use the object form to choose a mode.",
   "tools.toolSearch.enabled":
-    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during embedded runtime runs.",
+    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind structured search/describe/call tools during embedded runtime runs.",
   "tools.toolSearch.mode":
-    'Choose the model-facing surface: "code" exposes `tool_search_code`; "tools" exposes structured search/describe/call fallback tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
-  "tools.toolSearch.codeTimeoutMs":
-    "Maximum milliseconds for one `tool_search_code` execution. Runtime clamps values to the supported 1s..60s range.",
+    'Choose the model-facing surface: "tools" (default) exposes structured search/describe/call tools; "directory" keeps a bounded tool directory visible, exposes a bounded set of likely or required schemas, and defers the rest behind search/describe/call.',
   "tools.toolSearch.searchDefaultLimit":
     "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
   "tools.toolSearch.maxSearchLimit":
     "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
   "tools.codeMode":
-    "Generic OpenClaw code mode. When enabled, agent runs expose only `exec` and `wait` to the model and hide normal tools behind a QuickJS-WASI catalog bridge.",
+    'Generic OpenClaw Code Mode. When omitted globally, defaults to `"auto"`; an authored object without `enabled` remains off. Engaged agent runs expose only `exec` and `wait` to the model and access normal tools through the catalog bridge.',
   "tools.codeMode.enabled":
-    'Global OpenClaw Code Mode default. Off when omitted, including objects without `enabled`. `"auto"` engages catalog-preferred models; `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
-  "tools.codeMode.runtime": 'Guest JavaScript runtime. Only "quickjs-wasi" is supported.',
+    'Global OpenClaw Code Mode activation. A completely absent global setting defaults to `"auto"`; an authored object without `enabled` remains off. `"auto"` engages catalog-preferred models, while `true` engages tool-capable runs. Agent and model activation overrides take precedence. An engaged run fails closed if the runtime is unavailable instead of exposing the full tool list.',
+  "tools.codeMode.executor":
+    'JavaScript executor: "node" (default) uses Node vm for trusted code and is not a security sandbox; "quickjs" uses the bundled QuickJS WASM plugin for hardened guest execution. Tool permissions apply to both. A missing selected executor fails closed.',
   "tools.codeMode.mode":
     'Model-facing surface. Only "only" is supported: expose code-mode `exec` and `wait` and hide normal tools.',
-  "tools.codeMode.languages":
-    'Accepted source languages for `exec`. Supported values are "javascript" and "typescript".',
   "tools.codeMode.timeoutMs": "Maximum milliseconds for one code-mode `exec` or `wait` call.",
-  "tools.codeMode.memoryLimitBytes": "QuickJS heap limit for one code-mode VM.",
+  "tools.codeMode.memoryLimitBytes":
+    "QuickJS guest heap limit or best-effort Node worker V8 heap budget in bytes. Node runtime overhead and minimum engine allocations affect the effective budget; external buffers and process RSS are excluded. This is not a security guarantee.",
   "tools.codeMode.maxOutputBytes": "Maximum serialized bytes returned through code-mode output.",
   "tools.codeMode.maxSnapshotBytes":
     "Maximum serialized bytes retained for one suspended QuickJS snapshot.",
   "tools.codeMode.maxPendingToolCalls":
     "Maximum concurrent nested tool calls a code-mode VM can start before it must resume later.",
   "tools.codeMode.snapshotTtlSeconds":
-    "How long suspended code-mode snapshots can be resumed with `wait` before they expire.",
+    "How long suspended Code Mode runs can be resumed with `wait` before they expire.",
   "tools.codeMode.searchDefaultLimit":
     "Default number of hidden catalog search results returned by `catalog.search` inside code mode.",
   "tools.codeMode.maxSearchLimit":
@@ -155,7 +164,8 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Collector-mode subagent orchestration. Enabled by default; set false to opt out. Tool permissions still apply to agents_wait and swarm spawn options.",
   "tools.swarm.enabled":
     "Enables collector-mode subagents and agents_wait. Default is on; set false to opt out.",
-  "tools.swarm.maxConcurrent": "Maximum concurrently running collector children per swarm group.",
+  "tools.swarm.maxConcurrent":
+    "Maximum running collector children in each swarm group's separate execution lane (default: 32), independent of ordinary subagent concurrency. Each running child uses one model stream and one Code Mode worker isolate. Group admission limits still apply.",
   "tools.swarm.maxChildrenPerGroup": "Maximum live collector children per swarm group.",
   "tools.swarm.maxTotalPerGroup": "Maximum lifetime collector spawns per swarm group.",
   "tools.swarm.waitTimeoutSecondsMax": "Maximum timeout accepted by agents_wait, in seconds.",
@@ -203,7 +213,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.experimental":
     "Opt-in Control UI experiments. These capabilities may change between releases and remain disabled unless explicitly enabled.",
   "gateway.controlUi.experimental.customPlugins":
-    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Restart the Gateway and reload open Control UI pages after changing this setting.",
+    "Allow user-installed plugins to execute native JavaScript in the Control UI (default: false). Bundled plugin views remain available. Custom UI shares the signed-in operator's Gateway permissions; enable only for trusted plugins. Changes apply without a Gateway restart. Reload open Control UI pages to clear previously loaded plugin code.",
   "gateway.controlUi.environment":
     "Optional public environment identity shown in the Control UI stripe, agent avatar, label pills, browser title, and favicon. Omit it to preserve the default appearance.",
   "gateway.controlUi.environment.label":
@@ -211,9 +221,13 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.environment.color":
     "Named environment color ramp: teal, amber, purple, coral, pink, blue, green, red, or gray.",
   "gateway.controlUi.communityInvite":
-    "Show the Discord community invitation in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+    "Show the community invitation with Reddit, Discord, and X links in the Control UI served by this Gateway (default on). Set false to hide it for every browser using this UI deployment. Changes apply after browser refresh or reconnect; re-enabling preserves browser-local dismissals.",
+  "gateway.controlUi.newSessionModelDefaults":
+    'Choose "configured" to start fresh Control UI drafts with the selected agent’s configured model, runtime and reasoning defaults instead of remembered selections. Default: "last-used". Explicit draft and conversation choices remain editable; Fast Mode and placement preferences are unchanged. Applies after browser refresh or reconnect.',
+  "gateway.controlUi.github.host":
+    "Host this service credential may access. Omit for github.com; set to gateway.github.host for Enterprise project discovery and account metadata.",
   "gateway.controlUi.github.token":
-    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Hover previews prefer the selected agent's configured GitHub identity, inheriting the system identity when there is no override. Prefer explicit configuration for clear service ownership. Omit it to retain the GH_TOKEN/GITHUB_TOKEN fallback from the shared Gateway process environment. An explicitly configured but unavailable credential fails closed.",
+    "SecretRef-backed service credential for Control UI project discovery and GitHub hover previews without a managed identity. Set gateway.controlUi.github.host for Enterprise; an omitted host means github.com. Hover previews prefer the selected agent's configured GitHub identity. GH_TOKEN/GITHUB_TOKEN fallback applies only to github.com. A mismatched or unavailable credential fails closed.",
   "gateway.controlUi.sessionObserver":
     "Produce live session status digests for subscribed Control UI clients with each agent's utility model (default on). Set false to disable observer model calls gateway-wide; setting agents.defaults.utilityModel to an empty string disables utility-model observation for agents that do not override it.",
   "gateway.controlUi.embedSandbox":
@@ -221,13 +235,20 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.allowExternalEmbedUrls":
     "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
   "gateway.controlUi.automaticallyFetchFavicons":
-    "Fetch link favicons through the Gateway (default on). The Gateway requests only HTTPS /favicon.ico from public destinations, applies strict SSRF checks to every DNS result and redirect, and validates bounded image bytes. Set false to prevent all favicon route requests and destination fetches.",
+    "Fetch link favicons and browser-tab social previews through the Gateway (default on). Browser-tab cards load public page metadata and declared images without browser cookies or site credentials. All requests use strict SSRF checks and bounded HTML/image processing. Set false to disable both automatic favicon and page-preview fetches; live browser screenshots are unaffected.",
   "gateway.controlUi.allowedOrigins":
-    'Allowed browser origins for Control UI/WebChat websocket connections (full origins only, e.g. https://control.example.com). Required for non-loopback Control UI deployments unless dangerous Host-header fallback is explicitly enabled. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
+    'Allowed browser origins for Control UI/WebChat connections (full origins only, e.g. https://control.example.com). When omitted, defaults to gateway.publicOrigin if configured. An explicit list, including [], overrides that default; existing local/private-origin rules still apply. Setting ["*"] means allow any browser origin and should be avoided outside tightly controlled local testing.',
   "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback":
     "DANGEROUS toggle that enables Host-header based origin fallback for Control UI/WebChat websocket checks. This mode is supported when your deployment intentionally relies on Host-header origin policy; explicit gateway.controlUi.allowedOrigins remains the recommended hardened default.",
+  "gateway.portals": "Portal publication and private ingress settings.",
+  "gateway.portals.ingress":
+    "Optional operator-managed private HTTPS wildcard reverse proxy. Forward original Host, paths, and WebSocket upgrades to the dedicated loopback listener. Portal bearer authentication remains required. Requires Gateway restart.",
+  "gateway.portals.ingress.domain":
+    "Bare DNS domain for random portal subdomains (for example previews.example.net). Configure wildcard DNS and HTTPS privately; do not share the Gateway or Control UI hostname namespace.",
+  "gateway.portals.ingress.port":
+    "Dedicated loopback HTTP port receiving the private wildcard HTTPS proxy. Must differ from the Gateway port. This is the backend port, not the public HTTPS port.",
   "gateway.publicOrigin":
-    "Externally reachable HTTPS origin of the Gateway. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
+    "Externally reachable HTTPS origin of the Gateway. Also the default browser origin when gateway.controlUi.allowedOrigins is omitted. HTTP is allowed only for localhost, 127.0.0.1, or [::1]. Per-requester MCP OAuth uses it to build the callback URL at /oauth/mcp/callback; channel session links and plugin-generated viewer links use it to reach the Control UI and Gateway routes.",
   "mcp.apps":
     "MCP Apps UI support. When enabled, configured MCP servers may provide interactive HTML views for their tool results.",
   "mcp.apps.enabled":
@@ -265,7 +286,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "gateway.reload.mode":
     'Controls how config edits are applied: "off" ignores live edits and "hybrid" applies hot-safe changes then restarts when required.',
   "gateway.nodes.browser.mode":
-    'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
+    'Node browser routing ("auto" = prefer the host browser, use a single connected browser node when local capability is unavailable; "manual" = require an explicit node selection or configured pin; "off" = disable node routing).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.pairing":
     "Node pairing policy settings. SSH-verified auto-approval is enabled by default; CIDR auto-approval stays disabled unless explicit trusted CIDR/IP allowlists are configured.",
@@ -282,6 +303,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Node command names to block even if present in node claims or default allowlist (exact command-name matching only, e.g. `system.run`; does not inspect shell text inside that command).",
   nodeHost:
     "Node host controls for features exposed from this gateway node to other nodes or clients. Keep defaults unless you intentionally proxy local capabilities across your node network.",
+  "nodeHost.autoUpdate":
+    "Controls automatic updates of the separate runtime for packaged headless node hosts. Checks hourly and waits for all node work to finish before restarting; automatic restarts are at least 12 hours apart.",
+  "nodeHost.autoUpdate.enabled":
+    "Enable automatic stable or beta updates for long-running packaged headless nodes (default: true). Set false to opt out. Also disabled by update.checkOnStart=false or OPENCLAW_NO_AUTO_UPDATE=1; source checkouts, native apps, private workers, dev, and extended-stable do not auto-apply.",
   "nodeHost.agentRuns":
     "Opt in to approval-gated native agent turns on this headless node host. Disabled by default.",
   "nodeHost.agentRuns.claude":
@@ -297,7 +322,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "nodeHost.workerRuns.isolation":
     'Select the worker-session process boundary: "none" runs directly on the node host (default); "container" requires a working Docker-compatible engine and never falls back to host execution.',
   "nodeHost.workerRuns.containerImage":
-    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.19.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
+    'Optional Node 24.16+ or 26.1+ image for container-isolated workers (default: "node:24.21.0-slim"). Use a digest-pinned, private-registry, or preloaded image when needed; missing images are pulled on first use.',
   "nodeHost.browserProxy":
     "Groups browser-proxy settings for exposing local browser control through node routing. Enable only when remote node workflows need your local browser profiles.",
   "nodeHost.browserProxy.enabled":
@@ -448,9 +473,9 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "agents.entries.*.tools.byProvider":
     "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
   "agents.entries.*.tools.message.crossContext.allowWithinProvider":
-    "Per-agent message guard for sending to other conversations on the same provider. Set false for current-conversation-only public agents.",
+    "Per-agent message guard for sending to other conversations on the same provider. Set both this and allowAcrossProviders to false for current-conversation-only public agents.",
   "agents.entries.*.tools.message.crossContext.allowAcrossProviders":
-    "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
+    "Per-agent override for sending across providers. Inherits the global setting (default: true). Set false to block cross-provider messaging for this agent.",
   "agents.entries.*.tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
   "tools.exec.approvalRunningNoticeMs":
@@ -552,14 +577,20 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Optional account selector for multi-account channel setups when plugin approvals must route through a specific account context.",
   "approvals.plugin.targets[].threadId":
     "Optional thread/topic target for channels that support threaded delivery of forwarded plugin approvals.",
+  "approvals.plugin.slack":
+    "Slack reviewer policy for plugin approvals. Omit the default approvers list to retain account allowFrom/defaultTo authorization; set it to [] to deny Slack decisions by default.",
+  "approvals.plugin.slack.approvers":
+    "Default Slack plugin reviewers as raw U/W user IDs within the selected Slack account, or workspace-qualified team:<team-id>:user:<user-id> values. Plugin and tool lists override this list for their own requests.",
+  "approvals.plugin.slack.plugins":
+    "Reviewer overrides keyed by the selected native tool plugin ID. Tool keys encode the raw tool name.",
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict access.',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict reads and ordinary sends. Explicit agents.entries.<id>.tools.agentToAgent.send destinations can permit sends without widening reads.',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":
-    "Allow sends across different providers (default: false).",
+    "Allow sends across different providers (default: true). Set false to block cross-provider messaging.",
   "tools.message.crossContext.marker.enabled":
     "Add a visible origin marker when sending cross-context (default: true).",
   "tools.message.crossContext.marker.prefix":

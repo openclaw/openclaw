@@ -1,9 +1,11 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PreparedReplyTranscriptStart } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import type { AgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { buildCommandOutputFromToolResultEvent } from "./agent-runner-command-output.js";
@@ -12,7 +14,6 @@ import {
   createCompactionHookNoticePayload,
   createCompactionNoticePayload,
   formatCompactionModelRef,
-  readCompactionHookMessages,
 } from "./compaction-notice.js";
 
 const agentCompactionLog = createSubsystemLogger("auto-reply/compaction");
@@ -31,11 +32,11 @@ function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined 
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
-  notifyAgentRunStart: () => void;
+  prepareAgentRunStart: () => void | Promise<void>;
+  notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
-  runId: string;
   effectiveSessionId?: string;
   notifyUserAboutCompaction: boolean;
   onCompactionCompleted: () => number;
@@ -59,33 +60,18 @@ export function createAgentRunEventHandler(params: {
       logVerbose(`compaction ${label} notice delivery failed (non-fatal): ${String(err)}`);
     }
   };
-  const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    await deliverCompactionNoticePayload(
-      createCompactionNoticePayload({
-        phase,
-        currentMessageId,
-        applyReplyToMode: params.turn.applyReplyToMode,
-      }),
-      phase,
-    );
-  };
-  const sendCompactionHookMessages = async (messages: string[]) => {
-    const noticePayload = createCompactionHookNoticePayload({
-      messages,
-      currentMessageId,
-      applyReplyToMode: params.turn.applyReplyToMode,
-    });
-    if (noticePayload) {
-      await deliverCompactionNoticePayload(noticePayload, "hook");
-    }
-  };
 
   return async (evt) => {
     params.turn.replyOperation?.recordActivity();
     params.lifecycleBackstop.note(evt);
     const hasLifecyclePhase = evt.stream === "lifecycle" && typeof evt.data.phase === "string";
     if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-      params.notifyAgentRunStart();
+      const preparation =
+        evt.transcriptStart === undefined ? params.prepareAgentRunStart() : undefined;
+      if (preparation) {
+        await preparation;
+      }
+      params.notifyAgentRunStart(evt.transcriptStart);
     }
     if (evt.stream === "tool" && evt.data.hideFromChannelProgress !== true) {
       const phase = readStringValue(evt.data.phase) ?? "";
@@ -125,12 +111,6 @@ export function createAgentRunEventHandler(params: {
       }
     }
 
-    const suppressItemChannelProgress =
-      evt.stream === "item" &&
-      evt.data.suppressChannelProgress === true &&
-      Boolean(params.turn.opts?.onToolStart);
-    const hideItemFromChannelProgress =
-      evt.stream === "item" && evt.data.hideFromChannelProgress === true;
     const itemPhase = evt.stream === "item" ? readStringValue(evt.data.phase) : "";
     const itemName = evt.stream === "item" ? readStringValue(evt.data.name) : "";
     const itemStatus = evt.stream === "item" ? readStringValue(evt.data.status) : "";
@@ -151,8 +131,6 @@ export function createAgentRunEventHandler(params: {
 
     if (
       evt.stream === "item" &&
-      !hideItemFromChannelProgress &&
-      !suppressItemChannelProgress &&
       (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
     ) {
       const itemSummary = readStringValue(evt.data.summary);
@@ -168,6 +146,8 @@ export function createAgentRunEventHandler(params: {
         title: readStringValue(evt.data.title),
         phase: itemPhase,
         status: itemStatus,
+        ...(evt.data.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
+        ...(evt.data.suppressChannelProgress === true ? { suppressChannelProgress: true } : {}),
         ...(itemToolCallId ? { toolCallId: itemToolCallId } : {}),
         ...(itemName ? { name: itemName } : {}),
         ...(itemSummary !== undefined ? { summary: itemSummary } : {}),
@@ -183,6 +163,7 @@ export function createAgentRunEventHandler(params: {
         phase: readStringValue(evt.data.phase),
         title: readStringValue(evt.data.title),
         explanation: readStringValue(evt.data.explanation),
+        ...(evt.data.explanationFormat === "plain" ? { explanationFormat: "plain" as const } : {}),
         steps: normalizeAgentPlanSteps(evt.data.steps),
         source: readStringValue(evt.data.source),
       });
@@ -246,13 +227,27 @@ export function createAgentRunEventHandler(params: {
 
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
-    const hookMessages = readCompactionHookMessages(evt.data.messages);
+    const hookMessages = normalizeTrimmedStringList(evt.data.messages);
     const sendCompactionUserNotices = async (noticePhase: "start" | "end" | "incomplete") => {
       if (hookMessages.length > 0) {
-        await sendCompactionHookMessages(hookMessages);
+        const noticePayload = createCompactionHookNoticePayload({
+          messages: hookMessages,
+          currentMessageId,
+          applyReplyToMode: params.turn.applyReplyToMode,
+        });
+        if (noticePayload) {
+          await deliverCompactionNoticePayload(noticePayload, "hook");
+        }
       }
       if (params.notifyUserAboutCompaction) {
-        await sendCompactionNotice(noticePhase);
+        await deliverCompactionNoticePayload(
+          createCompactionNoticePayload({
+            phase: noticePhase,
+            currentMessageId,
+            applyReplyToMode: params.turn.applyReplyToMode,
+          }),
+          noticePhase,
+        );
       }
     };
     if (phase === "start") {

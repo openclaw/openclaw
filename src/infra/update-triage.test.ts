@@ -1,16 +1,30 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import * as exec from "../process/exec.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { hasErrnoCode } from "./errno.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { prepareUpdateFailureTriage, runUpdateFailureTriage } from "./update-triage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts?.close();
+});
 
 async function createInstalledTriage(params: { hang?: boolean; promptPath?: string } = {}) {
   const root = await fs.realpath(tempDirs.make("openclaw-triage-child-"));
@@ -20,8 +34,13 @@ async function createInstalledTriage(params: { hang?: boolean; promptPath?: stri
   await fs.writeFile(
     path.join(root, "dist", "index.js"),
     `
+    ${fixtureReceiptClientSource(receipts.endpoint).replace(
+      'import { createConnection as connectFixtureReceipts } from "node:net";',
+      'const { createConnection: connectFixtureReceipts } = require("node:net");',
+    )}
     const fs = require("node:fs");
     fs.writeFileSync(${JSON.stringify(receiptPath)}, JSON.stringify({ pid: process.pid, updateRunId: process.env[${JSON.stringify(UPDATE_RUN_ID_ENV)}] ?? null }));
+    sendReceipt(${JSON.stringify(receiptPath)}, "ready");
     ${params.hang ? "setInterval(() => {}, 1000);" : `process.stdout.write(JSON.stringify({ promptPath: ${JSON.stringify(promptPath)}, bundlePath: null, bundleError: "Snapshot unavailable" }));`}
   `,
   );
@@ -51,10 +70,7 @@ describe("update triage child lifecycle", () => {
         });
         const cwdStat = await fs.stat(state.workspaceDir);
         let release!: () => void;
-        let started!: () => void;
-        const validating = new Promise<void>((resolve) => {
-          started = resolve;
-        });
+        const { promise: validating, resolve: started } = createDeferred();
         const blocked = new Promise<void>((resolve) => {
           release = resolve;
         });
@@ -126,10 +142,7 @@ describe("update triage child lifecycle", () => {
   it("does not launch diagnostics after its owner closes during root discovery", async () => {
     const { target, receiptPath } = await createInstalledTriage();
     let releaseRoot!: (root: string) => void;
-    let started!: () => void;
-    const discovering = new Promise<void>((resolve) => {
-      started = resolve;
-    });
+    const { promise: discovering, resolve: started } = createDeferred();
     let current = true;
     const pending = runUpdateFailureTriage({
       failure: { error: "Update failed" },
@@ -150,7 +163,9 @@ describe("update triage child lifecycle", () => {
     await expect(fs.stat(receiptPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("terminates diagnostics and suppresses publication when its scheduler stops", async () => {
+  it("terminates diagnostics and suppresses publication when its scheduler stops", async ({
+    signal,
+  }) => {
     const { target, receiptPath } = await createInstalledTriage({ hang: true });
     const controller = new AbortController();
     const runtime = { log: vi.fn(), error: vi.fn() };
@@ -162,13 +177,22 @@ describe("update triage child lifecycle", () => {
       signal: controller.signal,
     });
     try {
-      await expect
-        .poll(() => fs.readFile(receiptPath, "utf8").catch(() => ""), { timeout: 5000 })
-        .not.toBe("");
+      // The child writes its record before replying; receipt delivery and command exit are unordered.
+      const settled = pending.then(async () => {
+        const record = await fs.readFile(receiptPath, "utf8").catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return "";
+          }
+          throw error;
+        });
+        expect(record).not.toBe("");
+      });
+      await withinTest(Promise.race([receipts.waitFor(receiptPath, "ready"), settled]), signal);
       const { pid } = JSON.parse(await fs.readFile(receiptPath, "utf8")) as { pid: number };
       controller.abort();
       expect(await pending).toEqual({ status: "cancelled" });
-      await expect.poll(() => isPidAlive(pid)).toBe(false);
+      // Command settlement includes its process-tree cleanup join.
+      expect(isPidAlive(pid)).toBe(false);
       expect(runtime.log).toHaveBeenCalledExactlyOnceWith(
         "Update failed. Preparing triage diagnostics...",
       );

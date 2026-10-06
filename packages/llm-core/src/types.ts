@@ -23,6 +23,7 @@ export type KnownApi =
   | "anthropic-messages"
   | "bedrock-converse-stream"
   | "google-generative-ai"
+  | "google-interactions"
   | "google-vertex";
 
 /** Provider API id; custom providers can use ids outside the built-in set. */
@@ -220,6 +221,8 @@ export type ProviderImagesOptions = ImagesOptions & Record<string, unknown>;
 
 /** Unified text options used by simple completion helpers. */
 export interface SimpleStreamOptions extends StreamOptions {
+  /** Optional processing tier; only providers supporting these tiers apply it. */
+  serviceTier?: "default" | "priority";
   reasoning?: ModelThinkingLevel;
   /** Custom token budgets for thinking levels (token-based providers only) */
   thinkingBudgets?: ThinkingBudgets;
@@ -359,17 +362,145 @@ export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OU
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
+export const DEFAULT_MISSING_TOOL_RESULT_TEXT =
+  "Tool call interrupted before a result was recorded; its outcome is unknown. Retry only if the operation is read-only or idempotent. If it may have had side effects, verify the current state first instead of repeating it.";
+
 /** User turn in a text-model conversation. */
 export interface UserMessage {
   role: "user";
   content: string | (TextContent | ImageContent)[];
   timestamp: number; // Unix timestamp in milliseconds
+  /** Trusted runtime-context metadata; ordinary user messages omit it. */
+  runtimeContext?: {
+    /** Prefix-bound providers retain these messages across turns. */
+    retained?: boolean;
+  };
   /**
-   * Marks a user message carrying runtime context. Provider replay policy decides
-   * whether the carrier is transient or retained append-only; only retained
-   * carriers are stable prompt-cache anchors.
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext`; remove after
+   * the minimum supported plugin API no longer includes that release.
    */
   runtimeContextCarrier?: boolean;
+  /**
+   * @deprecated Shipped through v2026.9.7. Use `runtimeContext.retained`;
+   * remove with `runtimeContextCarrier`.
+   */
+  runtimeContextCarrierRetained?: boolean;
+  /** Operator-authored text projected to system authority on capable routes. */
+  operatorMessage?: { turnScoped: boolean };
+}
+
+export const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
+export const RUNTIME_CONTEXT_BEGIN_MARKER = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_END_MARKER = "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
+export const RUNTIME_CONTEXT_HEADER = "OpenClaw runtime context:";
+export const RUNTIME_CONTEXT_FOOTER = "End OpenClaw runtime context.";
+const ESCAPED_RUNTIME_CONTEXT_FOOTER = "[[RUNTIME_CONTEXT_FOOTER_ESCAPED]]";
+
+/** Identifies the exact delimiter envelope emitted by shipped transcript carriers. */
+export function hasLegacyRuntimeContextEnvelope(content: string): boolean {
+  return (
+    content.startsWith(`${RUNTIME_CONTEXT_BEGIN_MARKER}\n`) &&
+    content.endsWith(`\n${RUNTIME_CONTEXT_END_MARKER}`)
+  );
+}
+
+/** Prevent untrusted carrier content from terminating its provider projection. */
+export function escapeRuntimeContextFooter(content: string): string {
+  return content.replaceAll(RUNTIME_CONTEXT_FOOTER, ESCAPED_RUNTIME_CONTEXT_FOOTER);
+}
+
+/** Builds the human-readable projection used only at provider boundaries. */
+export function labelRuntimeContextText(content: string): string {
+  return `${RUNTIME_CONTEXT_HEADER}\n${escapeRuntimeContextFooter(content)}\n${RUNTIME_CONTEXT_FOOTER}`;
+}
+
+/** Labels runtime context once while preserving structured text blocks. */
+export function labelRuntimeContextContent(
+  content: string | TextContent[],
+): string | TextContent[] {
+  if (typeof content === "string") {
+    return labelRuntimeContextText(content);
+  }
+  if (content.length === 0) {
+    return [{ type: "text", text: `${RUNTIME_CONTEXT_HEADER}\n${RUNTIME_CONTEXT_FOOTER}` }];
+  }
+  return content.map((block, index) => ({
+    ...block,
+    text: [
+      ...(index === 0 ? [RUNTIME_CONTEXT_HEADER] : []),
+      escapeRuntimeContextFooter(block.text),
+      ...(index === content.length - 1 ? [RUNTIME_CONTEXT_FOOTER] : []),
+    ].join("\n"),
+  }));
+}
+
+/** Flattens already-labeled runtime context for string-only provider messages. */
+export function runtimeContextContentToText(content: string | TextContent[]): string {
+  return typeof content === "string" ? content : content.map((block) => block.text).join("\n");
+}
+
+/** Trusted per-turn OpenClaw context, projected by each provider at its valid authority level. */
+export type RuntimeContextMessage = Omit<UserMessage, "content"> & {
+  content: string | TextContent[];
+} & (
+    | { runtimeContext: NonNullable<UserMessage["runtimeContext"]> }
+    | { runtimeContextCarrier: true }
+  );
+
+/** Identifies trusted runtime context independently of its provider-compatible shape. */
+export function hasRuntimeContextMarker(message: {
+  role: string;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): boolean {
+  return (
+    message.role === "user" &&
+    (message.runtimeContext !== undefined || message.runtimeContextCarrier === true)
+  );
+}
+
+/** Distinguishes trusted runtime context while preserving user-role plugin compatibility. */
+export function isRuntimeContextMessage(message: {
+  role: string;
+  content?: unknown;
+  runtimeContext?: unknown;
+  runtimeContextCarrier?: unknown;
+}): message is RuntimeContextMessage {
+  const textOnlyContent =
+    typeof message.content === "string" ||
+    (Array.isArray(message.content) &&
+      message.content.every(
+        (part) =>
+          typeof part === "object" &&
+          part !== null &&
+          "type" in part &&
+          part.type === "text" &&
+          "text" in part &&
+          typeof part.text === "string",
+      ));
+  return textOnlyContent && hasRuntimeContextMarker(message);
+}
+
+/** Reads canonical metadata while accepting the shipped v2026.9.7 carrier fields. */
+export function readRuntimeContextMetadata(
+  message: RuntimeContextMessage,
+): NonNullable<UserMessage["runtimeContext"]> {
+  if (message.runtimeContext !== undefined) {
+    return message.runtimeContext;
+  }
+  return message.runtimeContextCarrierRetained === undefined
+    ? {}
+    : { retained: message.runtimeContextCarrierRetained };
+}
+
+/** Updates canonical retention and its shipped compatibility projection together. */
+export function setRuntimeContextRetention(
+  message: RuntimeContextMessage,
+  retained: boolean | undefined,
+): void {
+  message.runtimeContext = { ...readRuntimeContextMetadata(message), retained };
+  message.runtimeContextCarrier = true;
+  message.runtimeContextCarrierRetained = retained;
 }
 
 /** Assistant turn, including provider identity and final stop state. */
@@ -403,9 +534,11 @@ export interface AssistantMessage {
   responseId?: string; // Provider-specific response/message identifier when the upstream API exposes one
   providerReplay?: ProviderReplayState; // Opaque provider state carried into a compatible later request.
   turnId?: string; // Runtime-assigned stable turn identity when the provider does not expose one
-  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime diagnostics for failures and recoveries.
+  diagnostics?: AssistantMessageDiagnostic[]; // Redacted provider/runtime completion, failure, and recovery diagnostics.
   usage: Usage;
   stopReason: StopReason;
+  /** A completed provider response can explicitly request another inference with false. */
+  endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
   errorType?: string;
@@ -503,7 +636,7 @@ export interface AssistantMessageEventStreamContract extends AsyncIterable<Assis
   push(event: AssistantMessageEvent): void;
   /** Complete the stream and optionally resolve the final message. */
   end(result?: AssistantMessage): void;
-  /** Final assistant message produced by the stream. */
+  /** Final assistant message produced independently of event iteration. */
   result(): Promise<AssistantMessage>;
 }
 
@@ -523,6 +656,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
+  supportedReasoningEfforts?: string[];
   /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
   reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
@@ -561,12 +696,16 @@ export interface OpenAICompletionsCompat {
 
 /** Compatibility settings for OpenAI Responses APIs. */
 export interface OpenAIResponsesCompat {
+  /** Whether a compatible provider accepts the `strict` tool field. Default: auto-detected from the endpoint. */
+  supportsStrictMode?: boolean;
   /** Whether the provider supports the `developer` role (vs `system`). Default: true. */
   supportsDeveloperRole?: boolean;
   /** Whether to send reasoning effort settings. Defaults to the model's known capabilities. */
   supportsReasoningEffort?: boolean;
   /** Provider-native reasoning efforts accepted by the model. Overrides known model defaults. */
   supportedReasoningEfforts?: string[];
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the model accepts the `temperature` parameter. Default: true. */
   supportsTemperature?: boolean;
   /** Whether to send the OpenAI `session_id` cache-affinity header from `options.sessionId` when caching is enabled. Default: true. */
@@ -575,6 +714,15 @@ export interface OpenAIResponsesCompat {
   supportsLongCacheRetention?: boolean;
   /** Whether the provider honors top-level `instructions`. Defaults to true only for verified native routes (OpenAI, xAI); every other route defaults to false and embeds the system prompt in `input` unless set true here after verifying against that endpoint. */
   supportsInstructions?: boolean;
+  /**
+   * Explicit opt-in for HTTP continuation (client-side delta + `previous_response_id`)
+   * on a custom/proxy OpenAI-Responses-compatible endpoint. A native `api.openai.com`
+   * connection is eligible by default; a custom endpoint carries no trust signal of
+   * its own, so this is the only path to eligibility there — set it once you've
+   * verified the backend correctly resolves `previous_response_id` and persists
+   * `store: true` turns. Default: false.
+   */
+  supportsResponsesContinuation?: boolean;
 }
 
 /** Compatibility settings for Anthropic Messages-compatible APIs. */
@@ -687,7 +835,11 @@ export interface Model<TApi extends Api = Api> {
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat
-    : TApi extends "openai-responses" | "azure-openai-responses" | "openai-codex-responses"
+    : TApi extends
+          | "openai-responses"
+          | "azure-openai-responses"
+          | "openai-chatgpt-responses"
+          | "openai-codex-responses"
       ? OpenAIResponsesCompat
       : TApi extends "anthropic-messages"
         ? AnthropicMessagesCompat

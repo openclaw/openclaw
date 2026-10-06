@@ -70,7 +70,7 @@ internal class WearProxyException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal class WearProxyClient private constructor(
+internal class WearProxyClient(
   private val nodeResolver: WearNodeResolver,
   private val transport: WearMessageTransport,
 ) : WearRpcRequester {
@@ -99,8 +99,64 @@ internal class WearProxyClient private constructor(
     var attemptedPreferredPhone: PreferredPhoneRegistration? = null
     val result =
       withTimeoutOrNull(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS) {
-        requestBeforeDeadline(method, params, expectedNodeId, requirePreferredNode) { registration ->
-          attemptedPreferredPhone = registration
+        // Stateful RPCs stay on the phone that supplied their session/transcript.
+        // Rediscovery here could route a shared session key to a different phone.
+        val preferredPhone =
+          when {
+            requirePreferredNode || expectedNodeId == null -> resolvePreferredPhone()
+            else -> preferredPhoneRegistration(expectedNodeId)
+          }
+        val nodeId = expectedNodeId ?: checkNotNull(preferredPhone).nodeId
+        if (requirePreferredNode && expectedNodeId != null && preferredPhone?.nodeId != expectedNodeId) {
+          throw WearProxyException("phone_changed", "Preferred phone changed during request")
+        }
+        val attemptedPhone = preferredPhone?.takeIf { it.nodeId == nodeId }
+        attemptedPreferredPhone = attemptedPhone
+        val requestId = UUID.randomUUID().toString()
+        val response = CompletableDeferred<WearMessage.Response>()
+        val pendingRequest =
+          PendingWearRequest(
+            nodeId = nodeId,
+            response = response,
+            preferredPhone = attemptedPhone,
+          )
+        check(pending.putIfAbsent(requestId, pendingRequest) == null)
+        try {
+          try {
+            transport.send(
+              nodeId = nodeId,
+              path = WearProtocol.REQUEST_PATH,
+              data =
+                WearProtocolCodec.encode(
+                  WearMessage.Request(requestId = requestId, method = method, params = params),
+                ),
+            )
+          } catch (error: Throwable) {
+            if (error is CancellationException) currentCoroutineContext().ensureActive()
+            invalidatePreferredPhone(attemptedPhone)
+            throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
+          }
+          val envelope = response.await()
+          if (
+            (expectedNodeId == null || requirePreferredNode || method.requiresPreferredSnapshotSource()) &&
+            currentPreferredPhone()?.nodeId != nodeId
+          ) {
+            throw WearProxyException("phone_changed", "Preferred phone changed during request")
+          }
+          if (!envelope.ok) {
+            val error = envelope.error
+            throw WearProxyException(error?.code ?: "unavailable", error?.message ?: "Phone proxy request failed")
+          }
+          WearRpcResult(
+            payload = envelope.result ?: buildJsonObject {},
+            // Phone and watch can update independently. A missing v1 watermark means
+            // unknown, so the next event establishes the legacy phone's live baseline.
+            eventStreamId = envelope.eventStreamId,
+            eventSequence = envelope.eventSequence,
+            sourceNodeId = nodeId,
+          )
+        } finally {
+          pending.remove(requestId, pendingRequest)
         }
       }
     if (result != null) return result
@@ -109,76 +165,6 @@ internal class WearProxyClient private constructor(
     // must be rediscovered just like a node that rejected the send outright.
     invalidatePreferredPhone(attemptedPreferredPhone)
     throw WearProxyException("timeout", "Paired phone did not respond")
-  }
-
-  private suspend fun requestBeforeDeadline(
-    method: WearRpcMethod,
-    params: JsonObject,
-    expectedNodeId: String?,
-    requirePreferredNode: Boolean,
-    recordPreferredPhoneAttempt: (PreferredPhoneRegistration?) -> Unit,
-  ): WearRpcResult {
-    // Stateful RPCs stay on the phone that supplied their session/transcript.
-    // Rediscovery here could route a shared session key to a different phone.
-    val preferredPhone =
-      when {
-        requirePreferredNode || expectedNodeId == null -> resolvePreferredPhone()
-        else -> preferredPhoneRegistration(expectedNodeId)
-      }
-    val nodeId = expectedNodeId ?: checkNotNull(preferredPhone).nodeId
-    if (requirePreferredNode && expectedNodeId != null && preferredPhone?.nodeId != expectedNodeId) {
-      throw WearProxyException("phone_changed", "Preferred phone changed during request")
-    }
-    recordPreferredPhoneAttempt(preferredPhone?.takeIf { it.nodeId == nodeId })
-    val requestId = UUID.randomUUID().toString()
-    val response = CompletableDeferred<WearMessage.Response>()
-    val pendingRequest =
-      PendingWearRequest(
-        nodeId = nodeId,
-        response = response,
-        preferredPhone = preferredPhone?.takeIf { it.nodeId == nodeId },
-      )
-    check(pending.putIfAbsent(requestId, pendingRequest) == null)
-    return try {
-      try {
-        transport.send(
-          nodeId = nodeId,
-          path = WearProtocol.REQUEST_PATH,
-          data =
-            WearProtocolCodec.encode(
-              WearMessage.Request(requestId = requestId, method = method, params = params),
-            ),
-        )
-      } catch (_: CancellationException) {
-        currentCoroutineContext().ensureActive()
-        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
-        throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-      } catch (_: Throwable) {
-        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
-        throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-      }
-      val envelope = response.await()
-      if (
-        (expectedNodeId == null || requirePreferredNode || method.requiresPreferredSnapshotSource()) &&
-        currentPreferredPhone()?.nodeId != nodeId
-      ) {
-        throw WearProxyException("phone_changed", "Preferred phone changed during request")
-      }
-      if (!envelope.ok) {
-        val error = envelope.error
-        throw WearProxyException(error?.code ?: "unavailable", error?.message ?: "Phone proxy request failed")
-      }
-      WearRpcResult(
-        payload = envelope.result ?: buildJsonObject {},
-        // Phone and watch can update independently. A missing v1 watermark means
-        // unknown, so the next event establishes the legacy phone's live baseline.
-        eventStreamId = envelope.eventStreamId,
-        eventSequence = envelope.eventSequence,
-        sourceNodeId = nodeId,
-      )
-    } finally {
-      pending.remove(requestId, pendingRequest)
-    }
   }
 
   suspend fun handleMessage(
@@ -224,12 +210,10 @@ internal class WearProxyClient private constructor(
   private suspend fun resolvePhoneNode(): String =
     try {
       nodeResolver.reachablePhoneNodeId()
-    } catch (_: CancellationException) {
+    } catch (error: Throwable) {
       // Play Services can cancel its Task while this request remains active.
       // Preserve actual caller cancellation; map transport cancellation below.
-      currentCoroutineContext().ensureActive()
-      throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-    } catch (_: Throwable) {
+      if (error is CancellationException) currentCoroutineContext().ensureActive()
       throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
     } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
 
@@ -353,22 +337,17 @@ internal class WearProxyClient private constructor(
             selectReachablePhoneNodeId(
               capabilityClient
                 .getCapability(WearProtocol.PHONE_CAPABILITY, CapabilityClient.FILTER_REACHABLE)
-                .await()
+                .awaitWearTask()
                 .nodes
                 .map { node -> WearReachablePhoneNode(id = node.id, isNearby = node.isNearby) },
             )
           },
         transport =
           WearMessageTransport { nodeId, path, data ->
-            messageClient.sendMessage(nodeId, path, data).await()
+            messageClient.sendMessage(nodeId, path, data).awaitWearTask()
           },
       )
     }
-
-    internal fun createForTests(
-      nodeResolver: WearNodeResolver,
-      transport: WearMessageTransport,
-    ): WearProxyClient = WearProxyClient(nodeResolver, transport)
   }
 }
 
@@ -425,7 +404,7 @@ internal class WearEventSequenceTracker {
       return
     }
     val previous = lastSequence
-    val streamChanged = this.streamId != streamId && (this.streamId != null || streamId != null)
+    val streamChanged = this.streamId != streamId
     this.streamId = streamId
     if (awaitingSnapshot || previous == null || streamChanged || sequence > previous) lastSequence = sequence
     awaitingSnapshot = false
@@ -444,12 +423,7 @@ internal class WearEventSequenceTracker {
       eventGeneration += 1
       return WearSequenceDecision.Accepted
     }
-    if (this.streamId != streamId && (this.streamId != null || streamId != null)) {
-      awaitingSnapshot = true
-      eventGeneration += 1
-      return WearSequenceDecision.GapOrReset
-    }
-    if (sequence == previous + 1) {
+    if (this.streamId == streamId && sequence == previous + 1) {
       lastSequence = sequence
       eventGeneration += 1
       return WearSequenceDecision.Accepted
@@ -502,12 +476,7 @@ internal class WearEventSequenceTracker {
     sequence: Long?,
   ): Boolean {
     if (awaitingSnapshot) return false
-    if (
-      this.streamId != responseStreamId &&
-      (this.streamId != null || responseStreamId != null)
-    ) {
-      return false
-    }
+    if (this.streamId != responseStreamId) return false
     val currentSequence = lastSequence
     return if (sequence == null) {
       requestEventGeneration == eventGeneration
@@ -598,7 +567,7 @@ internal class WearEventResyncBuffer(
   }
 }
 
-private suspend fun <T> Task<T>.await(): T =
+internal suspend fun <T> Task<T>.awaitWearTask(): T =
   suspendCancellableCoroutine { continuation ->
     addOnSuccessListener { value -> if (continuation.isActive) continuation.resume(value) }
     addOnFailureListener { error -> if (continuation.isActive) continuation.resumeWithException(error) }

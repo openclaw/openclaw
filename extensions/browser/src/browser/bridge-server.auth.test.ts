@@ -54,10 +54,12 @@ describe("startBrowserBridgeServer auth", () => {
   async function expectAuthFlow(
     authConfig: { authToken?: string; authPassword?: string },
     headers: Record<string, string>,
+    host?: string,
   ) {
     const bridge = await startBrowserBridgeServer({
       resolved: buildResolvedConfig(),
       ...authConfig,
+      host,
     });
     servers.push({ stop: () => stopBrowserBridgeServer(bridge.server) });
 
@@ -77,9 +79,16 @@ describe("startBrowserBridgeServer auth", () => {
     }
   });
 
-  it("rejects unauthenticated requests when authToken is set", async () => {
-    await expectAuthFlow({ authToken: "secret-token" }, { Authorization: "Bearer secret-token" });
-  });
+  it.each(["127.0.0.1", "::1"])(
+    "authenticates through the returned bridge URL on %s",
+    async (host) => {
+      await expectAuthFlow(
+        { authToken: "secret-token" },
+        { Authorization: "Bearer secret-token" },
+        host,
+      );
+    },
+  );
 
   it("accepts x-openclaw-password when authPassword is set", async () => {
     await expectAuthFlow(

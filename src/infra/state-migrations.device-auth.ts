@@ -13,21 +13,16 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
-import type { MigrationMessages } from "./state-migrations.types.js";
+import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
 const LEGACY_PATH = "identity/device-auth.json";
 type DeviceAuthMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
-type LegacyDeviceAuthDetection = {
-  sourcePath: string;
-  sourcePresent: boolean;
-  hasLegacy: boolean;
-};
 
 /** Detect the retired device-auth store only when an explicit Doctor flow opts in. */
 export function detectLegacyDeviceAuth(params: {
   stateDir: string;
   doctorOnlyStateMigrations?: boolean;
-}): LegacyDeviceAuthDetection {
+}): LegacyStateDetection["deviceAuth"] {
   const sourcePath = path.join(params.stateDir, LEGACY_PATH);
   const sourcePresent = fs.existsSync(sourcePath);
   return {
@@ -82,86 +77,9 @@ function rowIsCanonical(row: { scopes_json: string; updated_at_ms: number }): bo
   }
 }
 
-async function importLegacyStore(params: {
-  stateDir: string;
-  env: NodeJS.ProcessEnv;
-}): Promise<MigrationMessages> {
-  const stateRoot = await root(params.stateDir, {
-    hardlinks: "reject",
-    maxBytes: 256 * 1024,
-    symlinks: "reject",
-  });
-  const source = await stateRoot.read(LEGACY_PATH, {
-    hardlinks: "reject",
-    maxBytes: 256 * 1024,
-    symlinks: "reject",
-  });
-  const store = parseStore(JSON.parse(source.buffer.toString("utf8")));
-  const counts = runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const stateDb = getNodeSqliteKysely<DeviceAuthMigrationDatabase>(db);
-      let imported = 0;
-      let preserved = 0;
-      for (const entry of store.entries) {
-        const query = stateDb
-          .selectFrom("device_auth_tokens")
-          .select(["scopes_json", "updated_at_ms"])
-          .where("device_id", "=", store.deviceId)
-          .where("role", "=", entry.role);
-        const existing = executeSqliteQueryTakeFirstSync(db, query);
-        if (existing && rowIsCanonical(existing)) {
-          preserved += 1;
-          continue;
-        }
-        executeSqliteQuerySync(
-          db,
-          stateDb
-            .insertInto("device_auth_tokens")
-            .values({
-              device_id: store.deviceId,
-              role: entry.role,
-              token: entry.token,
-              scopes_json: JSON.stringify(entry.scopes),
-              updated_at_ms: entry.updatedAtMs,
-            })
-            .onConflict((conflict) =>
-              conflict.columns(["device_id", "role"]).doUpdateSet({
-                token: entry.token,
-                scopes_json: JSON.stringify(entry.scopes),
-                updated_at_ms: entry.updatedAtMs,
-              }),
-            ),
-        );
-        if (!executeSqliteQueryTakeFirstSync(db, query)) {
-          throw new Error("SQLite verification failed for a device-auth token");
-        }
-        imported += 1;
-      }
-      return { imported, preserved };
-    },
-    { env: params.env },
-  );
-  await stateRoot.remove(LEGACY_PATH);
-  resetLegacyDeviceAuthPresenceCache(params.env);
-  return {
-    changes: [
-      `Migrated ${counts.imported} device-auth token${counts.imported === 1 ? "" : "s"} to SQLite.`,
-    ],
-    warnings: [],
-    notices: [
-      ...(counts.preserved > 0
-        ? [
-            `Preserved ${counts.preserved} canonical SQLite device-auth token${counts.preserved === 1 ? "" : "s"}.`,
-          ]
-        : []),
-      "Removed retired device-auth JSON after verified SQLite import.",
-    ],
-  };
-}
-
 /** Import retired device-auth JSON while excluding Gateways that can rewrite it. */
 export async function migrateLegacyDeviceAuth(params: {
-  detected: LegacyDeviceAuthDetection;
+  detected: LegacyStateDetection["deviceAuth"];
   stateDir: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
@@ -174,6 +92,78 @@ export async function migrateLegacyDeviceAuth(params: {
     label: "legacy device auth",
     releaseLabel: "Device-auth",
     errorLabel: "Failed migrating legacy device auth",
-    run: async (env) => await importLegacyStore({ ...params, env }),
+    run: async (env) => {
+      const stateRoot = await root(params.stateDir, {
+        hardlinks: "reject",
+        maxBytes: 256 * 1024,
+        symlinks: "reject",
+      });
+      const source = await stateRoot.read(LEGACY_PATH, {
+        hardlinks: "reject",
+        maxBytes: 256 * 1024,
+        symlinks: "reject",
+      });
+      const store = parseStore(JSON.parse(source.buffer.toString("utf8")));
+      const counts = runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const stateDb = getNodeSqliteKysely<DeviceAuthMigrationDatabase>(db);
+          let imported = 0;
+          let preserved = 0;
+          for (const entry of store.entries) {
+            const query = stateDb
+              .selectFrom("device_auth_tokens")
+              .select(["scopes_json", "updated_at_ms"])
+              .where("device_id", "=", store.deviceId)
+              .where("role", "=", entry.role);
+            const existing = executeSqliteQueryTakeFirstSync(db, query);
+            if (existing && rowIsCanonical(existing)) {
+              preserved += 1;
+              continue;
+            }
+            executeSqliteQuerySync(
+              db,
+              stateDb
+                .insertInto("device_auth_tokens")
+                .values({
+                  device_id: store.deviceId,
+                  role: entry.role,
+                  token: entry.token,
+                  scopes_json: JSON.stringify(entry.scopes),
+                  updated_at_ms: entry.updatedAtMs,
+                })
+                .onConflict((conflict) =>
+                  conflict.columns(["device_id", "role"]).doUpdateSet({
+                    token: entry.token,
+                    scopes_json: JSON.stringify(entry.scopes),
+                    updated_at_ms: entry.updatedAtMs,
+                  }),
+                ),
+            );
+            if (!executeSqliteQueryTakeFirstSync(db, query)) {
+              throw new Error("SQLite verification failed for a device-auth token");
+            }
+            imported += 1;
+          }
+          return { imported, preserved };
+        },
+        { env },
+      );
+      await stateRoot.remove(LEGACY_PATH);
+      resetLegacyDeviceAuthPresenceCache(env);
+      return {
+        changes: [
+          `Migrated ${counts.imported} device-auth token${counts.imported === 1 ? "" : "s"} to SQLite.`,
+        ],
+        warnings: [],
+        notices: [
+          ...(counts.preserved > 0
+            ? [
+                `Preserved ${counts.preserved} canonical SQLite device-auth token${counts.preserved === 1 ? "" : "s"}.`,
+              ]
+            : []),
+          "Removed retired device-auth JSON after verified SQLite import.",
+        ],
+      };
+    },
   });
 }

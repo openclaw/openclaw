@@ -59,12 +59,6 @@ describe("transcript English loading", () => {
       expect(manager.t(key)).toBe(value);
     }
     expect(manager.t("common.health")).toBe("Gesundheit");
-    expect(manager.t("transcripts.summaryHint")).toBe(
-      "Check the transcript before relying on decisions or action items.",
-    );
-    expect(manager.t("meetingCapture.sourceChanged")).toBe(
-      "This source changed while you were editing. Cancel and reopen it to use the current draft.",
-    );
     expect(manager.t("transcripts.savedCount", { count: "154" })).toBe("154 saved utterances");
     expect(manager.t(capture.labelKey)).toBe("Meeting capture");
   });

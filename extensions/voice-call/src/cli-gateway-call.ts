@@ -125,48 +125,6 @@ export function resolveContinueTimeout(config: VoiceCallConfig): number {
   );
 }
 
-function resolveVoiceCallDeadlineMs(timeoutMs: number, nowMs = Date.now()): number {
-  return nowMs + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
-}
-
-function readGatewayOperationId(payload: unknown): string {
-  if (isRecord(payload) && typeof payload.operationId === "string" && payload.operationId) {
-    return payload.operationId;
-  }
-  throw new Error("voicecall gateway response missing operationId");
-}
-
-function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
-  if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
-    return clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs;
-  }
-  return fallbackTimeoutMs;
-}
-
-function readCompletedContinueResult(
-  payload: unknown,
-):
-  | { status: "pending" }
-  | { status: "completed"; result: unknown }
-  | { status: "failed"; error: string } {
-  if (!isRecord(payload)) {
-    throw new Error("voicecall gateway response missing operation status");
-  }
-  if (payload.status === "pending") {
-    return { status: "pending" };
-  }
-  if (payload.status === "failed") {
-    return {
-      status: "failed",
-      error: typeof payload.error === "string" ? payload.error : "continue failed",
-    };
-  }
-  if (payload.status === "completed") {
-    return { status: "completed", result: payload.result };
-  }
-  throw new Error("voicecall gateway response has unknown operation status");
-}
-
 export async function pollContinueGateway(
   payload: unknown,
   fallbackTimeoutMs: number,
@@ -174,22 +132,26 @@ export async function pollContinueGateway(
   if (!isRecord(payload) || typeof payload.operationId !== "string") {
     return payload;
   }
-  const params = {
-    operationId: readGatewayOperationId(payload),
-    timeoutMs: readGatewayPollTimeoutMs(payload, fallbackTimeoutMs),
-  };
-  const deadlineMs = resolveVoiceCallDeadlineMs(params.timeoutMs);
+  if (!payload.operationId) {
+    throw new Error("voicecall gateway response missing operationId");
+  }
+  const operationId = payload.operationId;
+  const timeoutMs =
+    typeof payload.pollTimeoutMs === "number"
+      ? (clampTimerTimeoutMs(payload.pollTimeoutMs) ?? fallbackTimeoutMs)
+      : fallbackTimeoutMs;
+  const deadlineMs = performance.now() + (clampTimerTimeoutMs(timeoutMs) ?? MAX_TIMER_TIMEOUT_MS);
 
   for (;;) {
     // Sleep already clamps to remaining budget; the gateway RPC must too.
     // Otherwise the final poll can overrun the continue deadline by a full RPC timeout.
-    const remainingMs = deadlineMs - Date.now();
+    const remainingMs = deadlineMs - performance.now();
     if (remainingMs <= 0) {
       break;
     }
     const gateway = await callVoiceCallGateway(
       "voicecall.continue.result",
-      { operationId: params.operationId },
+      { operationId },
       { timeoutMs: Math.min(VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS, remainingMs) },
     );
     if (!gateway.ok) {
@@ -199,14 +161,20 @@ export async function pollContinueGateway(
         )}`,
       );
     }
-    const result = readCompletedContinueResult(gateway.payload);
+    const result = gateway.payload;
+    if (!isRecord(result)) {
+      throw new Error("voicecall gateway response missing operation status");
+    }
     if (result.status === "completed") {
       return result.result;
     }
     if (result.status === "failed") {
-      throw new Error(result.error);
+      throw new Error(typeof result.error === "string" ? result.error : "continue failed");
     }
-    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - Date.now());
+    if (result.status !== "pending") {
+      throw new Error("voicecall gateway response has unknown operation status");
+    }
+    const sleepMs = Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, deadlineMs - performance.now());
     if (sleepMs <= 0) {
       break;
     }

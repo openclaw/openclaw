@@ -2,8 +2,11 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+
+registerSkillWorkshopEnglish();
 
 export type SkillWorkshopSelfLearning = {
   enabled: boolean;
@@ -74,9 +77,6 @@ export async function setSelfLearningEnabled(
     return runtimeConfig.state.lastError ?? t("skillWorkshop.selfLearning.updateError");
   }
   await runtimeConfig.refresh();
-  if (!isCurrent()) {
-    return null;
-  }
   return null;
 }
 

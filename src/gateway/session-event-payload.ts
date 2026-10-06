@@ -1,31 +1,70 @@
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
+import { deriveSessionUnread } from "../shared/session-unread.js";
 import {
   deriveGatewaySessionLifecycleProjectionPatch,
   isStaleLifecycleEventForSession,
 } from "./session-lifecycle-state.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 
-/**
- * Project a catalog-less session row for websocket merge events.
- * Picker metadata comes from catalog-backed list/patch responses; emitting a
- * locally reconstructed subset here would replace richer client state.
- */
-export function buildGatewaySessionEventFields(params: {
-  sessionRow: GatewaySessionRow;
+export function buildGatewaySessionSnapshot(params: {
+  sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
+  includeSession?: boolean;
+  lifecycle?: boolean;
+  event?: AgentEventRuntimePayload;
+  lifecycleRunId?: string;
   label?: string;
   displayName?: string;
   parentSessionKey?: string;
+  activeRunState?: { active: boolean; runIds?: string[]; status?: "queued" } | null;
   status?: GatewaySessionRow["status"];
-  hasActiveRun?: boolean;
-  activeRunIds?: string[] | null;
 }): Record<string, unknown> {
-  const { sessionRow } = params;
+  const { event, sessionRow: storedRow } = params;
+  if (!storedRow) {
+    return {};
+  }
+  const lifecycleRow = event
+    ? { ...storedRow, updatedAt: storedRow.updatedAt ?? undefined }
+    : undefined;
+  const patch =
+    event &&
+    !isStaleLifecycleEventForSession({
+      owningSessionId: event.sessionId,
+      currentSessionId: storedRow.sessionId,
+      eventRunId: event.runId,
+      currentRunId: params.lifecycleRunId,
+      eventStartedAt: event.data?.startedAt,
+      currentStartedAt: storedRow.startedAt,
+    })
+      ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
+      : {};
+  const sessionRow = { ...storedRow, ...patch };
+  if (Object.hasOwn(patch, "lastActivityAt")) {
+    sessionRow.unread = deriveSessionUnread(sessionRow);
+  }
+  for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
+    delete sessionRow[key];
+  }
+  if (params.lifecycle && sessionRow.totalTokensFresh !== true) {
+    delete sessionRow.totalTokens;
+    delete sessionRow.totalTokensFresh;
+    delete sessionRow.contextTokens;
+    delete sessionRow.estimatedCostUsd;
+  }
+  // Accepted terminal events outrank retained cleanup liveness; otherwise the
+  // active owner, not a stale persisted row, supplies current run status.
+  const activeStatus = params.activeRunState?.active
+    ? (params.activeRunState.status ?? "running")
+    : undefined;
+  const status = params.status ?? patch.status ?? activeStatus;
+  // Picker metadata belongs to catalog-backed list/patch responses; emitting a
+  // reconstructed subset here would replace richer client state. Null tombstones
+  // and false flags clear subscribed metadata during reconciliation.
   const omitUnscopedGlobalGoal = sessionRow.key === "global" && !params.agentId;
   const omitUnscopedSwarm =
     (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId;
-  return {
+  const eventFields: Record<string, unknown> = {
     updatedAt: sessionRow.updatedAt ?? undefined,
     sessionId: sessionRow.sessionId,
     createdActor: sessionRow.createdActor ?? null,
@@ -40,17 +79,21 @@ export function buildGatewaySessionEventFields(params: {
     space: sessionRow.space,
     chatType: sessionRow.chatType,
     origin: sessionRow.origin,
+    conversationLink: sessionRow.conversationLink,
     archived: sessionRow.archived ?? false,
     archivedAt: sessionRow.archivedAt ?? null,
     archivedBy: sessionRow.archivedBy ?? null,
     archiveReason: sessionRow.archiveReason ?? null,
     pinned: sessionRow.pinned ?? false,
     pinnedAt: sessionRow.pinnedAt ?? null,
+    snoozedUntil: sessionRow.snoozedUntil ?? null,
+    snoozedAt: sessionRow.snoozedAt ?? null,
     unread: sessionRow.unread ?? false,
     lastReadAt: sessionRow.lastReadAt,
     markedUnreadAt: sessionRow.markedUnreadAt ?? null,
     agentStatus: sessionRow.agentStatus ?? null,
     observerDigest: sessionRow.observerDigest ?? null,
+    ...(sessionRow.activitySummary ? { activitySummary: sessionRow.activitySummary } : {}),
     lastActivityAt: sessionRow.lastActivityAt,
     spawnedBy: sessionRow.spawnedBy,
     controlOwnerSessionKey: sessionRow.controlOwnerSessionKey ?? null,
@@ -83,16 +126,14 @@ export function buildGatewaySessionEventFields(params: {
     label: params.label ?? sessionRow.label ?? null,
     autoLabel: sessionRow.autoLabel ?? null,
     icon: sessionRow.icon ?? null,
-    // Explicit null so subscribed clients drop a cleared color during merge-reconcile.
     color: sessionRow.color ?? null,
     channelAvatarUrl: sessionRow.channelAvatarUrl ?? null,
-    // Explicit null so subscribed clients drop a cleared category during merge-reconcile.
     category: sessionRow.category ?? null,
+    boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
-    // Explicit null lets subscribed clients clear an override during merge-reconcile.
     thinkingLevel: sessionRow.thinkingLevel ?? null,
     fastMode: sessionRow.fastMode,
     effectiveFastMode: sessionRow.effectiveFastMode,
@@ -127,83 +168,24 @@ export function buildGatewaySessionEventFields(params: {
     activeModel: sessionRow.activeModel ?? null,
     modelOverrideSource: sessionRow.modelOverrideSource,
     agentRuntime: sessionRow.agentRuntime,
-    status: params.status ?? sessionRow.status,
-    // Explicit null lets subscribed clients clear the previous run's failure reason.
+    runtimeSelectionLocked: sessionRow.runtimeSelectionLocked,
+    status: status ?? sessionRow.status,
     lastRunError: sessionRow.lastRunError ?? null,
-    // Explicit null lets a newer start evict the previous terminal run identity.
+    providerReview: sessionRow.providerReview ?? null,
     lastRunId: sessionRow.lastRunId ?? null,
-    // Explicit false lets subscribed clients drop the flag during merge-reconcile.
     hasAutomation: sessionRow.hasAutomation ?? false,
-    ...(params.hasActiveRun === undefined ? {} : { hasActiveRun: params.hasActiveRun }),
-    ...(params.activeRunIds === undefined ? {} : { activeRunIds: params.activeRunIds }),
+    ...(params.activeRunState == null
+      ? {}
+      : {
+          hasActiveRun: params.activeRunState.active,
+          // Presence means an exact set; null clears IDs when only liveness is known.
+          activeRunIds: params.activeRunState.runIds ?? null,
+        }),
     startedAt: sessionRow.startedAt,
     endedAt: sessionRow.endedAt ?? null,
     runtimeMs: sessionRow.runtimeMs ?? null,
-    compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-    latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
     pluginExtensions: sessionRow.pluginExtensions,
   };
-}
-
-export function buildGatewaySessionSnapshot(params: {
-  sessionRow: GatewaySessionRow | null | undefined;
-  agentId?: string;
-  includeSession?: boolean;
-  lifecycle?: boolean;
-  event?: AgentEventPayload;
-  lifecycleRunId?: string;
-  label?: string;
-  displayName?: string;
-  parentSessionKey?: string;
-  activeRunState?: { active: boolean; runIds?: string[]; status?: "queued" } | null;
-  status?: GatewaySessionRow["status"];
-}): Record<string, unknown> {
-  const { event, sessionRow: storedRow } = params;
-  if (!storedRow) {
-    return {};
-  }
-  const lifecycleRow = event
-    ? { ...storedRow, updatedAt: storedRow.updatedAt ?? undefined }
-    : undefined;
-  const patch =
-    event &&
-    !isStaleLifecycleEventForSession({
-      owningSessionId: event.sessionId,
-      currentSessionId: storedRow.sessionId,
-      eventRunId: event.runId,
-      currentRunId: params.lifecycleRunId,
-      eventStartedAt: event.data?.startedAt,
-      currentStartedAt: storedRow.startedAt,
-    })
-      ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
-      : {};
-  const sessionRow = { ...storedRow, ...patch };
-  for (const key of ["thinkingLevels", "thinkingOptions", "thinkingDefault"] as const) {
-    delete sessionRow[key];
-  }
-  if (params.lifecycle && sessionRow.totalTokensFresh !== true) {
-    delete sessionRow.totalTokens;
-    delete sessionRow.totalTokensFresh;
-    delete sessionRow.contextTokens;
-    delete sessionRow.estimatedCostUsd;
-  }
-  // Accepted terminal events outrank retained cleanup liveness; otherwise the
-  // active owner, not a stale persisted row, supplies current run status.
-  const activeStatus = params.activeRunState?.active
-    ? (params.activeRunState.status ?? "running")
-    : undefined;
-  const status = params.status ?? patch.status ?? activeStatus;
-  const eventFields = buildGatewaySessionEventFields({
-    sessionRow,
-    agentId: params.agentId,
-    label: params.label,
-    displayName: params.displayName,
-    parentSessionKey: params.parentSessionKey,
-    status,
-    hasActiveRun: params.activeRunState?.active,
-    // Presence means an exact set; null clears stale IDs when only liveness is known.
-    activeRunIds: params.activeRunState ? (params.activeRunState.runIds ?? null) : undefined,
-  });
   if (params.lifecycle) {
     // Lifecycle snapshots cannot replace selection metadata or clear an active fallback.
     for (const field of [
@@ -213,6 +195,7 @@ export function buildGatewaySessionSnapshot(params: {
       "activeModel",
       "modelOverrideSource",
       "agentRuntime",
+      "runtimeSelectionLocked",
     ] as const) {
       delete sessionRow[field];
       delete eventFields[field];

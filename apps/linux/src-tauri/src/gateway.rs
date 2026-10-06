@@ -16,12 +16,38 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip)]
+    pub runtime_path: Option<std::path::PathBuf>,
 }
 
 impl GatewaySnapshot {
+    pub(crate) fn remote_opening() -> Self {
+        Self {
+            phase: "remoteOpening",
+            runtime_path: None,
+            installed: false,
+            running: false,
+            reachable: false,
+            status: "Opening remote dashboard".to_string(),
+            detail: Some(
+                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
+            ),
+        }
+    }
+
+    pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
+        Self {
+            phase: "remoteError",
+            status: "Remote connection unavailable".to_string(),
+            detail: Some(detail.into()),
+            ..Self::remote_opening()
+        }
+    }
+
     pub fn unconfigured() -> Self {
         Self {
             phase: "unconfigured",
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
@@ -33,6 +59,7 @@ impl GatewaySnapshot {
     pub fn missing_cli() -> Self {
         Self {
             phase: "missingCli",
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
@@ -44,6 +71,7 @@ impl GatewaySnapshot {
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
             phase: "reconnecting",
+            runtime_path: None,
             installed: true,
             running: false,
             reachable: false,
@@ -86,10 +114,17 @@ struct DaemonStatus {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ServiceStatus {
-    loaded: bool,
+    loaded: Option<bool>,
+    load_state: Option<ServiceLoadState>,
     command: Option<serde_json::Value>,
     runtime: Option<ServiceRuntime>,
+}
+
+#[derive(Deserialize)]
+struct ServiceLoadState {
+    detail: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -127,20 +162,39 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     let value = cli
         .json::<DaemonStatus, _, _>(["gateway", "status", "--json"])
         .map_err(|error| error.to_string())?;
-    let installed = value.service.command.is_some() || value.service.loaded;
+    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
+    // A failed service inspection is not evidence that installation is missing.
+    // A healthy RPC can still attach without inspecting or changing the service.
+    if !reachable && value.service.loaded.is_none() {
+        let service_detail = value
+            .service
+            .load_state
+            .as_ref()
+            .and_then(|state| state.detail.as_deref())
+            .unwrap_or("The CLI could not determine the Gateway service state.");
+        let rpc_detail = value
+            .rpc
+            .as_ref()
+            .and_then(|rpc| rpc.error.as_deref())
+            .unwrap_or("The Gateway RPC check did not report a healthy connection.");
+        return Err(format!(
+            "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
+             to inspect service access and Gateway credentials, then retry."
+        ));
+    }
+    let installed = value.service.command.is_some() || value.service.loaded == Some(true);
     let runtime_status = value
         .service
         .runtime
         .as_ref()
         .and_then(|runtime| runtime.status.as_deref())
-        .unwrap_or("stopped");
+        .unwrap_or("unknown");
     let running = runtime_status == "running";
-    let reachable = value.rpc.as_ref().is_some_and(|rpc| rpc.ok);
     let (phase, status) = if reachable {
         ("connected", "Connected")
     } else if !installed {
         ("notInstalled", "Not installed")
-    } else if running {
+    } else if runtime_status != "stopped" {
         ("reconnecting", "Unavailable")
     } else {
         ("stopped", "Stopped")
@@ -164,7 +218,15 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             }
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
+    let runtime_path = value
+        .service
+        .command
+        .as_ref()
+        .and_then(|command| command.pointer("/programArguments/0"))
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from);
     Ok(GatewaySnapshot {
+        runtime_path,
         phase,
         installed,
         running,
@@ -174,6 +236,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {
@@ -184,7 +247,7 @@ pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
         run_service_command(cli, "install")?;
         snapshot = status(cli)?;
     }
-    if !snapshot.running {
+    if snapshot.phase == "stopped" {
         run_service_command(cli, "start")?;
     }
 
@@ -283,6 +346,10 @@ fn dashboard_token(dashboard_url: &str) -> Result<Option<String>, String> {
         .map(|(_, value)| value.into_owned())
         .filter(|value| !value.is_empty()))
 }
+
+#[cfg(all(test, unix))]
+#[path = "gateway_status_tests.rs"]
+mod status_tests;
 
 #[cfg(test)]
 mod dashboard_tests {

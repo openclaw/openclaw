@@ -24,93 +24,6 @@ export function findConfiguredProviderModel<T extends { id: string }>(
   )(modelId);
 }
 
-const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
-  "amazon-bedrock",
-  "amazon-bedrock-mantle",
-  "anthropic",
-  "anthropic-vertex",
-  "arcee",
-  "azure-openai-responses",
-  "byteplus",
-  "byteplus-plan",
-  "cerebras",
-  "chutes",
-  "claude-cli",
-  "clawrouter",
-  "cloudflare-ai-gateway",
-  "codex",
-  "comfy",
-  "copilot-proxy",
-  "dashscope",
-  "deepinfra",
-  "deepseek",
-  "fal",
-  "fireworks",
-  "github-copilot",
-  "gmi",
-  "gmi-cloud",
-  "gmicloud",
-  "google",
-  "google-antigravity",
-  "google-gemini-cli",
-  "google-vertex",
-  "groq",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "kimi-coding",
-  "litellm",
-  "lmstudio",
-  "meta",
-  "microsoft-foundry",
-  "minimax",
-  "minimax-portal",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "moonshot-ai",
-  "moonshotai",
-  "nvidia",
-  "novita",
-  "novita-ai",
-  "novitaai",
-  "ollama",
-  "ollama-cloud",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qianfan",
-  "qwen",
-  "qwen-token-plan",
-  "qwencloud",
-  "sglang",
-  "stepfun",
-  "stepfun-plan",
-  "synthetic",
-  "tencent-tokenhub",
-  "tencent-tokenplan",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "volcengine-plan",
-  "vydra",
-  "x-ai",
-  "xai",
-  "xiaomi",
-  "xiaomi-token-plan",
-  "z.ai",
-  "z-ai",
-  "zai",
-]);
-
-/** Identifies provider overlays already known to the bundled config contract. */
-export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
-  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
-}
-
 /** Indexes configured model rows after caller-owned model-id normalization. */
 export function resolveMergedModelProviderModels<T extends { id: string }>(params: {
   models: readonly T[] | undefined;
@@ -138,6 +51,9 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
   const canonicalize = (id: string) =>
     stripSelfProviderModelPrefix(provider, id) !== id ? id : canonicalizeModelId?.(id).trim() || id;
   let configuredModels: Map<string, T> | undefined;
+  let configuredModelsComplete = false;
+  let hasFallback = false;
+  let legacyRows: [string, T][] | undefined;
   return (modelId) => {
     const id = modelId.trim();
     if (!configuredModels) {
@@ -156,6 +72,7 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
       for (const [candidate, row] of exactRows) {
         configuredModels.set(candidate, row);
       }
+      configuredModelsComplete = true;
     }
     const rows = configuredModels;
     const canonicalId = canonicalize(id);
@@ -165,9 +82,28 @@ export function createConfiguredProviderModelResolver<T extends { id: string }>(
     }
     // Declared equivalents precede legacy self-provider prefixes. The selected
     // namespace itself is never stripped or merged with a legacy row.
-    for (const [candidate, row] of rows) {
-      const legacy = stripSelfProviderModelPrefix(provider, candidate);
-      if (legacy !== candidate && (legacy === id || canonicalize(legacy.trim()) === canonicalId)) {
+    // One-shot callers keep the original short-circuit scan. Repeated fallbacks
+    // prepare only a completed index; callbacks can expose a partial one.
+    if (configuredModelsComplete && !legacyRows) {
+      if (hasFallback) {
+        legacyRows = [];
+        for (const [candidate, row] of rows) {
+          const legacy = stripSelfProviderModelPrefix(provider, candidate);
+          if (legacy !== candidate) {
+            legacyRows.push([legacy, row]);
+          }
+        }
+      }
+      hasFallback = true;
+    }
+    // A callback can reenter and prepare the projection while this scan is live.
+    const fallbackRows = legacyRows;
+    for (const [candidate, row] of fallbackRows ?? rows) {
+      const legacy = fallbackRows ? candidate : stripSelfProviderModelPrefix(provider, candidate);
+      if (
+        (fallbackRows !== undefined || legacy !== candidate) &&
+        (legacy === id || canonicalize(legacy.trim()) === canonicalId)
+      ) {
         return row;
       }
     }

@@ -1,7 +1,3 @@
-// Mattermost tests cover answering an ask_user question from its button.
-//
-// Every case drives the composed handleInteraction that registerMattermostInteractions
-// hands to the transport, so the behavior and the wiring are pinned together.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveOptionMock = vi.hoisted(() => vi.fn());
@@ -117,7 +113,10 @@ describe("mattermost question interactions", () => {
   });
 
   it("submits the clicked option to the question Gateway and retires the prompt", async () => {
-    const response = await captureDispatcher()(questionInteraction(questionContext));
+    const picker = vi.fn(async () => null);
+    const response = await captureDispatcher({ handleModelPickerInteraction: picker })(
+      questionInteraction(questionContext),
+    );
 
     expect(resolveOptionMock).toHaveBeenCalledTimes(1);
     expect(resolveOptionMock.mock.calls[0]?.[0]).toMatchObject({
@@ -129,11 +128,7 @@ describe("mattermost question interactions", () => {
     expect(response?.update?.props).toEqual({
       attachments: [{ text: "✓ **production** selected by @ada" }],
     });
-  });
-
-  it("takes a fresh authorization decision before the Gateway write", async () => {
-    await captureDispatcher()(questionInteraction(questionContext));
-
+    expect(picker).not.toHaveBeenCalled();
     expect(authorizeMock).toHaveBeenCalledTimes(1);
     expect(authorizeMock.mock.calls[0]?.[0]).toMatchObject({
       senderId: "user-1",
@@ -195,15 +190,6 @@ describe("mattermost question interactions", () => {
     expect(response?.update).toBeUndefined();
   });
 
-  it("re-checks access inside the resolver, not only before it", async () => {
-    await captureDispatcher()(questionInteraction(questionContext));
-
-    const passed = resolveOptionMock.mock.calls[0]?.[0] as { authorize?: () => unknown };
-    expect(typeof passed.authorize).toBe("function");
-    await passed.authorize?.();
-    expect(authorizeMock).toHaveBeenCalledTimes(2);
-  });
-
   it("keeps the prompt when the question already reached a terminal state", async () => {
     // The resolver reports both an answered and an expired question this way.
     resolveOptionMock.mockResolvedValue({ status: "already-terminal", reason: "already-terminal" });
@@ -223,17 +209,6 @@ describe("mattermost question interactions", () => {
     expect(response?.ephemeral_text).toBe("Could not submit this answer.");
     expect(response?.update).toBeUndefined();
     expect(error).toHaveBeenCalledWith(expect.stringContaining("gateway down"));
-  });
-
-  it("answers a question click without consulting the model picker", async () => {
-    const picker = vi.fn(async () => null);
-
-    await captureDispatcher({ handleModelPickerInteraction: picker })(
-      questionInteraction(questionContext),
-    );
-
-    expect(resolveOptionMock).toHaveBeenCalledTimes(1);
-    expect(picker).not.toHaveBeenCalled();
   });
 
   it("still hands every other click to the model picker", async () => {

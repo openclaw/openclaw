@@ -1,73 +1,47 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-
-/** Tracks capacity-triggered child ticks without leaking the parent timer lifecycle. */
-export function createCronCapacityRecheckTracker(
-  requestRecheck: () => Promise<void> | undefined,
-  requestRecheckAfterClose: () => Promise<void> | undefined,
-) {
+/** Defers a capacity wake until the current batch settles its initial reservations. */
+export function createCronCapacityRecheckGate(requestRecheck: () => void) {
   let pendingActivations = 0;
   let activationsAllowRecheck = true;
-  let activationGateResolved = false;
-  let activationGateAllowsRecheck = false;
-  let closed = false;
-  let resolveActivationGate!: (allowRecheck: boolean) => void;
-  const activationGate = new Promise<boolean>((resolve) => {
-    resolveActivationGate = resolve;
-  });
-  const trackedRechecks = new Set<Promise<void>>();
-  // Capacity may be released from an unrelated async chain. Open requests are
-  // still parent-owned, so restore the creation context before starting them.
-  const runInParentContext = AsyncLocalStorage.snapshot();
+  let allowRecheck: boolean | undefined;
+  let requested = false;
 
-  const resolveActivationGateOnce = (allowRecheck: boolean) => {
-    if (activationGateResolved) {
+  const resolveActivationGate = (allowed: boolean) => {
+    if (allowRecheck !== undefined) {
       return;
     }
-    activationGateResolved = true;
-    activationGateAllowsRecheck = allowRecheck;
-    resolveActivationGate(allowRecheck);
+    allowRecheck = allowed;
+    if (requested && allowed) {
+      requestRecheck();
+    }
+    requested = false;
   };
 
   return {
     initializeActivations(count: number, allowRecheckWhenEmpty = false) {
       pendingActivations = count;
       if (count === 0) {
-        resolveActivationGateOnce(allowRecheckWhenEmpty);
+        resolveActivationGate(allowRecheckWhenEmpty);
       }
     },
-    settleActivation(allowRecheck: boolean) {
-      if (activationGateResolved) {
+    settleActivation(allowed: boolean) {
+      if (allowRecheck !== undefined) {
         return;
       }
-      activationsAllowRecheck &&= allowRecheck;
+      activationsAllowRecheck &&= allowed;
       pendingActivations -= 1;
       if (pendingActivations === 0) {
-        resolveActivationGateOnce(activationsAllowRecheck);
+        resolveActivationGate(activationsAllowRecheck);
       }
     },
     request() {
-      if (closed) {
-        if (activationGateAllowsRecheck) {
-          void requestRecheckAfterClose();
-        }
-        return;
+      if (allowRecheck === true) {
+        requestRecheck();
+      } else if (allowRecheck === undefined) {
+        requested = true;
       }
-      const recheck = activationGate.then(async (allowRecheck) => {
-        if (allowRecheck) {
-          await runInParentContext(requestRecheck);
-        }
-      });
-      trackedRechecks.add(recheck);
-      void recheck.finally(() => trackedRechecks.delete(recheck));
     },
     abort() {
-      closed = true;
-      resolveActivationGateOnce(false);
-    },
-    async drain() {
-      while (trackedRechecks.size > 0) {
-        await Promise.all(trackedRechecks);
-      }
+      resolveActivationGate(false);
     },
   };
 }

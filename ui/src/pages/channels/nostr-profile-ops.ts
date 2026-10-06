@@ -1,7 +1,8 @@
 // Nostr profile HTTP operations for the channels page: gateway REST calls for
 // publishing and importing the relay profile, plus validation-error parsing.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { NostrProfile } from "../../api/types.ts";
-import { fetchWithControlUiAuth } from "../../app/control-ui-auth.ts";
+import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
@@ -12,16 +13,17 @@ type NostrProfileRequest = {
   isCurrent: () => boolean;
 };
 
-type NostrProfileHttpResult<T> = {
-  data: T | null;
-  response: Response;
-};
-
-async function requestNostrProfile<T>(
-  url: string,
-  init: { method: string; headers: Record<string, string>; body: string },
+async function requestNostrProfile(
   auth: NostrProfileRequest,
-): Promise<NostrProfileHttpResult<T>> {
+  method: "PUT" | "POST",
+  body: unknown,
+  suffix = "",
+) {
+  const init = {
+    method,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  };
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -32,20 +34,12 @@ async function requestNostrProfile<T>(
   );
   try {
     const response = await fetchWithControlUiAuth(
-      url,
+      `/api/channels/nostr/${encodeURIComponent(auth.accountId)}/profile${suffix}`,
       { ...init, signal: controller.signal },
       auth.authCandidates,
       auth.isCurrent,
     );
-    let data: T | null = null;
-    try {
-      data = (await response.json()) as T;
-    } catch (error) {
-      if (controller.signal.aborted) {
-        throw controller.signal.reason ?? error;
-      }
-    }
-    return { data, response };
+    return await readControlUiJsonResponse(response, controller.signal);
   } finally {
     clearTimeout(timeout);
   }
@@ -73,49 +67,34 @@ export function parseValidationErrors(details: unknown): Record<string, string> 
   return errors;
 }
 
-function buildNostrProfileUrl(accountId: string, suffix = ""): string {
-  return `/api/channels/nostr/${encodeURIComponent(accountId)}/profile${suffix}`;
-}
-
-export async function putNostrProfile(
+export function putNostrProfile(
   params: NostrProfileRequest & {
     values: NostrProfile;
   },
 ) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    error?: string;
-    details?: unknown;
-    persisted?: boolean;
-  }>(
-    buildNostrProfileUrl(params.accountId),
-    {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(params.values),
-    },
-    params,
+  return requestNostrProfile(params, "PUT", params.values);
+}
+
+function isNostrProfile(value: unknown): value is NostrProfile {
+  return (
+    isRecord(value) &&
+    ["name", "displayName", "about", "picture", "banner", "website", "nip05", "lud16"].every(
+      (field) =>
+        value[field] === undefined || value[field] === null || typeof value[field] === "string",
+    )
   );
 }
 
 export async function importNostrProfile(params: NostrProfileRequest) {
-  return await requestNostrProfile<{
-    ok?: boolean;
-    error?: string;
-    imported?: NostrProfile;
-    merged?: NostrProfile;
-    saved?: boolean;
-  }>(
-    buildNostrProfileUrl(params.accountId, "/import"),
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ autoMerge: true }),
+  const result = await requestNostrProfile(params, "POST", { autoMerge: true }, "/import");
+  return {
+    ...result,
+    data: result.data && {
+      ...result.data,
+      ok: result.data.ok,
+      saved: result.data.saved,
+      imported: isNostrProfile(result.data.imported) ? result.data.imported : undefined,
+      merged: isNostrProfile(result.data.merged) ? result.data.merged : undefined,
     },
-    params,
-  );
+  };
 }

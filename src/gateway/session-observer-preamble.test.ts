@@ -32,93 +32,82 @@ function state(headline: string): SessionObserverState {
   };
 }
 
+function publisherFixture(
+  now: () => number = () => 1_000,
+  preparePublication?: Parameters<
+    typeof createSessionObserverPreamblePublisher
+  >[0]["preparePublication"],
+) {
+  const publish = vi.fn();
+  const publisher = createSessionObserverPreamblePublisher({
+    now,
+    setTimeoutFn: setTimeout,
+    clearTimeoutFn: clearTimeout,
+    isCurrent: () => true,
+    preparePublication,
+    publish,
+  });
+  return { publish, publisher };
+}
+
+function preambleEvent(
+  session: SessionObserverState,
+  seq: number,
+  progressText: string,
+  ts = 1_000,
+) {
+  return {
+    runId: "run-1",
+    seq,
+    stream: "item" as const,
+    ts,
+    sessionKey: session.sessionKey,
+    agentId: session.agentId,
+    data: { kind: "preamble", progressText },
+  };
+}
+
 describe("session observer preamble publisher", () => {
-  it("keeps generation stable for duplicate snapshots while clearing publication state", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
+  it("preserves a replacement preamble when an older authority read finishes", async () => {
+    const olderRead = Promise.withResolvers<void>();
+    const newerRead = Promise.withResolvers<void>();
+    const preparations = [olderRead.promise, newerRead.promise];
+    const { publish, publisher } = publisherFixture(
+      () => 1_000,
+      async (_session, consume) => {
+        const prepared = preparations.shift();
+        if (!prepared) {
+          throw new Error("Unexpected preamble preparation");
+        }
+        await prepared;
+        consume();
+      },
+    );
     const session = state("Earlier headline");
-    const publish = vi.fn();
-    const publisher = createSessionObserverPreamblePublisher({
-      now: Date.now,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish,
-    });
-
-    publisher.handle(session, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item" as const,
-      ts: 1_000,
-      sessionKey: session.sessionKey,
-      agentId: session.agentId,
-      data: { kind: "preamble", progressText: "Current headline" },
-    });
-    publisher.handle(session, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item" as const,
-      ts: 1_000,
-      sessionKey: session.sessionKey,
-      agentId: session.agentId,
-      data: { kind: "preamble", progressText: "Current headline" },
-    });
-    expect(publisher.generation(session)).toBe(1);
-
-    vi.advanceTimersByTime(2_000);
-    expect(publisher.generation(session)).toBe(1);
-    publisher.dispose();
-    vi.useRealTimers();
-  });
-
-  it("does not advance generation when the headline already matches the digest", () => {
-    const session = state("Same headline");
-    const publisher = createSessionObserverPreamblePublisher({
-      now: () => 1_000,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish: vi.fn(),
-    });
-
-    for (let sequence = 1; sequence <= 2; sequence += 1) {
-      publisher.handle(session, {
-        runId: "run-1",
-        seq: sequence,
-        stream: "item" as const,
-        ts: 1_000,
-        sessionKey: session.sessionKey,
-        agentId: session.agentId,
-        data: { kind: "preamble", progressText: "Same headline" },
-      });
+    const older = publisher.handle(session, preambleEvent(session, 1, "Older preamble"));
+    publisher.clear(session);
+    const newer = publisher.handle(session, preambleEvent(session, 2, "Newer preamble"));
+    try {
+      olderRead.resolve();
+      await older;
+      newerRead.resolve();
+      await newer;
+      expect(publish).toHaveBeenCalledOnce();
+      expect(session.previousDigest).toMatchObject({ headline: "Newer preamble", revision: 2 });
+    } finally {
+      olderRead.resolve();
+      newerRead.resolve();
+      await Promise.allSettled([older, newer]);
+      publisher.dispose();
     }
-
-    expect(publisher.generation(session)).toBe(0);
-    publisher.dispose();
   });
 
-  it("remembers a preamble that matches a restored digest", () => {
+  it("remembers a preamble that matches a restored digest", async () => {
     const session = state("Checking files");
-    const publish = vi.fn();
-    const publisher = createSessionObserverPreamblePublisher({
-      now: () => 1_000,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish,
-    });
-    const event = {
-      runId: "run-1",
-      seq: 1,
-      stream: "item" as const,
-      ts: 1_000,
-      sessionKey: session.sessionKey,
-      agentId: session.agentId,
-      data: { kind: "preamble", progressText: "Checking files" },
-    };
+    const { publish, publisher } = publisherFixture();
+    const event = preambleEvent(session, 1, "Checking files");
 
-    publisher.handle(session, event);
+    await publisher.handle(session, event);
     const previousDigest = session.previousDigest;
     if (!previousDigest) {
       throw new Error("expected previous digest");
@@ -129,35 +118,19 @@ describe("session observer preamble publisher", () => {
       headline: "Reviewing the implementation",
       updatedAt: 2_000,
     };
-    publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
+    await publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
 
     expect(session.lastPreambleHeadline).toBe("Checking files");
     expect(publish).not.toHaveBeenCalled();
-    expect(publisher.generation(session)).toBe(0);
     publisher.dispose();
   });
 
-  it("does not restore an unchanged preamble after a richer digest replaces it", () => {
+  it("does not restore an unchanged preamble after a richer digest replaces it", async () => {
     const session = state("Earlier headline");
-    const publish = vi.fn();
-    const publisher = createSessionObserverPreamblePublisher({
-      now: () => 1_000,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish,
-    });
-    const event = {
-      runId: "run-1",
-      seq: 1,
-      stream: "item" as const,
-      ts: 1_000,
-      sessionKey: session.sessionKey,
-      agentId: session.agentId,
-      data: { kind: "preamble", progressText: "Checking files" },
-    };
+    const { publish, publisher } = publisherFixture();
+    const event = preambleEvent(session, 1, "Checking files");
 
-    publisher.handle(session, event);
+    await publisher.handle(session, event);
     publisher.clear(session);
     const previousDigest = session.previousDigest;
     if (!previousDigest) {
@@ -169,45 +142,30 @@ describe("session observer preamble publisher", () => {
       headline: "Reviewing the implementation",
       updatedAt: 2_000,
     };
-    publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
+    await publisher.handle(session, { ...event, seq: 2, ts: 2_001 });
 
     expect(publish).toHaveBeenCalledOnce();
-    expect(publisher.generation(session)).toBe(1);
     publisher.dispose();
   });
 
-  it("replays a queued preamble after dormant-state revival", () => {
+  it("replays a queued preamble after dormant-state revival", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
     const original = state("Earlier headline");
-    const publish = vi.fn();
-    const publisher = createSessionObserverPreamblePublisher({
-      now: Date.now,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish,
-    });
-    const preamble = (sequence: number, progressText: string) => ({
-      runId: "run-1",
-      seq: sequence,
-      stream: "item" as const,
-      ts: Date.now(),
-      sessionKey: original.sessionKey,
-      agentId: original.agentId,
-      data: { kind: "preamble" as const, progressText },
-    });
+    const { publish, publisher } = publisherFixture(Date.now);
+    const preamble = (sequence: number, progressText: string) =>
+      preambleEvent(original, sequence, progressText, Date.now());
 
-    publisher.handle(original, preamble(1, "Published headline"));
+    await publisher.handle(original, preamble(1, "Published headline"));
     vi.setSystemTime(1_100);
-    publisher.handle(original, preamble(2, "Queued headline"));
+    await publisher.handle(original, preamble(2, "Queued headline"));
     const dormant = createDormantSessionObserverRun(original);
     publisher.clear(original);
 
     expect(dormant.lastPreambleHeadline).toBe("Published headline");
     const revived = state("Published headline");
     revived.lastPreambleHeadline = dormant.lastPreambleHeadline;
-    publisher.handle(revived, {
+    await publisher.handle(revived, {
       ...preamble(3, "Queued headline"),
       sessionKey: revived.sessionKey,
       agentId: revived.agentId,
@@ -219,37 +177,14 @@ describe("session observer preamble publisher", () => {
     vi.useRealTimers();
   });
 
-  it("preserves duplicate suppression across dormant-state revival", () => {
+  it("preserves duplicate suppression across dormant-state revival", async () => {
     const original = state("Earlier headline");
-    const publish = vi.fn();
-    const publisher = createSessionObserverPreamblePublisher({
-      now: () => 1_000,
-      setTimeoutFn: setTimeout,
-      clearTimeoutFn: clearTimeout,
-      isCurrent: () => true,
-      publish,
-    });
-    publisher.handle(original, {
-      runId: "run-1",
-      seq: 1,
-      stream: "item" as const,
-      ts: 1_000,
-      sessionKey: original.sessionKey,
-      agentId: original.agentId,
-      data: { kind: "preamble", progressText: "Checking files" },
-    });
+    const { publish, publisher } = publisherFixture();
+    await publisher.handle(original, preambleEvent(original, 1, "Checking files"));
 
     const revived = state("Reviewing the implementation");
     revived.lastPreambleHeadline = original.lastPreambleHeadline;
-    publisher.handle(revived, {
-      runId: "run-1",
-      seq: 2,
-      stream: "item" as const,
-      ts: 2_000,
-      sessionKey: revived.sessionKey,
-      agentId: revived.agentId,
-      data: { kind: "preamble", progressText: "Checking files" },
-    });
+    await publisher.handle(revived, preambleEvent(revived, 2, "Checking files", 2_000));
 
     expect(publish).toHaveBeenCalledOnce();
     publisher.dispose();

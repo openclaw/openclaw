@@ -13,19 +13,44 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { backupGitCreateCommand } from "./backup-git.js";
+import { backupRestoreCommand } from "./backup-restore.js";
 import { backupSqliteCreateCommand } from "./backup-sqlite.js";
 import { verifyBackupArchive } from "./backup-verify.js";
+import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+async function listArchiveEntries(archivePath: string): Promise<string[]> {
+  const entries: string[] = [];
+  await tar.t({
+    file: archivePath,
+    onReadEntry: (entry) => {
+      entries.push(entry.path);
+    },
+  });
+  return entries;
+}
 
 describe("private update capture exclusion", () => {
   let home: TempHomeEnv;
   let stateDir: string;
   let captureRoot: string;
+  let output: string;
+
+  async function configureAgents(
+    entries: Record<string, { workspace?: string; agentDir?: string }>,
+  ) {
+    await fs.writeFile(
+      path.join(stateDir, "openclaw.json"),
+      JSON.stringify({ agents: { ownership: "explicit", entries } }),
+    );
+  }
+
   beforeEach(async () => {
     resetConfigRuntimeState();
     home = await createTempHomeEnv("backup-capture-privacy-");
     stateDir = path.join(home.home, ".openclaw");
     captureRoot = `${stateDir}.update-captures`;
+    output = path.join(path.dirname(home.home), `${path.basename(home.home)}.tar.gz`);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     await fs.mkdir(path.join(captureRoot, "completed"), { recursive: true });
@@ -39,47 +64,34 @@ describe("private update capture exclusion", () => {
   afterEach(async () => {
     resetConfigRuntimeState();
     vi.unstubAllEnvs();
-    await home.restore();
+    try {
+      await fs.rm(output, { force: true });
+    } finally {
+      await home.restore();
+    }
   });
 
   it.each(["parent", "nested"])(
     "excludes captures selected through a %s workspace",
     async (selection) => {
-      const config = {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            main: {
-              workspace: selection === "parent" ? home.home : path.join(captureRoot, "completed"),
-            },
-            healthy: { workspace: `${captureRoot}-notes` },
-          },
+      await configureAgents({
+        main: {
+          workspace: selection === "parent" ? home.home : path.join(captureRoot, "completed"),
         },
-      };
-      await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
-      const output = path.join(path.dirname(home.home), `${path.basename(home.home)}.tar.gz`);
-      try {
-        const result = await createBackupArchive({ output });
-        const entries: string[] = [];
-        await tar.t({
-          file: result.archivePath,
-          onReadEntry: (entry) => {
-            entries.push(entry.path);
-          },
-        });
-        expect(entries.some((entry) => entry.endsWith("/private.txt"))).toBe(false);
-        expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
-        await verifyBackupArchive(result.archivePath);
-        expect(await fs.readFile(path.join(captureRoot, "completed", "private.txt"), "utf8")).toBe(
-          "retained raw bytes",
-        );
-      } finally {
-        await fs.rm(output, { force: true });
-      }
+        healthy: { workspace: `${captureRoot}-notes` },
+      });
+      const result = await createBackupArchive({ output });
+      const entries = await listArchiveEntries(result.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/private.txt"))).toBe(false);
+      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+      await verifyBackupArchive(result.archivePath);
+      expect(await fs.readFile(path.join(captureRoot, "completed", "private.txt"), "utf8")).toBe(
+        "retained raw bytes",
+      );
     },
   );
 
-  it("excludes another state's paired capture root from a public archive", async () => {
+  it.each([false, true])("backupCreateCommand: linked capture owner=%s", async (linkedOwner) => {
     const otherState = path.join(home.home, "profile-b");
     const otherCapture = `${otherState}.update-captures`;
     const healthy = `${otherCapture}-notes`;
@@ -88,39 +100,66 @@ describe("private update capture exclusion", () => {
     for (const directory of [otherState, path.join(otherCapture, "run"), healthy, unowned]) {
       await fs.mkdir(directory, { recursive: true });
     }
+    if (linkedOwner) {
+      await fs.rename(otherState, otherState + "-target");
+      await fs.symlink(
+        otherState + "-target",
+        otherState,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
     const privateFile = path.join(otherCapture, "run", "private-b.txt");
     await fs.writeFile(privateFile, "synthetic private B bytes");
     await fs.writeFile(path.join(otherCapture, "run", "config.json"), '{"synthetic":"raw B"}');
     await fs.writeFile(path.join(healthy, "healthy-b.txt"), "healthy B neighbor");
     await fs.writeFile(path.join(unowned, "research.txt"), "ordinary research");
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        agents: { ownership: "explicit", entries: { main: { workspace: home.home } } },
-      }),
-    );
-    const output = path.join(
-      path.dirname(home.home),
-      `${path.basename(home.home)}-cross-state.tar.gz`,
-    );
-    try {
-      const result = await createBackupArchive({ output });
-      const entries: string[] = [];
-      await tar.t({
-        file: result.archivePath,
-        onReadEntry: (entry) => {
-          entries.push(entry.path);
-        },
-      });
-      await verifyBackupArchive(result.archivePath);
-      expect(entries.some((entry) => entry.endsWith("/healthy-b.txt"))).toBe(true);
-      expect(entries.some((entry) => entry.endsWith("/research.txt"))).toBe(true);
-      expect(await fs.readFile(privateFile, "utf8")).toBe("synthetic private B bytes");
-      expect(entries.some((entry) => entry.includes("/profile-b.update-captures/"))).toBe(false);
-    } finally {
-      await fs.rm(output, { force: true });
+    await configureAgents({ main: { workspace: home.home } });
+    const runtime = createTestRuntime();
+    const result = await backupCreateCommand(runtime, { output, verify: true });
+    const entries = await listArchiveEntries(result.archivePath);
+    await verifyBackupArchive(result.archivePath);
+    const restored = path.join(home.home, "restored-paired");
+    await backupRestoreCommand(runtime, { archive: result.archivePath, target: restored });
+    const workspace = result.assets.find((asset) => asset.kind === "workspace");
+    expect(workspace).toBeDefined();
+    if (workspace) {
+      await expect(
+        fs.stat(
+          path.join(
+            restored,
+            workspace.archivePath,
+            "profile-b.update-captures",
+            "run",
+            "private-b.txt",
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
     }
+    expect(entries.some((entry) => entry.endsWith("/healthy-b.txt"))).toBe(true);
+    expect(entries.some((entry) => entry.endsWith("/research.txt"))).toBe(true);
+    expect(await fs.readFile(privateFile, "utf8")).toBe("synthetic private B bytes");
+    expect(entries.some((entry) => entry.includes("/profile-b.update-captures/"))).toBe(false);
   });
+
+  it.each([false, true])(
+    "backupCreateCommand: linked capture root, onlyConfig=%s",
+    async (onlyConfig) => {
+      const owner = path.join(home.home, "other-state");
+      const target = path.join(home.home, "legacy-data");
+      await fs.mkdir(owner);
+      await fs.mkdir(target);
+      const configPath = path.join(target, "config.json");
+      await fs.writeFile(configPath, "{}");
+      const captureAlias = owner + ".update-captures";
+      await fs.symlink(target, captureAlias, process.platform === "win32" ? "junction" : "dir");
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(captureAlias, "config.json"));
+      await expect(
+        backupCreateCommand(createTestRuntime(), { output, onlyConfig, verify: true }),
+      ).rejects.toThrow("Private update captures are excluded from backups and support exports.");
+      await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(configPath, "utf8")).toBe("{}");
+    },
+  );
 
   it.each(["parent", "nested alias"])(
     "excludes marked orphaned and relocated artifacts from a %s workspace",
@@ -149,42 +188,20 @@ describe("private update capture exclusion", () => {
       );
       const alias = path.join(home.home, "artifact-alias");
       await fs.symlink(moved, alias, process.platform === "win32" ? "junction" : "dir");
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            entries: {
-              main: { workspace: selection === "parent" ? home.home : alias },
-              healthy: { workspace: healthy },
-            },
-          },
-        }),
-      );
-      const output = path.join(
-        path.dirname(home.home),
-        `${path.basename(home.home)}-marker.tar.gz`,
-      );
-      try {
-        const result = await createBackupArchive({ output });
-        const entries: string[] = [];
-        await tar.t({
-          file: result.archivePath,
-          onReadEntry: (entry) => {
-            entries.push(entry.path);
-          },
-        });
-        expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
-        expect(entries.some((entry) => entry.endsWith("/manifest.json"))).toBe(true);
-        expect(entries.some((entry) => entry.endsWith("/raw.txt"))).toBe(false);
-        await verifyBackupArchive(result.archivePath);
-        for (const directory of [orphanedRoot, moved, movedRoot]) {
-          expect(await fs.readFile(path.join(directory, "raw.txt"), "utf8")).toBe(
-            "synthetic retained bytes",
-          );
-        }
-      } finally {
-        await fs.rm(output, { force: true });
+      await configureAgents({
+        main: { workspace: selection === "parent" ? home.home : alias },
+        healthy: { workspace: healthy },
+      });
+      const result = await createBackupArchive({ output });
+      const entries = await listArchiveEntries(result.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+      expect(entries.some((entry) => entry.endsWith("/manifest.json"))).toBe(true);
+      expect(entries.some((entry) => entry.endsWith("/raw.txt"))).toBe(false);
+      await verifyBackupArchive(result.archivePath);
+      for (const directory of [orphanedRoot, moved, movedRoot]) {
+        expect(await fs.readFile(path.join(directory, "raw.txt"), "utf8")).toBe(
+          "synthetic retained bytes",
+        );
       }
     },
   );
@@ -203,174 +220,87 @@ describe("private update capture exclusion", () => {
       path.join(skills, "demo"),
       process.platform === "win32" ? "junction" : "dir",
     );
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        agents: {
-          ownership: "explicit",
-          entries: { main: { workspace: `${captureRoot}-notes` } },
-        },
-      }),
-    );
-    const output = path.join(path.dirname(home.home), `${path.basename(home.home)}-skill.tar.gz`);
-    try {
-      const result = await createBackupArchive({ output });
-      const entries: string[] = [];
-      await tar.t({
-        file: result.archivePath,
-        onReadEntry: (entry) => {
-          entries.push(entry.path);
-        },
-      });
-      expect(entries.some((entry) => entry.endsWith("/SKILL.md"))).toBe(false);
-      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
-      await verifyBackupArchive(result.archivePath);
-      expect(await fs.readFile(path.join(external, "SKILL.md"), "utf8")).toBe(skill);
-      expect(await fs.readFile(marker, "utf8")).toBe("openclaw-private-update-capture-v1\n");
-    } finally {
-      await fs.rm(output, { force: true });
-    }
+    await configureAgents({ main: { workspace: `${captureRoot}-notes` } });
+    const result = await createBackupArchive({ output });
+    const entries = await listArchiveEntries(result.archivePath);
+    expect(entries.some((entry) => entry.endsWith("/SKILL.md"))).toBe(false);
+    expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+    await verifyBackupArchive(result.archivePath);
+    expect(await fs.readFile(path.join(external, "SKILL.md"), "utf8")).toBe(skill);
+    expect(await fs.readFile(marker, "utf8")).toBe("openclaw-private-update-capture-v1\n");
   });
 
-  it.each(["valid", "invalid with duplicate", "valid with duplicate"])(
-    "checks a %s lexical marker before deduplicating an outward workspace alias",
-    async (mode) => {
-      const outside = path.join(home.home, "unmarked-target");
-      const marked = path.join(home.home, "marked-parent");
-      await fs.mkdir(outside);
-      await fs.mkdir(marked);
-      const marker = path.join(marked, ".openclaw-private-update-capture");
-      const markerBytes = mode.startsWith("invalid")
-        ? "incomplete"
-        : "openclaw-private-update-capture-v1\n";
-      await fs.writeFile(marker, markerBytes);
-      const raw = path.join(outside, "outward.txt");
-      await fs.writeFile(raw, "synthetic outward bytes");
-      const alias = path.join(marked, "workspace");
-      await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            entries: {
-              main: { workspace: alias },
-              healthy: { workspace: `${captureRoot}-notes` },
-              ...(mode.includes("duplicate") ? { independent: { workspace: outside } } : {}),
-            },
-          },
-        }),
-      );
-      const output = path.join(
-        path.dirname(home.home),
-        `${path.basename(home.home)}-outward.tar.gz`,
-      );
-      try {
-        if (mode.startsWith("invalid")) {
-          await expect(createBackupArchive({ output })).rejects.toThrow(
-            "Private update capture marker",
-          );
-          await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-        } else {
-          const result = await createBackupArchive({ output });
-          const entries: string[] = [];
-          await tar.t({
-            file: result.archivePath,
-            onReadEntry: (entry) => {
-              entries.push(entry.path);
-            },
-          });
-          expect(entries.some((entry) => entry.endsWith("/outward.txt"))).toBe(
-            mode.includes("duplicate"),
-          );
-          expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
-          await verifyBackupArchive(result.archivePath);
-          expect(result.skipped).toContainEqual(
-            expect.objectContaining({ kind: "workspace", sourcePath: alias, reason: "private" }),
-          );
-        }
-        expect(await fs.readFile(raw, "utf8")).toBe("synthetic outward bytes");
-        expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);
-        expect(await fs.realpath(alias)).toBe(await fs.realpath(outside));
-      } finally {
-        await fs.rm(output, { force: true });
-      }
-    },
-  );
-
-  it.each(["unpaired", "current", "other"])(
-    "refuses publication for an invalid privacy marker in a %s capture directory",
-    async (owner) => {
-      const workspace = owner === "unpaired" ? path.join(home.home, "workspace") : home.home;
-      const otherState = path.join(home.home, "other-state");
-      if (owner === "other") {
-        await fs.mkdir(otherState);
-      }
-      const privateDir =
-        owner === "current"
-          ? captureRoot
-          : owner === "other"
-            ? `${otherState}.update-captures`
-            : path.join(workspace, "incomplete");
-      await fs.mkdir(privateDir, { recursive: true });
-      await fs.writeFile(path.join(privateDir, ".openclaw-private-update-capture"), "incomplete");
-      await fs.writeFile(path.join(privateDir, "raw.txt"), "synthetic incomplete bytes");
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: { ownership: "explicit", entries: { main: { workspace } } },
-        }),
-      );
-      const output = path.join(
-        path.dirname(home.home),
-        `${path.basename(home.home)}-invalid.tar.gz`,
-      );
-      try {
-        await expect(createBackupArchive({ output })).rejects.toThrow(
-          "Private update capture marker",
-        );
-        await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await fs.readFile(path.join(privateDir, "raw.txt"), "utf8")).toBe(
-          "synthetic incomplete bytes",
-        );
-      } finally {
-        await fs.rm(output, { force: true });
-      }
-    },
-  );
-
   it.each([
-    ["sqlite", "current"],
-    ["git", "current"],
-    ["sqlite", "other"],
-    ["git", "other"],
-    ["sqlite", "alias"],
-    ["git", "alias"],
-    ["sqlite", "marked relocated alias"],
-    ["git", "marked relocated alias"],
-  ])("refuses capture inputs in %s snapshots from %s state", async (kind, owner) => {
-    let selectedRoot = captureRoot;
-    if (owner !== "current") {
-      const otherState = path.join(home.home, "profile-b");
-      await fs.mkdir(otherState);
-      selectedRoot = `${otherState}.update-captures`;
-      await fs.mkdir(path.join(selectedRoot, "completed"), { recursive: true });
-      if (owner === "alias") {
-        const alias = path.join(home.home, "capture-alias");
-        await fs.symlink(selectedRoot, alias, process.platform === "win32" ? "junction" : "dir");
-        selectedRoot = alias;
-      }
+    "invalid with duplicate",
+    "valid with duplicate",
+    "valid via alias",
+    "invalid via alias",
+  ])("backupCreateCommand checks real and resolved ancestors for a %s workspace", async (mode) => {
+    const outside = path.join(home.home, "unmarked-target");
+    const marked = path.join(home.home, "marked-parent");
+    await fs.mkdir(outside);
+    await fs.mkdir(marked);
+    const marker = path.join(marked, ".openclaw-private-update-capture");
+    const markerBytes = mode.startsWith("invalid")
+      ? "incomplete"
+      : "openclaw-private-update-capture-v1\n";
+    await fs.writeFile(marker, markerBytes);
+    const raw = path.join(outside, "outward.txt");
+    await fs.writeFile(raw, "synthetic outward bytes");
+    let alias = path.join(marked, "workspace");
+    await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
+    if (mode.endsWith("via alias")) {
+      const markedAlias = path.join(home.home, "marked-alias");
+      await fs.symlink(marked, markedAlias, process.platform === "win32" ? "junction" : "dir");
+      alias = path.join(markedAlias, "workspace");
     }
-    if (owner === "marked relocated alias") {
-      const moved = path.join(home.home, "relocated");
-      await fs.rename(selectedRoot, moved);
-      await fs.writeFile(
-        path.join(moved, ".openclaw-private-update-capture"),
-        "openclaw-private-update-capture-v1\n",
+    await configureAgents({
+      main: { workspace: alias },
+      healthy: { workspace: `${captureRoot}-notes` },
+      ...(mode.includes("duplicate") ? { independent: { workspace: outside } } : {}),
+    });
+    if (mode.startsWith("invalid")) {
+      await expect(backupCreateCommand(createTestRuntime(), { output })).rejects.toThrow(
+        "Private update capture marker",
       );
-      await fs.symlink(moved, selectedRoot, process.platform === "win32" ? "junction" : "dir");
-      await fs.rmdir(path.join(home.home, "profile-b"));
+      await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      const result = await backupCreateCommand(createTestRuntime(), { output });
+      const entries = await listArchiveEntries(result.archivePath);
+      expect(entries.some((entry) => entry.endsWith("/outward.txt"))).toBe(
+        mode.includes("duplicate"),
+      );
+      expect(entries.some((entry) => entry.endsWith("/healthy.txt"))).toBe(true);
+      await verifyBackupArchive(result.archivePath);
+      expect(result.skipped).toContainEqual(
+        expect.objectContaining({ kind: "workspace", sourcePath: alias, reason: "private" }),
+      );
     }
+    expect(await fs.readFile(raw, "utf8")).toBe("synthetic outward bytes");
+    expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);
+    expect(await fs.realpath(alias)).toBe(await fs.realpath(outside));
+  });
+
+  it("refuses publication for an invalid marker even in a known capture directory", async () => {
+    await fs.writeFile(path.join(captureRoot, ".openclaw-private-update-capture"), "incomplete");
+    await fs.writeFile(path.join(captureRoot, "raw.txt"), "synthetic incomplete bytes");
+    await configureAgents({ main: { workspace: home.home } });
+    await expect(createBackupArchive({ output })).rejects.toThrow("Private update capture marker");
+    await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(captureRoot, "raw.txt"), "utf8")).toBe(
+      "synthetic incomplete bytes",
+    );
+  });
+
+  it.each(["sqlite", "git"])("refuses relocated capture aliases in %s snapshots", async (kind) => {
+    const selectedRoot = path.join(home.home, "profile-b.update-captures");
+    const moved = path.join(home.home, "relocated");
+    await fs.mkdir(path.join(moved, "completed"), { recursive: true });
+    await fs.writeFile(
+      path.join(moved, ".openclaw-private-update-capture"),
+      "openclaw-private-update-capture-v1\n",
+    );
+    await fs.symlink(moved, selectedRoot, process.platform === "win32" ? "junction" : "dir");
     const databasePath = path.join(selectedRoot, "completed", "database.sqlite");
     const source = new DatabaseSync(databasePath);
     source.exec(OPENCLAW_STATE_SCHEMA_SQL);
@@ -403,41 +333,25 @@ describe("private update capture exclusion", () => {
     expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
-  it.each(["valid", "invalid"])(
-    "refuses a %s marked agent root selection before canonicalization",
-    async (mode) => {
-      const marked = path.join(home.home, "marked-agent-parent");
-      const target = path.join(home.home, "external-agent");
-      await fs.mkdir(marked);
-      await fs.mkdir(target);
-      const marker = path.join(marked, ".openclaw-private-update-capture");
-      const markerBytes = mode === "valid" ? "openclaw-private-update-capture-v1\n" : "incomplete";
-      await fs.writeFile(marker, markerBytes);
-      await fs.writeFile(path.join(target, "agent-private.txt"), "synthetic private agent bytes");
-      const alias = path.join(marked, "agent");
-      await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            entries: { main: { agentDir: alias, workspace: `${captureRoot}-notes` } },
-          },
-        }),
-      );
-      const output = path.join(path.dirname(home.home), `${path.basename(home.home)}-agent.tar.gz`);
-      try {
-        await expect(createBackupArchive({ output })).rejects.toThrow("Private update capture");
-        await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await fs.readFile(path.join(target, "agent-private.txt"), "utf8")).toBe(
-          "synthetic private agent bytes",
-        );
-        expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);
-      } finally {
-        await fs.rm(output, { force: true });
-      }
-    },
-  );
+  it("refuses a marked agent root selection before canonicalization", async () => {
+    const marked = path.join(home.home, "marked-agent-parent");
+    const target = path.join(home.home, "external-agent");
+    await fs.mkdir(marked);
+    await fs.mkdir(target);
+    const marker = path.join(marked, ".openclaw-private-update-capture");
+    const markerBytes = "openclaw-private-update-capture-v1\n";
+    await fs.writeFile(marker, markerBytes);
+    await fs.writeFile(path.join(target, "agent-private.txt"), "synthetic private agent bytes");
+    const alias = path.join(marked, "agent");
+    await fs.symlink(target, alias, process.platform === "win32" ? "junction" : "dir");
+    await configureAgents({ main: { agentDir: alias, workspace: `${captureRoot}-notes` } });
+    await expect(createBackupArchive({ output })).rejects.toThrow("Private update capture");
+    await expect(fs.stat(output)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(path.join(target, "agent-private.txt"), "utf8")).toBe(
+      "synthetic private agent bytes",
+    );
+    expect(await fs.readFile(marker, "utf8")).toBe(markerBytes);
+  });
 
   it.each([
     ["sqlite", "global"],
@@ -475,20 +389,12 @@ describe("private update capture exclusion", () => {
         alias,
         role === "global" ? "file" : process.platform === "win32" ? "junction" : "dir",
       );
-      await fs.writeFile(
-        path.join(stateDir, "openclaw.json"),
-        JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            entries: {
-              main: {
-                ...(role === "agent" ? { agentDir: alias } : {}),
-                workspace: `${captureRoot}-notes`,
-              },
-            },
-          },
-        }),
-      );
+      await configureAgents({
+        main: {
+          ...(role === "agent" ? { agentDir: alias } : {}),
+          workspace: `${captureRoot}-notes`,
+        },
+      });
       for (const key of ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"]) {
         vi.stubEnv(key, "OpenClaw Test");
       }
@@ -519,18 +425,6 @@ describe("private update capture exclusion", () => {
       await fs.unlink(marker);
       await expect(create()).resolves.toBeDefined();
       expect((await fs.readdir(repository)).length).toBeGreaterThan(0);
-    },
-  );
-
-  it.each([false, true])(
-    "refuses a raw capture selected as config, onlyConfig=%s",
-    async (onlyConfig) => {
-      const configPath = path.join(captureRoot, "completed", "config.json");
-      await fs.writeFile(configPath, "{}");
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      await expect(createBackupArchive({ onlyConfig, dryRun: true })).rejects.toThrow(
-        "Private update captures are excluded",
-      );
     },
   );
 });

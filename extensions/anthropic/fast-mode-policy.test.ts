@@ -15,6 +15,11 @@ describe("selected request Fast applicability", () => {
   it.each([
     { name: "Sonnet 5", context: { modelId: "claude-sonnet-5" }, expected: false },
     { name: "Opus 5", context: {}, expected: true },
+    {
+      name: "non-Anthropic provider",
+      context: { provider: "anthropic-vertex" },
+      expected: undefined,
+    },
     { name: "legacy Priority Tier", context: { modelId: "claude-sonnet-4-6" }, expected: true },
     { name: "OAuth", context: { authMode: "oauth" }, expected: false },
     { name: "unknown auth", context: { authMode: undefined }, expected: undefined },

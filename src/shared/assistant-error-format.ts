@@ -1,6 +1,8 @@
-// Assistant error formatting helpers normalize assistant-visible error payloads.
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { extractHttpResponseBody } from "./http-error-response.js";
 const ERROR_PAYLOAD_PREFIX_RE =
@@ -39,86 +41,63 @@ const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
 
 type ErrorPayload = Record<string, unknown>;
 
-type ApiErrorInfo = {
-  httpCode?: string;
-  type?: string;
-  code?: string;
-  message?: string;
-  requestId?: string;
-};
-
-export function formatProviderRefusalText(message: { diagnostics?: unknown }): string | undefined {
+export function formatProviderRefusalText(message: {
+  diagnostics?: unknown;
+  errorCode?: unknown;
+}): string | undefined {
   const refusal = Array.isArray(message.diagnostics)
     ? message.diagnostics.find(
         (diagnostic) => asOptionalRecord(diagnostic)?.type === "provider_refusal",
       )
     : undefined;
   if (!refusal) {
-    return undefined;
+    // Older transcripts retain the code but have no review findings or continuation state.
+    return message.errorCode === "misalignment_policy_violation"
+      ? "The provider stopped this request as a safety precaution (misalignment)."
+      : undefined;
   }
   const category = asOptionalRecord(asOptionalRecord(refusal)?.details)?.category;
   const safeCategory =
     typeof category === "string" && /^[a-z0-9_-]{1,64}$/i.test(category) ? category : undefined;
+  if (safeCategory === "misalignment") {
+    return "Chat stopped as a precaution. Review the findings in chat before continuing.";
+  }
   return `The provider refused this request${safeCategory ? ` (category: ${safeCategory})` : ""}. Revise the request and try again.`;
 }
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+  const record = asOptionalRecord(payload);
+  if (!record) {
     return false;
   }
-  const record = payload as ErrorPayload;
   if (record.type === "error") {
     return true;
   }
   if (typeof record.request_id === "string" || typeof record.requestId === "string") {
     return true;
   }
-  if ("error" in record) {
-    const err = record.error;
-    if (err && typeof err === "object" && !Array.isArray(err)) {
-      const errRecord = err as ErrorPayload;
-      if (
-        typeof errRecord.message === "string" ||
-        typeof errRecord.type === "string" ||
-        typeof errRecord.code === "string"
-      ) {
-        return true;
-      }
-    }
-    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
-    if (typeof err === "string" && typeof record.message === "string") {
-      return true;
-    }
-  }
-  return false;
+  const error = asOptionalRecord(record.error);
+  return (
+    [error?.message, error?.type, error?.code].some((value) => typeof value === "string") ||
+    (typeof record.error === "string" && typeof record.message === "string")
+  );
 }
 
 export function parseApiErrorPayload(raw?: string): ErrorPayload | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
-  const candidates = [trimmed];
-  if (ERROR_PAYLOAD_PREFIX_RE.test(trimmed)) {
-    candidates.push(trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim());
+  const candidate = trimmed.replace(ERROR_PAYLOAD_PREFIX_RE, "").trim();
+  if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
+    return null;
   }
-  for (const candidate of candidates) {
-    if (!candidate.startsWith("{") || !candidate.endsWith("}")) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(candidate) as unknown;
-      if (isErrorPayloadObject(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // ignore parse errors
-    }
+  try {
+    const parsed = JSON.parse(candidate) as unknown;
+    return isErrorPayloadObject(parsed) ? parsed : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function extractHttpStatusMatch(
@@ -146,31 +125,16 @@ export function extractProviderWrappedHttpStatus(
 
 /** Extract an explicitly labeled provider HTTP status without matching embedded numeric text. */
 export function extractErrorHttpStatus(raw: string): { code: number; rest: string } | null {
-  const trimmed = raw.trim();
-  const direct =
-    extractLeadingHttpStatus(trimmed) ??
-    extractProviderWrappedHttpStatus(trimmed) ??
-    extractHttpStatusMatch(trimmed.match(LABELED_HTTP_STATUS_RE));
-  if (direct) {
-    return direct;
-  }
-  const unwrapped = trimmed.replace(ERROR_STATUS_ENVELOPE_RE, "");
-  if (unwrapped === trimmed) {
-    return null;
-  }
+  const candidate = raw.trim().replace(ERROR_STATUS_ENVELOPE_RE, "");
   return (
-    extractLeadingHttpStatus(unwrapped) ??
-    extractProviderWrappedHttpStatus(unwrapped) ??
-    extractHttpStatusMatch(unwrapped.match(LABELED_HTTP_STATUS_RE))
+    extractLeadingHttpStatus(candidate) ??
+    extractProviderWrappedHttpStatus(candidate) ??
+    extractHttpStatusMatch(candidate.match(LABELED_HTTP_STATUS_RE))
   );
 }
 
 export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-
   if (
     HTML_ERROR_PREFIX_RE.test(trimmed) &&
     HTML_CLOSE_RE.test(trimmed) &&
@@ -195,20 +159,14 @@ export function isCloudflareOrHtmlErrorPage(raw: string): boolean {
 
 export function isGenericProviderInternalError(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
   return (
     GENERIC_PROVIDER_INTERNAL_ERROR_RE.test(trimmed) &&
     (/help\.openai\.com/i.test(trimmed) || SUPPORT_REQUEST_ID_RE.test(trimmed))
   );
 }
 
-export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
+export function parseApiErrorInfo(raw?: string) {
+  const trimmed = normalizeOptionalString(raw);
   if (!trimmed) {
     return null;
   }
@@ -237,46 +195,22 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
     payload = details;
   }
 
-  const requestId =
-    typeof payload.request_id === "string"
-      ? payload.request_id
-      : typeof payload.requestId === "string"
-        ? payload.requestId
-        : undefined;
-
-  const topType = typeof payload.type === "string" ? payload.type : undefined;
-  const topCode = typeof payload.code === "string" ? payload.code : undefined;
-  const topMessage = typeof payload.message === "string" ? payload.message : undefined;
-
-  let errType: string | undefined;
-  let errCode: string | undefined;
-  let errMessage: string | undefined;
-  if (payload.error && typeof payload.error === "object" && !Array.isArray(payload.error)) {
-    const err = payload.error as Record<string, unknown>;
-    if (typeof err.type === "string") {
-      errType = err.type;
-    }
-    if (typeof err.code === "string") {
-      errCode = err.code;
-      if (!errType) {
-        errType = err.code;
-      }
-    }
-    if (typeof err.message === "string") {
-      errMessage = err.message;
-    }
-  } else if (typeof payload.error === "string") {
-    // Flat error payloads: {"error":"insufficient_balance","message":"..."}
-    errType = payload.error;
-  }
-
-  const code = errCode ?? topCode;
+  const error = asOptionalRecord(payload.error);
+  const errorCode = readStringField(error, "code");
+  const errorType = readStringField(error, "type");
+  // A nested code also supplies the type when that type is blank or absent.
+  const type = error
+    ? errorCode !== undefined && !errorType
+      ? errorCode
+      : errorType
+    : readStringField(payload, "error");
+  const code = errorCode ?? readStringField(payload, "code");
   return {
     httpCode,
-    type: errType ?? topType,
+    type: type ?? readStringField(payload, "type"),
     ...(code === undefined ? {} : { code }),
-    message: errMessage ?? topMessage,
-    requestId,
+    message: readStringField(error, "message") ?? readStringField(payload, "message"),
+    requestId: readStringField(payload, "request_id") ?? readStringField(payload, "requestId"),
   };
 }
 
@@ -294,18 +228,8 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     return GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE;
   }
 
-  const leadingStatus = extractLeadingHttpStatus(trimmed);
-  const isHtmlChallenge = isCloudflareOrHtmlErrorPage(trimmed);
-  if (leadingStatus && isHtmlChallenge) {
-    return `The AI service is temporarily unavailable (HTTP ${leadingStatus.code}). Please try again in a moment.`;
-  }
-
-  if (isHtmlChallenge) {
-    return (
-      "The provider returned an HTML error page instead of an API response. " +
-      "This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. " +
-      "Retry in a moment or check provider status."
-    );
+  if (isCloudflareOrHtmlErrorPage(trimmed)) {
+    return "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
   }
 
   const httpMatch = extractHttpStatusMatch(trimmed.match(HTTP_STATUS_PREFIX_RE));
@@ -325,18 +249,38 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }
 
-const REFUSED_TRANSPORT_CODE_RE = /\beconnrefused\b/i;
-const INTERRUPTED_TRANSPORT_CODE_RE = /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i;
-const DNS_TRANSPORT_CODE_RE = /\benotfound\b|\beai_again\b/i;
-const UNREACHABLE_TRANSPORT_CODE_RE = /\benetunreach\b|\behostunreach\b|\behostdown\b/i;
+const CONNECTION_FAILED_MESSAGE =
+  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+const TRANSPORT_ERRORS = [
+  {
+    code: /\beconnrefused\b/i,
+    phrases: ["connection refused", "actively refused"],
+    message: CONNECTION_FAILED_MESSAGE,
+  },
+  {
+    code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
+    phrases: ["socket hang up", "connection reset", "connection aborted"],
+    message:
+      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+  },
+  {
+    code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
+    phrases: [
+      "getaddrinfo",
+      "no such host",
+      "dns",
+      "network is unreachable",
+      "host is unreachable",
+      "fetch failed",
+      "connection error",
+      "network request failed",
+    ],
+    message: CONNECTION_FAILED_MESSAGE,
+  },
+];
 
 export function isKnownTransportErrorCode(value: string): boolean {
-  return [
-    REFUSED_TRANSPORT_CODE_RE,
-    INTERRUPTED_TRANSPORT_CODE_RE,
-    DNS_TRANSPORT_CODE_RE,
-    UNREACHABLE_TRANSPORT_CODE_RE,
-  ].some((pattern) => pattern.exec(value)?.[0] === value);
+  return TRANSPORT_ERRORS.some(({ code }) => code.exec(value)?.[0] === value);
 }
 
 export function formatTransportErrorCopy(raw: string): string | undefined {
@@ -344,45 +288,13 @@ export function formatTransportErrorCopy(raw: string): string | undefined {
     return undefined;
   }
   const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    REFUSED_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-  if (
-    INTERRUPTED_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-  if (
-    DNS_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-  if (
-    UNREACHABLE_TRANSPORT_CODE_RE.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
+  for (const { code, phrases, message } of TRANSPORT_ERRORS) {
+    if (code.test(raw) || phrases.some((phrase) => lower.includes(phrase))) {
+      return message;
+    }
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
+    return CONNECTION_FAILED_MESSAGE;
   }
   return undefined;
 }

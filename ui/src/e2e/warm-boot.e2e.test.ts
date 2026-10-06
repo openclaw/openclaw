@@ -13,10 +13,23 @@ const suite = createControlUiE2eSuite({
   name: "Control UI warm reload",
   trackBrowserContexts: true,
 });
-const sessionKey = "agent:main:main";
+// A literal conversation can restore before hello; the shorthand main route needs live defaults.
+const sessionKey = "agent:main:thread:warm-reload";
 const transcriptText = "This conversation is ready before the Gateway reconnects.";
 
-async function waitForPersistedWarmState(page: Page, eligible = true): Promise<void> {
+async function expectOwnMessageAlignment(page: Page): Promise<void> {
+  const own = page.locator(".chat-group.user", { hasText: "Morgan's saved message." });
+  await expect
+    .poll(() =>
+      own.evaluate((row) => ({
+        peer: row.classList.contains("chat-group--peer"),
+        alignment: getComputedStyle(row).justifyContent,
+      })),
+    )
+    .toEqual({ peer: false, alignment: "end" });
+}
+
+async function waitForPersistedWarmState(page: Page): Promise<void> {
   await expect
     .poll(() =>
       page.evaluate(async () => {
@@ -85,7 +98,7 @@ async function waitForPersistedWarmState(page: Page, eligible = true): Promise<v
         };
       }),
     )
-    .toEqual({ bootRecord: eligible, roster: eligible, transcript: true });
+    .toEqual({ bootRecord: true, roster: true, transcript: true });
 }
 
 suite.define(() => {
@@ -102,11 +115,20 @@ suite.define(() => {
           updatedAt: timestamp,
         };
         const gateway = await installMockGateway(page, {
+          sessionKey,
           // The typed hold applies again after reload and releases the normal hello payload.
           heldMethods: ["connect"],
           authMethod: profile === "trusted-proxy" || profile === "device-token" ? profile : "token",
           authMode: profile === "trusted-proxy" ? "trusted-proxy" : "token",
-          presenceUsers: [{ id: "profile-a", self: true }],
+          presenceUsers: [
+            {
+              id: "profile-a",
+              self: true,
+              ...(profile === "matching"
+                ? { identity: { type: "profile" as const, id: "profile-a" } }
+                : {}),
+            },
+          ],
           sessions: [
             currentRow,
             {
@@ -127,6 +149,21 @@ suite.define(() => {
                   content: transcriptText,
                   __openclaw: { id: "cached-message", seq: 1 },
                 },
+                ...(profile === "matching"
+                  ? [
+                      {
+                        role: "user",
+                        content: "Morgan's saved message.",
+                        __openclaw: {
+                          id: "own-message",
+                          seq: 2,
+                          senderId: "profile-a",
+                          senderIdentity: { type: "profile", id: "profile-a" },
+                          senderName: "Morgan",
+                        },
+                      },
+                    ]
+                  : []),
               ],
               deltaCursor: "warm-reload-cursor",
               hasMore: false,
@@ -136,7 +173,7 @@ suite.define(() => {
         });
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, sessionKey) +
-            (profile === "device-token" ? "" : "#token=test-token"),
+            (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
@@ -146,7 +183,10 @@ suite.define(() => {
         const transcript = page.locator(".chat-thread-inner");
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
-        await waitForPersistedWarmState(page, profile !== "trusted-proxy");
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+        }
+        await waitForPersistedWarmState(page);
         const hello = await page.evaluate(() => {
           const app = document.querySelector<HTMLElement & { runtime?: ApplicationRuntime }>(
             "openclaw-app",
@@ -160,25 +200,14 @@ suite.define(() => {
 
         await page.reload();
         const connect = await gateway.waitForRequest("connect");
-        if (profile === "trusted-proxy") {
-          await page.locator(".connect-splash").waitFor();
-          expect(await page.locator("openclaw-app-shell").count()).toBe(0);
-          expect(await sidebar.getByText("Cached only session", { exact: true }).count()).toBe(0);
-          expect(await transcript.getByText(transcriptText, { exact: true }).count()).toBe(0);
-          expect(await gateway.getRequests("sessions.list")).toEqual([]);
-          expect(await gateway.getRequests("chat.startup")).toEqual([]);
-          await waitForPersistedWarmState(page, false);
-          await page.screenshot({ path: path.join(suite.artifactDir, "proxy-before-hello.png") });
-          await gateway.resolveDeferred("connect");
-          await transcript.getByText(transcriptText, { exact: true }).waitFor();
-          await waitForPersistedWarmState(page, false);
-          return;
-        }
         await sidebar.locator(".nav-item--home").waitFor();
         await sidebar.getByText("Cached only session", { exact: true }).waitFor();
         await transcript.getByText(transcriptText, { exact: true }).waitFor();
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+        }
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-before-hello.png`),
         });
@@ -214,6 +243,8 @@ suite.define(() => {
           await gateway.deferNext("chat.startup");
           await gateway.resolveDeferred("connect", {
             ...hello,
+            // Presence attribution alone does not change the authenticated storage owner.
+            auth: { ...hello.auth, recoveryScope: "e2e-profile-b-recovery-scope" },
             snapshot: {
               ...(typeof hello.snapshot === "object" && hello.snapshot !== null
                 ? hello.snapshot
@@ -257,6 +288,18 @@ suite.define(() => {
         await page.screenshot({
           path: path.join(suite.artifactDir, `warm-${profile}-after-hello.png`),
         });
+        if (profile === "matching") {
+          await expectOwnMessageAlignment(page);
+          const connectCount = (await gateway.getRequests("connect")).length;
+          const startupCount = (await gateway.getRequests("chat.startup")).length;
+          await gateway.deferNext("connect");
+          await gateway.closeLatest(1001, "Own-message alignment reconnect");
+          await gateway.waitForRequest("connect", { after: connectCount });
+          await expectOwnMessageAlignment(page);
+          await gateway.resolveDeferred("connect");
+          await gateway.waitForRequest("chat.startup", { after: startupCount });
+          await expectOwnMessageAlignment(page);
+        }
       });
     },
   );

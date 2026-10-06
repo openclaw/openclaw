@@ -1,13 +1,15 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
-import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
+import {
+  normalizeTrimmedStringList,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseToml } from "smol-toml";
 import type {
-  CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
   CodexAppServerHomeScope,
-  CodexAppServerRemoteAppsSubstrate,
   CodexAppServerRuntimeOptions,
-  CodexAppServerSandboxMode,
   CodexAppServerStartOptions,
   CodexManagedCommandOrder,
   CodexComputerUseConfig,
@@ -20,7 +22,6 @@ import type {
 import {
   assertCodexAppServerAllowedForOpenClawExecMode,
   resolveApprovalPolicy,
-  resolveApprovalsReviewer,
   resolveCodexPolicyModeForOpenClawExecMode,
   resolveEffectiveOpenClawExecModeForCodexAppServer,
   resolveSandbox,
@@ -37,10 +38,7 @@ import {
   assertCodexAppServerCommandHasNoInlineArgs,
   readCodexPluginConfig,
 } from "./config-parsing.js";
-import {
-  parseAllowedApprovalPoliciesFromCodexRequirements,
-  readCodexRequirementsToml,
-} from "./config-requirements.js";
+import { parseCodexRequirementsPolicy, readCodexRequirementsToml } from "./config-requirements.js";
 import {
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexConfigEnablesNativeComputerUse,
@@ -48,25 +46,19 @@ import {
 import {
   assertCodexAppServerConnectionSecurity,
   inferCodexAppServerConnectionClass,
-  normalizeRemoteWorkspaceRoot,
   resolveCodexAppServerNetworkProxy,
   resolveDefaultCodexAppServerPolicy,
   resolvePolicyMode,
-  resolveTransport,
 } from "./config-security.js";
 import {
   hashSecretForKey,
-  normalizeCodexAppServerSecretInput,
-  normalizeCodexServiceTier,
   normalizeHeaders,
-  normalizePositiveNumber,
-  readBooleanEnv,
   readNonEmptyString,
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
 import { readCodexAppServerConfigOptions } from "./launch-args.js";
-import type { CodexSandboxPolicy } from "./protocol.js";
+import type { CodexSandboxMode, CodexSandboxPolicy } from "./protocol.js";
 
 /**
  * Sole owner of the app-server home-scope decision. Ordinary harness connections
@@ -83,8 +75,7 @@ export function resolveCodexAppServerHomeScope(params: {
   if (configured) {
     return configured;
   }
-  return params.connectionScope === "supervision" &&
-    resolveTransport(params.appServer?.transport) !== "websocket"
+  return params.connectionScope === "supervision" && params.appServer?.transport !== "websocket"
     ? "user"
     : "agent";
 }
@@ -118,7 +109,7 @@ export function createCodexAppServerConfig({
     const env = params.env ?? process.env;
     const pluginConfig = readCodexPluginConfig(params.pluginConfig);
     const config = pluginConfig.appServer ?? {};
-    const transport = resolveTransport(config.transport);
+    const transport = config.transport ?? "stdio";
     const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
     if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
       throw new Error(
@@ -139,14 +130,13 @@ export function createCodexAppServerConfig({
     const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
     const headers = normalizeHeaders(config.headers);
     const clearEnv = normalizeTrimmedStringList(config.clearEnv);
-    const authToken = normalizeCodexAppServerSecretInput({
+    const authToken = normalizeResolvedSecretInputString({
       value: config.authToken,
       path: "plugins.entries.codex.config.appServer.authToken",
     });
     const url = readNonEmptyString(config.url) ?? (transport === "unix" ? "unix://" : undefined);
     const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
-    const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
-    const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
+    const remoteWorkspaceRoot = readNonEmptyString(config.remoteWorkspaceRoot);
     const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
       execMode: params.execMode,
       execPolicy: params.execPolicy,
@@ -155,11 +145,10 @@ export function createCodexAppServerConfig({
     if (!params.sessionPermissionMode) {
       assertCodexAppServerAllowedForOpenClawExecMode(execMode);
     }
-    const explicitPolicyMode =
-      resolvePolicyMode(config.mode) ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
+    const explicitPolicyMode = config.mode ?? resolvePolicyMode(env.OPENCLAW_CODEX_APP_SERVER_MODE);
     const configuredSandbox =
-      resolveSandbox(config.sandbox) ?? resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX);
-    const explicitApprovalsReviewer = resolveApprovalsReviewer(config.approvalsReviewer);
+      config.sandbox ?? resolveSandbox(env.OPENCLAW_CODEX_APP_SERVER_SANDBOX);
+    const explicitApprovalsReviewer = config.approvalsReviewer;
     const normalizedPolicyMode = resolveCodexPolicyModeForOpenClawExecMode(execMode);
     const ignoreLegacyYoloPolicyMode =
       normalizedPolicyMode === "guardian" && explicitPolicyMode === "yolo";
@@ -209,7 +198,7 @@ export function createCodexAppServerConfig({
     if (
       forcePerCommandApprovals &&
       requirementsToml &&
-      parseAllowedApprovalPoliciesFromCodexRequirements(requirementsToml)?.has("untrusted") ===
+      parseCodexRequirementsPolicy(requirementsToml).allowedApprovalPolicies?.has("untrusted") ===
         false
     ) {
       throw new Error("tools.exec.ask=always requires Codex app-server per-command approvals");
@@ -259,7 +248,7 @@ export function createCodexAppServerConfig({
     const policyMode = ignoreLegacyYoloPolicyMode
       ? normalizedPolicyMode
       : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
-    const serviceTier = normalizeCodexServiceTier(config.serviceTier);
+    const serviceTier = config.serviceTier;
     const resolvedSandbox =
       forcedPolicy?.sandbox ??
       configuredSandbox ??
@@ -292,20 +281,13 @@ export function createCodexAppServerConfig({
       headers,
     });
 
-    const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
+    const configApprovalPolicy = config.approvalPolicy;
     const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
     const approvalPolicy =
       configApprovalPolicy ??
       envApprovalPolicy ??
       defaultPolicy?.approvalPolicy ??
       (policyMode === "guardian" ? "on-request" : "never");
-    const approvalPolicySource: CodexAppServerApprovalPolicySource = configApprovalPolicy
-      ? "config"
-      : envApprovalPolicy
-        ? "env"
-        : defaultPolicy?.approvalPolicy
-          ? "requirements"
-          : "implicit";
     const computerUseConfig = resolveCodexComputerUseConfig({
       pluginConfig: params.pluginConfig,
       env,
@@ -315,7 +297,7 @@ export function createCodexAppServerConfig({
       (homeScope === "user" || computerUseConfig.enabled ? "desktop-first" : "package-first");
     const includeManagedCommandOrder =
       commandSource === "managed" &&
-      (managedCommandOrder === "desktop-first" || params.managedCommandOrder === "package-first");
+      (managedCommandOrder === "desktop-first" || params.managedCommandOrder !== undefined);
     const managedComputerUsePluginNames = [
       ...new Set([DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME, computerUseConfig.pluginName]),
     ];
@@ -335,13 +317,11 @@ export function createCodexAppServerConfig({
         ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
       },
       connectionClass,
-      remoteAppsSubstrate,
       ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
       codeModeOnly: config.codeModeOnly === true,
       loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
-      requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+      requestTimeoutMs: resolvePositiveTimerTimeoutMs(config.requestTimeoutMs, 60_000),
       approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
-      approvalPolicySource,
       sandbox: resolvedSandbox,
       approvalsReviewer:
         forcedPolicy?.approvalsReviewer ??
@@ -349,6 +329,7 @@ export function createCodexAppServerConfig({
         defaultPolicy?.approvalsReviewer ??
         (policyMode === "guardian" ? "auto_review" : "user"),
       ...(serviceTier ? { serviceTier } : {}),
+      enableUltrafast: config.enableUltrafast !== false,
       ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
     };
   }
@@ -381,7 +362,7 @@ export function createCodexAppServerConfig({
  */
 export function resolveCodexAppServerStartOptionsForAgent(params: {
   startOptions: CodexAppServerStartOptions;
-  agentDir: string;
+  agentDir?: string;
   codexConfigToml?: string | null;
   env?: NodeJS.ProcessEnv;
 }): CodexAppServerStartOptions {
@@ -396,8 +377,12 @@ export function resolveCodexAppServerStartOptionsForAgent(params: {
   if (startOptions.homeScope === "user") {
     return { ...startOptions, managedCommandOrder: "desktop-first" };
   }
+  if (!params.agentDir) {
+    throw new Error("Agent-scoped Codex requires an OpenClaw agent directory");
+  }
   const nativeComputerUseEnabled = codexConfigEnablesNativeComputerUse({
     agentDir: params.agentDir,
+    codexHome: startOptions.codexHome,
     codexConfigToml: params.codexConfigToml,
     env: params.env,
     homeScope: "agent",
@@ -419,78 +404,58 @@ export function resolveCodexComputerUseConfig(
 ): ResolvedCodexComputerUseConfig {
   const env = params.env ?? process.env;
   const config = readCodexPluginConfig(params.pluginConfig).computerUse ?? {};
-  const marketplaceSource =
-    readNonEmptyString(params.overrides?.marketplaceSource) ??
-    readNonEmptyString(config.marketplaceSource) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_SOURCE);
-  const marketplacePath =
-    readNonEmptyString(params.overrides?.marketplacePath) ??
-    readNonEmptyString(config.marketplacePath) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_PATH);
-  const marketplaceName =
-    readNonEmptyString(params.overrides?.marketplaceName) ??
-    readNonEmptyString(config.marketplaceName) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_NAME);
-  const configuredPluginName =
-    readNonEmptyString(params.overrides?.pluginName) ??
-    readNonEmptyString(config.pluginName) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_NAME);
-  const configuredMcpServerName =
-    readNonEmptyString(params.overrides?.mcpServerName) ??
-    readNonEmptyString(config.mcpServerName) ??
-    readNonEmptyString(env.OPENCLAW_CODEX_COMPUTER_USE_MCP_SERVER_NAME);
+  const option = <K extends keyof CodexComputerUseConfig>(key: K) =>
+    params.overrides?.[key] ?? config[key];
+  const stringOption = (key: keyof CodexComputerUseConfig, envSuffix: string) =>
+    readNonEmptyString(params.overrides?.[key]) ??
+    readNonEmptyString(config[key]) ??
+    readNonEmptyString(env[`OPENCLAW_CODEX_COMPUTER_USE_${envSuffix}`]);
+  const marketplaceSource = stringOption("marketplaceSource", "MARKETPLACE_SOURCE");
+  const marketplacePath = stringOption("marketplacePath", "MARKETPLACE_PATH");
+  const marketplaceName = stringOption("marketplaceName", "MARKETPLACE_NAME");
+  const configuredPluginName = stringOption("pluginName", "PLUGIN_NAME");
+  const configuredMcpServerName = stringOption("mcpServerName", "MCP_SERVER_NAME");
   const autoInstall =
-    params.overrides?.autoInstall ??
-    config.autoInstall ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
+    option("autoInstall") ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_INSTALL) ??
     false;
-  const marketplaceDiscoveryTimeoutMs = normalizePositiveNumber(
-    params.overrides?.marketplaceDiscoveryTimeoutMs ??
-      config.marketplaceDiscoveryTimeoutMs ??
+  const marketplaceDiscoveryTimeoutMs = resolvePositiveTimerTimeoutMs(
+    option("marketplaceDiscoveryTimeoutMs") ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS,
   );
-  const liveTestTimeoutMs = normalizePositiveNumber(
-    params.overrides?.liveTestTimeoutMs ??
-      config.liveTestTimeoutMs ??
+  const liveTestTimeoutMs = resolvePositiveTimerTimeoutMs(
+    option("liveTestTimeoutMs") ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_LIVE_TEST_TIMEOUT_MS,
   );
-  const toolCallTimeoutMs = normalizePositiveNumber(
-    params.overrides?.toolCallTimeoutMs ??
-      config.toolCallTimeoutMs ??
+  const toolCallTimeoutMs = resolvePositiveTimerTimeoutMs(
+    option("toolCallTimeoutMs") ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS),
     DEFAULT_CODEX_COMPUTER_USE_TOOL_CALL_TIMEOUT_MS,
   );
   const healthCheckIntervalMinutes = normalizeComputerUseHealthCheckIntervalMinutes(
-    params.overrides?.healthCheckIntervalMinutes ??
-      config.healthCheckIntervalMinutes ??
+    option("healthCheckIntervalMinutes") ??
       readNumberEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_INTERVAL_MINUTES),
   );
   const healthCheckEnabled =
-    params.overrides?.healthCheckEnabled ??
-    config.healthCheckEnabled ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
+    option("healthCheckEnabled") ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_HEALTH_CHECK_ENABLED) ??
     false;
   const pluginCacheMode =
     normalizeComputerUsePluginCacheMode(params.overrides?.pluginCacheMode) ??
-    normalizeComputerUsePluginCacheMode(config.pluginCacheMode) ??
+    config.pluginCacheMode ??
     normalizeComputerUsePluginCacheMode(env.OPENCLAW_CODEX_COMPUTER_USE_PLUGIN_CACHE_MODE) ??
     "independent";
   const strictReadiness =
-    params.overrides?.strictReadiness ??
-    config.strictReadiness ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
+    option("strictReadiness") ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_STRICT_READINESS) ??
     false;
   const autoRepair =
-    params.overrides?.autoRepair ??
-    config.autoRepair ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ??
-    false;
+    option("autoRepair") ?? parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE_AUTO_REPAIR) ?? false;
   const enabled =
-    params.overrides?.enabled ??
-    config.enabled ??
-    readBooleanEnv(env.OPENCLAW_CODEX_COMPUTER_USE) ??
+    option("enabled") ??
+    parseBooleanValue(env.OPENCLAW_CODEX_COMPUTER_USE) ??
     Boolean(
       autoInstall ||
       marketplaceSource ||
@@ -552,7 +517,10 @@ export function codexAppServerStartOptionsKey(
     headers: Object.entries(options.headers)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
-    env: Object.entries(options.env ?? {})
+    env: Object.entries({
+      ...options.env,
+      ...(options.codexHome ? { CODEX_HOME: options.codexHome } : {}),
+    })
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
@@ -564,7 +532,7 @@ export function codexAppServerStartOptionsKey(
 }
 
 export function codexSandboxPolicyForTurn(
-  mode: CodexAppServerSandboxMode,
+  mode: CodexSandboxMode,
   cwd: string,
   nativeArgs: readonly string[] = [],
 ): CodexSandboxPolicy {

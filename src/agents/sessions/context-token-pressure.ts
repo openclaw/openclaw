@@ -57,10 +57,7 @@ export function estimateToolSchemaTokens(
     : 0;
 }
 
-function estimateIdentifierTokenPressure(
-  value: unknown,
-  charsPerToken = JSON_PAYLOAD_CHARS_PER_TOKEN,
-): number {
+function estimateIdentifierTokenPressure(value: unknown): number {
   if (value == null) {
     return 0;
   }
@@ -70,33 +67,36 @@ function estimateIdentifierTokenPressure(
     typeof value === "boolean" ||
     typeof value === "bigint"
   ) {
-    return estimateStringTokenPressure(String(value), charsPerToken);
+    return estimateStringTokenPressure(String(value), JSON_PAYLOAD_CHARS_PER_TOKEN);
   }
-  return estimateJsonPayloadTokenPressure(value, charsPerToken);
+  return estimateJsonPayloadTokenPressure(value);
 }
 
 function estimateContentBlockTokenPressure(
   block: unknown,
-  charsPerToken = ESTIMATED_CHARS_PER_TOKEN,
   mode: TokenPressureMode = "general",
 ): number {
   if (typeof block === "string") {
-    return estimateStringTokenPressure(block, charsPerToken, mode);
+    return estimateStringTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode);
   }
   if (!isRecord(block)) {
-    return estimateJsonPayloadTokenPressure(block, charsPerToken, mode);
+    return estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode);
   }
 
   const type = block.type;
   const text = type === "text" ? block.text : type === "thinking" ? block.thinking : undefined;
   if (typeof text === "string") {
-    return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateStringTokenPressure(text, charsPerToken, mode);
+    return (
+      CONTENT_BLOCK_OVERHEAD_TOKENS +
+      estimateStringTokenPressure(text, ESTIMATED_CHARS_PER_TOKEN, mode)
+    );
   }
   if (type === "image") {
     return IMAGE_BLOCK_TOKENS;
   }
   return (
-    CONTENT_BLOCK_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(block, charsPerToken, mode)
+    CONTENT_BLOCK_OVERHEAD_TOKENS +
+    estimateJsonPayloadTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode)
   );
 }
 
@@ -104,7 +104,7 @@ function estimateAssistantToolCallTokenPressure(block: Record<string, unknown>):
   const args = block.arguments ?? block.input ?? block.args ?? {};
   return (
     CONTENT_BLOCK_OVERHEAD_TOKENS +
-    estimateIdentifierTokenPressure(block.name, JSON_PAYLOAD_CHARS_PER_TOKEN) +
+    estimateIdentifierTokenPressure(block.name) +
     estimateJsonPayloadTokenPressure(args, JSON_PAYLOAD_CHARS_PER_TOKEN)
   );
 }
@@ -117,11 +117,7 @@ function estimateContentTokenPressure(
     return estimateStringTokenPressure(content, ESTIMATED_CHARS_PER_TOKEN, mode);
   }
   if (Array.isArray(content)) {
-    return content.reduce(
-      (sum, block) =>
-        sum + estimateContentBlockTokenPressure(block, ESTIMATED_CHARS_PER_TOKEN, mode),
-      0,
-    );
+    return content.reduce((sum, block) => sum + estimateContentBlockTokenPressure(block, mode), 0);
   }
   if (content !== undefined) {
     return estimateJsonPayloadTokenPressure(
@@ -212,23 +208,26 @@ export function estimateRenderedPromptTokens(params: {
   );
 }
 
-/** Rebuild pressure after replacement; old provider usage describes the discarded prefix. */
-export function estimateFreshLlmBoundaryTokenPressure(params: {
-  messages: AgentMessage[];
+/** Prepare fixed request costs before estimating its pending input or replacement history. */
+export function createFreshLlmBoundaryTokenEstimator(params: {
   systemPrompt?: string;
   tools?: readonly { name: string; description: string; parameters: unknown }[];
-  prompt: string;
-  imageCount?: number;
-}): number {
+}) {
   const toolTokens = estimateToolSchemaTokens(params.tools);
-  return Math.ceil(
-    (estimateRenderedPromptTokens(params) +
-      toolTokens +
-      (params.imageCount ?? 0) * IMAGE_BLOCK_TOKENS +
-      params.messages.reduce(
-        (total, message) => total + estimateMessageTokenPressure(message),
-        0,
-      )) *
-      SAFETY_MARGIN,
-  );
+  const fixedPromptTokens = estimateRenderedPromptTokens({
+    systemPrompt: params.systemPrompt,
+    prompt: "",
+  });
+  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number =>
+    Math.ceil(
+      (fixedPromptTokens +
+        estimateStringTokenPressure(request.prompt) +
+        toolTokens +
+        (request.imageCount ?? 0) * IMAGE_BLOCK_TOKENS +
+        request.messages.reduce(
+          (total, message) => total + estimateMessageTokenPressure(message),
+          0,
+        )) *
+        SAFETY_MARGIN,
+    );
 }

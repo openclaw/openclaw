@@ -1,5 +1,6 @@
 import { asOptionalRecord as asResultRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/gateway-error-details.js";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -10,42 +11,55 @@ import {
 } from "../../agents/tools/common.js";
 import type { OutboundReplyFacts } from "../../channels/message/types.js";
 import { normalizeConversationReadInvocationOrigin } from "../../channels/plugins/conversation-read-origin.js";
-import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
+import {
+  dispatchChannelMessageAction,
+  isFencedProviderReadAction,
+  isScheduledMessageWriteAction,
+} from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { resolvePollMaxSelections } from "../../polls.js";
+import { withEffectPreparation } from "../../shared/effect-authority.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { formatErrorMessage } from "../errors.js";
 import { throwIfAborted } from "./abort.js";
-import type {
-  MessageActionGateway,
-  MessageActionResult,
-  ResolvedActionContext,
+import { assertOutboundHandoffCurrent, OutboundHandoffRejectedError } from "./deliver-handoff.js";
+import {
+  createChannelActionContext,
+  type MessageActionGateway,
+  type MessageActionInput,
+  type MessageActionResult,
+  type ResolvedActionContext,
 } from "./message-action-contracts.js";
+import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import { resolveAndApplyOutboundThreadId } from "./message-action-threading.js";
-import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
+import {
+  resolveOutboundMessageGatewayOptions,
+  type OutboundGatewayRequestContext,
+} from "./message-gateway-options.js";
 import {
   applyCrossContextDecoration,
   buildCrossContextDecoration,
-  type CrossContextDecoration,
   shouldApplyCrossContextMarker,
 } from "./outbound-policy.js";
 import { executePollAction } from "./outbound-send-service.js";
 import {
   beginTerminalSourceReplyDelivery,
   cancelTerminalSourceReplyDelivery,
-  isDeliveredCurrentSourceReply,
   reconcileTerminalSourceReplyDelivery,
 } from "./source-reply-mirror.js";
+
+export { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 
 const log = createSubsystemLogger("outbound/message-action");
 
@@ -55,58 +69,52 @@ const loadMessageActionGatewayRuntime = createLazyRuntimeModule(
   () => import("./message.gateway.runtime.js"),
 );
 
-export function annotateSourceDelivery<T extends MessageActionResult>(
-  result: T,
-  ctx: ResolvedActionContext,
-  replyToIsExplicit: boolean,
-): T {
-  // Current-source identity comes from the authorized route and delivery receipt,
-  // not the reply mode; automatic runs also use this marker to avoid false fallbacks.
-  const authorization = ctx.input.messageActionAuthorization;
-  if (result.kind === "broadcast" || !authorization?.toolContext) {
-    return result;
-  }
-  const mirrorParams = {
-    action: result.action,
-    channel: ctx.channel,
-    actionParams: ctx.params,
-    cfg: ctx.cfg,
-    accountId: ctx.accountId,
-    currentAccountId: authorization.requesterAccountId ?? ctx.input.defaultAccountId,
-    sessionKey: ctx.input.sessionKey,
-    sessionId: ctx.input.sessionId,
-    agentId: ctx.agentId,
-    toolContext: authorization.toolContext,
-    deliveredPayload: result.payload,
-    replyToIsExplicit,
-  };
-  if (!isDeliveredCurrentSourceReply(mirrorParams)) {
-    return result;
-  }
-  const payload = asResultRecord(result.payload);
-  const details = asResultRecord(result.toolResult?.details);
-  return {
-    ...result,
-    payload: payload ? { ...payload, sourceReplyRoute: "current-source" } : result.payload,
-    ...(result.toolResult
-      ? {
-          toolResult: {
-            ...result.toolResult,
-            details: { ...details, sourceReplyRoute: "current-source" },
-          },
-        }
-      : {}),
-  } as T;
-}
-
 const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
+
+export function withMessageActionEffectAuthority<T>(
+  input: MessageActionInput,
+  run: () => Promise<T>,
+): Promise<T> {
+  const prepare = input.messageActionAuthorization?.scheduled?.prepareUse;
+  return withEffectPreparation(
+    prepare
+      ? () =>
+          prepare(
+            isFencedProviderReadAction(input.action) || isScheduledMessageWriteAction(input.action),
+            () => {
+              input.abortSignal?.throwIfAborted();
+              input.assertDirectAdapterHandoff?.();
+            },
+          )
+      : undefined,
+    run,
+  );
+}
+
+export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+  throwIfAborted(input.abortSignal);
+  input.assertDirectAdapterHandoff?.();
+  input.messageActionAuthorization?.scheduled?.assertCurrent();
+  input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+export async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
+  const deliveryAttempt = input.messageActionAuthorization?.deliveryAttempt;
+  if (!deliveryAttempt) {
+    return;
+  }
+  assertMessageDeliveryCurrent(input);
+  await deliveryAttempt.beforeAttempt();
+  assertMessageDeliveryCurrent(input);
+}
 
 async function callGatewayMessageAction<T>(params: {
   gateway?: MessageActionGateway;
   actionParams: Record<string, unknown>;
   agentRuntimeIdentityToken?: string;
+  requestContext?: OutboundGatewayRequestContext;
   abortSignal?: AbortSignal;
   onUnknownDeliveryOutcome?: () => void;
 }): Promise<T> {
@@ -127,12 +135,20 @@ async function callGatewayMessageAction<T>(params: {
     signal: params.abortSignal,
     agentRuntimeIdentityToken: params.agentRuntimeIdentityToken,
   };
+  const request = <R>(
+    options: typeof call | (Omit<typeof call, "timeoutMs"> & { timeoutMs: number | null }),
+  ) =>
+    params.gateway?.request
+      ? params.gateway.request<R>(options, params.requestContext)
+      : callGatewayLeastPrivilege<R>(options);
   try {
-    return await callGatewayLeastPrivilege<T>(call);
+    return await request<T>(call);
   } catch (error) {
     if (
-      !isGatewayTransportError(error) ||
-      error.kind !== "timeout" ||
+      !(
+        (isGatewayTransportError(error) && error.kind === "timeout") ||
+        (error instanceof GatewayProtocolRequestTimeoutError && error.requestSent)
+      ) ||
       params.actionParams.action !== "send"
     ) {
       throw error;
@@ -161,7 +177,7 @@ async function callGatewayMessageAction<T>(params: {
   };
   // A caller-side timeout does not cancel Gateway work. Reattach once with the
   // unchanged idempotency key so the live Gateway can join the original work.
-  return await callGatewayLeastPrivilege<T>(reconciliationCall);
+  return await request<T>(reconciliationCall);
 }
 
 function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
@@ -187,6 +203,24 @@ function isConfirmedGatewayMessageActionRejection(error: unknown): boolean {
   );
 }
 
+export function projectMessageActionPartialDelivery(error: unknown) {
+  const directDelivery = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+  const gatewayDelivery =
+    error instanceof Error && error.name === "GatewayClientRequestError"
+      ? asResultRecord(asResultRecord(error)?.details)?.partialDelivery
+      : undefined;
+  const deliveryResult = directDelivery ?? gatewayDelivery;
+  return deliveryResult === undefined
+    ? undefined
+    : {
+        ok: false as const,
+        deliveryStatus: "partial_failed" as const,
+        sentBeforeError: true as const,
+        error: formatErrorMessage(error),
+        result: deliveryResult,
+      };
+}
+
 export function projectGatewayQueuedDeliveryResult(error: unknown) {
   if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
     return undefined;
@@ -208,35 +242,6 @@ async function resolveGatewayActionIdempotencyKey(idempotencyKey?: string): Prom
   }
   const { randomIdempotencyKey } = await loadMessageActionGatewayRuntime();
   return randomIdempotencyKey();
-}
-
-function applyCrossContextMessageDecoration({
-  params,
-  message,
-  decoration,
-  preferPresentation,
-}: {
-  params: Record<string, unknown>;
-  message: string;
-  decoration: CrossContextDecoration;
-  preferPresentation: boolean;
-}): string {
-  const applied = applyCrossContextDecoration({
-    message,
-    decoration,
-    preferPresentation,
-  });
-  params.message = applied.message;
-  if (applied.presentation) {
-    const existing = normalizeMessagePresentation(params.presentation);
-    params.presentation = existing
-      ? {
-          ...existing,
-          blocks: [...applied.presentation.blocks, ...existing.blocks],
-        }
-      : applied.presentation;
-  }
-  return applied.message;
 }
 
 export async function applyMessageCrossContextMarker(params: {
@@ -265,12 +270,22 @@ export async function applyMessageCrossContextMarker(params: {
   if (!decoration) {
     return params.message;
   }
-  return applyCrossContextMessageDecoration({
-    params: params.args,
+  const applied = applyCrossContextDecoration({
     message: params.message,
     decoration,
     preferPresentation: params.preferPresentation,
   });
+  params.args.message = applied.message;
+  if (applied.presentation) {
+    const existing = normalizeMessagePresentation(params.args.presentation);
+    params.args.presentation = existing
+      ? {
+          ...existing,
+          blocks: [...applied.presentation.blocks, ...existing.blocks],
+        }
+      : applied.presentation;
+  }
+  return applied.message;
 }
 
 export async function executeGatewayAction(
@@ -284,12 +299,21 @@ export async function executeGatewayAction(
   if (ctx.dryRun || !ctx.gateway) {
     return null;
   }
-  if (!ctx.channelPlugin?.actions?.handleAction) {
+  const channelPlugin = ctx.channelPlugin;
+  const supportsCanonicalGatewayDelivery =
+    Boolean(ctx.input.messageActionAuthorization?.scheduled && ctx.gateway.request) &&
+    channelPlugin?.outbound?.deliveryMode === "gateway" &&
+    ((params.action === "send" &&
+      Boolean(channelPlugin.message?.send?.text || channelPlugin.outbound.sendText)) ||
+      (params.action === "poll" && Boolean(channelPlugin.outbound.sendPoll))) &&
+    (!channelPlugin.actions?.handleAction ||
+      channelPlugin.actions.supportsAction?.({ action: params.action }) === false);
+  if (!channelPlugin?.actions?.handleAction && !supportsCanonicalGatewayDelivery) {
     return null;
   }
   const executionMode =
-    ctx.channelPlugin.actions.resolveExecutionMode?.({ action: params.action }) ?? "local";
-  if (executionMode !== "gateway") {
+    channelPlugin.actions?.resolveExecutionMode?.({ action: params.action }) ?? "local";
+  if (executionMode !== "gateway" && !supportsCanonicalGatewayDelivery) {
     return null;
   }
   const conversationReadOrigin = normalizeConversationReadInvocationOrigin(
@@ -302,10 +326,13 @@ export async function executeGatewayAction(
     ctx.gateway.terminalSourceReplyReceiptOwner === "caller" && ctx.input.sourceReplyFinal === true;
   // Resolve local capability/auth preflight before arming a durable send intent.
   // A failure here proves the RPC never reached the gateway.
-  const agentRuntimeIdentityToken = await ctx.gateway.resolveAgentRuntimeIdentityToken?.({
+  const requestContext = {
     sourceReplyFinal: ctx.input.sourceReplyFinal,
     sourceReplyToolCallId: ctx.input.sourceReplyToolCallId,
-  });
+  };
+  const agentRuntimeIdentityToken = ctx.gateway.request
+    ? undefined
+    : await ctx.gateway.resolveAgentRuntimeIdentityToken?.(requestContext);
   const sourceReplyMirror = {
     action: params.action,
     channel: ctx.channel,
@@ -333,10 +360,12 @@ export async function executeGatewayAction(
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
+    assertOutboundHandoffCurrent(ctx.input.assertDirectAdapterHandoff);
     payload = await callGatewayMessageAction<unknown>({
       gateway: ctx.gateway,
       abortSignal: ctx.input.abortSignal,
       agentRuntimeIdentityToken,
+      requestContext,
       onUnknownDeliveryOutcome: () => {
         hadUnknownDeliveryOutcome = true;
       },
@@ -356,14 +385,22 @@ export async function executeGatewayAction(
       },
     });
   } catch (error) {
-    if (
-      callerOwnsTerminalReceipt &&
-      !hadUnknownDeliveryOutcome &&
-      isConfirmedGatewayMessageActionRejection(error)
-    ) {
-      await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+    const partialDelivery = ctx.input.messageActionAuthorization?.scheduled
+      ? projectMessageActionPartialDelivery(error)
+      : undefined;
+    if (partialDelivery !== undefined) {
+      payload = partialDelivery;
+    } else {
+      if (
+        callerOwnsTerminalReceipt &&
+        !hadUnknownDeliveryOutcome &&
+        (error instanceof OutboundHandoffRejectedError ||
+          isConfirmedGatewayMessageActionRejection(error))
+      ) {
+        await cancelTerminalSourceReplyDelivery(terminalDeliveryReceipt);
+      }
+      throw error;
     }
-    throw error;
   }
   if (callerOwnsTerminalReceipt) {
     try {
@@ -383,7 +420,36 @@ export async function executeGatewayAction(
       });
     }
   }
-  return params.result(payload);
+  const result = params.result(payload);
+  if (!supportsCanonicalGatewayDelivery) {
+    return result;
+  }
+  const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
+  if (result.kind === "send") {
+    return {
+      ...result,
+      handledBy: "core",
+      ...(partialDelivery
+        ? {}
+        : {
+            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+          }),
+    };
+  }
+  if (result.kind === "poll") {
+    return {
+      ...result,
+      handledBy: "core",
+      ...(partialDelivery
+        ? {}
+        : {
+            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+          }),
+    };
+  }
+  return result;
 }
 
 export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<MessageActionResult> {
@@ -430,14 +496,14 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
   });
   const pollReplyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
-    return annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
+    return await annotateSourceDelivery(gatewayPluginAction, ctx, pollReplyToIsExplicit);
   }
 
   const poll = await executePollAction({
     ctx: {
       ...ctx,
-      // Poll actions expose requester IDs and turn context, without send-only
-      // authority or media grants. Preserve that plugin boundary independently.
+      // Poll actions expose requester IDs, turn context, and the same live
+      // provider-call fence as every other scheduled message action.
       mediaAccess: undefined,
       input: {
         cfg,
@@ -450,6 +516,10 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
         sessionId: input.sessionId,
         inboundEventKind: input.inboundEventKind,
         toolContext: input.toolContext,
+        messageActionAuthorization: input.messageActionAuthorization,
+        gatewayOwnedDelivery: input.gatewayOwnedDelivery,
+        onPlatformSendDispatch: input.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
       },
       silent: silent ?? undefined,
     },
@@ -482,7 +552,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
     },
   });
 
-  return annotateSourceDelivery(
+  return await annotateSourceDelivery(
     {
       kind: "poll",
       channel,
@@ -510,26 +580,28 @@ export async function executeMessagePlugin(
     mediaAccess,
     accountId,
     dryRun,
-    gateway,
     input,
     abortSignal,
-    agentId,
   } = ctx;
   throwIfAborted(abortSignal);
   const action = input.action as Exclude<ChannelMessageActionName, "send" | "poll" | "broadcast">;
+  const actionResult = {
+    kind: "action" as const,
+    channel,
+    action,
+    ...(ctx.resolvedTarget ? { to: ctx.resolvedTarget.to } : {}),
+    dryRun,
+  };
   if (dryRun) {
     return {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "dry-run",
       payload: { ok: true, dryRun: true, channel, action },
-      dryRun: true,
     };
   }
 
   if (!channelPlugin?.actions?.handleAction) {
-    throw new Error(`Channel ${channel} is unavailable for message actions (plugin not loaded).`);
+    throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 
   // Plugin actions bypass buildSendPayloadParts, so model-authored text here
@@ -563,60 +635,62 @@ export async function executeMessagePlugin(
   const gatewayPluginAction = await executeGatewayAction(ctx, {
     action,
     result: (payload) => ({
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload,
-      dryRun,
     }),
   });
   const replyToIsExplicit = Boolean(readToolStringParam(params, "replyTo"));
   if (gatewayPluginAction) {
     // Gateway-owned actions must execute where the live channel runtime exists.
-    return annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
+    return await annotateSourceDelivery(gatewayPluginAction, ctx, replyToIsExplicit);
   }
 
   const authorization = input.messageActionAuthorization;
-  const handled = await dispatchChannelMessageAction({
-    channel,
-    action,
-    cfg,
-    params,
-    mediaAccess,
-    mediaLocalRoots: mediaAccess.localRoots,
-    mediaReadFile: mediaAccess.readFile,
-    accountId: accountId ?? undefined,
-    requesterAccountId:
-      authorization !== undefined
-        ? authorization.requesterAccountId
-        : (input.requesterAccountId ?? undefined),
-    requesterSenderId:
-      authorization !== undefined
-        ? authorization.requesterSenderId
-        : (input.requesterSenderId ?? undefined),
-    senderIsOwner: input.senderIsOwner,
-    conversationReadOrigin: normalizeConversationReadInvocationOrigin(input.conversationReadOrigin),
-    sessionKey: input.sessionKey,
-    sessionId: input.sessionId,
-    inboundEventKind: input.inboundEventKind,
-    agentId,
-    gateway,
-    toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
-    dryRun,
-  });
+  let handled;
+  try {
+    handled = await dispatchChannelMessageAction({
+      ...createChannelActionContext({ ctx, action, mediaAccess }),
+      progressSnapshot: input.progressSnapshot,
+      requesterAccountId:
+        authorization !== undefined
+          ? authorization.requesterAccountId
+          : (input.requesterAccountId ?? undefined),
+      requesterSenderId:
+        authorization !== undefined
+          ? authorization.requesterSenderId
+          : (input.requesterSenderId ?? undefined),
+      toolContext: authorization !== undefined ? authorization.toolContext : input.toolContext,
+      messageActionAuthorization: authorization,
+      deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
+      skipQueue: input.skipQueue,
+    });
+  } catch (error) {
+    const partialDelivery = input.messageActionAuthorization?.scheduled
+      ? projectMessageActionPartialDelivery(error)
+      : undefined;
+    if (partialDelivery) {
+      return await annotateSourceDelivery(
+        {
+          ...actionResult,
+          handledBy: "plugin",
+          payload: partialDelivery,
+        },
+        ctx,
+        replyToIsExplicit,
+      );
+    }
+    throw error;
+  }
   if (!handled) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
-  return annotateSourceDelivery(
+  return await annotateSourceDelivery(
     {
-      kind: "action",
-      channel,
-      action,
+      ...actionResult,
       handledBy: "plugin",
       payload: extractToolPayload(handled),
       toolResult: handled,
-      dryRun,
     },
     ctx,
     replyToIsExplicit,

@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { registerMatrixCliMetadata } from "./cli-metadata.js";
+import { setMatrixRuntimeLifecycle } from "./runtime-setter-api.js";
 import { registerMatrixSubagentHooks } from "./subagent-hooks-api.js";
 
 const loadMatrixHandlersRuntimeModule = createLazyRuntimeModule(
@@ -12,6 +13,7 @@ const loadMatrixHandlersRuntimeModule = createLazyRuntimeModule(
 );
 
 export function registerMatrixFullRuntime(api: OpenClawPluginApi): void {
+  setMatrixRuntimeLifecycle(api.runtime, api.lifecycle);
   api.registerGatewayMethod("matrix.verify.recoveryKey", async (ctx) => {
     const { handleVerifyRecoveryKey } = await loadMatrixHandlersRuntimeModule();
     await handleVerifyRecoveryKey(ctx);

@@ -23,13 +23,12 @@ import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
-import type { DeliveryTargetResolution } from "./delivery-target.js";
+import type { SuccessfulCronDeliveryTarget } from "./delivery-dispatch-types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
-
-type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
 
 export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   idPrefix: "cron-direct-delivery:v1:",
@@ -75,12 +74,6 @@ export function normalizeSilentReplyText(text: string | undefined): NormalizedSi
   return { text: next, strippedTrailingSilentToken };
 }
 
-/** Returns whether cron delivery should tolerate per-payload send failures. */
-export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
-  return job.delivery?.bestEffort === true;
-}
-
-/** Successful delivery-target resolution consumed by announce/direct delivery dispatch. */
 const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /unsupported channel/i,
   /unknown channel/i,
@@ -95,9 +88,7 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
 
-const deliveryLoggerRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-logger.runtime.js"),
-);
+const deliveryLoggerRuntimeLoader = createLazyImportLoader(() => import("../../logger.js"));
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
@@ -111,7 +102,7 @@ const subagentFollowupRuntimeLoader = createLazyImportLoader(
 type DescendantSubagentFollowup = {
   /** Descendant reply that replaces the interim cron text; undefined keeps the original. */
   finalReply: string | undefined;
-  activeSubagentRuns: number;
+  hasUnsettledDescendants: boolean;
   hadDescendants: boolean;
 };
 
@@ -123,42 +114,46 @@ export async function resolveDescendantSubagentFollowup(params: {
   deliveryBestEffort: boolean;
   spawnOnlyHandoff: boolean;
   initialSynthesizedText: string;
+  abortSignal?: AbortSignal;
 }): Promise<DescendantSubagentFollowup> {
   const expectedFollowup = expectsSubagentFollowup(params.initialSynthesizedText);
   const subagentRegistryRuntime = await deliverySubagentRegistryRuntimeLoader.load();
-  let activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
+  let hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
+    params.sessionKey,
+  );
   const shouldCheckCompletedDescendants =
-    activeSubagentRuns === 0 &&
+    !params.abortSignal?.aborted &&
+    !hasUnsettledDescendants &&
     (params.spawnOnlyHandoff || isLikelyInterimCronMessage(params.initialSynthesizedText));
   const needsFollowupRuntime =
-    shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedFollowup;
+    shouldCheckCompletedDescendants || hasUnsettledDescendants || expectedFollowup;
   const followupRuntime = needsFollowupRuntime
     ? await subagentFollowupRuntimeLoader.load()
     : undefined;
-  // Also check for already-completed descendants. If the subagent finished
-  // before delivery-dispatch runs, activeSubagentRuns is 0 and
-  // expectedFollowup may be false (e.g. cron said "on it" which doesn't
-  // match the narrow hint list). We still need to use the descendant's
-  // output instead of the interim cron text.
+  // A child may settle before delivery starts without matching the narrow
+  // follow-up hints. Its result still replaces the parent's interim text.
   const completedDescendantReply = shouldCheckCompletedDescendants
     ? await followupRuntime?.readDescendantSubagentFallbackReply({
         sessionKey: params.sessionKey,
         runStartedAt: params.runStartedAt,
       })
     : undefined;
-  const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+  const hadDescendants = hasUnsettledDescendants || Boolean(completedDescendantReply);
   if (
     (!params.deliveryBestEffort || params.spawnOnlyHandoff) &&
-    (activeSubagentRuns > 0 || expectedFollowup)
+    (hasUnsettledDescendants || expectedFollowup)
   ) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,
       timeoutMs: params.timeoutMs,
-      observedActiveDescendants: activeSubagentRuns > 0 || expectedFollowup,
+      observedActiveDescendants: hasUnsettledDescendants || expectedFollowup,
+      abortSignal: params.abortSignal,
     });
-    activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(params.sessionKey);
-    if (!finalReply && activeSubagentRuns === 0) {
+    hasUnsettledDescendants = await subagentRegistryRuntime.hasUnsettledCronDescendants(
+      params.sessionKey,
+    );
+    if (!params.abortSignal?.aborted && !finalReply && !hasUnsettledDescendants) {
       finalReply = await followupRuntime?.readDescendantSubagentFallbackReply({
         sessionKey: params.sessionKey,
         runStartedAt: params.runStartedAt,
@@ -166,12 +161,12 @@ export async function resolveDescendantSubagentFollowup(params: {
     }
     // Apply only once every descendant settled; a live run still owns the turn.
     return {
-      finalReply: finalReply && activeSubagentRuns === 0 ? finalReply : undefined,
-      activeSubagentRuns,
+      finalReply: finalReply && !hasUnsettledDescendants ? finalReply : undefined,
+      hasUnsettledDescendants,
       hadDescendants,
     };
   }
-  return { finalReply: completedDescendantReply, activeSubagentRuns, hadDescendants };
+  return { finalReply: completedDescendantReply, hasUnsettledDescendants, hadDescendants };
 }
 
 export async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -190,35 +185,32 @@ export function logCronDeliveryErrorDeferred(message: string): void {
   });
 }
 
-export function resolveCronDeliveryScheduledAtMs(params: {
+export function resolveStaleCronDeliveryError(params: {
   job: CronJob;
   runStartedAt: number;
-}): number {
+}): string | undefined {
   const scheduledAt = params.job.state?.nextRunAtMs;
-  return hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
-}
-
-export function resolveCronDeliveryStartDelayMs(params: {
-  job: CronJob;
-  runStartedAt: number;
-}): number {
-  return params.runStartedAt - resolveCronDeliveryScheduledAtMs(params);
-}
-
-export function isStaleCronDelivery(params: { job: CronJob; runStartedAt: number }): boolean {
-  return resolveCronDeliveryStartDelayMs(params) > STALE_CRON_DELIVERY_MAX_START_DELAY_MS;
+  const scheduledAtMs = hasScheduledNextRunAtMs(scheduledAt) ? scheduledAt : params.runStartedAt;
+  const startDelayMs = params.runStartedAt - scheduledAtMs;
+  if (startDelayMs > STALE_CRON_DELIVERY_MAX_START_DELAY_MS) {
+    const nowMs = Date.now();
+    return `skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`;
+  }
+  return undefined;
 }
 
 export async function maybeApplyTtsToCronPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
-  delivery: SuccessfulDeliveryTarget;
+  delivery: SuccessfulCronDeliveryTarget;
   agentId: string;
   ttsAuto?: TtsAutoMode;
 }): Promise<ReplyPayload[]> {
+  const preparedTtsPreferences = await prepareTtsPreferences();
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.delivery.channel,
@@ -232,6 +224,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({
         payload,
+        preparedTtsPreferences,
         cfg: params.cfg,
         channel: params.delivery.channel,
         kind: "final",
@@ -246,7 +239,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
 export function buildDirectCronDeliveryIdempotencyKey(params: {
   jobId: string;
   runStartedAt: number;
-  delivery: SuccessfulDeliveryTarget;
+  delivery: SuccessfulCronDeliveryTarget;
 }): string {
   // Include route identity, not just the cron execution id, because one run can
   // target different channels/accounts/threads across retry and fallback paths.
@@ -333,10 +326,6 @@ function isTransientDirectCronDeliveryError(error: unknown): boolean {
   }
   return deliveryRecovery.isProvenDeliveryNotSentError(error);
 }
-function resolveDirectCronRetryDelaysMs(): readonly number[] {
-  return isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];
-}
-
 export async function retryTransientDirectCronDelivery<T>(params: {
   jobId: string;
   label?: string;
@@ -345,7 +334,7 @@ export async function retryTransientDirectCronDelivery<T>(params: {
   run: () => Promise<T>;
   shouldRetryError?: (err: unknown) => boolean;
 }): Promise<T> {
-  const retryDelaysMs = resolveDirectCronRetryDelaysMs();
+  const retryDelaysMs = isFastTestRuntimeEnv() ? [0, 0, 0] : [5_000, 10_000, 20_000];
   const assertActive = () => {
     if (params.signal?.aborted) {
       throw new Error("cron delivery aborted");
@@ -361,7 +350,7 @@ export async function retryTransientDirectCronDelivery<T>(params: {
     assertActive();
     return await params.run();
   };
-  const result = await retryAsync(runWithAbortCheck, {
+  return await retryAsync(runWithAbortCheck, {
     attempts: retryDelaysMs.length + 1,
     minDelayMs: 0,
     maxDelayMs: Math.max(...retryDelaysMs),
@@ -386,5 +375,4 @@ export async function retryTransientDirectCronDelivery<T>(params: {
       assertActive();
     },
   });
-  return result;
 }

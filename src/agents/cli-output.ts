@@ -14,7 +14,7 @@ import {
   collectExplicitCliErrorText,
   decodeCliRecords,
   describeClaudeTurnStop,
-  isStreamJsonDialect,
+  supportsCliJsonlToolEvents,
   parseCliJson,
 } from "./cli-output-records.js";
 import {
@@ -100,7 +100,7 @@ export function parseCliOutput(params: {
     if (parsed) {
       return parsed;
     }
-    if (isStreamJsonDialect(params)) {
+    if (supportsCliJsonlToolEvents(params)) {
       return {
         text: "",
         sessionId: params.fallbackSessionId,
@@ -120,10 +120,6 @@ export function parseCliOutput(params: {
 /** Extracts a human-readable error message from mixed CLI stderr/stdout text. */
 export function extractCliErrorMessage(raw: string): string | null {
   const parsedRecords = decodeCliRecords(raw);
-  if (parsedRecords.length === 0) {
-    return null;
-  }
-
   let errorText = "";
   for (const parsed of parsedRecords) {
     const next = collectExplicitCliErrorText(parsed);

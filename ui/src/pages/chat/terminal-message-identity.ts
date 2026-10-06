@@ -10,6 +10,8 @@ type LiveTerminalIdentity = {
 };
 
 const liveTerminalIdentities = new WeakMap<object, LiveTerminalIdentity>();
+// Outcomes land beside published history arrays; caches keyed by them key this too.
+let liveTerminalRevision = 0;
 const authoritativeTerminals = new WeakMap<object, AuthoritativeTerminal>();
 
 type AuthoritativeTerminal = {
@@ -32,14 +34,17 @@ export function rememberLiveTerminalRun(
       ...(afterBoundaryRunId ? { afterBoundaryRunId } : {}),
       ...(disposition ? { disposition } : {}),
     });
+    liveTerminalRevision += 1;
   }
   return message;
 }
 
+export function readLiveTerminalRevision(): number {
+  return liveTerminalRevision;
+}
+
 export function isLiveTerminalForRun(message: unknown, runId: string): boolean {
-  return Boolean(
-    message && typeof message === "object" && liveTerminalIdentities.get(message)?.runId === runId,
-  );
+  return readLiveTerminalRunId(message) === runId;
 }
 
 export function readLiveTerminalRunId(message: unknown): string | null {

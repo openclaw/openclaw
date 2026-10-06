@@ -289,7 +289,7 @@ describe("configured model consumer parity", () => {
           const transportId = modelId === "MODEL" ? upper.id : modelId;
           const { modelRegistry } = createEmptyAgentDiscoveryStores();
           const transportModel = expectDefined(
-            resolveModelWithRegistry({
+            await resolveModelWithRegistry({
               cfg,
               provider: "openai",
               modelId: transportId,

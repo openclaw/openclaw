@@ -14,7 +14,7 @@ import type { MemoryChunk } from "./internal.js";
  * non-text parts.
  */
 export function enforceEmbeddingMaxInputTokens(
-  provider: EmbeddingProvider,
+  provider: Pick<EmbeddingProvider, "id" | "maxInputTokens">,
   chunks: MemoryChunk[],
   hardMaxInputTokens?: number,
 ): MemoryChunk[] {
@@ -26,11 +26,10 @@ export function enforceEmbeddingMaxInputTokens(
   const out: MemoryChunk[] = [];
 
   for (const chunk of chunks) {
-    if (hasNonTextEmbeddingParts(chunk.embeddingInput)) {
-      out.push(chunk);
-      continue;
-    }
-    if (estimateUtf8Bytes(chunk.text) <= maxInputTokens) {
+    if (
+      hasNonTextEmbeddingParts(chunk.embeddingInput) ||
+      estimateUtf8Bytes(chunk.text) <= maxInputTokens
+    ) {
       out.push(chunk);
       continue;
     }

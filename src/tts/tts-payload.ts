@@ -16,6 +16,7 @@ import type { SpeechVoiceOption } from "./provider-types.js";
 import { assertSpeechRuntimeAvailable, isSpeechRuntimeAvailable } from "./runtime-availability.js";
 import { isCodeHeavySpeechText, normalizeSpeechText } from "./speech-text.js";
 import { summarizeText } from "./tts-core.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "./tts-preferences.js";
 import {
   getResolvedSpeechProviderConfig,
   resolveSpeechProviderTimeoutMs,
@@ -103,6 +104,7 @@ export async function maybeApplyTtsToPayloadCore(
   params: {
     payload: ReplyPayload;
     cfg: OpenClawConfig;
+    preparedTtsPreferences?: PreparedTtsPreferences;
     channel?: string;
     kind?: "tool" | "block" | "final";
     inboundAudio?: boolean;
@@ -121,6 +123,7 @@ export async function maybeApplyTtsToPayloadCore(
   const cfg = resolveTtsRuntimeConfig(params.cfg);
   const { autoMode, config, prefsPath } = resolveTtsSettingsSnapshot({
     cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     sessionAuto: params.ttsAuto,
     agentId: params.agentId,
     channelId: params.channel,
@@ -159,9 +162,7 @@ export async function maybeApplyTtsToPayloadCore(
     );
   }
 
-  const cleanedText = directives.cleanedText;
-  const trimmedCleaned = cleanedText.trim();
-  const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
+  const visibleText = directives.cleanedText.trim();
   const explicitTtsText = directives.ttsText?.trim() || "";
   const ttsText = explicitTtsText || visibleText;
 
@@ -185,18 +186,18 @@ export async function maybeApplyTtsToPayloadCore(
     return nextPayload;
   }
 
-  if (!ttsText.trim()) {
+  if (!ttsText) {
     return nextPayload;
   }
   if (reply.hasMedia || hasLegacyFinalMediaDirective(text)) {
     return nextPayload;
   }
-  if (!explicitTtsText && ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.length < 10) {
     return nextPayload;
   }
 
   const maxLength = getTtsMaxLength(prefsPath);
-  let textForAudio = ttsText.trim();
+  let textForAudio = ttsText;
   let wasSummarized = false;
 
   if (!explicitTtsText && isCodeHeavySpeechText(textForAudio)) {
@@ -219,6 +220,7 @@ export async function maybeApplyTtsToPayloadCore(
           cfg,
           config,
           timeoutMs: config.timeoutMs,
+          agentId: params.agentId,
         });
         textForAudio = summary.summary;
         wasSummarized = true;
@@ -258,42 +260,36 @@ export async function maybeApplyTtsToPayloadCore(
     persistTtsAudio,
   );
 
-  if (result.success && result.audioPath) {
-    lastTtsAttempt = {
-      timestamp: Date.now(),
-      success: true,
-      textLength: text.length,
-      summarized: wasSummarized,
-      provider: result.provider,
-      persona: result.persona,
-      fallbackFrom: result.fallbackFrom,
-      attemptedProviders: result.attemptedProviders,
-      attempts: result.attempts,
-      latencyMs: result.latencyMs,
-    };
-
-    const payloadWithAudio = {
-      ...nextPayload,
-      mediaUrl: result.audioPath,
-      audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
-      spokenText: textForAudio,
-      trustedLocalMedia: true,
-    } as ReplyPayload;
-    return nextPayload.text?.trim()
-      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
-      : payloadWithAudio;
-  }
-
+  const succeeded = result.success && Boolean(result.audioPath);
   lastTtsAttempt = {
     timestamp: Date.now(),
-    success: false,
+    success: succeeded,
     textLength: text.length,
     summarized: wasSummarized,
     persona: result.persona,
     attemptedProviders: result.attemptedProviders,
     attempts: result.attempts,
-    error: result.error,
+    ...(succeeded
+      ? {
+          provider: result.provider,
+          fallbackFrom: result.fallbackFrom,
+          latencyMs: result.latencyMs,
+        }
+      : { error: result.error }),
   };
+
+  if (result.success && result.audioPath) {
+    const payloadWithAudio: ReplyPayload = {
+      ...nextPayload,
+      mediaUrl: result.audioPath,
+      audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
+      spokenText: textForAudio,
+      trustedLocalMedia: true,
+    };
+    return nextPayload.text?.trim()
+      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
+      : payloadWithAudio;
+  }
 
   const latency = Date.now() - ttsStart;
   logVerbose(`TTS: conversion failed after ${latency}ms (${result.error ?? "unknown"}).`);

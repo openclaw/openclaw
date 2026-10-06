@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -66,8 +67,9 @@ import fs from 'node:fs';
 const admission=await acceptTriageContinuation();
 if (!admission) throw new Error('candidate was not admitted');
 const descendant=JSON.parse(execFileSync(process.execPath,['-e','console.log(JSON.stringify({updateRunId:process.env[${JSON.stringify(UPDATE_RUN_ID_ENV)}] ?? null,handoff:process.env.OPENCLAW_UPDATE_RUN_HANDOFF ?? null,sentinel:process.env.OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META ?? null,inProgress:process.env.OPENCLAW_UPDATE_IN_PROGRESS ?? null,shell:process.env.OPENCLAW_SHELL,compileCache:process.env.NODE_DISABLE_COMPILE_CACHE}))'],{encoding:'utf8'}));
-fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({message:admission,descendant,args:process.argv.slice(2)}));
+if(!fs.existsSync(${JSON.stringify(receipt)})) fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({message:admission,descendant,args:process.argv.slice(2)}));
 await admission.finish("closed");
+if(fs.existsSync(${JSON.stringify(path.join(root, "repair-failed"))})) process.exitCode=17;
 `,
   );
   const runner = path.join(root, "updater.mts");
@@ -82,6 +84,11 @@ await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw ne
   kind:'update',phase:'synthetic-replacement',error:'original failure',gateway:'preserve',installationRoot:${JSON.stringify(installed)}
 });
 if(process.env.OPENCLAW_UPDATE_IN_PROGRESS!=='1') throw new Error('updater role was changed');
+await fs.writeFile(${JSON.stringify(path.join(root, "repair-failed"))}, 'fail');
+const outcome=await triageAfterFailure({log:console.log,error:console.error,exit:()=>{throw new Error('failure owner exit overwritten');}}, {
+  kind:'gateway-startup',phase:'startup',error:'gateway.bind refused',gateway:'verify-running',installationRoot:${JSON.stringify(installed)}
+});
+if(outcome!=='failed') throw new Error('admitted failure was mistaken for declined triage');
 process.exitCode=7;
 `,
   );
@@ -92,12 +99,12 @@ process.exitCode=7;
       cwd: root,
       env: {
         ...process.env,
+        ...Object.fromEntries(SUPERVISOR_HINT_ENV_VARS.map((key) => [key, ""])),
         OPENCLAW_STATE_DIR: root,
         OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
         OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
         OPENCLAW_SHELL: "",
         CODEX_THREAD_ID: "",
-        OPENCLAW_SUPERVISOR_MODE: "",
         OPENCLAW_UPDATE_RUN_HANDOFF: "",
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [UPDATE_RUN_ID_ENV]: "completed-update-run",
@@ -134,5 +141,5 @@ process.exitCode=7;
     },
   });
   expect(result.stderr).toContain("Original failure retained");
-  expect(result.stderr).not.toContain("could not complete");
+  expect(result.stderr).toContain("automatic triage candidate failed (exit 17)");
 });

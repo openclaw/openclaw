@@ -1,7 +1,5 @@
-// Discord plugin module implements client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,24 +13,14 @@ import { getGateway } from "./monitor/gateway-registry.js";
 import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
 import { createDiscordRequestClient } from "./proxy-request-client.js";
 import { createDiscordRetryRunner } from "./retry.js";
-import type { DiscordRuntimeAccountContext } from "./send.types.js";
+import type { DiscordReactOpts, DiscordRuntimeAccountContext } from "./send.types.js";
 import { normalizeDiscordToken } from "./token.js";
 
-export type DiscordClientOpts = {
-  cfg: OpenClawConfig;
-  token?: string;
-  accountId?: string;
-  rest?: RequestClient;
-  retry?: RetryConfig;
-  signal?: AbortSignal;
-  timeoutMs?: number;
-  verbose?: boolean;
-};
+export type DiscordClientOpts = DiscordReactOpts;
 
-export function createDiscordRuntimeAccountContext(params: {
-  cfg: OpenClawConfig;
-  accountId: string;
-}): DiscordRuntimeAccountContext {
+export function createDiscordRuntimeAccountContext(
+  params: DiscordRuntimeAccountContext,
+): DiscordRuntimeAccountContext {
   return {
     cfg: params.cfg,
     accountId: normalizeAccountId(params.accountId),

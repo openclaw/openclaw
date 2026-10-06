@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,8 +8,28 @@ import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
 const profileMocks = vi.hoisted(() => ({
   managedUserDataDir: "",
+  tempRoot: "",
   cookiesSetManyViaPlaywright: vi.fn(async (params: { cookies: unknown[] }) => ({
     added: params.cookies.length,
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/temp-path")>()),
+  resolvePreferredOpenClawTmpDir: () => profileMocks.tempRoot,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  getRuntimeConfig: () => ({ browser: {} }),
+}));
+
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: vi.fn(async () => ({
+    termination: "exit",
+    code: 0,
+    stdout: Buffer.from("fixture-value"),
   })),
 }));
 
@@ -41,6 +62,7 @@ const { readSystemProfileCookies } = await import("../system-profile-api.js");
 const { importSystemProfileCookies } = await import("./system-profiles.js");
 
 const KEYCHAIN_FIXTURE = "fixture-value";
+const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function encryptV10(value: string, host: string): Buffer {
@@ -90,6 +112,7 @@ function createSystemProfileFixture(): string {
   } finally {
     database.close();
   }
+  vi.spyOn(os, "homedir").mockReturnValue(homeDir);
   return homeDir;
 }
 
@@ -123,16 +146,23 @@ function createManagedProfileFixture() {
 
 describe("system profile cookie reader", () => {
   beforeEach(() => {
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
     profileMocks.cookiesSetManyViaPlaywright.mockClear();
+    profileMocks.tempRoot = tempDirs.make("openclaw-system-cookies-test-");
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platformDescriptor);
+    vi.restoreAllMocks();
   });
 
   it("snapshots, decrypts, and applies the domain allowlist", async () => {
-    const homeDir = createSystemProfileFixture();
+    createSystemProfileFixture();
     const readSecret = vi.fn(async () => Buffer.from(KEYCHAIN_FIXTURE));
 
     const result = await readSystemProfileCookies(
       { browser: "chrome", systemProfile: "Default", domains: ["example.com"] },
-      { platform: "darwin", homeDir, readSecret },
+      { readSecret },
     );
 
     expect(result).toMatchObject({
@@ -149,21 +179,37 @@ describe("system profile cookie reader", () => {
       }),
     ]);
     expect(readSecret).toHaveBeenCalledOnce();
+    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
+  });
+
+  it("removes cookie snapshot scratch when opening the source database fails", async () => {
+    const homeDir = createSystemProfileFixture();
+    const cookiesFile = path.join(
+      homeDir,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+      "Default",
+      "Network",
+      "Cookies",
+    );
+    fs.rmSync(cookiesFile);
+    fs.mkdirSync(cookiesFile);
+
+    await expect(
+      readSystemProfileCookies({ browser: "chrome", systemProfile: "Default" }),
+    ).rejects.toMatchObject({ code: "ERR_SQLITE_ERROR" });
+    expect(fs.readdirSync(profileMocks.tempRoot)).toEqual([]);
   });
 
   it("keeps the existing import flow on the shared reader", async () => {
-    const homeDir = createSystemProfileFixture();
+    createSystemProfileFixture();
     const runtime = createManagedProfileFixture();
 
     const result = await importSystemProfileCookies(
       { browser: "chrome", systemProfile: "Default", into: "imported", domains: ["example.com"] },
       runtime as never,
-      {
-        platform: "darwin",
-        homeDir,
-        cfg: { browser: {} },
-        readSecret: async () => Buffer.from(KEYCHAIN_FIXTURE),
-      },
     );
 
     expect(result.cookies).toEqual({ total: 2, imported: 1, failed: 0, skipped: 1 });

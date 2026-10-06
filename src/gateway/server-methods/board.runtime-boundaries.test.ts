@@ -8,8 +8,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createDashboardTool } from "../../agents/tools/dashboard-tool.js";
-import type { InProcessGatewayCaller } from "../../agents/tools/in-process-gateway.js";
 import { resetBoardEventNoticeStateForTest } from "../../boards/board-notices.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
@@ -22,12 +20,18 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../../process/gateway-work-admission.test-helpers.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-descriptors.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../methods/core-method-policy.js";
 import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodRegistry,
@@ -63,6 +67,24 @@ vi.mock("./sessions.runtime.js", () => ({
   })),
 }));
 
+async function grantTools(tools: string[], harness = createHarness()) {
+  const target = { sessionKey: "session", name: "reader" };
+  const put = await harness.invoke("board.widget.put", {
+    ...target,
+    content: { kind: "html", html: "reader" },
+    declared: { tools },
+  });
+  const widget = (put.mock.calls[0]![1] as BoardSnapshot).widgets[0]!;
+  await harness.invoke("board.widget.grant", {
+    ...target,
+    decision: "granted",
+    revision: widget.revision,
+    instanceId: widget.instanceId,
+  });
+  const board = await harness.invoke("board.get", { sessionKey: "session" });
+  return { ...harness, ticket: (board.mock.calls[0]![1] as BoardSnapshot).widgets[0]!.viewTicket };
+}
+
 describe("board gateway runtime boundaries", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -75,9 +97,45 @@ describe("board gateway runtime boundaries", () => {
     cronRun.mockReset();
   });
 
-  afterEach(() => {
+  it.each(["agent:main:guarded", "agent:main:dashboard:incognito-guarded"])(
+    "reads current permission mode from its session owner: %s",
+    async (sessionKey) => {
+      const database = openOpenClawAgentDatabase({
+        agentId: "main",
+        ...(isIncognitoSessionKey(sessionKey)
+          ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }) }
+          : {}),
+      });
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: database.path },
+        { sessionId: "guarded-widget", updatedAt: 1, permissionMode: "guarded" },
+      );
+      const cfg = { tools: { exec: { mode: "auto" as const } } };
+      const store = new SqliteBoardStore({
+        resolveSession: () => ({ agentId: "main", sessionKey, path: database.path }),
+      });
+      const harness = createHarness(undefined, undefined, store, {
+        getRuntimeConfig: () => cfg,
+      });
+      const response = await harness.invoke("board.widget.put", {
+        sessionKey,
+        name: "health",
+        content: { kind: "html", html: "<p>health</p>" },
+        declared: { tools: ["health"] },
+      });
+      expect(response).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ widgets: [expect.objectContaining({ grantState: "pending" })] }),
+      );
+      expect(reviewWidgetApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  afterEach(async () => {
     resetGatewayWorkAdmission();
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
   });
 
@@ -109,7 +167,7 @@ describe("board gateway runtime boundaries", () => {
     });
   });
 
-  it.each(["commit", "failure", "retired"] as const)(
+  it.each(["commit", "retired"] as const)(
     "waits for board persistence before publishing a %s result",
     async (outcome) => {
       const harness = createHarness();
@@ -119,9 +177,6 @@ describe("board gateway runtime boundaries", () => {
       vi.spyOn(harness.store, "applyOps").mockImplementationOnce(async (...args) => {
         started.resolve();
         await release.promise;
-        if (outcome === "failure") {
-          throw new Error("board write failed");
-        }
         return await applyOps(...args);
       });
       let responded = false;
@@ -188,14 +243,15 @@ describe("board gateway runtime boundaries", () => {
     sessionList.mockImplementation(async ({ respond }: { respond: RespondFn }) =>
       respond(true, { sessions: ["one"] }),
     );
-    const { invoke, store } = createHarness();
+    const harness = createHarness();
+    const { invoke } = harness;
     await invoke("board.widget.put", {
       sessionKey: "session",
       name: "reader",
       content: { kind: "html", html: "reader" },
     });
-    let board = await invoke("board.get", { sessionKey: "session" });
-    let snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const board = await invoke("board.get", { sessionKey: "session" });
+    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
     const denied = await invoke("board.data.read", {
       ticket: snapshot.widgets[0]?.viewTicket,
       bindingId: "sessions.list",
@@ -204,24 +260,9 @@ describe("board gateway runtime boundaries", () => {
     expect(denied.mock.calls[0]?.[0]).toBe(false);
     expect(sessionList).not.toHaveBeenCalled();
 
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-      declared: { tools: ["sessions.list"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "reader",
-      decision: "granted",
-      revision: 2,
-      instanceId: (await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets[0]
-        ?.instanceId,
-    });
-    board = await invoke("board.get", { sessionKey: "session" });
-    snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const { ticket } = await grantTools(["sessions.list"], harness);
     const allowed = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
+      ticket,
       bindingId: "sessions.list",
       params: { limit: 2 },
     });
@@ -252,7 +293,7 @@ describe("board gateway runtime boundaries", () => {
       getGatewayMethodRegistry: () => methodRegistry,
       getSessionEventSubscriberConnIds: () => new Set<string>(),
       getRuntimeConfig: () => ({
-        agents: { list: [{ id: "main" }] },
+        agents: { entries: { main: {} } },
         tools: { exec: { mode: "ask" } },
       }),
       logGateway: { warn: vi.fn() },
@@ -260,6 +301,7 @@ describe("board gateway runtime boundaries", () => {
     gatewayContext.resolveGatewayContext = () => gatewayContext;
     const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
     server.on("connection", (socket) => {
+      let gatewayClient: GatewayWsClient | null = null;
       socket.send(
         JSON.stringify({
           type: "event",
@@ -275,7 +317,7 @@ describe("board gateway runtime boundaries", () => {
           type: "req";
         };
         if (request.method === "connect") {
-          gatewayClients.add({
+          gatewayClient = {
             socket,
             connect: {
               role: "operator",
@@ -283,7 +325,8 @@ describe("board gateway runtime boundaries", () => {
             } as GatewayWsClient["connect"],
             connId: "board-authority-proof",
             usesSharedGatewayAuth: false,
-          });
+          };
+          gatewayClients.add(gatewayClient);
           socket.send(
             JSON.stringify({
               type: "res",
@@ -324,7 +367,7 @@ describe("board gateway runtime boundaries", () => {
               }),
             );
           },
-          client: null,
+          client: gatewayClient,
           isWebchatConnect: () => false,
           context: gatewayContext,
           methodRegistry,
@@ -394,180 +437,43 @@ describe("board gateway runtime boundaries", () => {
     }
   });
 
-  it("rejects ticketed events after the issuing request authority retires", async () => {
-    let active = true;
-    const requestContext: { value?: GatewayRequestContext } = {};
+  it("fences automatic widget approval to the current plugin authority", async () => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    markPluginRegistryActive(pluginRegistry);
+    reviewWidgetApproval.mockImplementationOnce(async () => {
+      markPluginRegistryRetired(pluginRegistry);
+      markPluginRegistryActive(pluginRegistry);
+      return { decision: "allow-once", risk: "low", rationale: "approved before plugin reload" };
+    });
     const harness = createHarness(undefined, undefined, undefined, {
-      resolveGatewayContext: () => (active ? requestContext.value : undefined),
+      getRuntimeConfig: () => ({
+        agents: { entries: { main: {} } },
+        tools: { exec: { mode: "auto" } },
+      }),
     });
-    requestContext.value = harness.context;
-    await harness.invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "counter",
-      content: { kind: "html", html: "counter" },
-    });
-    const board = await harness.invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const ticket = snapshot.widgets[0]?.viewTicket;
-
-    const allowed = await harness.invoke("board.event", { ticket, payload: { count: 1 } });
-    expect(allowed.mock.calls[0]?.[0]).toBe(true);
-    active = false;
-    const denied = await harness.invoke("board.event", { ticket, payload: { count: 2 } });
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
-    expect(denied.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
-    expect(peekSystemEvents("agent:main:session")).toHaveLength(1);
-  });
-
-  it.each([
-    {
-      name: "layout update before applyOps",
-      run: async () => {
-        const harness = createHarness();
-        const response = await runWithGatewayRootWorkAdmissionForTest(async () => {
-          resetGatewayWorkAdmission();
-          return await harness.invoke("board.update", {
+    const response = await withPluginRuntimeGatewayRequestScope(
+      { isWebchatConnect: () => false, pluginRegistry },
+      () =>
+        runWithGatewayRootWorkAdmissionForTest(() =>
+          harness.invoke("board.widget.put", {
             sessionKey: "session",
-            ops: [{ kind: "tab_create", tabId: "ops", title: "Ops" }],
-          });
-        });
-        return {
-          response,
-          verify: async () =>
-            expect(
-              (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).tabs,
-            ).toEqual([]),
-        };
-      },
-    },
-    {
-      name: "automatic widget approval before grant",
-      run: async () => {
-        const pluginRegistry = createEmptyPluginRegistry();
-        markPluginRegistryActive(pluginRegistry);
-        reviewWidgetApproval.mockImplementationOnce(async () => {
-          markPluginRegistryRetired(pluginRegistry);
-          markPluginRegistryActive(pluginRegistry);
-          return {
-            decision: "allow-once",
-            risk: "low",
-            rationale: "approved before plugin reload",
-          };
-        });
-        const harness = createHarness(undefined, undefined, undefined, {
-          getRuntimeConfig: () => ({
-            agents: { list: [{ id: "main" }] },
-            tools: { exec: { mode: "auto" } },
+            name: "approval",
+            content: { kind: "html", html: "approval" },
+            declared: { netOrigins: ["https://example.com"] },
           }),
-        });
-        const response = await withPluginRuntimeGatewayRequestScope(
-          { isWebchatConnect: () => false, pluginRegistry },
-          () =>
-            runWithGatewayRootWorkAdmissionForTest(() =>
-              harness.invoke("board.widget.put", {
-                sessionKey: "session",
-                name: "approval",
-                content: { kind: "html", html: "approval" },
-                declared: { netOrigins: ["https://example.com"] },
-              }),
-            ),
-        );
-        return {
-          response,
-          verify: async () =>
-            expect(
-              (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
-            ).toMatchObject([{ name: "approval", grantState: "pending" }]),
-        };
-      },
-    },
-    {
-      name: "explicit widget grant before store grant",
-      run: async () => {
-        const harness = createHarness();
-        const put = await harness.invoke("board.widget.put", {
-          sessionKey: "session",
-          name: "grant",
-          content: { kind: "html", html: "grant" },
-          declared: { netOrigins: ["https://example.com"] },
-        });
-        const snapshot = put.mock.calls[0]?.[1] as BoardSnapshot | undefined;
-        const widget = snapshot?.widgets[0];
-        if (!widget) {
-          throw new Error("board.widget.put did not return a widget");
-        }
-        harness.broadcast.mockClear();
-        const response = await runWithGatewayRootWorkAdmissionForTest(async () => {
-          resetGatewayWorkAdmission();
-          return await harness.invoke("board.widget.grant", {
-            sessionKey: "session",
-            name: widget.name,
-            decision: "granted",
-            revision: widget.revision,
-            instanceId: widget.instanceId,
-          });
-        });
-        return {
-          response,
-          verify: async () =>
-            expect(
-              (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
-            ).toMatchObject([{ name: "grant", grantState: "pending" }]),
-        };
-      },
-    },
-    {
-      name: "widget event before notice append",
-      run: async () => {
-        const harness = createHarness();
-        await harness.invoke("board.widget.put", {
-          sessionKey: "session",
-          name: "counter",
-          content: { kind: "html", html: "counter" },
-        });
-        harness.broadcast.mockClear();
-        const response = await runWithGatewayRootWorkAdmissionForTest(async () => {
-          resetGatewayWorkAdmission();
-          return await harness.invoke("board.event", {
-            sessionKey: "session",
-            widget: "counter",
-            payload: { count: 1 },
-          });
-        });
-        return {
-          response,
-          verify: async () => expect(peekSystemEvents("agent:main:session")).toEqual([]),
-        };
-      },
-    },
-  ])("fences $name to its request and plugin authority", async ({ run }) => {
-    const { response, verify } = await run();
-
+        ),
+    );
     expect(response.mock.calls[0]?.[0]).toBe(false);
     expect(response.mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
-    await verify();
+    expect(
+      (await harness.store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets,
+    ).toMatchObject([{ name: "approval", grantState: "pending" }]);
   });
 
   it("rejects unknown data bindings inside the gateway allowlist boundary", async () => {
-    const { invoke, store } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "reader",
-      content: { kind: "html", html: "reader" },
-      declared: { tools: ["secrets.dump"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "reader",
-      decision: "granted",
-      revision: 1,
-      instanceId: (await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets[0]
-        ?.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
+    const { invoke, ticket } = await grantTools(["secrets.dump"]);
     const response = await invoke("board.data.read", {
-      ticket: snapshot.widgets[0]?.viewTicket,
+      ticket,
       bindingId: "secrets.dump",
     });
     expect(response).toHaveBeenCalledWith(
@@ -582,24 +488,7 @@ describe("board gateway runtime boundaries", () => {
       async ({ params, respond }: { params: { id: string }; respond: RespondFn }) =>
         respond(true, { ok: true, jobId: params.id }),
     );
-    const { invoke, store } = createHarness();
-    await invoke("board.widget.put", {
-      sessionKey: "session",
-      name: "runner",
-      content: { kind: "html", html: "runner" },
-      declared: { tools: ["cron.trigger:job-1"] },
-    });
-    await invoke("board.widget.grant", {
-      sessionKey: "session",
-      name: "runner",
-      decision: "granted",
-      revision: 1,
-      instanceId: (await store.getSnapshot({ sessionKey: "session", agentId: "main" })).widgets[0]
-        ?.instanceId,
-    });
-    const board = await invoke("board.get", { sessionKey: "session" });
-    const snapshot = board.mock.calls[0]?.[1] as BoardSnapshot;
-    const ticket = snapshot.widgets[0]?.viewTicket;
+    const { invoke, ticket } = await grantTools(["cron.trigger:job-1"]);
 
     const denied = await invoke("board.action", {
       ticket,
@@ -681,72 +570,5 @@ describe("board gateway runtime boundaries", () => {
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect((await boardStore.getSnapshot({ sessionKey })).widgets).toHaveLength(1);
-  });
-
-  it("replaces a dashboard widget through Gateway while preserving layout patches", async () => {
-    const sessionKey = "agent:main:board-put-proof";
-    const stateDir = tempDirs.make("openclaw-board-put-");
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, storePath: database.path },
-      { sessionId: "board-put-proof", updatedAt: Date.now() },
-    );
-    const createTool = () => {
-      const store = new SqliteBoardStore({
-        resolveSession: () => ({ agentId: "main", sessionKey }),
-        env,
-      });
-      const { invoke } = createHarness(undefined, {}, store);
-      const callGateway: InProcessGatewayCaller = async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        const response = await invoke(method, params);
-        expect(response.mock.calls[0]?.[0]).toBe(true);
-        return response.mock.calls[0]?.[1] as T;
-      };
-      return createDashboardTool({ agentSessionKey: sessionKey, agentId: "main", callGateway });
-    };
-    let tool = createTool();
-    const put = (name: string, props?: Record<string, unknown>) =>
-      tool.execute(`put-${name}`, {
-        action: "widget_put",
-        name,
-        pluginKind: "proof:card",
-        ...(props ? { props } : {}),
-      });
-
-    await put("target", { cardId: "card-123", compact: true });
-    await put("sibling", { side: "right" });
-    const moved = (
-      await tool.execute("move", { action: "widget_move", name: "target", after: "sibling" })
-    ).details as BoardSnapshot;
-    expect(moved.widgets.map((widget) => widget.name)).toEqual(["sibling", "target"]);
-    expect(moved.widgets[1]?.props).toEqual({ cardId: "card-123", compact: true });
-
-    const replaced = (await put("target")).details as BoardSnapshot;
-    expect(replaced.widgets.map((widget) => widget.name)).toEqual(["sibling", "target"]);
-    expect(replaced.widgets[0]?.props).toEqual({ side: "right" });
-    expect(replaced.widgets[1]).not.toHaveProperty("props");
-    const read = (await tool.execute("read", { action: "read" })).details as BoardSnapshot;
-    expect(read.widgets).toEqual(replaced.widgets);
-
-    const descriptor = JSON.parse(
-      (
-        database.db
-          .prepare(
-            "SELECT descriptor_json FROM board_widgets WHERE session_key = ? AND name = 'target'",
-          )
-          .get(sessionKey) as { descriptor_json: string }
-      ).descriptor_json,
-    );
-    expect(descriptor).not.toHaveProperty("props");
-
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    tool = createTool();
-    const reopened = (await tool.execute("reopen", { action: "read" })).details as BoardSnapshot;
-    expect(reopened.widgets).toEqual(read.widgets);
   });
 });

@@ -1,10 +1,12 @@
 // Model auth tests cover provider auth status, expiry, and display helpers.
 
+import { CANCEL_SYMBOL } from "@clack/prompts";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ProviderPlugin } from "../../plugins/types.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
+import type { ProviderAuthProfile, ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.js";
 
@@ -45,7 +47,6 @@ function readMockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unk
 const mocks = vi.hoisted(() => ({
   clackCancel: vi.fn(),
   clackConfirm: vi.fn(),
-  clackIsCancel: vi.fn((value: unknown) => value === Symbol.for("clack:cancel")),
   clackPassword: vi.fn(),
   clackSelect: vi.fn(),
   clackText: vi.fn(),
@@ -58,6 +59,7 @@ const mocks = vi.hoisted(() => ({
   upsertAuthProfileWithLock: vi.fn(),
   persistProviderAuthProfilesAfterLogin: vi.fn(),
   removeProviderAuthProfilesWithLock: vi.fn(),
+  loadAuthProfileStoreWithoutExternalProfiles: vi.fn(),
   resolvePluginProvidersCore: vi.fn(),
   createClackPrompter: vi.fn(),
   loadValidConfigSnapshotOrThrow: vi.fn(),
@@ -72,7 +74,7 @@ const mocks = vi.hoisted(() => ({
   isImplicitLocalGatewayTarget: vi.fn(() => Promise.resolve(true)),
   resolvePluginSetupProviderCore: vi.fn(),
   resolvePluginSetupRegistry: vi.fn(),
-  readSecretStoreValue: vi.fn(() => ({
+  readSecretStoreValue: vi.fn(async () => ({
     ok: false as const,
     error: { code: "SECRET_STORE_NOT_FOUND", message: "missing" },
   })),
@@ -92,6 +94,11 @@ vi.mock("../../agents/auth-profiles/profiles.js", () => ({
   upsertAuthProfile: mocks.upsertAuthProfile,
   upsertAuthProfileWithLock: mocks.upsertAuthProfileWithLock,
   upsertAuthProfileWithLockOrThrow: mocks.upsertAuthProfileWithLock,
+}));
+
+vi.mock("../../agents/auth-profiles/store-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store-runtime.js")>()),
+  loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
 }));
 
 vi.mock("../../plugins/provider-auth-persistence.js", () => ({
@@ -129,10 +136,10 @@ vi.mock("../../plugins/provider-auth-helpers.js", () => ({
   }),
 }));
 
-vi.mock("@clack/prompts", () => ({
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
   cancel: mocks.clackCancel,
   confirm: mocks.clackConfirm,
-  isCancel: mocks.clackIsCancel,
   password: mocks.clackPassword,
   select: mocks.clackSelect,
   text: mocks.clackText,
@@ -184,13 +191,14 @@ vi.mock("../../plugins/install-record-commit.js", () => ({
       current: OpenClawConfig,
       context: { snapshot: { valid: boolean } },
     ) => { nextConfig: OpenClawConfig };
-    writeOptions?: { beforeCommit?: () => void };
+    writeOptions?: ConfigWriteOptions;
   }) => {
     const next = await mocks.updateConfig(
       (current: OpenClawConfig) =>
         params.transform(current, { snapshot: { valid: true } }).nextConfig,
       undefined,
       params.writeOptions?.beforeCommit,
+      params.writeOptions,
     );
     return { nextConfig: next, result: next };
   },
@@ -287,26 +295,6 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", async (importOriginal) 
           : merged;
       },
     ),
-    applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
-      ...cfg,
-      agents: {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: {
-            ...cfg.agents?.defaults?.models,
-            [model]: cfg.agents?.defaults?.models?.[model] ?? {},
-          },
-          model: {
-            ...(typeof cfg.agents?.defaults?.model === "object" &&
-            "fallbacks" in cfg.agents.defaults.model
-              ? { fallbacks: cfg.agents.defaults.model.fallbacks }
-              : undefined),
-            primary: model,
-          },
-        },
-      },
-    })),
   };
 });
 
@@ -393,6 +381,21 @@ function createProvider(params: {
   };
 }
 
+function createOpenAISetupProvider(
+  runOauthAuth: ProviderPlugin["auth"][number]["run"],
+  runApiKeyAuth: ProviderPlugin["auth"][number]["run"],
+): ProviderPlugin {
+  return createProvider({
+    id: "openai",
+    label: "OpenAI",
+    run: runOauthAuth,
+    auth: [
+      { id: "oauth", label: "ChatGPT Login", kind: "oauth", run: runOauthAuth },
+      { id: "api-key", label: "OpenAI API Key", kind: "api_key", run: runApiKeyAuth },
+    ],
+  });
+}
+
 describe("modelsAuthLoginCommand", () => {
   let restoreStdin: (() => void) | null = null;
   let currentConfig: OpenClawConfig;
@@ -406,9 +409,6 @@ describe("modelsAuthLoginCommand", () => {
     lastUpdatedConfig = null;
     mocks.clackCancel.mockReset();
     mocks.clackConfirm.mockReset();
-    mocks.clackIsCancel.mockImplementation(
-      (value: unknown) => value === Symbol.for("clack:cancel"),
-    );
     mocks.clackPassword.mockReset();
     mocks.clackSelect.mockReset();
     mocks.clackText.mockReset();
@@ -429,6 +429,10 @@ describe("modelsAuthLoginCommand", () => {
     mocks.tryImportProviderCredential.mockResolvedValue(undefined);
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+    mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset().mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -449,8 +453,16 @@ describe("modelsAuthLoginCommand", () => {
       runtimeConfig: structuredClone(currentConfig),
     }));
     mocks.updateConfig.mockImplementation(
-      async (mutator: (cfg: OpenClawConfig) => OpenClawConfig) => {
-        lastUpdatedConfig = mutator(currentConfig);
+      async (
+        mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+        _selectModelRefs: unknown,
+        beforeCommit?: ConfigWriteOptions["beforeCommit"],
+        writeOptions?: ConfigWriteOptions,
+      ) => {
+        const nextConfig = mutator(currentConfig);
+        await beforeCommit?.();
+        writeOptions?.assertCurrent?.();
+        lastUpdatedConfig = nextConfig;
         currentConfig = lastUpdatedConfig;
         return lastUpdatedConfig;
       },
@@ -494,7 +506,7 @@ describe("modelsAuthLoginCommand", () => {
   function useCoderAgentConfig() {
     currentConfig = {
       agents: {
-        list: [{ id: "main" }, { id: "coder", workspace: "/tmp/openclaw/workspaces/coder" }],
+        entries: { main: {}, coder: { workspace: "/tmp/openclaw/workspaces/coder" } },
       },
     };
     const originalConfig = currentConfig;
@@ -505,6 +517,36 @@ describe("modelsAuthLoginCommand", () => {
       agentId === "coder" ? "/tmp/openclaw/workspaces/coder" : "/tmp/openclaw/workspace",
     );
     return originalConfig;
+  }
+
+  function useTokenProvider() {
+    const runTokenAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "moonshot:token",
+          credential: {
+            type: "token",
+            provider: "moonshot",
+            token: "moonshot-token",
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      {
+        id: "moonshot",
+        label: "Moonshot",
+        auth: [
+          {
+            id: "setup-token",
+            label: "setup-token",
+            kind: "token",
+            run: runTokenAuth,
+          },
+        ],
+      },
+    ]);
+    return runTokenAuth;
   }
 
   it("runs plugin-owned openai login", async () => {
@@ -518,6 +560,7 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(result).toMatchObject({ authRefresh: "refreshed" });
     expect(runProviderAuth).toHaveBeenCalledOnce();
+    expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
     const persistCall = readMockCallArg(
       mocks.persistProviderAuthProfilesAfterLogin,
     ) as PersistProviderAuthCall;
@@ -549,6 +592,48 @@ describe("modelsAuthLoginCommand", () => {
       }),
     );
   });
+
+  it.each([
+    { profileId: undefined, expectedIds: ["openai:first", "openai:second"] },
+    { profileId: "openai:first", expectedIds: ["openai:first"] },
+    { profileId: "openai:new", expectedIds: [] },
+  ])(
+    "passes only permitted stored profiles to login (profile=$profileId)",
+    async ({ profileId, expectedIds }) => {
+      const credential = {
+        type: "oauth",
+        provider: "openai",
+        access: "synthetic-expired-access",
+        refresh: "synthetic-refresh",
+        expires: 1,
+        clientId: "synthetic-client",
+        authorizationScope: "openid profile resource.invoke offline_access",
+      } as const;
+      const profiles: Record<string, ProviderAuthProfile["credential"]> = {
+        "openai:first": credential,
+        "openai:second": { ...credential, clientId: "another-registration" },
+        "other:private": { ...credential, provider: "other" },
+      };
+      mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({ version: 1, profiles });
+      runProviderAuth.mockResolvedValueOnce({
+        profiles: [{ profileId: profileId ?? "openai:first", credential }],
+      });
+
+      await modelsAuthLoginCommand({ provider: "openai", profileId }, createRuntime());
+
+      expect(runProviderAuth.mock.calls[0]?.[0].existingProfiles).toEqual(
+        expectedIds.map((id) => ({ profileId: id, credential: profiles[id] })),
+      );
+      expect(mocks.loadAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
+        "/tmp/openclaw/agents/main",
+      );
+      expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          profiles: [{ profileId: profileId ?? "openai:first", credential }],
+        }),
+      );
+    },
+  );
 
   it("persists a named login profile and promotes that same profile", async () => {
     const runtime = createRuntime();
@@ -868,25 +953,7 @@ describe("modelsAuthLoginCommand", () => {
       }),
     ]);
     mocks.resolvePluginSetupProviderCore.mockReturnValue(
-      createProvider({
-        id: "openai",
-        label: "OpenAI",
-        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
-        auth: [
-          {
-            id: "oauth",
-            label: "ChatGPT Login",
-            kind: "oauth",
-            run: runOauthAuth,
-          },
-          {
-            id: "api-key",
-            label: "OpenAI API Key",
-            kind: "api_key",
-            run: runApiKeyAuth,
-          },
-        ],
-      }),
+      createOpenAISetupProvider(runOauthAuth, runApiKeyAuth),
     );
 
     await modelsAuthLoginCommand({ provider: "openai" }, runtime);
@@ -921,25 +988,7 @@ describe("modelsAuthLoginCommand", () => {
       }),
     ]);
     mocks.resolvePluginSetupProviderCore.mockReturnValue(
-      createProvider({
-        id: "openai",
-        label: "OpenAI",
-        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
-        auth: [
-          {
-            id: "oauth",
-            label: "ChatGPT Login",
-            kind: "oauth",
-            run: runOauthAuth,
-          },
-          {
-            id: "api-key",
-            label: "OpenAI API Key",
-            kind: "api_key",
-            run: runApiKeyAuth,
-          },
-        ],
-      }),
+      createOpenAISetupProvider(runOauthAuth, runApiKeyAuth),
     );
 
     await modelsAuthLoginCommand({ provider: "openai", method: "api-key" }, runtime);
@@ -1478,15 +1527,6 @@ describe("modelsAuthLoginCommand", () => {
     );
   });
 
-  it("--force does not purge when omitted", async () => {
-    const runtime = createRuntime();
-
-    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
-
-    expect(mocks.removeProviderAuthProfilesWithLock).not.toHaveBeenCalled();
-    expect(runProviderAuth).toHaveBeenCalledOnce();
-  });
-
   it("--force fails before login when purge throws", async () => {
     const runtime = createRuntime();
     mocks.removeProviderAuthProfilesWithLock.mockRejectedValueOnce(new Error("disk full"));
@@ -1520,25 +1560,7 @@ describe("modelsAuthLoginCommand", () => {
       const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
       const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
       mocks.resolvePluginSetupProviderCore.mockReturnValue(
-        createProvider({
-          id: "openai",
-          label: "OpenAI",
-          run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
-          auth: [
-            {
-              id: "oauth",
-              label: "ChatGPT Login",
-              kind: "oauth",
-              run: runOauthAuth,
-            },
-            {
-              id: "api-key",
-              label: "OpenAI API Key",
-              kind: "api_key",
-              run: runApiKeyAuth,
-            },
-          ],
-        }),
+        createOpenAISetupProvider(runOauthAuth, runApiKeyAuth),
       );
 
       await expect(
@@ -1614,9 +1636,7 @@ describe("modelsAuthLoginCommand", () => {
       throw new Error(`exit:${String(code ?? "")}`);
     }) as typeof process.exit);
     try {
-      const cancelSymbol = Symbol.for("clack:cancel");
-      mocks.clackPassword.mockResolvedValue(cancelSymbol);
-      mocks.clackIsCancel.mockImplementation((value: unknown) => value === cancelSymbol);
+      mocks.clackPassword.mockResolvedValue(CANCEL_SYMBOL);
 
       await expect(modelsAuthPasteTokenCommand({ provider: "openai" }, runtime)).rejects.toThrow(
         "exit:0",
@@ -1741,20 +1761,6 @@ describe("modelsAuthLoginCommand", () => {
     expect(mocks.updateConfig).not.toHaveBeenCalled();
   });
 
-  it("rejects piped OpenAI API keys as OpenAI Codex token material", async () => {
-    const runtime = createRuntime();
-    restoreStdin?.();
-    restoreStdin = withPipedStdin("sk-openai-chatgpt-api-key-value\n");
-
-    await expect(modelsAuthPasteTokenCommand({ provider: "openai" }, runtime)).rejects.toThrow(
-      "paste-api-key --provider openai",
-    );
-
-    expect(mocks.clackPassword).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfileWithLock).not.toHaveBeenCalled();
-    expect(mocks.updateConfig).not.toHaveBeenCalled();
-  });
-
   it("rejects line-wrapped piped OpenAI API keys as OpenAI Codex token material", async () => {
     const runtime = createRuntime();
     restoreStdin?.();
@@ -1808,36 +1814,14 @@ describe("modelsAuthLoginCommand", () => {
       mode: "api_key",
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway has not confirmed applying the provider settings"),
+    );
     expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         params: { operation: "login", agentId: "coder" },
       }),
     );
-  });
-
-  it("writes piped OpenAI Codex API keys to API-key profiles", async () => {
-    const runtime = createRuntime();
-    restoreStdin?.();
-    restoreStdin = withPipedStdin("sk-openai-chatgpt-api-key-value\n");
-
-    await modelsAuthPasteApiKeyCommand({ provider: "openai" }, runtime);
-
-    expect(mocks.clackPassword).not.toHaveBeenCalled();
-    expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
-      profileId: "openai:manual",
-      credential: {
-        type: "api_key",
-        provider: "openai",
-        key: "sk-openai-chatgpt-api-key-value",
-      },
-      agentDir: "/tmp/openclaw/agents/main",
-      preserveApiKeyMetadata: true,
-      validateCurrentCredential: expect.any(Function),
-    });
-    expect(lastUpdatedConfig?.auth?.profiles?.["openai:manual"]).toEqual({
-      provider: "openai",
-      mode: "api_key",
-    });
   });
 
   it("normalizes line-wrapped piped OpenAI Codex API keys before storing", async () => {
@@ -1893,7 +1877,7 @@ describe("modelsAuthLoginCommand", () => {
 
   it("rejects an unknown agent before prompting for pasted tokens", async () => {
     const runtime = createRuntime();
-    currentConfig = { agents: { list: [{ id: "main" }] } };
+    currentConfig = { agents: { entries: { main: {} } } };
 
     await expect(
       modelsAuthPasteTokenCommand({ provider: "openai", agent: "missing" }, runtime),
@@ -1908,32 +1892,7 @@ describe("modelsAuthLoginCommand", () => {
 
   it("runs token auth for any token-capable provider plugin", async () => {
     const runtime = createRuntime();
-    const runTokenAuth = vi.fn().mockResolvedValue({
-      profiles: [
-        {
-          profileId: "moonshot:token",
-          credential: {
-            type: "token",
-            provider: "moonshot",
-            token: "moonshot-token",
-          },
-        },
-      ],
-    });
-    mocks.resolvePluginProvidersCore.mockReturnValue([
-      {
-        id: "moonshot",
-        label: "Moonshot",
-        auth: [
-          {
-            id: "setup-token",
-            label: "setup-token",
-            kind: "token",
-            run: runTokenAuth,
-          },
-        ],
-      },
-    ]);
+    const runTokenAuth = useTokenProvider();
 
     await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true }, runtime);
 
@@ -1958,32 +1917,7 @@ describe("modelsAuthLoginCommand", () => {
   it("uses the requested agent store for setup-token provider auth", async () => {
     const runtime = createRuntime();
     useCoderAgentConfig();
-    const runTokenAuth = vi.fn().mockResolvedValue({
-      profiles: [
-        {
-          profileId: "moonshot:token",
-          credential: {
-            type: "token",
-            provider: "moonshot",
-            token: "moonshot-token",
-          },
-        },
-      ],
-    });
-    mocks.resolvePluginProvidersCore.mockReturnValue([
-      {
-        id: "moonshot",
-        label: "Moonshot",
-        auth: [
-          {
-            id: "setup-token",
-            label: "setup-token",
-            kind: "token",
-            run: runTokenAuth,
-          },
-        ],
-      },
-    ]);
+    const runTokenAuth = useTokenProvider();
 
     await modelsAuthSetupTokenCommand({ provider: "moonshot", yes: true, agent: "coder" }, runtime);
 

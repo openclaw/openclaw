@@ -12,11 +12,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { containsEnvVarReference } from "./env-substitution.js";
+import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -81,7 +82,7 @@ function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: s
  * sentinel and restore the original value from the on-disk config, so a
  * round-trip through the Web UI does not corrupt credentials.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export { REDACTED_SENTINEL } from "./redact-sentinel.js";
 
 function isSecretRefWithProvider(
   value: Record<string, unknown>,
@@ -200,12 +201,12 @@ function redactValue(
         if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
           const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
-            result[key] = redactSecretRefId({
-              value: objectValue,
-              values,
-              redactedSentinel: REDACTED_SENTINEL,
-              isConcreteSensitiveString,
-            });
+            const redacted = { ...objectValue };
+            if (isConcreteSensitiveString(objectValue.id)) {
+              values.push(objectValue.id);
+              redacted.id = REDACTED_SENTINEL;
+            }
+            result[key] = redacted;
           } else {
             collectSensitiveStrings(objectValue, values);
             result[key] = REDACTED_SENTINEL;
@@ -284,9 +285,10 @@ export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
 export function redactConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   uiHints?: ConfigUiHints,
-): ConfigFileSnapshot {
+): Omit<ConfigFileSnapshot, "authoredConfig" | "sourceConfigBeforeMigrations"> {
   // Internal migration inputs can contain resolved secrets; never expose them in public snapshots.
   const {
+    authoredConfig: _authoredConfig,
     sourceConfigBeforeMigrations: _sourceConfigBeforeMigrations,
     pluginMetadataSnapshot: _pluginMetadataSnapshot,
     ...publicSnapshot
@@ -391,17 +393,15 @@ function restoreRedactedValuesWithContext(
         humanReadableMessage: err.humanReadableMessage,
       };
     }
-    throw err; // some coding error, pass through
+    throw err;
   }
 }
 
 class RedactionError extends Error {
-  public readonly key: string;
   public readonly humanReadableMessage: string;
 
   constructor(key: string, humanReadableMessage?: string) {
     super("internal error class---should never escape");
-    this.key = key;
     this.humanReadableMessage =
       humanReadableMessage ??
       `Sentinel value "${REDACTED_SENTINEL}" in key ${key} is not valid as real data`;

@@ -75,7 +75,7 @@ if (command === 'lsof') {
         );
         expect(result.code).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
-          present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, true])),
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, true])),
           routingPreserved: true,
         });
       };
@@ -106,7 +106,7 @@ if (command === 'lsof') {
       for (const entry of reports) {
         expect(entry, `${entry.command} inherited canary presence`).toEqual({
           command: entry.command,
-          present: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
+          defined: Object.fromEntries(Object.keys(diagnosticCanaries).map((key) => [key, false])),
           routingPreserved: true,
         });
       }

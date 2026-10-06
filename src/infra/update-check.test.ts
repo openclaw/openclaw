@@ -20,6 +20,84 @@ import {
 
 const mockHttp = useMockHttp();
 
+describe("update network budgets", () => {
+  const queries = [
+    {
+      name: "package target",
+      run: async () => (await fetchNpmPackageTargetStatus({ target: "latest" })).version,
+    },
+    {
+      name: "channel selector",
+      run: async () => (await resolveNpmChannelTag({ channel: "stable" })).version,
+    },
+    {
+      name: "extended-stable verification",
+      run: async () => {
+        const result = await resolveExtendedStablePackage({ installKind: "package", env: {} });
+        return result.status === "resolved" ? result.version : null;
+      },
+    },
+    {
+      name: "update status",
+      run: async () =>
+        (await checkUpdateStatus({ root: null, includeRegistry: true })).registry?.latestVersion,
+    },
+  ];
+
+  function delayRegistryResponse(delayMs: number) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("Registry request has no watchdog");
+        }
+        return await new Promise<Response>((resolve, reject) => {
+          const abort = () => {
+            clearTimeout(timer);
+            reject(new Error("Registry request aborted"));
+          };
+          const timer = setTimeout(() => {
+            signal.removeEventListener("abort", abort);
+            resolve(Response.json({ version: "2026.8.33" }));
+          }, delayMs);
+          signal.addEventListener("abort", abort, { once: true });
+        });
+      }),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it.each(queries)("allows slow registry metadata for $name", async ({ run }) => {
+    vi.useFakeTimers();
+    delayRegistryResponse(299_000);
+    const result = run();
+    await vi.advanceTimersByTimeAsync(598_000);
+    await expect(result).resolves.toBe("2026.8.33");
+  });
+
+  it.each([
+    { timeoutMs: 50, delayMs: 1000, durationMs: 50, version: null },
+    { timeoutMs: 420_000, delayMs: 350_000, durationMs: 350_000, version: "2026.8.33" },
+  ])("preserves an explicit $timeoutMs ms registry budget", async (testCase) => {
+    vi.useFakeTimers();
+    delayRegistryResponse(testCase.delayMs);
+    const startedAt = Date.now();
+    let durationMs: number | undefined;
+    const result = fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: testCase.timeoutMs });
+    void result.then(() => {
+      durationMs = Date.now() - startedAt;
+    });
+    await vi.advanceTimersByTimeAsync(testCase.delayMs);
+    await expect(result).resolves.toMatchObject({ version: testCase.version });
+    expect(durationMs).toBe(testCase.durationMs);
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -141,44 +219,46 @@ describe("resolveNpmChannelTag", () => {
     runCommand = runCommandMock;
   });
 
-  it("delegates package target metadata to npm view with global config scope", async () => {
-    versionByTag.latest = "1.0.4";
-    const env = { ...process.env, NPM_CONFIG_USERCONFIG: "/tmp/openclaw-user-npmrc" };
+  it.each([50, 1000, 420_000])(
+    "forwards %i ms to npm view with global config scope",
+    async (timeoutMs) => {
+      versionByTag.latest = "1.0.4";
+      const env = { ...process.env, NPM_CONFIG_USERCONFIG: "/tmp/openclaw-user-npmrc" };
 
-    await expect(
-      fetchNpmPackageTargetStatus({
-        target: "latest",
-        spec: "openclaw@latest",
-        command: "/opt/openclaw/node/bin/npm",
-        timeoutMs: 1000,
-        cwd: "/tmp/openclaw-project",
-        env,
-        runCommand,
-      }),
-    ).resolves.toEqual({
-      target: "latest",
-      version: "1.0.4",
-      nodeEngine: ">=22.19.0",
-    });
+      await expect(
+        fetchNpmPackageTargetStatus({
+          target: "latest",
+          spec: "openclaw@latest",
+          command: "/opt/openclaw/node/bin/npm",
+          timeoutMs,
+          cwd: "/tmp/openclaw-project",
+          env,
+          runCommand,
+        }),
+      ).resolves.toEqual({
+        version: "1.0.4",
+        nodeEngine: ">=22.19.0",
+      });
 
-    expect(runCommandMock).toHaveBeenCalledWith(
-      [
-        "/opt/openclaw/node/bin/npm",
-        "view",
-        "openclaw@latest",
-        "version",
-        "engines.node",
-        "openclaw.schemaVersions",
-        "--json",
-        "--global",
-      ],
-      expect.objectContaining({
-        timeoutMs: 1000,
-        cwd: "/tmp/openclaw-project",
-        env,
-      }),
-    );
-  });
+      expect(runCommandMock).toHaveBeenCalledWith(
+        [
+          "/opt/openclaw/node/bin/npm",
+          "view",
+          "openclaw@latest",
+          "version",
+          "engines.node",
+          "openclaw.schemaVersions",
+          "--json",
+          "--global",
+        ],
+        expect.objectContaining({
+          timeoutMs,
+          cwd: "/tmp/openclaw-project",
+          env,
+        }),
+      );
+    },
+  );
 
   it("normalizes npm 12 singleton-array metadata", async () => {
     const npm12RunCommand = vi.fn(async () => ({
@@ -200,7 +280,6 @@ describe("resolveNpmChannelTag", () => {
         runCommand: npm12RunCommand,
       }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.7.1",
       nodeEngine: ">=22.22.3",
       schemaVersions: { state: 3, agent: 11 },
@@ -267,7 +346,6 @@ describe("resolveNpmChannelTag", () => {
             },
           }),
         ).resolves.toEqual({
-          target: "latest",
           version: "2026.6.6",
           nodeEngine: ">=22.19.0",
           schemaVersions: { state: 1, agent: 1 },
@@ -300,7 +378,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
       schemaVersions: { state: 1, agent: 1 },
@@ -337,7 +414,6 @@ describe("resolveNpmChannelTag", () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       await expect(resultPromise).resolves.toMatchObject({
-        target: "latest",
         version: null,
         nodeEngine: null,
         error: "TimeoutError: request timed out",
@@ -362,7 +438,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: null,
       nodeEngine: null,
       error: "HTTP 503",
@@ -418,24 +493,17 @@ describe("resolveNpmChannelTag", () => {
     expect(result.error).toContain("malformed JSON");
   });
 
-  it("returns error on non-200 status from registry", async () => {
-    mockHttp.intercept({
-      url: "https://registry.npmjs.org/openclaw/latest",
-      reply: { status: 404 },
-    });
-
-    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 });
-    expect(result.version).toBeNull();
-    expect(result.error).toBe("HTTP 404");
-  });
-
   it("falls back to latest when beta is older", async () => {
     versionByTag.beta = "1.0.0-beta.1";
     versionByTag.latest = "1.0.1-1";
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1-1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps beta when beta is not older", async () => {
@@ -444,7 +512,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
+    expect(resolved).toMatchObject({
+      tag: "beta",
+      version: "1.0.2-beta.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("falls back to latest when beta has same base as stable", async () => {
@@ -453,7 +525,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps non-beta channels unchanged", async () => {
@@ -461,9 +537,10 @@ describe("resolveNpmChannelTag", () => {
 
     await expect(
       resolveNpmChannelTag({ channel: "stable", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "latest",
       version: "1.0.3",
+      metadata: { nodeEngine: ">=22.19.0" },
     });
   });
 
@@ -488,7 +565,9 @@ describe("resolveNpmChannelTag", () => {
 
       await vi.advanceTimersByTimeAsync(200);
 
-      expect(completed).toHaveBeenCalledWith({ tag: "beta", version: "2026.9.1-beta.1" });
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ tag: "beta", version: "2026.9.1-beta.1" }),
+      );
       await pending;
     } finally {
       await vi.runAllTimersAsync();
@@ -500,10 +579,14 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.latest = "1.0.4";
     await expect(
       fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({ tag: "latest", version: "1.0.4" });
+    ).resolves.toMatchObject({
+      tag: "latest",
+      version: "1.0.4",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
     await expect(
       fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "missing",
       version: null,
       error: "npm view failed: npm ERR! 404 Not Found",
@@ -758,7 +841,11 @@ describe("checkUpdateStatus registry behavior", () => {
         JSON.stringify({ name: "openclaw", packageManager: "pnpm@12.0.0" }),
         "utf8",
       );
-      await runCommandWithTimeout(["git", "init"], { cwd: root, timeoutMs: 1000 });
+      const initialized = await runCommandWithTimeout(["git", "init"], {
+        cwd: root,
+        timeoutMs: 1000,
+      });
+      expect(initialized, initialized.stderr).toMatchObject({ code: 0, termination: "exit" });
       const status = await checkUpdateStatus({
         root,
         includeRegistry: true,

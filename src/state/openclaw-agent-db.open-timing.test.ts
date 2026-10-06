@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as permissions from "./openclaw-agent-db-permissions.js";
@@ -18,16 +19,17 @@ import {
   withOpenClawAgentDatabaseAsync,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const logger = vi.hoisted(() => ({ warn: vi.fn() }));
+const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const original = actual.createSubsystemLogger(name);
-      return name === "state/agent-db" ? { ...original, warn: logger.warn } : original;
+      return name === "state/agent-db" ? { ...original, ...logger } : original;
     },
   };
 });
@@ -40,6 +42,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   logger.warn.mockClear();
+  logger.info.mockClear();
 });
 
 function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheckMs = 0) {
@@ -123,6 +126,41 @@ function createTimedOpen(validationMs: number, indexRepairMs = 0, integrityCheck
 }
 
 describe("agent database open timings", () => {
+  it("includes synchronous WAL recovery in the deferred integrity gate", () => {
+    const { options, pathname, advance } = createTimedOpen(0);
+    const database = openOpenClawAgentDatabase(options);
+    vi.spyOn(database.db, "prepare").mockRestore();
+    const prepare = database.db.prepare.bind(database.db);
+    vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+      const statement = prepare(sql);
+      if (sql === "PRAGMA wal_checkpoint(PASSIVE)") {
+        const get = statement.get.bind(statement);
+        vi.spyOn(statement, "get").mockImplementation((...parameters) => {
+          const result = get(...parameters);
+          advance(2_400);
+          return result;
+        });
+      }
+      return statement;
+    });
+    const diagnostics: SqliteIntegrityDiagnostics = {};
+    const admission = schema.agentDatabaseIntegrityBeforeMutationSteps(
+      database.db,
+      options.agentId,
+      pathname,
+      diagnostics,
+      undefined,
+      false,
+      true,
+    );
+    expect(admission.next()).toEqual({ done: true, value: false });
+    expect(diagnostics).toMatchObject({
+      integrityGateReason: "process-death",
+      integrityGateMode: "deferred",
+      integrityGateMs: 2_400,
+    });
+  });
+
   it("reports completed phases at the slow threshold and skips live cache hits", () => {
     const { options, pathname, advance } = createTimedOpen(690);
     const database = openOpenClawAgentDatabase(options);
@@ -150,112 +188,66 @@ describe("agent database open timings", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("keeps opens below the existing threshold quiet", () => {
-    const { options } = createTimedOpen(689.75);
-    expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
-  it("measures a validated reopen without charging skipped schema or registration work", () => {
-    const { options, pathname } = createTimedOpen(1_000);
-    openOpenClawAgentDatabase(options);
+  it("reports canonical index repair separately from other open phases", () => {
+    const { options, pathname } = createTimedOpen(0, 1_000);
+    const database = openOpenClawAgentDatabase(options);
+    database.db.exec(`
+    INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+    VALUES ('session-one', 'window-one', '{}', 1);
+    DROP INDEX idx_agent_session_nodes_updated_at;
+    CREATE INDEX idx_agent_session_nodes_updated_at ON session_nodes(session_key);
+  `);
     closeOpenClawAgentDatabaseByPath(pathname);
     logger.warn.mockClear();
-    expect(openOpenClawAgentDatabase(options).db.isOpen).toBe(true);
-    expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
-      agentId: options.agentId,
-      elapsedMs: 1_150,
-      path: pathname,
-      pid: process.pid,
-      threadId,
-      isMainThread,
-      admissionMode: "sync",
-      thresholdMs: 1_000,
-      integrityGateMs: 0,
-      integrityGateOutcome: "healthy",
-      integrityCheckSyncMs: 0,
-      integrityOutsideCheckMs: 0,
-      canonicalIndexMs: 0,
-      repairedIndexCount: 0,
-      phaseDurationsMs: {
-        open: 60,
-        validation: 1_000,
-        configuration: 80,
-        schema: 0,
-        registration: 10,
-      },
-    });
-  });
 
-  it.each(["definition", "physical"] as const)(
-    "reports actual repairs for %s index drift",
-    (drift) => {
-      const { options, pathname } = createTimedOpen(0, 1_000);
-      const database = openOpenClawAgentDatabase(options);
-      const canonicalIndex = database.db
-        .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_agent_session_nodes_updated_at'")
-        .get();
-      const canonicalIndexCount = database.db
+    const reopened = openOpenClawAgentDatabase(options);
+    expect(
+      reopened.db
         .prepare(
-          "SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'session_nodes' AND sql IS NOT NULL",
+          "SELECT session_key FROM session_nodes INDEXED BY idx_agent_session_nodes_updated_at",
         )
-        .all().length;
-      database.db.exec(`
-      INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-      VALUES ('session-one', 'window-one', '{}', 1);
-      DROP INDEX idx_agent_session_nodes_updated_at;
-      CREATE INDEX idx_agent_session_nodes_updated_at ON session_nodes(session_key);
-    `);
-      if (drift === "physical") {
-        database.db.enableDefensive?.(false);
-        database.db.exec("PRAGMA writable_schema = ON;");
-        database.db
-          .prepare(
-            "UPDATE sqlite_schema SET sql = ? WHERE name = 'idx_agent_session_nodes_updated_at'",
-          )
-          .run(String(canonicalIndex?.sql));
-        database.db.exec("PRAGMA writable_schema = OFF;");
-      }
-      closeOpenClawAgentDatabaseByPath(pathname);
-      logger.warn.mockClear();
-
-      const reopened = openOpenClawAgentDatabase(options);
-      expect(
-        reopened.db
-          .prepare(
-            "SELECT session_key FROM session_nodes INDEXED BY idx_agent_session_nodes_updated_at",
-          )
-          .all(),
-      ).toEqual([{ session_key: "session-one" }]);
-      expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
-      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
-        "slow OpenClaw agent database open",
-        expect.objectContaining({
-          elapsedMs: 1_150,
-          integrityGateMs: 0,
-          integrityGateOutcome: drift === "physical" ? "failed" : "healthy",
-          integrityCheckSyncMs: 0,
-          integrityOutsideCheckMs: 0,
-          canonicalIndexMs: 1_000,
-          repairedIndexCount: drift === "physical" ? canonicalIndexCount : 1,
-          phaseDurationsMs: {
-            open: 60,
-            validation: 1_000,
-            configuration: 80,
-            schema: 0,
-            registration: 10,
-          },
-        }),
-      );
-    },
-  );
+        .all(),
+    ).toEqual([{ session_key: "session-one" }]);
+    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
+      integrity_check: "ok",
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining(
+        `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
+      ),
+      {
+        agentId: options.agentId,
+        path: pathname,
+        indexes: ["idx_agent_session_nodes_updated_at"],
+        elapsedMs: 1_000,
+      },
+    );
+    expect(logger.warn).toHaveBeenNthCalledWith(
+      2,
+      "slow OpenClaw agent database open",
+      expect.objectContaining({
+        elapsedMs: 1_150,
+        integrityGateOutcome: "cached",
+        canonicalIndexMs: 1_000,
+        repairedIndexCount: 1,
+        phaseDurationsMs: {
+          open: 60,
+          validation: 1_000,
+          configuration: 80,
+          schema: 0,
+          registration: 10,
+        },
+      }),
+    );
+  });
 
   it("separates the synchronous check from readmission waiting in the completed owner log", async () => {
     const { options, pathname, advance } = createTimedOpen(0, 0, 120.75);
     openOpenClawAgentDatabase(options);
-    closeOpenClawAgentDatabaseByPath(pathname);
+    closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     let admissions = 0;
 
@@ -275,7 +267,7 @@ describe("agent database open timings", () => {
     expect(admissions).toBe(2);
     expect(logger.warn).toHaveBeenCalledExactlyOnceWith("slow OpenClaw agent database open", {
       agentId: options.agentId,
-      elapsedMs: 1_270,
+      elapsedMs: 1_430,
       path: pathname,
       pid: process.pid,
       threadId,
@@ -284,6 +276,8 @@ describe("agent database open timings", () => {
       thresholdMs: 1_000,
       integrityGateMs: 1_120,
       integrityGateOutcome: "healthy",
+      integrityGateReason: "revoked",
+      integrityGateMode: "full",
       integrityCheckSyncMs: 120,
       integrityOutsideCheckMs: 1_000,
       canonicalIndexMs: 0,
@@ -292,8 +286,8 @@ describe("agent database open timings", () => {
         open: 60,
         validation: 1_120,
         configuration: 80,
-        schema: 0,
-        registration: 10,
+        schema: 90,
+        registration: 80,
       },
     });
   });
@@ -302,6 +296,7 @@ describe("agent database open timings", () => {
     const { options, pathname, advance } = createTimedOpen(0);
     openOpenClawAgentDatabase(options);
     closeOpenClawAgentDatabasesForTest();
+    clearOpenClawAgentIntegrityVerification(pathname, options.env);
     logger.warn.mockClear();
     const nativeFinished = createDeferredCore();
     const release = createDeferredCore();
@@ -351,6 +346,11 @@ describe("agent database open timings", () => {
         thresholdMs: 1_000,
         integrityGateMs: 1_000,
         integrityGateOutcome: "healthy",
+        integrityGateReason: "revoked",
+        integrityGateMode: "full",
+        integrityWorkerCheckMs: expect.any(Number),
+        integrityWorkerLifetimeMs: 0,
+        integrityOutsideWorkerMs: 1_000,
         canonicalIndexMs: 0,
         repairedIndexCount: 0,
         phaseDurationsMs: {

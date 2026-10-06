@@ -1,5 +1,6 @@
 // Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -15,8 +16,9 @@ import {
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../../src/state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../../src/state/openclaw-state-db.js";
+import { cleanupSessionStateForTest } from "../../../../src/test-utils/session-state-cleanup.js";
 import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   buildSessionEntry,
@@ -32,10 +34,14 @@ let envSnapshot: Record<string, string | undefined> | undefined;
 let fixtureId = 0;
 
 beforeAll(() => {
-  fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
+  fixtureRoot = fsSync.realpathSync.native(
+    fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-")),
+  );
 });
 
-afterAll(() => {
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
 });
 
@@ -51,11 +57,9 @@ beforeEach(() => {
   clearConfigCache();
 });
 
-afterEach(() => {
-  // Agent close releases leases through shared state; close agent handles first while the fixture
-  // env is active, then close shared state before removing the Windows-owned directory.
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
+  // Close case databases before restoring its environment or removing its files.
+  await cleanupSessionStateForTest({ stateDir: tmpDir, rootPath: tmpDir });
   for (const [key, value] of Object.entries(envSnapshot ?? {})) {
     if (value === undefined) {
       Reflect.deleteProperty(process.env, key);
@@ -129,7 +133,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const scanError = Object.assign(new Error("transient session archive scan failure"), {
       code: "EIO",
     });
-    const readdirSpy = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+    const readdirSpy = vi.spyOn(fs, "readdir").mockImplementation(async () => {
       throw scanError;
     });
 
@@ -337,6 +341,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       absPath: sessionKey,
       path: liveEntry.path,
       mtimeMs: liveEntry.mtimeMs,
+      revisionMs: liveEntry.revisionMs,
       size: liveEntry.size,
     });
     expect(archiveEntry.path).toBe(
@@ -396,7 +401,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     );
   });
 
-  it("classifies active entries through cron parentage chains", async () => {
+  it("classifies active entries through cron parentage chains and cycles", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     const cronPath = path.join(sessionsDir, "cron-run.jsonl");
@@ -443,10 +448,26 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         spawnedBy: "agent:main:chat:manual",
         updatedAt: 1,
       },
+      "agent:main:subagent:cycle-a": {
+        sessionId: "cycle-a",
+        parentSessionKey: "agent:main:subagent:cycle-b",
+        spawnedBy: "agent:main:cron:job-1:run:missing",
+        updatedAt: 1,
+      },
+      "agent:main:subagent:cycle-b": {
+        sessionId: "cycle-b",
+        parentSessionKey: "agent:main:subagent:cycle-a",
+        updatedAt: 1,
+      },
     });
 
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
-    expect(entries.filter((entry) => entry.generatedByCronRun)).toHaveLength(4);
+    expect(
+      entries
+        .filter((entry) => entry.generatedByCronRun)
+        .map((entry) => entry.sessionId)
+        .toSorted(),
+    ).toEqual(["cron-run", "cycle-a", "cycle-b", "keyed-child", "orphan-child", "spawned-child"]);
   });
 
   it("keeps archive classification when the active transcript is missing", async () => {
@@ -724,10 +745,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
         },
       }),
     );
-    fsSync.writeFileSync(
-      configPath,
-      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
-    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }));
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -758,6 +776,30 @@ describe("memory session sync targets", () => {
 });
 
 describe("buildSessionEntry", () => {
+  it("preserves the persisted export hash for wrapped Unicode messages", async () => {
+    const records = Array.from({ length: 4 }, (_, index) => ({
+      type: "message",
+      id: `m${index}`,
+      timestamp: "2026-09-01T00:00:00Z",
+      message: {
+        role: index % 2 ? "assistant" : "user",
+        content: `sample-${index} café 🦞 ordinary text. `.repeat(32).slice(0, 1024),
+        __openclaw: { senderIsOwner: true },
+      },
+    }));
+    const filePath = path.join(tmpDir, "hash-contract.jsonl");
+    fsSync.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+    const entry = requireSessionEntry(
+      await buildSessionEntry(filePath, {
+        generatedByCronRun: false,
+        generatedByDreamingNarrative: false,
+        sessionKind: "interactive",
+      }),
+    );
+    expect(entry.lineMap).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
+    expect(entry.hash).toBe("c0c681f57b6caea32f1a6baee132322c0dbc6f93e75656725fe3ef7158f195ae");
+  });
+
   it("returns lineMap tracking original JSONL line numbers", async () => {
     // Simulate a real session JSONL file with metadata records interspersed
     // Lines 1-3: non-message metadata records

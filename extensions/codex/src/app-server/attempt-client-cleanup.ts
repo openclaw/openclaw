@@ -1,16 +1,26 @@
-/**
- * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
- */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  AgentHarnessPreflightError,
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
-import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerBrokenPipeError,
+  isCodexAppServerOverloadError,
+  isCodexAppServerRequestTimeoutError,
+  type CodexAppServerClient,
+} from "./client.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
+import {
+  isCodexAppServerStartSelectionChangedError,
+  retireSharedCodexAppServerClientIfCurrent,
+} from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
-/** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
-/** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
@@ -32,13 +42,6 @@ export class CodexAppServerUnsafeSubscriptionError extends Error {
   }
 }
 
-export function isCodexAppServerUnsafeSubscriptionError(
-  error: unknown,
-): error is CodexAppServerUnsafeSubscriptionError {
-  return error instanceof CodexAppServerUnsafeSubscriptionError;
-}
-
-/** Asserts Codex resumed the exact thread this attempt subscribed to. */
 export function assertCodexThreadResumeSubscription(
   requestedThreadId: string,
   returnedThreadId: string,
@@ -107,7 +110,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
       await client.request("turn/interrupt", requestParams, { timeoutMs });
       return true;
     }
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const started = createDeferred<boolean>();
     // Codex acknowledges interruption before publishing turn/completed. Register
     // first so an immediate exact-turn terminal cannot race past its owner.
@@ -126,7 +129,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
     const requestInterrupt = async () => {
       try {
         await client.request("turn/interrupt", requestParams, {
-          timeoutMs: Math.max(1, deadline - Date.now()),
+          timeoutMs: Math.max(1, deadline - performance.now()),
           // The client floors RPC timeouts at 100ms. The lifecycle signal owns
           // the exact remaining deadline and cancels RPCs when terminal wins.
           signal: completion.settledSignal,
@@ -149,7 +152,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
         completion.completion.then(() => false),
         started.promise,
       ]);
-      if (activated && completion.state === "pending" && Date.now() < deadline) {
+      if (activated && completion.state === "pending" && performance.now() < deadline) {
         await requestInterrupt();
       }
     }
@@ -167,6 +170,7 @@ export async function terminateCodexBackgroundTerminals(
   client: CodexAppServerClient,
   threadId: string,
   oneShotCliRun = false,
+  waitForNativeItems?: (signal: AbortSignal) => Promise<void>,
 ): Promise<void> {
   const options = {
     timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
@@ -200,6 +204,8 @@ export async function terminateCodexBackgroundTerminals(
         throw new Error("native terminal termination did not confirm process cleanup");
       }
     }
+    // Native process termination does not join its asynchronous final item event.
+    await waitForNativeItems?.(options.signal);
   } catch (cause) {
     throw new Error(
       "Codex background-terminal cleanup failed; inspect the thread's running terminals before starting more work.",
@@ -208,13 +214,13 @@ export async function terminateCodexBackgroundTerminals(
   }
 }
 
-/** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
     threadId: string;
     timeoutMs: number;
     assertCurrent?: () => void;
+    withCurrent?: (write: () => void) => Promise<void>;
   },
 ): Promise<boolean> {
   try {
@@ -223,6 +229,7 @@ export async function unsubscribeCodexThreadBestEffort(
       params.threadId,
       params.timeoutMs,
       params.assertCurrent,
+      params.withCurrent,
     );
     return true;
   } catch (error) {
@@ -233,4 +240,27 @@ export async function unsubscribeCodexThreadBestEffort(
     });
     return false;
   }
+}
+
+export function shouldRetireCodexStartupClient(
+  error: unknown,
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
+  signal: AbortSignal,
+): boolean {
+  const cause = codexPrewriteRejectionCause(error);
+  if (
+    signal.aborted ||
+    isCodexAppServerStartupError(cause) ||
+    isCodexAppServerRequestTimeoutError(cause)
+  ) {
+    return true;
+  }
+  // Model-independent preflights preserve healthy conversations. A handoff with
+  // an uncertain native write owns its retirement at the resume boundary.
+  return (
+    !isCodexAppServerStartSelectionChangedError(cause) &&
+    !isCodexAppServerOverloadError(cause) &&
+    !(cause instanceof AgentHarnessPreflightError && cause.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(cause) || !spawnedBy)
+  );
 }

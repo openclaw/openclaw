@@ -10,253 +10,198 @@ import {
 } from "./openai-completions.test-support.js";
 import { parseOpenAICompletionsUsage } from "./openai-transport-shared.js";
 
+const pricedModel = makeCompletionsModel({
+  id: "gpt-5",
+  cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
+});
+const openRouterModel = makeCompletionsModel({
+  provider: "openrouter",
+  baseUrl: "https://openrouter.ai/api/v1",
+  reasoning: false,
+  cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+});
+type RawUsage = Parameters<typeof parseOpenAICompletionsUsage>[0];
+type UsageCase = {
+  name: string;
+  usage: RawUsage;
+  expected: Record<string, unknown>;
+  model?: typeof pricedModel;
+};
+const usageCases: UsageCase[] = [
+  {
+    name: "missing total tokens",
+    usage: { prompt_tokens: 10, completion_tokens: 5 } as RawUsage,
+    expected: { contextUsage: { state: "unavailable" } },
+  },
+  {
+    name: "total below prompt and completion tokens",
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 14 },
+    expected: { contextUsage: { state: "unavailable" } },
+  },
+  {
+    name: "reasoning tokens without double-counting",
+    usage: {
+      prompt_tokens: 10,
+      completion_tokens: 20,
+      total_tokens: 30,
+      prompt_tokens_details: { cached_tokens: 3 },
+      completion_tokens_details: { reasoning_tokens: 7 },
+    },
+    expected: {
+      input: 7,
+      output: 20,
+      cacheRead: 3,
+      reasoningTokens: 7,
+      totalTokens: 30,
+      contextUsage: { state: "available", promptTokens: 10, totalTokens: 30 },
+    },
+  },
+  {
+    name: "separate cache write count",
+    model: openRouterModel,
+    usage: {
+      prompt_tokens: 10,
+      completion_tokens: 5,
+      total_tokens: 15,
+      prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
+    },
+    expected: {
+      input: 5,
+      cacheRead: 3,
+      cacheWrite: 2,
+      totalTokens: 15,
+      contextUsage: { state: "available", promptTokens: 10, totalTokens: 15 },
+    },
+  },
+  {
+    name: "uncached prompt usage clamped at zero",
+    usage: {
+      prompt_tokens: 2,
+      completion_tokens: 5,
+      total_tokens: 7,
+      prompt_tokens_details: { cached_tokens: 4 },
+    },
+    expected: {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      totalTokens: 9,
+      contextUsage: { state: "unavailable" },
+    },
+  },
+];
+
+function usageChunk(completionTokens: number, reasoningTokens?: number) {
+  return makeCompletionsChunk({}, null, {
+    choices: [],
+    usage: {
+      prompt_tokens: 8,
+      completion_tokens: completionTokens,
+      total_tokens: 8 + completionTokens,
+      ...(reasoningTokens === undefined
+        ? {}
+        : {
+            completion_tokens_details: { reasoning_tokens: reasoningTokens },
+          }),
+    },
+  });
+}
+async function runChunks(chunks: readonly unknown[], model = makeCompletionsModel()) {
+  const output = createAssistantOutput(model);
+  const events: CapturedStreamEvent[] = [];
+  await processCompletionsStream(streamChunks(chunks), output, model, {
+    push: (event) => events.push(event),
+  });
+  return { output, events };
+}
+
 describe("openai completions stream", () => {
-  it("preserves reasoning tokens without double-counting them", () => {
-    const model = makeCompletionsModel({
-      id: "gpt-5",
-      name: "GPT-5",
-      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
-    });
-
-    expectRecordFields(
-      parseOpenAICompletionsUsage(
-        {
-          prompt_tokens: 10,
-          completion_tokens: 20,
-          total_tokens: 30,
-          prompt_tokens_details: { cached_tokens: 3 },
-          completion_tokens_details: { reasoning_tokens: 7 },
-        },
-        model,
-      ),
-      {
-        input: 7,
-        output: 20,
-        cacheRead: 3,
-        reasoningTokens: 7,
-        totalTokens: 30,
-      },
-    );
+  it.each(usageCases)("parses $name", ({ usage, expected, model = pricedModel }) => {
+    expectRecordFields(parseOpenAICompletionsUsage(usage, model), expected);
   });
 
-  it("preserves a valid provider-reported usage cost", () => {
-    const model = makeCompletionsModel({
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    });
-
+  it.each([0, -1])("uses provider cost only when valid: %s", (cost) => {
     const usage = parseOpenAICompletionsUsage(
       {
         prompt_tokens: 10,
         completion_tokens: 5,
         total_tokens: 15,
-        cost: 0,
+        cost,
       },
-      model,
+      openRouterModel,
     );
-
-    expect(usage.cost.total).toBe(0);
-    expect(usage.cost.totalOrigin).toBe("provider-billed");
-  });
-
-  it("maps cache_write_tokens as a separate write count", () => {
-    const model = makeCompletionsModel({
-      id: "openrouter/cached",
-      name: "OpenRouter Cached",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const usage = parseOpenAICompletionsUsage(
-      {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 2 },
-      },
-      model,
-    );
-
-    // Writes are their own bucket: they must leave `input` and land in `totalTokens`,
-    // matching the plugin-sdk completions provider.
-    expect(usage).toMatchObject({ input: 5, cacheRead: 3, cacheWrite: 2, totalTokens: 15 });
-  });
-
-  it("keeps the catalog estimate for an invalid provider-reported usage cost", () => {
-    const model = makeCompletionsModel({
-      id: "openrouter/free",
-      name: "OpenRouter Free",
-      provider: "openrouter",
-      baseUrl: "https://openrouter.ai/api/v1",
-      reasoning: false,
-      cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-    });
-
-    const usage = parseOpenAICompletionsUsage(
-      {
-        prompt_tokens: 10,
-        completion_tokens: 5,
-        total_tokens: 15,
-        cost: -1,
-      },
-      model,
-    );
-
-    expect(usage.cost.total).toBeCloseTo(0.00002);
-    expect(usage.cost.totalOrigin).toBeUndefined();
-  });
-
-  it("clamps uncached prompt usage at zero", () => {
-    const model = makeCompletionsModel({
-      id: "gpt-5",
-      name: "GPT-5",
-      cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 0 },
-    });
-
-    expectRecordFields(
-      parseOpenAICompletionsUsage(
-        {
-          prompt_tokens: 2,
-          completion_tokens: 5,
-          total_tokens: 7,
-          prompt_tokens_details: { cached_tokens: 4 },
-        },
-        model,
-      ),
-      {
-        input: 0,
-        output: 5,
-        cacheRead: 4,
-        totalTokens: 9,
-      },
-    );
-  });
-
-  it("records usage from OpenAI-compatible streaming usage chunks", async () => {
-    const model = makeCompletionsModel({
-      id: "glm-5",
-      name: "GLM-5",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      contextWindow: 128000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-    const stream: { push(event: unknown): void } = { push() {} };
-
-    async function* mockStream() {
-      yield makeCompletionsChunk({ role: "assistant" as const, content: "ok" }, "stop" as const);
-      yield makeCompletionsChunk({}, null, {
-        choices: [],
-        usage: {
-          prompt_tokens: 8,
-          completion_tokens: 10,
-          total_tokens: 18,
-        },
-      });
+    if (cost === 0) {
+      expect(usage.cost.total).toBe(0);
+      expect(usage.cost.totalOrigin).toBe("provider-billed");
+    } else {
+      expect(usage.cost.total).toBeCloseTo(0.00002);
+      expect(usage.cost.totalOrigin).toBeUndefined();
     }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
-
-    expectRecordFields(output.usage, {
-      input: 8,
-      output: 10,
-      cacheRead: 0,
-      totalTokens: 18,
-    });
   });
 
-  it("emits reasoning activity for OpenAI-compatible usage-only reasoning chunks", async () => {
-    const model = makeCompletionsModel({
-      id: "google/gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      provider: "vertex-ai",
-      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
-      contextWindow: 1_000_000,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({}, null, {
-          choices: [],
-          usage: {
-            prompt_tokens: 8,
-            completion_tokens: 23,
-            total_tokens: 31,
-            completion_tokens_details: { reasoning_tokens: 23 },
-          },
-        }),
-        makeCompletionsChunk({ role: "assistant" as const, content: "Hi" }, "stop" as const),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(events.map((event) => event.type)).toEqual([
-      "thinking_start",
-      "thinking_delta",
-      "text_start",
-      "text_delta",
-    ]);
-    expect(events[1]).toHaveProperty("delta", "");
-    expect(output.content).toEqual([
-      { type: "thinking", thinking: "" },
-      { type: "text", text: "Hi" },
-    ]);
-  });
-
-  it("does not add trailing reasoning activity after visible OpenAI-compatible text", async () => {
-    const model = makeCompletionsModel({
-      id: "google/gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      provider: "vertex-ai",
-      baseUrl: "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
-      contextWindow: 1_000_000,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ role: "assistant" as const, content: "Hi" }),
-        makeCompletionsChunk({}, null, {
-          choices: [],
-          usage: {
-            prompt_tokens: 8,
-            completion_tokens: 25,
-            total_tokens: 33,
-            completion_tokens_details: { reasoning_tokens: 23 },
-          },
-        }),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(events.map((event) => event.type)).toEqual(["text_start", "text_delta"]);
-    expect(output.content).toEqual([{ type: "text", text: "Hi" }]);
-  });
+  it.each(["ordinary", "reasoning before text", "reasoning after text"] as const)(
+    "handles %s usage chunks",
+    async (kind) => {
+      const ordinary = kind === "ordinary";
+      const before = kind === "reasoning before text";
+      const text = makeCompletionsChunk(
+        { role: "assistant", content: ordinary ? "ok" : "Hi" },
+        before || ordinary ? "stop" : null,
+      );
+      const usage = usageChunk(ordinary ? 10 : before ? 23 : 25, ordinary ? undefined : 23);
+      const { output, events } = await runChunks(
+        before ? [usage, text] : [text, usage],
+        makeCompletionsModel(
+          ordinary
+            ? {
+                id: "glm-5",
+                provider: "vllm",
+                baseUrl: "http://localhost:8000/v1",
+                reasoning: false,
+              }
+            : {
+                id: "google/gemini-2.5-flash",
+                provider: "vertex-ai",
+                baseUrl:
+                  "http://127.0.0.1:8787/v1beta1/projects/test/locations/us/endpoints/openapi",
+              },
+        ),
+      );
+      if (ordinary) {
+        expectRecordFields(output.usage, {
+          input: 8,
+          output: 10,
+          cacheRead: 0,
+          totalTokens: 18,
+          contextUsage: { state: "available", promptTokens: 8, totalTokens: 18 },
+        });
+      } else {
+        expect(events.map((event) => event.type)).toEqual(
+          before
+            ? ["thinking_start", "thinking_delta", "text_start", "text_delta"]
+            : ["text_start", "text_delta"],
+        );
+        expect(output.content).toEqual(
+          before
+            ? [
+                { type: "thinking", thinking: "" },
+                { type: "text", text: "Hi" },
+              ]
+            : [{ type: "text", text: "Hi" }],
+        );
+        if (before) {
+          expect(events[1]).toHaveProperty("delta", "");
+        }
+      }
+    },
+  );
 
   it("yields to aborts during bursty OpenAI-compatible streams", async () => {
     const model = makeCompletionsModel({
       id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
       provider: "opencode-go",
       baseUrl: "http://localhost:8000/v1",
       reasoning: false,
-      contextWindow: 128000,
-      maxTokens: 4096,
     });
     const output = createAssistantOutput(model);
     const abort = new AbortController();
@@ -319,89 +264,56 @@ describe("openai completions stream", () => {
     expect(output.stopReason).not.toBe("toolUse");
   });
 
-  it("omits accumulated partial snapshots from OpenAI-compatible text deltas", async () => {
-    const model = makeCompletionsModel({
-      id: "dense-local",
-      name: "Dense Local",
-      provider: "local",
-      baseUrl: "http://127.0.0.1:18065/v1",
-      reasoning: false,
-      contextWindow: 128000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await processCompletionsStream(
-      streamChunks([
-        makeCompletionsChunk({ role: "assistant" as const, content: "a" }),
+  it.each([
+    {
+      name: "incremental text without accumulated snapshots",
+      model: makeCompletionsModel({
+        id: "dense-local",
+        provider: "local",
+        baseUrl: "http://127.0.0.1:18065/v1",
+        reasoning: false,
+      }),
+      chunks: [
+        makeCompletionsChunk({ role: "assistant", content: "a" }),
         makeCompletionsChunk({ content: "b" }),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    const textDeltas = events.filter((event) => event.type === "text_delta");
-    expect(textDeltas).toHaveLength(2);
-    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
-    expect(output.content).toEqual([{ type: "text", text: "ab" }]);
-  });
-
-  it("skips null and non-object OpenAI-compatible stream chunks", async () => {
-    const model = makeCompletionsModel({
-      id: "glm-5",
-      name: "GLM-5",
-      provider: "vllm",
-      baseUrl: "http://localhost:8000/v1",
-      reasoning: false,
-      contextWindow: 128000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-    const stream: { push(event: unknown): void } = { push() {} };
-
-    async function* mockStream() {
-      yield null as never;
-      yield "not-a-chunk" as never;
-      yield makeCompletionsChunk({ role: "assistant" as const, content: "ok" }, "stop" as const);
-    }
-
-    await processCompletionsStream(mockStream(), output, model, stream);
-
-    expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
-    expect(output.stopReason).toBe("stop");
-  });
-
-  it("surfaces chat-completions refusal deltas as visible assistant text", async () => {
-    const model = makeCompletionsModel({
-      id: "gpt-5.5",
-      name: "GPT-5.5",
-      reasoning: false,
-      contextWindow: 128_000,
-      maxTokens: 4096,
-    });
-    const output = createAssistantOutput(model);
-    const events: CapturedStreamEvent[] = [];
-
-    await processCompletionsStream(
-      streamChunks([
+      ],
+      text: "ab",
+      deltas: ["a", "b"],
+    },
+    {
+      name: "null and non-object chunks",
+      model: makeCompletionsModel({
+        id: "glm-5",
+        provider: "vllm",
+        baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+      }),
+      chunks: [
+        null,
+        "not-a-chunk",
+        makeCompletionsChunk({ role: "assistant", content: "ok" }, "stop"),
+      ],
+      text: "ok",
+      deltas: ["ok"],
+    },
+    {
+      name: "visible refusal deltas",
+      model: makeCompletionsModel({ id: "gpt-5.5", reasoning: false }),
+      chunks: [
         makeCompletionsChunk(
           { role: "assistant", content: null, refusal: "I can't help with that." },
           "stop",
         ),
-      ]),
-      output,
-      model,
-      { push: (event) => events.push(event as CapturedStreamEvent) },
-    );
-
-    expect(output.content).toStrictEqual([{ type: "text", text: "I can't help with that." }]);
+      ],
+      text: "I can't help with that.",
+      deltas: ["I can't help with that."],
+    },
+  ])("renders $name", async ({ chunks, text, deltas, model }) => {
+    const { output, events } = await runChunks(chunks, model);
+    expect(output.content).toStrictEqual([{ type: "text", text }]);
     expect(output.stopReason).toBe("stop");
-    expect(
-      events.some(
-        (event) => event.type === "text_delta" && event.delta === "I can't help with that.",
-      ),
-    ).toBe(true);
+    const textDeltas = events.filter((event) => event.type === "text_delta");
+    expect(textDeltas.map((event) => event.delta)).toEqual(deltas);
+    expect(textDeltas.every((event) => !("partial" in event))).toBe(true);
   });
 });

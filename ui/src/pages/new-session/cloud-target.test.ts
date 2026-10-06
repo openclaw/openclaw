@@ -199,6 +199,55 @@ describe("cloud target menu", () => {
     );
   });
 
+  it("uses the first machine as the displayed default when a provider omits one", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "daytona",
+            providerId: "crabbox",
+            machines: [
+              { id: "small", label: "Small", cpu: 4, memoryGb: 8 },
+              { id: "large", label: "Large", cpu: 8, memoryGb: 16 },
+            ],
+          },
+        ],
+        selectedId: "daytona",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    expect(
+      container.querySelector('[data-value="machine:small"]')?.getAttribute("aria-pressed"),
+    ).toBe("true");
+  });
+
+  it("omits the operating-system heading when a provider exposes only machines", () => {
+    const container = document.createElement("div");
+    render(
+      renderCloudProfileMenuItems({
+        profiles: [
+          {
+            id: "daytona",
+            providerId: "crabbox",
+            machines: [{ id: "small", label: "Small", cpu: 4, memoryGb: 8 }],
+          },
+        ],
+        selectedId: "daytona",
+        compact: true,
+        submitting: false,
+        onSelect: vi.fn(),
+      }),
+      container,
+    );
+    const configuration = container.querySelector(".new-session-page__cloud-configuration");
+    expect(configuration?.textContent).not.toContain("Operating system");
+    expect(configuration?.textContent).toContain("Machine");
+  });
+
   it("forwards configuration choices and disables them while submitting", () => {
     const container = document.createElement("div");
     const onSelectMachine = vi.fn();

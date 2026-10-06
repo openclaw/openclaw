@@ -8,7 +8,10 @@ import { isCloudWorkerPlacementState } from "../../../components/session-row-bad
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
+import {
+  repositorySessionNeedsWorker,
+  resolveChatPaneWorkerPresentation,
+} from "../chat-pane-placement.ts";
 
 export function renderChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
@@ -17,15 +20,16 @@ export function renderChatPanePlacement(props: {
   placementRestarting?: boolean;
   placementMoveDisabledReason?: string;
   placementReclaimDisabledReason?: string;
-  placementRestartDisabledReason?: string;
+  placementRecoveryDisabledReason?: string;
   onPlacementMove?: () => void;
   onPlacementReclaim?: () => void;
-  onPlacementRestart?: () => void;
+  onPlacementRecover?: () => void;
 }): TemplateResult | typeof nothing {
   const session = props.session;
   const placement = session?.placement;
   const placementState = placement?.state;
-  if (!session || !isCloudWorkerPlacementState(placementState)) {
+  const dispatchRequired = repositorySessionNeedsWorker(session);
+  if (!session || (!isCloudWorkerPlacementState(placementState) && !dispatchRequired)) {
     return nothing;
   }
   const placementMove = session.placementMove;
@@ -58,7 +62,11 @@ export function renderChatPanePlacement(props: {
     : placementMove && moveTarget
       ? t("sessionsView.movingSession", { target: moveTarget })
       : props.placementRestarting
-        ? t("sessionsView.restartingSession")
+        ? t(
+            session.repositoryWorkspaceId && placementState !== "failed"
+              ? "sessionsView.dispatchingSession"
+              : "sessionsView.restartingSession",
+          )
         : props.placementMoving
           ? t("sessionsView.movingSessionGeneric")
           : deviceOffline
@@ -67,16 +75,18 @@ export function renderChatPanePlacement(props: {
                 placementState === "draining" ||
                 placementState === "reconciling"
               ? t("sessionsView.syncingCloudFiles")
-              : worker.label;
+              : dispatchRequired
+                ? t("sessionsView.repositoryWorkerRequiredLabel")
+                : worker.label;
   const moveDisabledReason = props.placementMoveDisabledReason;
   const reclaimDisabledReason = props.placementReclaimDisabledReason;
-  const restartDisabledReason = props.placementRestartDisabledReason;
+  const recoveryDisabledReason = props.placementRecoveryDisabledReason;
   const age = formatRelativeTimestamp(placement?.stateChangedAtMs, {
     fallback: "",
   });
   const exceptionState = placementMove?.error
     ? placementMove.error
-    : placementState === "active" || hasFacts
+    : dispatchRequired || placementState === "active" || hasFacts
       ? nothing
       : `${placementState}${age ? ` · ${age}` : ""}`;
   return html`
@@ -124,59 +134,50 @@ export function renderChatPanePlacement(props: {
               </dl>`
             : nothing
         }
-        ${
-          placementState === "active"
+        ${(
+          [
+            [
+              placementState === "active",
+              `chat-pane__placement-move ${deviceOffline ? "session-menu__item--destructive" : ""}`,
+              deviceOffline,
+              moveDisabledReason,
+              icons.monitor,
+              deviceOffline ? "sessionsView.continueOnGatewayMenu" : "sessionsView.moveSession",
+              props.onPlacementMove,
+            ],
+            [
+              dispatchRequired || restartable,
+              "chat-pane__placement-recovery",
+              false,
+              recoveryDisabledReason,
+              icons.monitor,
+              dispatchRequired ? "sessionsView.chooseWorker" : "sessionsView.restartSession",
+              props.onPlacementRecover,
+            ],
+            [
+              stopAction,
+              "session-menu__item--destructive chat-pane__placement-reclaim",
+              true,
+              reclaimDisabledReason,
+              icons.stop,
+              null,
+              props.onPlacementReclaim,
+            ],
+          ] as const
+        ).map(([visible, className, destructive, disabledReason, icon, labelKey, onClick]) =>
+          visible
             ? html`<wa-dropdown-item
-                class="session-menu__item chat-pane__placement-move ${
-                  deviceOffline ? "session-menu__item--destructive" : ""
-                }"
-                variant=${deviceOffline ? "danger" : nothing}
-                ?disabled=${Boolean(moveDisabledReason)}
-                title=${moveDisabledReason ?? nothing}
-                @click=${() => !moveDisabledReason && props.onPlacementMove?.()}
+                class=${`session-menu__item ${className}`}
+                variant=${destructive ? "danger" : nothing}
+                ?disabled=${Boolean(disabledReason)}
+                title=${disabledReason ?? nothing}
+                @click=${() => !disabledReason && onClick?.()}
               >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <span class="session-menu__text"
-                  >${
-                    deviceOffline
-                      ? t("sessionsView.continueOnGatewayMenu")
-                      : t("sessionsView.moveSession")
-                  }</span
-                >
+                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icon}</span>
+                <span class="session-menu__text">${labelKey ? t(labelKey) : worker.stopLabel}</span>
               </wa-dropdown-item>`
-            : nothing
-        }
-        ${
-          restartable
-            ? html`<wa-dropdown-item
-                class="session-menu__item chat-pane__placement-restart"
-                ?disabled=${Boolean(restartDisabledReason)}
-                title=${restartDisabledReason ?? nothing}
-                @click=${() => !restartDisabledReason && props.onPlacementRestart?.()}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.monitor}</span
-                >
-                <span class="session-menu__text">${t("sessionsView.restartSession")}</span>
-              </wa-dropdown-item>`
-            : nothing
-        }
-        ${
-          stopAction
-            ? html`<wa-dropdown-item
-                class="session-menu__item session-menu__item--destructive chat-pane__placement-reclaim"
-                variant="danger"
-                ?disabled=${Boolean(reclaimDisabledReason)}
-                title=${reclaimDisabledReason ?? nothing}
-                @click=${() => !reclaimDisabledReason && props.onPlacementReclaim?.()}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.stop}</span>
-                <span class="session-menu__text">${worker.stopLabel}</span>
-              </wa-dropdown-item>`
-            : nothing
-        }
+            : nothing,
+        )}
       </wa-dropdown>
       ${
         deviceOffline

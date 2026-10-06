@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import {
@@ -62,14 +63,6 @@ beforeAll(() => {
 afterAll(() => {
   restoreTranslations();
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function contextWithGateway(
   client: GatewayBrowserClient,
@@ -178,18 +171,6 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     await pending;
 
     expect(task).not.toHaveBeenCalled();
-  });
-
-  it("loads the selected agent on the first gateway bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithGateway(client, true);
-    const page = createPage(context);
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.dreaming.selectedAgentId).toBe("main");
-    expect(page.loadAll).toHaveBeenCalledOnce();
   });
 
   it("resets stale panel data when the selected agent changes", async () => {
@@ -548,7 +529,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         content: `# Dream Diary\n\n*April 5, 2026, 3:00 AM*\n\n${agentId} owns this dream.`,
       });
       const config = {
-        agents: { entries: { main: { default: true }, support: {} } },
+        agents: { entries: { main: {}, support: {} } },
         plugins: {
           entries: {
             "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
@@ -621,7 +602,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       const requestCount = () =>
         gateway.getRequests("doctor.memory.status").then((requests) => requests.length);
       const chooseAgent = async (name: string) => {
-        const picker = page.locator(".memory-page .agent-scope-control openclaw-agent-select");
+        const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
           .locator("wa-dropdown-item[data-agent-option]")

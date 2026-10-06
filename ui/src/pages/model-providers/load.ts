@@ -3,15 +3,9 @@
 // the provider list.
 import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ConfigSnapshot,
-  ModelAuthStatusResult,
-  ModelCatalogEntry,
-  ModelCatalogProviderOutcome,
-} from "../../api/types.ts";
+import type { ModelAuthStatusResult, ModelCatalogProviderOutcome } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -19,10 +13,7 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import {
-  requestProviderUsage,
-  type ProviderUsageRequestResult,
-} from "../../lib/provider-usage-request.ts";
+import type { ProviderUsageRequestResult } from "../../lib/provider-usage-request.ts";
 import { requestSessionUsage } from "../../lib/sessions/usage.ts";
 
 registerSettingsEnglish();
@@ -32,12 +23,9 @@ export const MODEL_PROVIDERS_COST_DAYS = 30;
 
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
-  models: ModelCatalogEntry[] | null;
-  automaticUtilityModel: string | null | undefined;
+  /** Operation diagnostics; picker facts are owned by the shared catalog store. */
   providerOutcomes: ModelCatalogProviderOutcome[];
-  pendingProviders?: readonly string[];
   catalogError: string | null;
-  config: Record<string, unknown> | null;
   providerUsage: ProviderUsageRequestResult | null;
   costByProvider: SessionModelUsage[] | null;
   updatedAt: number | null;
@@ -48,11 +36,8 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
-  models: null,
-  automaticUtilityModel: undefined,
   providerOutcomes: [],
   catalogError: null,
-  config: null,
   providerUsage: null,
   costByProvider: null,
   updatedAt: null,
@@ -87,7 +72,6 @@ export async function loadModelProvidersData(
     settleRequest(
       loadModelCatalog(client, {
         agentId: opts.agentId,
-        includeDefaultModels: true,
         ...(refresh ? { refresh: true } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),
@@ -102,31 +86,21 @@ export async function loadModelProvidersData(
         refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
     : loadConfiguredCatalog();
-  const [authStatus, catalog, refreshResult, config] = await Promise.all([
+  const [authStatus, catalog, refreshResult] = await Promise.all([
     authStatusLoad,
     catalogLoad,
     catalogRefresh ?? Promise.resolve(undefined),
-    client
-      .request<ConfigSnapshot>("config.get", {}, { signal: opts.signal })
-      .then((snapshot) => resolveEditableSnapshotConfig(snapshot))
-      .catch(() => null),
   ]);
   return {
     authStatus:
       authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
-    models: catalog.ok ? catalog.result.models : null,
-    automaticUtilityModel: catalog.ok
-      ? catalog.result.defaultModels?.automaticUtilityModel
-      : undefined,
     providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
-    pendingProviders: catalog.ok ? catalog.result.pendingProviders : undefined,
     catalogError:
       refreshResult && !refreshResult.ok
         ? errorMessage(refreshResult.error)
         : catalog.ok
           ? modelCatalogRefreshError(catalog.result, t("modelProviders.defaults.discoverFailed"))
           : errorMessage(catalog.error),
-    config,
     providerUsage: null,
     costByProvider: null,
     updatedAt: Date.now(),
@@ -136,13 +110,6 @@ export async function loadModelProvidersData(
       ? (authStatus.result.unavailable?.message ?? null)
       : errorMessage(authStatus.error),
   };
-}
-
-export function loadModelProviderUsage(
-  client: GatewayBrowserClient,
-  signal: AbortSignal,
-): Promise<ProviderUsageRequestResult> {
-  return requestProviderUsage(client, { signal });
 }
 
 export function loadModelProviderCost(

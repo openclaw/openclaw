@@ -1,4 +1,3 @@
-// Lightweight Telegram message-cache persistence contract shared with doctor migrations.
 import { createHash } from "node:crypto";
 import type { Message } from "grammy/types";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -11,8 +10,6 @@ import type {
 
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES = 3000;
 export const TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE = "telegram.message-cache";
-// Versioned writes preserve projection provenance. Shipped unversioned rows
-// hydrate as markerless context only; they never imply transcript projection.
 export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 
 export type TelegramMessageThreadBinding = {
@@ -20,7 +17,8 @@ export type TelegramMessageThreadBinding = {
   threadSpec:
     | { scope: "direct-messages"; id: number }
     | { scope: "dm"; id: number }
-    | { scope: "forum"; id: number };
+    | { scope: "forum"; id: number }
+    | { scope: "none"; id?: never };
 };
 
 export type TelegramResolvedMedia = {
@@ -40,6 +38,7 @@ export type PersistedTelegramMessageCacheValue = {
   promptContextProjection?: TelegramPromptContextProjection | TelegramPromptContextSource;
   resolvedMedia?: TelegramResolvedMedia;
   threadBinding?: TelegramMessageThreadBinding;
+  historyEligible?: true;
   threadId?: string;
 };
 
@@ -95,12 +94,8 @@ export function parseTelegramResolvedMedia(value: unknown): TelegramResolvedMedi
   };
 }
 
-export function resolveTelegramMessageCachePath(storePath: string): string {
-  return `${storePath}.telegram-messages.json`;
-}
-
 export function resolveTelegramMessageCacheScope(storePath: string): string {
-  return resolveTelegramMessageCachePath(storePath);
+  return `${storePath}.telegram-messages.json`;
 }
 
 export function resolveTelegramMessageCachePersistentScopeKey(scope: string): string {

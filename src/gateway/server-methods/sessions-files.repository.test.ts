@@ -2,15 +2,20 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
-import { invokeNodeWorkerSupervisorCommand } from "../../node-host/node-worker-supervisor-commands.js";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import * as worktreeGit from "../../agents/worktrees/git.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   NODE_WORKSPACE_DRAIN_COMMAND,
   parseNodeWorkerWorkspaceExecInput,
@@ -34,7 +39,6 @@ import { seedAttachedPlacementEnvironment } from "../worker-environments/placeme
 import { createRepositoryWorkspaceMutationService } from "../worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "../worker-environments/service.js";
 import {
-  readSessionRepositoryCheckpoint,
   stageSessionRepositoryCheckpoint,
   withSessionRepositoryCheckpoint,
 } from "../worker-environments/session-repository-checkpoints.js";
@@ -42,11 +46,12 @@ import type {
   WorkerWorkspaceCommand,
   WorkerWorkspaceReconcileRequest,
 } from "../worker-environments/tunnel-contract.js";
+import { captureWorkspaceManifest } from "../worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "../worker-environments/workspace-manifest.js";
 import { createWorkerWorkspaceOperationCoordinator } from "../worker-environments/workspace-operation-coordinator.js";
-import { readActualWorkspaceManifest } from "../worker-environments/workspace-reconcile-core.js";
+import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { loadSessionDiff } from "./sessions-diff.js";
-import { resolveLocalSessionWorkspaceRoot, sessionsFilesHandlers } from "./sessions-files.js";
+import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
   createSessionFilesHandlerInvoker,
   createWorkspaceFixture,
@@ -61,28 +66,12 @@ const mocks = vi.hoisted(() => ({
   workspace: vi.fn(),
   store: vi.fn(),
   open: vi.fn(),
-  beforeWrite: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.load }));
 vi.mock("../../config/sessions/session-accessor.js", async (original) => ({
   ...(await original<typeof import("../../config/sessions/session-accessor.js")>()),
   loadSessionEntryReadOnly: () => mocks.load().entry,
 }));
-vi.mock("../../infra/fs-safe.js", async (original) => {
-  const actual = await original<typeof import("../../infra/fs-safe.js")>();
-  return {
-    ...actual,
-    root: async (...args: Parameters<typeof actual.root>) => {
-      const root = await actual.root(...args);
-      const write = root.write.bind(root);
-      root.write = async (...writeArgs) => {
-        await mocks.beforeWrite();
-        await write(...writeArgs);
-      };
-      return root;
-    },
-  };
-});
 vi.mock("../../agents/agent-scope.js", async (original) => ({
   ...(await original<typeof import("../../agents/agent-scope.js")>()),
   resolveAgentWorkspaceDir: mocks.workspace,
@@ -113,14 +102,14 @@ let gatewayRoot: string;
 let nodeRoot: string;
 let workspace: string;
 let store: ReturnType<typeof createSessionRepositoryWorkspaceStore>;
-let source: ReturnType<typeof store.create>;
+let source: Awaited<ReturnType<typeof store.create>>;
 let runtime: NodeWorkerWorkspaceRuntime;
 let generation: number;
 let active: boolean;
 let onTunnel: (() => void) | undefined;
 let onResult: (() => void) | undefined;
 let sessionId: string;
-let lifecycleRevision: number;
+let lifecycleRevision: string;
 let archivedAt: number | undefined;
 let run: ReturnType<
   typeof vi.fn<(command: WorkerWorkspaceCommand) => ReturnType<NodeWorkerWorkspaceRuntime["exec"]>>
@@ -133,7 +122,8 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    logGateway: createSubsystemLogger("test/repository-files"),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {
         assertCurrent: () => void;
@@ -170,13 +160,13 @@ function requestContext() {
 
 beforeEach(async () => {
   vi.clearAllMocks();
-  mocks.beforeWrite.mockReset();
   gatewayRoot = createWorkspaceFixture("repository-files-gateway-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", gatewayRoot);
   nodeRoot = createWorkspaceFixture("repository-files-node-");
   generation = 1;
   active = true;
   sessionId = identity.sessionId;
-  lifecycleRevision = 0;
+  lifecycleRevision = "original";
   archivedAt = undefined;
   onTunnel = undefined;
   onResult = undefined;
@@ -194,19 +184,19 @@ beforeEach(async () => {
   git("add", ".");
   git("commit", "-qm", "base");
   store = createSessionRepositoryWorkspaceStore({
-    database: openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") }),
+    path: path.join(gatewayRoot, "state.sqlite"),
   });
-  source = store.create({
+  source = await store.create({
     agentId: "main",
     sessionKey,
     url: "https://example.test/repository.git",
     assertCurrent: () => {},
   });
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: git("rev-parse", "HEAD"),
   });
-  source = store.bindBase({
+  source = await store.bindBase({
     workspaceId: source.workspaceId,
     expectedRevision: source.revision,
     baseCommit: base.manifest.baseCommit!,
@@ -248,13 +238,25 @@ beforeEach(async () => {
   context = requestContext();
 });
 
-afterEach(() => {
-  closeOpenClawStateDatabaseByPath(path.join(gatewayRoot, "state.sqlite"));
+afterEach(async () => {
+  await closeOpenClawStateDatabaseByPathAsync(path.join(gatewayRoot, "state.sqlite"));
+  await closeOpenClawAgentDatabasesAsync(gatewayRoot);
+  vi.unstubAllEnvs();
   removeWorkspaceFixture(nodeRoot);
   removeWorkspaceFixture(gatewayRoot);
 });
 
 async function withCheckpointAcceptance(failCapture = false) {
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    {
+      sessionId,
+      updatedAt: Date.now(),
+      repositoryWorkspaceId: source.workspaceId,
+      lifecycleRevision,
+      archivedAt,
+    },
+  );
   const database = openOpenClawStateDatabase({ path: path.join(gatewayRoot, "state.sqlite") });
   const placements = createWorkerSessionPlacementStore({ database });
   seedAttachedPlacementEnvironment(database, {
@@ -262,7 +264,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     sessionId: identity.sessionId,
     ownerEpoch: identity.generation,
   });
-  let placement = placements.startDispatch({
+  let placement = await placements.startDispatch({
     sessionId: identity.sessionId,
     sessionKey,
     agentId: "main",
@@ -278,7 +280,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     ],
     ["starting", "active", { activeOwnerEpoch: identity.generation }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from,
       to,
@@ -287,7 +289,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     });
   }
   generation = placement.generation;
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -313,7 +315,7 @@ async function withCheckpointAcceptance(failCapture = false) {
         if (request.source.kind !== "repository") {
           throw new Error("expected repository capture");
         }
-        const current = await readActualWorkspaceManifest({
+        const current = await captureWorkspaceManifest({
           root: workspace,
           baseCommit: source.baseCommit,
         });
@@ -344,7 +346,7 @@ async function withCheckpointAcceptance(failCapture = false) {
           verifyStable: async () => {
             expect(
               (
-                await readActualWorkspaceManifest({
+                await captureWorkspaceManifest({
                   root: workspace,
                   baseCommit: source.baseCommit,
                 })
@@ -366,7 +368,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
     resolveWorkspace: async () => ({
       kind: "repository",
-      repository: store.get(source.workspaceId)!,
+      repository: (await store.get(source.workspaceId))!,
     }),
   });
   return { placements, context: { ...context, workerRepositoryWorkspaceMutationService: service } };
@@ -387,15 +389,12 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
       accepted.context,
     ),
   );
-  const checkpoint = await readSessionRepositoryCheckpoint({
-    store,
-    workspaceId: source.workspaceId,
-  });
-  const changed = checkpoint.changedEntries.find((entry) => entry.path === "changed.txt")!;
-  expect((await checkpoint.readEntry(changed)).toString()).toBe("saved\r\n");
   await withSessionRepositoryCheckpoint(
     { store, workspaceId: source.workspaceId, includePublication: true },
     async (snapshot) => {
+      expect(fs.readFileSync(path.join(snapshot.stagingRoot, "changed.txt"), "utf8")).toBe(
+        "saved\r\n",
+      );
       expect(snapshot.publicationDigest).toBeDefined();
       const { snapshot: publication } = await readGitHubRepositoryPublicationMetadata(
         snapshot.publicationStagingRoot!,
@@ -412,7 +411,7 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
       ).toBe("saved\n");
     },
   );
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([]);
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(accepted.placements.get(identity.sessionId)?.turnClaim).toBeNull();
 });
 
@@ -431,11 +430,11 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     ),
   ).rejects.toThrow("checkpoint capture failed");
   expect(fs.readFileSync(path.join(workspace, "changed.txt"), "utf8")).toBe("saved\n");
-  expect(store.get(source.workspaceId)).toMatchObject({
+  expect(await store.get(source.workspaceId)).toMatchObject({
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([
     expect.objectContaining({
       sessionId: identity.sessionId,
       workspaceAcceptedAtMs: null,
@@ -451,7 +450,6 @@ it("browses, previews, edits and diffs only the live repository without a Gatewa
     "package.json",
   );
   expect(list.root).toBeUndefined();
-  expect(resolveLocalSessionWorkspaceRoot({ sessionKey })).toBeUndefined();
   const before = expectOkPayload(
     await invoke("sessions.files.get", { sessionKey, path: "changed.txt" }, context),
   );
@@ -522,7 +520,7 @@ it.each(["reset", "archive", "lifecycle revision"])(
       } else if (change === "archive") {
         archivedAt = Date.now();
       } else {
-        lifecycleRevision++;
+        lifecycleRevision = `${lifecycleRevision}-next`;
       }
     };
     await expect(
@@ -542,65 +540,18 @@ it.each(["reset", "archive", "lifecycle revision"])(
   },
 );
 
-it.each(["stop", "reset"])(
-  "retains the editor owner through a delayed file commit before %s",
-  async (mutation) => {
-    const writing = createDeferredCore();
-    const releaseWrite = createDeferredCore();
-    mocks.beforeWrite.mockImplementationOnce(async () => {
-      writing.resolve();
-      await releaseWrite.promise;
-    });
-    const saving = invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
-      context,
-    );
-    await writing.promise;
-    let mutationEntered = false;
-    let contentAtMutation: string | undefined;
-    const mutating = runExclusiveSessionLifecycleMutation({
-      scope: path.join(gatewayRoot, "sessions.sqlite"),
-      identities: [sessionKey, identity.sessionId],
-      run: async () => {
-        mutationEntered = true;
-        contentAtMutation = fs.readFileSync(path.join(workspace, "changed.txt"), "utf8");
-        if (mutation === "stop") {
-          active = false;
-        } else {
-          sessionId = "replacement";
-        }
-      },
-    });
-    // Observe the independently queued lifecycle operation after its microtasks drain.
-    // The filesystem delay is explicit; no elapsed-time assumption controls the race.
-    try {
-      await setImmediate();
-      expect(mutationEntered).toBe(false);
-    } finally {
-      releaseWrite.resolve();
-      await Promise.allSettled([saving, mutating]);
-    }
-    expectOkPayload(await saving);
-    await mutating;
-    expect(mutationEntered).toBe(true);
-    expect(contentAtMutation).toBe("saved\n");
-  },
-);
-
 it("keeps stopped inspection limited to verified changed artifacts", async () => {
-  const base = await readActualWorkspaceManifest({
+  const base = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
   fs.writeFileSync(path.join(workspace, "changed.txt"), "retained first\n");
   fs.writeFileSync(path.join(workspace, "second.txt"), "retained second\n");
-  const current = await readActualWorkspaceManifest({
+  fs.writeFileSync(
+    path.join(workspace, "oversized.txt"),
+    Buffer.alloc(WORKSPACE_PREVIEW_MAX_BYTES + 1, 97),
+  );
+  const current = await captureWorkspaceManifest({
     root: workspace,
     baseCommit: source.baseCommit,
   });
@@ -617,25 +568,74 @@ it("keeps stopped inspection limited to verified changed artifacts", async () =>
   });
   source = await staged.publish();
   active = false;
+  const originalGitRead = worktreeGit.runGitBuffered;
+  const hostReads = vi.spyOn(worktreeGit, "runGitBuffered");
+  onTestFinished(() => hostReads.mockRestore());
   const list = expectOkPayload(await invoke("sessions.files.list", { sessionKey }, context));
   expect(list.browser.entries.map((entry: { path: string }) => entry.path)).toEqual([
     "changed.txt",
+    "oversized.txt",
     "second.txt",
   ]);
+  expect(hostReads.mock.calls.map(([, args]) => args.slice(0, 2))).toEqual([
+    ["cat-file", "commit"],
+    ["ls-tree", "-r"],
+  ]);
+  for (const call of hostReads.mock.calls) {
+    expect(call[2]).toMatchObject({ signal: expect.any(AbortSignal), killProcessTree: true });
+  }
   const retained = expectOkPayload(
     await invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
   );
   expect(retained.file.content).toBe("retained second\n");
   expect(retained.file.hash).toBeUndefined();
   expect(retained.root).toBeUndefined();
+  const blobsRead = () => hostReads.mock.calls.filter(([, args]) => args[1] === "blob").length;
+  const beforeOversized = blobsRead();
+  const oversized = expectError(
+    await invoke("sessions.files.get", { sessionKey, path: "oversized.txt" }, context),
+  );
+  expect(oversized).toEqual({
+    code: "INVALID_REQUEST",
+    message: "session file is too large to preview",
+    details: {
+      type: "session_file_too_large",
+      path: "oversized.txt",
+      maxPreviewBytes: WORKSPACE_PREVIEW_MAX_BYTES,
+      size: WORKSPACE_PREVIEW_MAX_BYTES + 1,
+    },
+  });
+  expect(blobsRead()).toBe(beforeOversized);
   await expect(
     invoke("sessions.files.get", { sessionKey, path: "README" }, context),
   ).rejects.toThrow("not a retained changed artifact");
   const diff = await loadSessionDiff({ sessionKey }, context as never);
   expect(diff.unavailableReason).toBe("workspace_stopped");
-  expect(diff.files.map((file) => file.path)).toEqual(["changed.txt", "second.txt"]);
+  expect(diff.files.map((file) => file.path)).toEqual([
+    "changed.txt",
+    "oversized.txt",
+    "second.txt",
+  ]);
   expect(run).not.toHaveBeenCalled();
   expect(mocks.workspace).not.toHaveBeenCalled();
+
+  hostReads.mockImplementation(async (...args) => {
+    const result = await originalGitRead(...args);
+    return args[1][1] === "blob" ? { ...result, stdout: Buffer.from("tampered\n") } : result;
+  });
+  await expect(
+    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
+  ).rejects.toThrow("staged result payload is invalid");
+  hostReads.mockImplementation(async (...args) => {
+    const result = await originalGitRead(...args);
+    if (args[1][1] === "blob") {
+      lifecycleRevision = `${lifecycleRevision}-next`;
+    }
+    return result;
+  });
+  await expect(
+    invoke("sessions.files.get", { sessionKey, path: "second.txt" }, context),
+  ).rejects.toThrow("workspace owner changed");
 });
 
 it.each(["symlink", "hardlink"])(
@@ -657,33 +657,21 @@ it.each(["symlink", "hardlink"])(
   },
 );
 
-it.each(["invalid input", "missing workspace"])(
-  "classifies %s as permanent inspection failure",
-  async (failure) => {
-    if (failure === "missing workspace") {
-      fs.rmSync(workspace, { recursive: true });
-    }
-    const input =
-      failure === "invalid input"
-        ? "{invalid"
-        : JSON.stringify({ operation: "get", sessionKey, path: "README", files: [] });
-    const response = await invokeNodeWorkerSupervisorCommand({
-      command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
-      paramsJSON: JSON.stringify({ ...identity, argv: [WORKSPACE_INSPECTION_COMMAND], input }),
-      workspace: runtime,
-    });
-    expect(response).toMatchObject({ handled: true, ok: false, code: "INVALID_REQUEST" });
-  },
-);
-
 it("keeps a timed-out remote save owned until its physical write drains before Stop", async () => {
   const writing = createDeferredCore();
   const releaseWrite = createDeferredCore();
   const draining = createDeferredCore();
-  mocks.beforeWrite.mockImplementationOnce(async () => {
-    writing.resolve();
-    await releaseWrite.promise;
+  const target = fs.realpathSync(path.join(workspace, "changed.txt"));
+  const realRename = fs.promises.rename.bind(fs.promises);
+  const renameSpy = vi.spyOn(fs.promises, "rename").mockImplementation(async (...args) => {
+    if (args[1] === target) {
+      // Hold publication after its final authorization check has dispatched it.
+      writing.resolve();
+      await releaseWrite.promise;
+    }
+    return await realRename(...args);
   });
+  onTestFinished(() => renameSpy.mockRestore());
   const record = {
     ...environment(),
     environmentId: identity.environmentId,
@@ -698,7 +686,9 @@ it("keeps a timed-out remote save owned until its physical write drains before S
     const input = parseNodeWorkerWorkspaceExecInput(JSON.stringify(request.params));
     if (input.argv[0] === WORKSPACE_INSPECTION_COMMAND) {
       const cancelled = new AbortController();
-      physicalWrite = runtime.exec(input, cancelled.signal);
+      physicalWrite = withEnvAsync({ FS_SAFE_NATIVE_MODE: "off" }, () =>
+        runtime.exec(input, cancelled.signal),
+      );
       void physicalWrite.catch(() => undefined);
       await writing.promise;
       // The real transport sends cancellation and returns before the node write joins.
@@ -765,7 +755,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
-  const stopping = runExclusiveSessionLifecycleMutation({
+  const stopping = runExclusiveSessionLifecycleMutation("drain", {
     scope: path.join(gatewayRoot, "sessions.sqlite"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {

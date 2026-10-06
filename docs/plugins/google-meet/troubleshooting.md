@@ -54,7 +54,7 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 Expected Twilio state:
 
 - `googlemeet setup` includes green `twilio-voice-call-plugin`, `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
-- `voicecall` is available in the CLI after Gateway reload.
+- `voicecall` is available in the CLI after the Voice Call plugin is installed and enabled.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
 - `openclaw logs --follow` shows DTMF TwiML served before realtime TwiML, then a realtime bridge with the initial greeting queued.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
@@ -63,7 +63,7 @@ Expected Twilio state:
 
 ### Agent cannot see the Google Meet tool
 
-Confirm the plugin is enabled and reload the Gateway; the running agent only sees plugin tools registered by the current Gateway process:
+Confirm the plugin is enabled and its runtime application succeeded; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect). Then check setup:
 
 ```bash
 openclaw plugins list | grep google-meet
@@ -146,11 +146,11 @@ openclaw googlemeet setup
 openclaw googlemeet doctor
 ```
 
-Use `mode: "agent"` for the STT -> OpenClaw agent -> TTS path, `mode: "bidi"` for the direct realtime voice fallback. `mode: "transcribe"` intentionally starts no talk-back bridge. For observe-only debugging, run `openclaw googlemeet status --json <session-id>` after participants speak and check `captioning`, `transcriptLines`, `lastCaptionText`. If `inCall` is true but `transcriptLines` stays `0`, Meet captions may be disabled, no one has spoken since the observer was installed, the Meet UI changed, or live captions are unavailable for the meeting language/account.
+Use `mode: "agent"` for the STT -> OpenClaw agent -> TTS path, or `mode: "bidi"` for realtime voice, including GPT-Live. `mode: "transcribe"` intentionally starts no talk-back bridge. For observe-only debugging, run `openclaw googlemeet status --json <session-id>` after participants speak and check `captioning`, `transcriptLines`, `lastCaptionText`. If `inCall` is true but `transcriptLines` stays `0`, Meet captions may be disabled, no one has spoken since the observer was installed, the Meet UI changed, or live captions are unavailable for the meeting language/account.
 
-`googlemeet test-speech` always checks the realtime path and reports whether bridge output bytes were observed for that invocation. If `speechOutputVerified` is false and `speechOutputTimedOut` is true, the realtime provider may have accepted the utterance but OpenClaw did not see new output bytes reach the Chrome audio bridge.
+`googlemeet test-speech` checks the selected talk-back path and requires a fresh assistant-output waveform on the virtual microphone capture path. If `speechOutputVerified` is false and `speechOutputTimedOut` is true, inspect both provider output and the native injection/loopback fields; accepted output bytes alone do not prove speech reached Meet's microphone.
 
-Also verify: a realtime provider key (`OPENAI_API_KEY` or `GEMINI_API_KEY`) is available on the Gateway host; the native audio backend is ready on the Chrome host; and Meet mic/speaker are routed through the virtual audio path (`doctor` should show both input and output routed for local Chrome realtime joins).
+Also verify provider authentication on the Gateway host, the native audio backend on the Chrome host, and both audio routes in `doctor`. With generated input commands, browser sessions use the virtual microphone for assistant injection and report `Isolated browser playback` for participant input. Explicit input commands retain their configured capture path. GPT-Live with Cove uses the configured OpenAI account; see the [Live configuration](/plugins/google-meet/config#gpt-live-with-cove).
 
 `googlemeet doctor [session-id]` prints session, node, in-call state, manual action reason, realtime provider connection, `realtimeReady`, audio input/output activity, last audio timestamps, byte counters, and browser URL. Use `googlemeet status [session-id] --json` for raw JSON, and `googlemeet doctor --oauth` (add `--meeting` or `--create-space`) to verify OAuth refresh without exposing tokens.
 
@@ -163,9 +163,31 @@ openclaw googlemeet recover-tab https://meet.google.com/abc-defg-hij
 
 The equivalent tool action is `recover_current_tab`: it focuses and inspects an existing Meet tab for the selected transport (local browser control for `chrome`, the configured node for `chrome-node`) without opening a new tab or session, and reports the current blocker (login, admission, permissions, audio-choice state). The CLI command talks to the configured Gateway, which must be running; `chrome-node` also requires the node to be connected.
 
+### Live cannot hear interruptions or browser capture fails
+
+Use `bidi` mode with an explicit Live model. Setting a voice model while keeping
+`agent` mode still uses regular TTS. GPT-Live handles interruptions itself, so
+`chrome.bargeInInputCommand` is not required and is not started for Live.
+
+For Live, participant input must come from isolated browser playback. Remove
+an explicit `chrome.audioInputCommand` to select that managed path; custom
+commands remain provider input for other models and are not silently replaced.
+If the bridge
+reports that it requires isolated meeting audio or cannot capture browser
+playback, inspect the tracked Meet tab and its reported browser error. Update
+both Gateway and paired node when using `chrome-node`, then retry after browser
+playback is available. The bridge stops on capture failure instead of feeding
+assistant output back into Live. An empty room with no remote media yet can
+remain connected and idle.
+
+Do not route participant playback back into the virtual microphone to work
+around a capture error. To verify duplex behavior, use a controlled second
+participant to confirm the response is audible and speak during it; local
+`test-speech` verification alone cannot prove that round trip.
+
 ### Twilio setup checks fail
 
-`twilio-voice-call-plugin` fails when `voice-call` is not allowed or not enabled: add it to `plugins.allow`, enable `plugins.entries.voice-call`, reload the Gateway.
+`twilio-voice-call-plugin` fails when `voice-call` is not allowed or not enabled: add it to `plugins.allow`, enable `plugins.entries.voice-call`, and rerun setup after the change applies.
 
 `twilio-voice-call-credentials` fails when the Twilio backend is missing account SID, auth token, or caller number:
 
@@ -212,7 +234,7 @@ For local development, use a tunnel or Tailscale exposure instead of a private h
 }
 ```
 
-Restart or reload the Gateway, then:
+Plugin config changes apply automatically with the default hybrid reload mode (see [Hot reload](/gateway/configuration/hot-reload)). If you changed environment-based credentials, restart the Gateway with the updated environment. Then verify:
 
 ```bash
 openclaw googlemeet setup --transport twilio

@@ -32,7 +32,7 @@ read_when:
     For background processes started by the exec tool, ask the agent to run:
 
     ```text
-    process action:kill sessionId:XXX
+    process action:kill sessionId:<sessionId>
     ```
 
     Most slash commands must be sent as a **standalone** message starting with `/`, but a few shortcuts (like `/status`) also work inline for allowlisted senders. See [Slash commands](/tools/slash-commands).
@@ -40,7 +40,9 @@ read_when:
   </Accordion>
 
   <Accordion title='How do I send a Discord message from Telegram? ("Cross-context messaging denied")'>
-    OpenClaw blocks **cross-provider** messaging by default. If a tool call is bound to Telegram, it will not send to Discord unless you explicitly allow it - and this takes effect immediately, no gateway restart needed:
+    OpenClaw allows **cross-provider** messaging by default. An agent in Telegram or WebChat can send to Discord when the destination is configured and its tool and channel policies permit it.
+
+    If you see "Cross-context messaging denied", check for `tools.message.crossContext.allowAcrossProviders: false` globally or in the agent's configuration. Remove that restriction or explicitly allow cross-provider messaging; this takes effect without a Gateway restart:
 
     ```json5
     {
@@ -54,6 +56,10 @@ read_when:
       },
     }
     ```
+
+    To block cross-provider messaging, set `allowAcrossProviders: false`. Per-agent values under `agents.entries.<id>.tools.message.crossContext` override the global setting. After upgrading, configurations that omit this setting use the new default; existing explicit values remain effective. No configuration migration is needed.
+
+    An explicit restriction still applies when the current conversation target is unavailable, including after restart recovery or a subagent continuation. The source provider is enough to enforce it.
 
   </Accordion>
 

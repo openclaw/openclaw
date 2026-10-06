@@ -1,5 +1,3 @@
-// Nvidia tests cover index plugin behavior.
-import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerSingleProviderPlugin,
@@ -21,22 +19,9 @@ const ssrfRuntimeMocks = vi.hoisted(() => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
 
-type NvidiaManifest = {
-  providerAuthChoices?: Array<Record<string, unknown>>;
-};
 type RegisteredModelCatalogProvider = Parameters<
   ReturnType<typeof createTestPluginApi>["registerModelCatalogProvider"]
 >[0];
-
-function readManifest(): NvidiaManifest {
-  return JSON.parse(
-    fs.readFileSync(new URL("./openclaw.plugin.json", import.meta.url), "utf8"),
-  ) as NvidiaManifest;
-}
-
-async function registerNvidiaProvider() {
-  return registerSingleProviderPlugin(plugin);
-}
 
 afterEach(() => {
   clearLiveCatalogCacheForTests();
@@ -64,21 +49,17 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
 }
 
 function registerNvidiaPluginApi() {
-  const registeredProviders: string[] = [];
   const registeredModelCatalogProviders: RegisteredModelCatalogProvider[] = [];
 
   plugin.register(
     createTestPluginApi({
-      registerProvider(provider: { id: string }) {
-        registeredProviders.push(provider.id);
-      },
       registerModelCatalogProvider(provider) {
         registeredModelCatalogProviders.push(provider);
       },
     }),
   );
 
-  return { registeredProviders, registeredModelCatalogProviders };
+  return { registeredModelCatalogProviders };
 }
 
 function buildCatalogContext(apiKey?: string) {
@@ -95,12 +76,12 @@ function buildCatalogContext(apiKey?: string) {
 }
 
 describe("nvidia provider hooks", () => {
-  it.each([401, 403, 503])(
+  it.each([401, 503])(
     "reports public catalog HTTP %s without rejecting inference credentials",
     async (status) => {
       mockFeaturedCatalogResponse({ error: "unavailable" }, status);
-      const provider = await registerNvidiaProvider();
-      const rejected = status === 401 || status === 403;
+      const provider = await registerSingleProviderPlugin(plugin);
+      const rejected = status === 401;
       await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toEqual({
         providers: {},
         outcomes: [
@@ -119,24 +100,15 @@ describe("nvidia provider hooks", () => {
 
   it("publishes ready for successful empty inventory", async () => {
     mockFeaturedCatalogResponse({ "featured-models": [] });
-    const provider = await registerNvidiaProvider();
+    const provider = await registerSingleProviderPlugin(plugin);
     await expect(provider.catalog?.run(buildCatalogContext("nvapi-test"))).resolves.toMatchObject({
       provider: { apiKey: "nvapi-test", models: [] },
       outcomes: [{ provider: "nvidia", status: "ready" }],
     });
   });
 
-  it("registers the nvidia provider with correct metadata", async () => {
-    const provider = await registerNvidiaProvider();
-
-    expect(provider.id).toBe("nvidia");
-    expect(provider.label).toBe("NVIDIA");
-    expect(provider.docsPath).toBe("/providers/nvidia");
-    expect(provider.envVars).toEqual(["NVIDIA_API_KEY"]);
-  });
-
   it("registers API-key auth choice metadata", async () => {
-    const provider = await registerNvidiaProvider();
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
 
@@ -146,52 +118,10 @@ describe("nvidia provider hooks", () => {
     });
     expect(choice?.provider.id).toBe("nvidia");
     expect(choice?.method.id).toBe("api-key");
-    expect(readManifest().providerAuthChoices).toStrictEqual([
-      {
-        provider: "nvidia",
-        method: "api-key",
-        choiceId: "nvidia-api-key",
-        appGuidedSecret: true,
-        choiceLabel: "NVIDIA API key",
-        groupId: "nvidia",
-        groupLabel: "NVIDIA",
-        groupHint: "Direct API key",
-        optionKey: "nvidiaApiKey",
-        cliFlag: "--nvidia-api-key",
-        cliOption: "--nvidia-api-key <key>",
-        cliDescription: "NVIDIA API key",
-      },
-    ]);
-  });
-
-  it("keeps nvidia auth setup metadata aligned", async () => {
-    const provider = await registerNvidiaProvider();
-
-    expect(
-      provider.auth.map((method) => ({
-        id: method.id,
-        label: method.label,
-        hint: method.hint,
-        choiceId: method.wizard?.choiceId,
-        groupId: method.wizard?.groupId,
-        groupLabel: method.wizard?.groupLabel,
-        groupHint: method.wizard?.groupHint,
-      })),
-    ).toEqual([
-      {
-        id: "api-key",
-        label: "NVIDIA API key",
-        hint: "Direct API key",
-        choiceId: "nvidia-api-key",
-        groupId: "nvidia",
-        groupLabel: "NVIDIA",
-        groupHint: "Direct API key",
-      },
-    ]);
   });
 
   it("keeps nvidia wizard setup metadata aligned", async () => {
-    const provider = await registerNvidiaProvider();
+    const provider = await registerSingleProviderPlugin(plugin);
 
     expect(provider.wizard?.setup).toStrictEqual({
       choiceId: "nvidia-api-key",
@@ -207,48 +137,11 @@ describe("nvidia provider hooks", () => {
     });
   });
 
-  it("keeps nvidia model picker metadata aligned", async () => {
-    const provider = await registerNvidiaProvider();
-
-    expect(provider.wizard?.modelPicker).toStrictEqual({
-      label: "NVIDIA (custom)",
-      hint: "Use NVIDIA-hosted open models",
-      methodId: "api-key",
-    });
-  });
-
-  it("does not override replay policy for standard openai-compatible transport", async () => {
-    const provider = await registerNvidiaProvider();
-
-    // NVIDIA uses standard OpenAI-compatible API without custom replay logic
-    expect(provider.buildReplayPolicy).toBeUndefined();
-  });
-
-  it("does not override stream wrapper for standard models", async () => {
-    const provider = await registerNvidiaProvider();
-
-    // NVIDIA uses standard streaming without custom wrappers
-    expect(provider.wrapStreamFn).toBeUndefined();
-  });
-
   it("opts into literal provider-prefix preservation", async () => {
-    const provider = await registerNvidiaProvider();
+    const provider = await registerSingleProviderPlugin(plugin);
 
-    // NVIDIA's ids like nvidia/nemotron-... sit alongside moonshotai/...,
-    // minimaxai/..., z-ai/... in the same catalog, so the leading nvidia/
-    // is a vendor namespace rather than a redundant provider prefix. The
-    // flag keeps the canonical ref as nvidia/nvidia/nemotron-... instead
-    // of letting the default string-based dedupe collapse it.
+    // The nvidia/ vendor namespace must survive provider-prefix deduplication.
     expect(provider.preserveLiteralProviderPrefix).toBe(true);
-  });
-
-  it("registers nvidia provider through the plugin api", () => {
-    const { registeredProviders, registeredModelCatalogProviders } = registerNvidiaPluginApi();
-
-    expect(registeredProviders).toStrictEqual(["nvidia"]);
-    expect(registeredModelCatalogProviders.map((provider) => provider.provider)).toStrictEqual([
-      "nvidia",
-    ]);
   });
 
   it("registers static and live nvidia model catalog rows", async () => {

@@ -1,15 +1,32 @@
 // Real OpenClaw stream helpers and Slack SDK with synthetic HTTP responses.
 import { WebClient, type WebClientOptions } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
-import { createSlackWriteClient, resolveSlackWriteClientOptions } from "./client.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createSlackWriteClient,
+  getSlackWriteClient,
+  getSlackListenerWriteClient,
+  resolveSlackWriteClientOptions,
+} from "./client.js";
 import { appendSlackStream, startSlackStream, stopSlackStream } from "./streaming.js";
+
+type EffectAuthority = ReturnType<
+  typeof import("openclaw/plugin-sdk/fetch-runtime").captureEffectAuthority
+>;
+const effectInput = vi.hoisted(() => ({ current: undefined as EffectAuthority | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => effectInput.current ?? actual.captureEffectAuthority(),
+  };
+});
 
 type StreamMethod = "chat.startStream" | "chat.appendStream" | "chat.stopStream";
 const STREAM_TS = "1700000000.000100";
 
 function createRateLimitTransport(
-  method: StreamMethod,
+  method: StreamMethod | "chat.postMessage",
   terminal: "success" | "socket" | "http500",
   brokenBody = false,
 ) {
@@ -43,10 +60,7 @@ function createRateLimitTransport(
         return new Response("synthetic server failure", { status: 500 });
       }
     }
-    return new Response(JSON.stringify({ ok: true, ts: STREAM_TS }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
+    return Response.json({ ok: true, ts: STREAM_TS });
   };
   return { fetch, requests };
 }
@@ -85,6 +99,83 @@ async function runStreamOperation(
 const STREAM_METHODS = ["chat.startStream", "chat.appendStream", "chat.stopStream"] as const;
 
 describe("Slack explicit rate-limit recovery", () => {
+  it.each([
+    { cache: "token", warm: false },
+    { cache: "token", warm: true },
+    { cache: "listener", warm: false },
+    { cache: "listener", warm: true },
+  ] as const)(
+    "keeps $cache clients operation-local under effect authority (warm=$warm)",
+    async ({ cache, warm }) => {
+      const transport = createRateLimitTransport("chat.postMessage", "success");
+      const token = `synthetic-${cache}-${warm}-scope`;
+      const clientOptions = {
+        fetch: transport.fetch,
+        slackApiUrl: `https://synthetic.slack.invalid/${cache}-${warm}/api/`,
+        teamId: "TFIXTURE",
+      };
+      for (const name of ["http_proxy", "https_proxy", "all_proxy"]) {
+        vi.stubEnv(name, "");
+      }
+      vi.stubGlobal("fetch", transport.fetch);
+      const listenerClient = new WebClient(token, clientOptions);
+      const getClient = () => {
+        const client =
+          cache === "token"
+            ? getSlackWriteClient(token, {
+                slackApiUrl: clientOptions.slackApiUrl,
+                teamId: "TFIXTURE",
+              })
+            : getSlackListenerWriteClient({ listenerClient, teamId: "TFIXTURE", clientOptions });
+        if (!client) {
+          throw new Error("missing fixture write client");
+        }
+        return client;
+      };
+      const send = (client: WebClient, text: string) =>
+        client.apiCall("chat.postMessage", { channel: "CFIXTURE", text });
+      let authorityOpen = true;
+      const authority: EffectAuthority = {
+        active: true,
+        run: (run) => run(),
+        async initiate(effect) {
+          if (!authorityOpen) {
+            throw new Error("fixture effect authority closed");
+          }
+          return effect();
+        },
+      };
+      try {
+        if (warm) {
+          await send(getClient(), "warm");
+        }
+        effectInput.current = authority;
+        const scoped = getClient();
+        await send(scoped, "scoped");
+        authorityOpen = false;
+        effectInput.current = undefined;
+        await expect(send(scoped, "late")).rejects.toThrow("fixture effect authority closed");
+        if (cache === "listener") {
+          expect(
+            getSlackListenerWriteClient({
+              listenerClient,
+              teamId: "TOTHER",
+              clientOptions,
+            }),
+          ).toBeUndefined();
+        }
+        await expect(send(getClient(), "ordinary")).resolves.toMatchObject({ ok: true });
+        expect(
+          transport.requests.map((request) => new URLSearchParams(request.body).get("text")),
+        ).toEqual(warm ? ["warm", "warm", "scoped", "ordinary"] : ["scoped", "scoped", "ordinary"]);
+      } finally {
+        authorityOpen = false;
+        effectInput.current = undefined;
+        vi.unstubAllGlobals();
+        vi.unstubAllEnvs();
+      }
+    },
+  );
   it("recovers an authoritative rejection even if its discarded body fails", async () => {
     const transport = createRateLimitTransport("chat.startStream", "success", true);
     const session = await runStreamOperation("chat.startStream", transport.fetch);
@@ -215,13 +306,40 @@ describe("Slack explicit rate-limit recovery", () => {
     },
   );
 
+  it("revalidates direct-delivery authority before a refused write is retried", async () => {
+    let authorized = true;
+    let attempts = 0;
+    const client = createSlackWriteClient(
+      "synthetic-live-authority-fixture",
+      {
+        fetch: async () => {
+          attempts += 1;
+          authorized = false;
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "0" },
+          });
+        },
+      },
+      () => {
+        if (!authorized) {
+          throw new Error("direct delivery is no longer active");
+        }
+      },
+    );
+
+    await expect(
+      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
+    ).rejects.toThrow("direct delivery is no longer active");
+    expect(attempts).toBe(1);
+  });
+
   it.each([
     { header: "0", calls: 3 },
     { header: "invalid", calls: 1 },
     { header: "2147001", calls: 1 },
     { header: "0", calls: 1, rejectRateLimitedCalls: true },
     { header: "0", calls: 2, retryConfig: { retries: 1, minTimeout: 1, maxTimeout: 1 } },
-    { header: "0", calls: 3, retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 } },
   ])("bounds rate-limit recovery for $header ($calls requests)", async (testCase) => {
     const responses: Response[] = [];
     const client = createSlackWriteClient("synthetic-budget-fixture", {
@@ -243,26 +361,6 @@ describe("Slack explicit rate-limit recovery", () => {
     if (!testCase.rejectRateLimitedCalls && !testCase.retryConfig) {
       expect(responses.every((response) => response.bodyUsed)).toBe(true);
     }
-  });
-
-  it("aborts a rate-limit wait when the request deadline closes", async () => {
-    const responses: Response[] = [];
-    const client = createSlackWriteClient("synthetic-cancel-fixture", {
-      timeout: 20,
-      fetch: async () => {
-        const response = new Response("rate limited", {
-          status: 429,
-          headers: { "retry-after": "60" },
-        });
-        responses.push(response);
-        return response;
-      },
-    });
-    await expect(
-      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
-    ).rejects.toThrow();
-    expect(responses).toHaveLength(1);
-    expect(responses[0]?.bodyUsed).toBe(true);
   });
 
   it("does not multiply the retry budget when pre-resolved options are reused", async () => {

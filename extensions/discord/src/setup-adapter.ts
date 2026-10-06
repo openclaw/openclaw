@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Discord plugin module implements setup adapter behavior.
 import {
   createEnvPatchedAccountSetupAdapter,
   type ChannelSetupAdapter,

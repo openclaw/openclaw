@@ -1,40 +1,23 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { SkillsLibraryMutateParams } from "../../../../packages/gateway-protocol/src/index.ts";
-import { icons } from "../../components/icons.ts";
+import { renderSettingsEmpty, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/modal-dialog.ts";
-import {
-  renderSettingsEmpty,
-  renderSettingsSection,
-  renderSettingsSegmented,
-  renderSettingsStatus,
-} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { SkillLibraryController, LibraryView } from "./library-controller.ts";
-import { renderLibraryIdentity } from "./library-detail.ts";
+import { uploadsDisabledMessage } from "../../lib/uploads.ts";
+import type { SkillLibraryController } from "./library-controller.ts";
+import { renderLibraryDialogHeader, renderLibraryIdentity } from "./library-detail.ts";
 import { libraryEventControl } from "./library-events.ts";
 import { libraryFileText } from "./library-files.ts";
+import { renderSkillLibraryToolbar } from "./library-toolbar.ts";
+import { renderSkillLibraryStatus } from "./skill-status.ts";
 
-export function renderSkillLibrary(library: SkillLibraryController) {
+export function renderSkillLibrary(
+  library: SkillLibraryController,
+  navigationActions: TemplateResult,
+) {
   const list = library.list;
-  const options: Array<{ value: LibraryView; label: string }> = [];
-  const hasLibraries = Boolean(list?.entries.length);
-  if (list?.multipleProfiles || hasLibraries || list?.defaultTarget === "personal") {
-    if (list?.profileId) {
-      options.push({ value: "mine", label: t("skillLibrary.mine") });
-    }
-    if (
-      list?.multipleProfiles ||
-      list?.entries.some((entry) => entry.shared || entry.ownerProfileId === null)
-    ) {
-      options.push({ value: "team", label: t("skillLibrary.team") });
-    }
-    options.push(
-      { value: "all", label: t("skillLibrary.all") },
-      { value: "workspace", label: t("skillLibrary.inventory") },
-    );
-  }
   const query = library.query.toLowerCase().trim();
   const entries = (list?.entries ?? []).filter((entry) => {
     const scopeMatches =
@@ -52,68 +35,13 @@ export function renderSkillLibrary(library: SkillLibraryController) {
     );
   });
   return html`
-    <div class="plugins-toolbar">
-      ${
-        options.length > 0
-          ? renderSettingsSegmented({
-              value: library.view ?? "workspace",
-              ariaLabel: t("skillLibrary.library"),
-              options,
-              onChange: (view) => {
-                library.view = view;
-                library.changed();
-              },
-            })
-          : nothing
-      }
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => library.create()}
-      >
-        ${t("skillLibrary.create")}
-      </button>
-      <button
-        type="button"
-        class="btn"
-        ?disabled=${!library.canCreate || library.busy}
-        @click=${() => {
-          library.importOpen = true;
-          library.importSource = null;
-          library.changed();
-        }}
-      >
-        ${t("skillLibrary.import")}
-      </button>
-      ${
-        !library.showWorkspace
-          ? html`<button
-              type="button"
-              class="btn"
-              ?disabled=${library.loading || library.busy}
-              @click=${() => void library.load()}
-            >
-              ${t("common.refresh")}
-            </button>`
-          : nothing
-      }
-    </div>
+    ${renderSkillLibraryToolbar(library, navigationActions)}
     ${
       list?.defaultTarget === "unavailable"
         ? html`<p class="muted">${t("skillLibrary.signIn")}</p>`
         : nothing
     }
-    ${
-      library.error && !library.draft && !library.importOpen
-        ? html`<div class="callout danger" role="alert">${library.error}</div>`
-        : nothing
-    }
-    ${
-      library.notice && !library.draft
-        ? html`<div class="callout success" role="status">${library.notice}</div>`
-        : nothing
-    }
+    ${renderSkillLibraryFeedback(library)}
     ${
       list && !library.showWorkspace
         ? html`<p class="muted">
@@ -167,12 +95,7 @@ export function renderSkillLibrary(library: SkillLibraryController) {
                               >
                             </button>
                             <div class="settings-row__control">
-                              ${renderSettingsStatus({
-                                kind: entry.enabled ? "ok" : "muted",
-                                label: t(
-                                  entry.enabled ? "skillsPage.enabled" : "skillsPage.disabled",
-                                ),
-                              })}
+                              ${renderSkillLibraryStatus(entry.enabled)}
                             </div>
                           </div>`,
                         ),
@@ -185,6 +108,20 @@ export function renderSkillLibrary(library: SkillLibraryController) {
   `;
 }
 
+function renderLibraryFeedback(error: string | null, notice: string | null = null) {
+  return html`
+    ${error ? html`<div class="callout danger" role="alert">${error}</div>` : nothing}
+    ${notice ? html`<div class="callout success" role="status">${notice}</div>` : nothing}
+  `;
+}
+
+export function renderSkillLibraryFeedback(library: SkillLibraryController) {
+  return renderLibraryFeedback(
+    !library.draft && !library.importOpen ? library.error : null,
+    !library.draft ? library.notice : null,
+  );
+}
+
 export const renderSkillLibraryDialogs = (library: SkillLibraryController) =>
   html`${renderLibraryEditor(library)} ${renderLibraryImport(library)}`;
 
@@ -195,6 +132,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
   }
   const pending = draft.proposal !== null;
   const disabled = !library.canEdit || library.busy || library.loading || pending;
+  const uploadBlocked = draft.importedFiles && !library.uploadsEnabled;
   const support = draft.files.find((file) => file.path === draft.selectedFile);
   const text =
     draft.selectedFile === "SKILL.md" ? draft.content : support ? libraryFileText(support) : null;
@@ -244,18 +182,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="exec-approval-header">
-        <strong class="exec-approval-title">${draft.entry?.slug ?? t("skillLibrary.create")}</strong
-        ><button
-          type="button"
-          class="btn btn--icon btn--ghost"
-          aria-label=${t("common.close")}
-          ?disabled=${library.busy}
-          @click=${() => library.close()}
-        >
-          ${icons.x}
-        </button>
-      </div>
+      ${renderLibraryDialogHeader(draft.entry?.slug ?? t("skillLibrary.create"), () => library.close(), library.busy)}
       <div
         class="skill-reader-dialog__body"
         style="display: grid; gap: var(--space-4); min-width: 0;"
@@ -429,16 +356,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
               </div>`
             : nothing
         }
-        ${
-          library.error
-            ? html`<div class="callout danger" role="alert">${library.error}</div>`
-            : nothing
-        }
-        ${
-          library.notice
-            ? html`<div class="callout success" role="status">${library.notice}</div>`
-            : nothing
-        }
+        ${renderLibraryFeedback(library.error, library.notice)}
         <div class="plugins-toolbar">
           ${
             !library.canEdit
@@ -455,7 +373,7 @@ function renderLibraryEditor(library: SkillLibraryController) {
                 : html`<button
                     type="submit"
                     class="btn primary"
-                    ?disabled=${disabled || !draft.dirty || !draft.content.trim()}
+                    ?disabled=${disabled || uploadBlocked || !draft.dirty || !draft.content.trim()}
                   >
                     ${
                       library.busy
@@ -572,19 +490,9 @@ function renderLibraryImport(library: SkillLibraryController) {
         }
       }}
     >
-      <div class="exec-approval-header">
-        <strong class="exec-approval-title">${t("skillLibrary.import")}</strong
-        ><button
-          type="button"
-          class="btn btn--icon btn--ghost"
-          aria-label=${t("common.close")}
-          ?disabled=${library.busy}
-          @click=${close}
-        >
-          ${icons.x}
-        </button>
-      </div>
+      ${renderLibraryDialogHeader(t("skillLibrary.import"), close, library.busy)}
       <div class="skill-reader-dialog__body skill-library-import">
+        ${!library.importSource && !library.uploadsEnabled ? html`<p role="status">${uploadsDisabledMessage()}</p>` : nothing}
         <p class="muted">
           ${
             library.importSource
@@ -610,7 +518,7 @@ function renderLibraryImport(library: SkillLibraryController) {
             }}
         /></label>
         ${
-          !library.importSource
+          !library.importSource && library.uploadsEnabled
             ? html`<div class="field" role="group" aria-labelledby="library-import-files-label">
                 <span id="library-import-files-label">${t("skillLibrary.files")}</span>
                 <small id="library-import-files-help" class="settings-row__desc">
@@ -629,6 +537,9 @@ function renderLibraryImport(library: SkillLibraryController) {
                         aria-describedby="library-import-files-help library-import-selection"
                         ?disabled=${library.busy}
                         @click=${(event: Event) => {
+                          if (!library.uploadsEnabled) {
+                            return;
+                          }
                           const input = libraryEventControl(
                             event,
                             HTMLButtonElement,
@@ -653,7 +564,9 @@ function renderLibraryImport(library: SkillLibraryController) {
                         ?disabled=${library.busy}
                         @change=${(event: Event) => {
                           const input = libraryEventControl(event, HTMLInputElement);
-                          library.importSelection = Array.from(input.files ?? []);
+                          library.importSelection = library.uploadsEnabled
+                            ? Array.from(input.files ?? [])
+                            : [];
                           input.value = "";
                           library.changed();
                         }}
@@ -688,15 +601,11 @@ function renderLibraryImport(library: SkillLibraryController) {
               </div>`
             : nothing
         }
-        ${
-          library.error
-            ? html`<div class="callout danger" role="alert">${library.error}</div>`
-            : nothing
-        }
+        ${renderLibraryFeedback(library.error)}
         <button
           type="submit"
           class="btn primary"
-          ?disabled=${library.busy || (!library.importSource && selectedFiles.length === 0)}
+          ?disabled=${library.busy || (!library.importSource && (!library.uploadsEnabled || selectedFiles.length === 0))}
         >
           ${library.busy ? t("common.loading") : t("skillLibrary.import")}
         </button>

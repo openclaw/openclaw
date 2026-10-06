@@ -1,74 +1,15 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
-import { type AddressInfo, createServer } from "node:net";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { waitForControlUiSettingsTakeover } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  installMockGateway,
+  waitForControlUiSettingsTakeover,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-
-async function startMockDevServer() {
-  const reservation = createServer();
-  await new Promise<void>((resolve, reject) => {
-    reservation.once("error", reject);
-    reservation.listen(0, "127.0.0.1", () => resolve());
-  });
-  const port = (reservation.address() as AddressInfo).port;
-  await new Promise<void>((resolve, reject) => {
-    reservation.close((error) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve();
-      }
-    });
-  });
-  const baseUrl = `http://127.0.0.1:${port}/`;
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      "scripts/control-ui-mock-dev.ts",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(port),
-    ],
-    { cwd: repoRoot, stdio: "ignore" },
-  );
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    try {
-      if ((await fetch(`${baseUrl}settings/appearance`)).ok) {
-        return {
-          baseUrl,
-          close: async () => {
-            if (child.exitCode === null && child.signalCode === null) {
-              const exited = once(child, "exit");
-              child.kill("SIGTERM");
-              await Promise.race([exited, delay(5_000)]);
-              if (child.exitCode === null && child.signalCode === null) {
-                child.kill("SIGKILL");
-                await exited;
-              }
-            }
-          },
-        };
-      }
-    } catch {}
-    await delay(100);
-  }
-  child.kill("SIGTERM");
-  throw new Error("Timed out waiting for control-ui-mock-dev");
-}
 
 const suite = createControlUiE2eSuite({
   name: "Control UI accent selection",
-  startServer: startMockDevServer,
 });
 
 suite.define(() => {
@@ -81,6 +22,23 @@ suite.define(() => {
         viewport: { height: 1000, width: 1440 },
       },
       async ({ page }) => {
+        const config = { ui: { prefs: { locale: "en" } } };
+        await installMockGateway(page, {
+          presenceUsers: [{ id: "appearance-user", name: "Appearance User", self: true }],
+          methodResponses: {
+            "config.get": {
+              appliedConfigHash: "appearance-accent",
+              config,
+              configRevisionHash: "appearance-accent",
+              hash: "appearance-accent",
+              issues: [],
+              raw: JSON.stringify(config),
+              valid: true,
+            },
+            "users.prefs.get": { status: "ok", entries: {} },
+            "users.prefs.set": { status: "ok" },
+          },
+        });
         const response = await page.goto(`${suite.server.baseUrl}settings/appearance`);
         expect(response?.status()).toBe(200);
         await waitForControlUiSettingsTakeover(page);
@@ -121,12 +79,12 @@ suite.define(() => {
         await expect
           .poll(() => accentSection.locator("#settings-accent-status").textContent())
           .toContain("Using Coral");
-        const gatewayScope = `${suite.server.baseUrl.replace(/^http/u, "ws")}__openclaw_mock_gateway__`;
+        const settingsStorageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
         await expect
           .poll(() =>
             page.evaluate(
               (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
-              `openclaw.control.settings.v1:${gatewayScope}`,
+              settingsStorageKey,
             ),
           )
           .toMatchObject({ accent: "#ff8066" });
@@ -149,7 +107,7 @@ suite.define(() => {
           .poll(() =>
             page.evaluate(
               (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
-              `openclaw.control.settings.v1:${gatewayScope}`,
+              settingsStorageKey,
             ),
           )
           .not.toHaveProperty("accent");

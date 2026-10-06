@@ -2,9 +2,10 @@
 
 /** Detects Vitest/test execution from the env shape used by local and worker processes. */
 export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
+  const vitest = env.VITEST;
   return (
-    env.VITEST === "true" ||
-    env.VITEST === "1" ||
+    vitest === "true" ||
+    vitest === "1" ||
     env.VITEST_POOL_ID !== undefined ||
     env.VITEST_WORKER_ID !== undefined ||
     env.NODE_ENV === "test"
@@ -13,7 +14,8 @@ export function isVitestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolea
 
 /** Enables the shared fast-test shortcuts only inside a detected test runtime. */
 export function isFastTestRuntimeEnv(env: NodeJS.ProcessEnv = process.env): boolean {
-  const isTestRuntime =
-    isVitestRuntimeEnv(env) || (env !== process.env && isVitestRuntimeEnv(process.env));
-  return isTestRuntime && env.OPENCLAW_TEST_FAST === "1";
+  return (
+    env.OPENCLAW_TEST_FAST === "1" &&
+    (isVitestRuntimeEnv(env) || (env !== process.env && isVitestRuntimeEnv(process.env)))
+  );
 }

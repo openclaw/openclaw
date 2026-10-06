@@ -3,70 +3,30 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
  * Channel health monitor regression tests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelId, ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
+import {
+  createMockChannelManager,
+  createSnapshotManager,
+  snapshotWith,
+} from "./channel-health-monitor.test-support.js";
 import type { ChannelManager } from "./server-channels.js";
 
-function createMockChannelManager(overrides?: Partial<ChannelManager>): ChannelManager {
-  return {
-    getRuntimeSnapshot: vi.fn(() => ({ channels: {}, channelAccounts: {} })),
-    pauseChannelStarts: vi.fn(() => () => {}),
-    startChannels: vi.fn(async () => {}),
-    startChannel: vi.fn(async () => new Map()),
-    stopChannel: vi.fn(async () => {}),
-    releaseChannelRouteHandoffs: vi.fn(),
-    setAutostartSuppression: vi.fn(),
-    getAutostartSuppression: vi.fn(() => null),
-    recoverAutostartSuppression: vi.fn(async () => false),
-    setAmbientAutostartSuppressedChannelIds: vi.fn(),
-    isAmbientAutostartSuppressed: vi.fn(() => false),
-    markChannelLoggedOut: vi.fn(),
-    isHealthMonitorEnabled: vi.fn(() => true),
-    isAccountListed: vi.fn(() => true),
-    isManuallyStopped: vi.fn(() => false),
-    isAutoRestartScheduled: vi.fn(() => false),
-    resetRestartAttempts: vi.fn(),
-    ...overrides,
-  };
-}
-
-function snapshotWith(
-  accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>>,
-): ChannelRuntimeSnapshot {
-  const channels: ChannelRuntimeSnapshot["channels"] = {};
-  const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
-  for (const [channelId, accts] of Object.entries(accounts)) {
-    const resolved: Record<string, ChannelAccountSnapshot> = {};
-    for (const [accountId, partial] of Object.entries(accts)) {
-      resolved[accountId] = { accountId, ...partial };
-    }
-    channelAccounts[channelId as ChannelId] = resolved;
-    const firstId = Object.keys(accts)[0];
-    if (firstId) {
-      channels[channelId as ChannelId] = resolved[firstId];
-    }
-  }
-  return { channels, channelAccounts };
-}
-
 const DEFAULT_CHECK_INTERVAL_MS = 5_000;
-
-function createSnapshotManager(
-  accounts: Record<string, Record<string, Partial<ChannelAccountSnapshot>>>,
-  overrides?: Partial<ChannelManager>,
-): ChannelManager {
-  return createMockChannelManager({
-    getRuntimeSnapshot: vi.fn(() => snapshotWith(accounts)),
-    ...overrides,
-  });
-}
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 
 function startDefaultMonitor(
   manager: ChannelManager,
   overrides: Partial<Omit<Parameters<typeof startChannelHealthMonitor>[0], "channelManager">> = {},
 ) {
   return startChannelHealthMonitor({
+    scheduler,
     channelManager: manager,
     checkIntervalMs: DEFAULT_CHECK_INTERVAL_MS,
     ...overrides,
@@ -88,7 +48,7 @@ async function startAndRunCheck(
 ) {
   const monitor = startDefaultMonitor(manager, overrides);
   const startupGraceMs = overrides.timing?.monitorStartupGraceMs ?? 0;
-  await vi.advanceTimersByTimeAsync(startupGraceMs + 1);
+  await clock.advanceBy(startupGraceMs + 1);
   return monitor;
 }
 
@@ -180,14 +140,18 @@ async function expectNoStart(manager: ChannelManager) {
 }
 
 async function advanceHealthCheck() {
-  await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS);
+  await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
 }
 
 describe("channel-health-monitor", () => {
   beforeEach(() => {
-    vi.useFakeTimers();
+    clock = createGatewaySchedulerClock(Date.now());
+    scheduler = createTestGatewayScheduler(clock.clock);
+    vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await scheduler.stop();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -204,21 +168,20 @@ describe("channel-health-monitor", () => {
   });
 
   it("normalizes oversized check intervals before rearming timers", async () => {
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const monitor = startDefaultMonitor(createMockChannelManager(), {
       checkIntervalMs: Number.MAX_SAFE_INTEGER,
     });
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(1);
 
-    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    expect(clock.wakes.at(-1)?.delayMs).toBe(MAX_TIMER_TIMEOUT_MS);
     monitor.stop();
   });
 
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { timing: { monitorStartupGraceMs: 60_000 } });
-    await vi.advanceTimersByTimeAsync(5_001);
+    await clock.advanceBy(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });
@@ -230,7 +193,7 @@ describe("channel-health-monitor", () => {
       timing: { monitorStartupGraceMs: 1_000 },
     });
 
-    await vi.advanceTimersByTimeAsync(1_001);
+    await clock.advanceBy(1_001);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalled();
     monitor.stop();
@@ -247,14 +210,39 @@ describe("channel-health-monitor", () => {
     });
     const monitor = startDefaultMonitor(manager);
 
-    await vi.advanceTimersByTimeAsync(1);
+    await clock.advanceBy(1);
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(DEFAULT_CHECK_INTERVAL_MS + 1);
+    await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS + 1);
 
     expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
     expect(manager.startChannel).not.toHaveBeenCalled();
     monitor.stop();
+  });
+
+  it("preserves the restart budget during plugin reload and recovers when its pause clears", async () => {
+    const snapshot = snapshotWith({
+      discord: { default: managedStoppedAccount("Plugin replacement pending") },
+    });
+    const reloadingChannels = new Map<ChannelId, string | undefined>([["discord", "default"]]);
+    snapshot.reloadingChannels = reloadingChannels;
+    const manager = createMockChannelManager({ getRuntimeSnapshot: vi.fn(() => snapshot) });
+    const monitor = startDefaultMonitor(manager, {
+      cooldownCycles: 0,
+      maxRestartsPerHour: 1,
+    });
+    try {
+      await clock.advanceBy(2 * DEFAULT_CHECK_INTERVAL_MS + 1);
+      expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+
+      reloadingChannels.clear();
+      await clock.advanceBy(DEFAULT_CHECK_INTERVAL_MS);
+      expect(manager.startChannel).toHaveBeenCalledExactlyOnceWith("discord", "default");
+      expect(manager.resetRestartAttempts).toHaveBeenCalledExactlyOnceWith("discord", "default");
+    } finally {
+      monitor.stop();
+    }
   });
 
   it("does not start a replacement when channel teardown fails", async () => {
@@ -309,13 +297,13 @@ describe("channel-health-monitor", () => {
       maxRestartsPerHour: 1,
     });
 
-    await vi.advanceTimersByTimeAsync(350);
+    await clock.advanceBy(350);
 
     expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
     expect(manager.startChannel).not.toHaveBeenCalled();
 
     allowRecovery = true;
-    await vi.advanceTimersByTimeAsync(101);
+    await clock.advanceBy(101);
 
     expect(recoverAutostartSuppression).toHaveBeenCalled();
     expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
@@ -674,11 +662,15 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(20_001);
+    for (let check = 0; check < 20; check += 1) {
+      await clock.advanceBy(1_000);
+    }
     // Budgeted restart, one free continuation, then two more budgeted restarts
     // before the hourly cap closes; a stuck account must not restart per check.
     expect(manager.startChannel).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(10_000);
+    for (let check = 0; check < 10; check += 1) {
+      await clock.advanceBy(1_000);
+    }
     expect(manager.startChannel).toHaveBeenCalledTimes(4);
     monitor.stop();
   });
@@ -824,9 +816,11 @@ describe("channel-health-monitor", () => {
       cooldownCycles: 1,
       maxRestartsPerHour: 3,
     });
-    await vi.advanceTimersByTimeAsync(5_001);
+    for (let check = 0; check < 6; check += 1) {
+      await clock.advanceBy(1_000);
+    }
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await vi.advanceTimersByTimeAsync(1_001);
+    await clock.advanceBy(1_001);
     expect(manager.startChannel).toHaveBeenCalledTimes(3);
     monitor.stop();
   });
@@ -850,17 +844,16 @@ describe("channel-health-monitor", () => {
       maxRestartsPerHour: 1,
     });
 
-    await vi.advanceTimersByTimeAsync(5_001);
+    for (let check = 0; check < 6; check += 1) {
+      await clock.advanceBy(1_000);
+    }
 
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     monitor.stop();
   });
 
   it("runs checks single-flight when restart work is still in progress", async () => {
-    let releaseStart: (() => void) | undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = () => resolve();
-    });
+    const { promise: startGate, resolve: releaseStart } = createDeferred();
     const manager = createSnapshotManager(
       {
         telegram: {
@@ -875,22 +868,22 @@ describe("channel-health-monitor", () => {
       },
     );
     const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
-    await vi.advanceTimersByTimeAsync(120);
-    expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(500);
-    expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    releaseStart?.();
-    await Promise.resolve();
-    monitor.stop();
+    const check = clock.advanceBy(120);
+    try {
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+      await clock.advanceBy(500);
+      expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    } finally {
+      releaseStart();
+      monitor.stop();
+      await check;
+    }
   });
 
   it.each(["manual stop", "abort signal"] as const)(
     "does not resume an in-flight restart after %s",
     async (stopMode) => {
-      let releaseStop: (() => void) | undefined;
-      const stopGate = new Promise<void>((resolve) => {
-        releaseStop = resolve;
-      });
+      const { promise: stopGate, resolve: releaseStop } = createDeferred();
       const abort = new AbortController();
       const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
         stopChannel: vi.fn(async () => {
@@ -903,28 +896,30 @@ describe("channel-health-monitor", () => {
         cooldownCycles: 0,
       });
 
-      await vi.advanceTimersByTimeAsync(101);
-      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      const check = clock.advanceBy(101);
+      try {
+        expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
-      if (stopMode === "manual stop") {
+        if (stopMode === "manual stop") {
+          monitor.shutdown();
+        } else {
+          abort.abort();
+        }
+        releaseStop();
+        await monitor.waitForIdle();
+
+        expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+        expect(manager.startChannel).not.toHaveBeenCalled();
+      } finally {
+        releaseStop();
         monitor.shutdown();
-      } else {
-        abort.abort();
+        await check;
       }
-      releaseStop?.();
-      await monitor.waitForIdle();
-
-      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
-      expect(manager.startChannel).not.toHaveBeenCalled();
-      monitor.stop();
     },
   );
 
   it("does not process later accounts after a retired monitor's stop rejects", async () => {
-    let rejectStop: (() => void) | undefined;
-    const stopGate = new Promise<void>((_resolve, reject) => {
-      rejectStop = () => reject(new Error("stop failed"));
-    });
+    const { promise: stopGate, reject: rejectStop } = createDeferred();
     const staleAccount = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       { slack: { first: staleAccount, second: staleAccount } },
@@ -936,26 +931,29 @@ describe("channel-health-monitor", () => {
     );
     const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
 
-    await vi.advanceTimersByTimeAsync(101);
-    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    const check = clock.advanceBy(101);
+    try {
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
-    monitor.shutdown();
-    rejectStop?.();
-    await monitor.waitForIdle();
+      monitor.shutdown();
+      rejectStop(new Error("stop failed"));
+      await monitor.waitForIdle();
 
-    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
-    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
-    expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+    } finally {
+      rejectStop(new Error("stop failed"));
+      monitor.shutdown();
+      await check;
+    }
   });
 
   it.each([
     { label: "replacement", shutdownAfterRetire: false, expectedStarts: 1 },
     { label: "replacement followed by shutdown", shutdownAfterRetire: true, expectedStarts: 0 },
   ])("coordinates the in-flight restart during $label", async (testCase) => {
-    let releaseStop: (() => void) | undefined;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+    const { promise: stopGate, resolve: releaseStop } = createDeferred();
     const staleAccount = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       { slack: { first: staleAccount, second: staleAccount } },
@@ -967,27 +965,31 @@ describe("channel-health-monitor", () => {
     );
     const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
 
-    await vi.advanceTimersByTimeAsync(101);
-    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+    const check = clock.advanceBy(101);
+    try {
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
 
-    monitor.stop();
-    const idle = monitor.waitForIdle();
-    if (testCase.shutdownAfterRetire) {
+      monitor.stop();
+      const idle = monitor.waitForIdle();
+      if (testCase.shutdownAfterRetire) {
+        monitor.shutdown();
+      }
+      releaseStop();
+      await idle;
+
+      expect(manager.stopChannel).toHaveBeenCalledTimes(1);
+      expect(manager.resetRestartAttempts).toHaveBeenCalledTimes(testCase.expectedStarts);
+      expect(manager.startChannel).toHaveBeenCalledTimes(testCase.expectedStarts);
+    } finally {
+      releaseStop();
       monitor.shutdown();
+      await check;
     }
-    releaseStop?.();
-    await idle;
-
-    expect(manager.stopChannel).toHaveBeenCalledTimes(1);
-    expect(manager.resetRestartAttempts).toHaveBeenCalledTimes(testCase.expectedStarts);
-    expect(manager.startChannel).toHaveBeenCalledTimes(testCase.expectedStarts);
   });
 
   it("bounds replacement handoff and abandons a late restart", async () => {
-    let releaseStop: (() => void) | undefined;
-    const stopGate = new Promise<void>((resolve) => {
-      releaseStop = resolve;
-    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { promise: stopGate, resolve: releaseStop } = createDeferred();
     const manager = createSlackSnapshotManager(disconnectedAccount(Date.now() - 300_000), {
       stopChannel: vi.fn(async () => {
         await stopGate;
@@ -995,24 +997,30 @@ describe("channel-health-monitor", () => {
     });
     const monitor = startDefaultMonitor(manager, { checkIntervalMs: 100, cooldownCycles: 0 });
 
-    await vi.advanceTimersByTimeAsync(101);
-    monitor.stop();
-    const handoff = monitor.waitForIdle();
-    await vi.advanceTimersByTimeAsync(5_001);
-    await handoff;
+    const check = clock.advanceBy(101);
+    try {
+      monitor.stop();
+      const handoff = monitor.waitForIdle();
+      await vi.advanceTimersByTimeAsync(5_001);
+      await handoff;
 
-    releaseStop?.();
-    await monitor.waitForIdle();
+      releaseStop();
+      await monitor.waitForIdle();
 
-    expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
-    expect(manager.startChannel).not.toHaveBeenCalled();
+      expect(manager.resetRestartAttempts).not.toHaveBeenCalled();
+      expect(manager.startChannel).not.toHaveBeenCalled();
+    } finally {
+      releaseStop();
+      monitor.shutdown();
+      await check;
+    }
   });
 
   it("stops cleanly", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager);
     monitor.stop();
-    await vi.advanceTimersByTimeAsync(5_001);
+    await clock.advanceBy(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
   });
 
@@ -1021,7 +1029,7 @@ describe("channel-health-monitor", () => {
     const abort = new AbortController();
     const monitor = startDefaultMonitor(manager, { abortSignal: abort.signal });
     abort.abort();
-    await vi.advanceTimersByTimeAsync(5_001);
+    await clock.advanceBy(5_001);
     expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     monitor.stop();
   });

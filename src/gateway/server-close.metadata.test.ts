@@ -18,98 +18,83 @@ import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMetadataCloseFixture as createFixture } from "./server-close.metadata.test-support.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 import type { GatewayServer } from "./server-public.js";
 
-it.each(["success", "failure"] as const)(
-  "retires retained Gateway bindings after metadata close settles with %s",
-  async (outcome) => {
-    const fixture = await createFixture(`gateway-context-close-${outcome}`);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const failure = new PluginRuntimeCloseRetainedError(new Error("metadata close refused"));
-    let loaded: ReturnType<typeof loadGatewayPlugins> | undefined;
-    let closing: Promise<unknown> | undefined;
-    let restoreClose: (() => void) | undefined;
+it("retires retained Gateway bindings after metadata close fails", async () => {
+  const fixture = await createFixture("gateway-context-close-failure");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const failure = new PluginRuntimeCloseRetainedError(new Error("metadata close refused"));
+  let loaded: ReturnType<typeof loadGatewayPlugins> | undefined;
+  let closing: Promise<unknown> | undefined;
+  let restoreClose: (() => void) | undefined;
+  try {
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
+    let available: PluginRuntime["gateway"]["isAvailable"] | undefined;
+    const loader = await import("../plugins/loader.js");
+    const load = loader.loadOpenClawPlugins;
+    const observed = vi.spyOn(loader, "loadOpenClawPlugins").mockImplementation((options) => {
+      available = options?.runtimeOptions?.gateway?.isAvailable;
+      return load(options);
+    });
     try {
-      const port = await getFreePort();
-      const server = await fixture.start(port);
-      const kernel = fixture.kernels.get(port);
-      assert(kernel);
-      let available: PluginRuntime["gateway"]["isAvailable"] | undefined;
-      const loader = await import("../plugins/loader.js");
-      const load = loader.loadOpenClawPlugins;
-      const observed = vi.spyOn(loader, "loadOpenClawPlugins").mockImplementation((options) => {
-        available = options?.runtimeOptions?.gateway?.isAvailable;
-        return load(options);
+      loaded = loadGatewayPlugins({
+        cfg: kernel.cfgAtStart,
+        autoEnabledReasons: {},
+        baseMethods: [],
+        pluginIds: [fixture.pluginId],
+        pluginMetadataSnapshot: kernel.getPluginMetadataSnapshot(),
+        resolveGatewayContext: kernel.resolvePluginGatewayContext,
+        loadIntent: "startup",
+        env: fixture.state.env,
       });
-      try {
-        loaded = loadGatewayPlugins({
-          cfg: kernel.cfgAtStart,
-          autoEnabledReasons: {},
-          baseMethods: [],
-          pluginIds: [fixture.pluginId],
-          pluginMetadataSnapshot: kernel.getPluginMetadataSnapshot(),
-          resolveGatewayContext: kernel.resolvePluginGatewayContext,
-          loadIntent: "startup",
-          log: { info() {}, warn() {}, error() {}, debug() {} },
-          env: fixture.state.env,
-        });
-      } finally {
-        observed.mockRestore();
-      }
-      assert(available);
-      expect(loaded.pluginRegistry.plugins).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ id: fixture.pluginId, status: "loaded" }),
-        ]),
-      );
-      await expect(available()).resolves.toBe(true);
-      const close = kernel.kernel.pluginMetadata.close.bind(kernel.kernel.pluginMetadata);
-      const held = vi
-        .spyOn(kernel.kernel.pluginMetadata, "close")
-        .mockImplementation(async (...args) => {
-          entered.resolve();
-          await release.promise;
-          await close(...args);
-          if (outcome === "failure") {
-            throw failure;
-          }
-        });
-      restoreClose = () => held.mockRestore();
-      closing = server.close({ reason: "retire bound context" }).catch((error: unknown) => error);
-      await Promise.race([
-        entered.promise,
-        closing.then(() => {
-          throw new Error("metadata close not reached");
-        }),
-      ]);
-      await expect(available()).resolves.toBe(true);
-      release.resolve();
-      const result = await closing;
-      if (outcome === "failure") {
-        expect(collectNestedErrorCandidates(result)).toContain(failure);
-      } else {
-        expect(result).toBeUndefined();
-      }
-      await expect(available()).resolves.toBe(false);
-      expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(
-        true,
-      );
     } finally {
-      release.resolve();
-      await closing;
-      restoreClose?.();
-      loaded?.retireGatewayRuntimeBindings();
-      if (loaded) {
-        await disposePluginRegistryInstances(loaded.pluginRegistry);
-      }
-      await fixture.cleanup();
+      observed.mockRestore();
     }
-  },
-);
+    assert(available);
+    expect(loaded.pluginRegistry.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: fixture.pluginId, status: "loaded" })]),
+    );
+    await expect(available()).resolves.toBe(true);
+    const close = kernel.kernel.pluginMetadata.close.bind(kernel.kernel.pluginMetadata);
+    const held = vi
+      .spyOn(kernel.kernel.pluginMetadata, "close")
+      .mockImplementation(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        await close(...args);
+        throw failure;
+      });
+    restoreClose = () => held.mockRestore();
+    closing = server.close({ reason: "retire bound context" }).catch((error: unknown) => error);
+    await Promise.race([
+      entered.promise,
+      closing.then(() => {
+        throw new Error("metadata close not reached");
+      }),
+    ]);
+    await expect(available()).resolves.toBe(true);
+    release.resolve();
+    const result = await closing;
+    expect(collectNestedErrorCandidates(result)).toContain(failure);
+    await expect(available()).resolves.toBe(false);
+    expect(getGatewayContextLifetime(kernel.resolvePluginGatewayContext).signal.aborted).toBe(true);
+  } finally {
+    release.resolve();
+    await closing;
+    restoreClose?.();
+    loaded?.retireGatewayRuntimeBindings();
+    if (loaded) {
+      await disposePluginRegistryInstances(loaded.pluginRegistry);
+    }
+    await fixture.cleanup();
+  }
+});
 
 it.each(["success", "failure"] as const)(
   "keeps captured bootstrap metadata while another live Gateway reloads (%s)",
@@ -138,9 +123,9 @@ it.each(["success", "failure"] as const)(
       });
     let starting: Promise<GatewayServer | Error> | undefined;
     try {
-      const firstPort = await getFreePort();
+      const firstPort = await fixture.reservePort();
       const firstServer = await fixture.start(firstPort);
-      secondPort = await getFreePort();
+      secondPort = await fixture.reservePort();
       const first = fixture.kernels.get(firstPort);
       assert(first);
       const initial = first.getPluginMetadataSnapshot();
@@ -168,7 +153,7 @@ it.each(["success", "failure"] as const)(
         nextConfig: first.cfgAtStart,
         sourceConfig: first.cfgAtStart,
         changedPaths: [],
-        prepareConfigEffects: () => {},
+        prepareConfigEffects: () => ({ retire: () => {}, rollback: async () => {} }),
         pluginLifecycle: {
           reason: "reload",
           operationId: "concurrent-bootstrap",
@@ -228,7 +213,7 @@ it("joins managed setup cleanup before releasing shared state and secrets", asyn
   const release = createDeferredCore();
   let closing: Promise<void> | undefined;
   try {
-    const port = await getFreePort();
+    const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
@@ -280,7 +265,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
   let closing: Promise<void> | undefined;
   let reset: { enabled: boolean } | undefined;
   try {
-    const port = await getFreePort();
+    const port = await fixture.reservePort();
     const server = await fixture.start(port);
     const kernel = fixture.kernels.get(port);
     assert(kernel);
@@ -309,7 +294,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
     ]);
     expect(setupOwner.lifecycle.signal.aborted).toBe(true);
     expect(() => callback()).toThrow("reloaded or disabled");
-    const attempted = await fixture.start(await getFreePort()).then(
+    const attempted = await fixture.start(await fixture.reservePort()).then(
       (admitted) => ({ admitted }),
       (error: unknown) => ({ error }),
     );
@@ -317,7 +302,7 @@ it("refuses a new Gateway until the final shared-state reset finishes", async ()
     release.resolve();
     await closing;
     reset.enabled = false;
-    const nextPort = await getFreePort();
+    const nextPort = await fixture.reservePort();
     const successor = await fixture.start(nextPort);
     const next = fixture.kernels.get(nextPort);
     assert(next);

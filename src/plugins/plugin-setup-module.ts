@@ -1,10 +1,11 @@
 import path from "node:path";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
-import { getPluginCache, retirePluginCacheInstance } from "./plugin-cache.js";
+import { clearPluginModuleRequireCache, isJavaScriptModulePath } from "./native-module-require.js";
+import { getPluginCache, getPluginCacheSource, retirePluginCacheInstance } from "./plugin-cache.js";
+import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-module-loader-cache.js";
 
-/** Setup callbacks and their source graph belong to the inventory that loaded them. */
+/** Setup callbacks belong to the inventory that loaded them. */
 export function getPluginSetupModuleLoader(
   record: PluginManifestRecord,
   source: string,
@@ -16,7 +17,7 @@ export function getPluginSetupModuleLoader(
   if (!cached && cache.retirement) {
     throw new Error(`Plugin ${record.id} setup inventory has retired`);
   }
-  const instance = cached ?? new PluginInstance(record.id);
+  const instance = cached ?? new PluginInstance(record.id, { cache });
   const discard = () => {
     // Repeated inspections share callbacks already published by successful initialization.
     if (instance.controlPlaneInitialized) {
@@ -31,22 +32,23 @@ export function getPluginSetupModuleLoader(
   if (!cached) {
     cache.setupModules.set(key, instance);
     try {
-      const compiledBundled = record.origin === "bundled" && /\.[cm]?js$/.test(source);
-      const distribution = path.dirname(path.dirname(rootDir));
+      if (record.origin === "bundled" && isJavaScriptModulePath(source)) {
+        const distribution = path.dirname(path.dirname(rootDir));
+        const dependencyRoot =
+          path.basename(path.dirname(rootDir)) === "extensions" &&
+          path.basename(distribution) === "dist"
+            ? distribution
+            : rootDir;
+        // Cold metadata reset refreshes CJS entry and hoisted helpers. Ordinary
+        // inventory retirement must not evict code still used by another instance.
+        getPluginCacheSource(source).disposeModule ??= () =>
+          clearPluginModuleRequireCache(source, dependencyRoot);
+      }
       bindPluginInstanceModuleLoader({
         instance,
         origin: record.origin,
         source,
         rootDir,
-        standalone: compiledBundled,
-        // Stable dist setup artifacts can reference hoisted plugin-owned helpers.
-        // Capture those inputs without changing the plugin's package identity.
-        inputBoundaryRoot:
-          compiledBundled &&
-          path.basename(path.dirname(rootDir)) === "extensions" &&
-          path.basename(distribution) === "dist"
-            ? distribution
-            : rootDir,
       });
     } catch (error) {
       discard();

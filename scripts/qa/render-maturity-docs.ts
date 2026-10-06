@@ -2,7 +2,10 @@
 // Renders public maturity scorecard docs from the root taxonomy and score aggregate.
 import fs from "node:fs";
 import path from "node:path";
+import { format } from "oxfmt";
 import {
+  getEffectiveQaEvidenceEntries,
+  projectQaEvidenceScenarioOutcomes,
   validateQaEvidenceSummaryJson,
   type QaEvidenceScorecardJson,
   type QaEvidenceStatus,
@@ -19,6 +22,7 @@ import {
   readQaMaturityTaxonomySource,
   readValidatedQaMaturityScoreSources,
   type QaMaturityCoverageScores,
+  type QaMaturityDecision,
   type QaMaturityScoreObject,
   type QaMaturityScoreSurface,
   type QaMaturityScoreSurfaceLts,
@@ -29,6 +33,10 @@ import {
 } from "../../extensions/qa-lab/src/scorecard-taxonomy.js";
 import { parseDocsDocument, resolveDocsFragment } from "../lib/docs-markdown.mjs";
 import { collectMirroredDocsRoutes } from "../lib/docs-published-routes.mts";
+import {
+  collectChannelMaturityInventory,
+  MATURITY_CHANNEL_COHORT_SURFACE_IDS,
+} from "./maturity-inventory.mts";
 
 const DEFAULT_TAXONOMY_PATH = "taxonomy.yaml";
 const DEFAULT_SCORES_PATH = "qa/maturity-scores.yaml";
@@ -52,6 +60,7 @@ type EvidenceSummary = {
   generatedAt: string;
   profile: string;
   entryCount: number;
+  unresolvedCount: number;
   statuses: StatusCounts;
   blockingResults: string[];
   scorecard?: QaEvidenceScorecardJson;
@@ -78,10 +87,6 @@ type DocsRouteIndex = {
   redirects: Map<string, string>;
   localRouteFiles: Map<string, string>;
   localRouteIds: Map<string, Set<string>>;
-};
-
-type RenderMaturityScorecardInputs = Pick<RenderInputs, "taxonomy" | "scores" | "coverage"> & {
-  evidenceSummaries: EvidenceSummary[];
 };
 
 type DerivedCoverageScores = QaMaturityCoverageScores & {
@@ -210,12 +215,31 @@ function markdownSlug(value: string): string {
 }
 
 const legacySurfaceAnchors: Readonly<Record<string, readonly string[]>> = {
+  "app-sdk": ["openclaw-app-sdk"],
   automation: ["automation-cron-hooks-tasks-polling"],
+  containers: ["docker-and-podman-hosting"],
+  "community-channels": ["mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat"],
   "control-ui": ["gateway-web-app"],
   "imessage-bluebubbles": ["imessage-and-bluebubbles"],
+  "session-memory": ["session-memory-and-context-engine"],
   "small-linux": ["raspberry-pi-and-small-linux-devices"],
   "windows-app": ["native-windows-companion-app"],
+  "regional-channels": ["feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels"],
 };
+
+function renderCatalogMembers(surfaceId: string): string[] {
+  if (!MATURITY_CHANNEL_COHORT_SURFACE_IDS.has(surfaceId)) {
+    return [];
+  }
+  const members = collectChannelMaturityInventory().membersBySurface.get(surfaceId) ?? [];
+  if (members.length === 0) {
+    return [];
+  }
+  return [
+    `**Current catalog members:** ${members.map((member) => `[${markdownEscape(member.label)}](${member.docsPath})`).join(", ")}`,
+    "",
+  ];
+}
 
 function normalizeRoutePath(route: string): string {
   return route.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -307,7 +331,7 @@ function validateTaxonomyDocsReferences(
           continue;
         }
         const anchor = redirectAnchor ?? sourceAnchor;
-        const ids = localDocsRouteIds(resolvedRoute, docsRouteIndex);
+        const ids = anchor ? localDocsRouteIds(resolvedRoute, docsRouteIndex) : undefined;
         if (anchor && (!ids || !resolveDocsFragment(`#${anchor}`, ids))) {
           const reason = ids
             ? "targets a missing docs anchor"
@@ -346,15 +370,8 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 
-function scorePercent(value?: QaMaturityScoreObject): number | undefined {
-  if (!value || typeof value !== "object" || !Number.isFinite(value.score)) {
-    return undefined;
-  }
-  return Math.max(0, Math.min(100, Math.round(value.score)));
-}
-
 function scoreClass(value?: QaMaturityScoreObject): string {
-  const score = scorePercent(value);
+  const score = value?.score;
   if (score === undefined) {
     return "maturity-score-unscored";
   }
@@ -374,28 +391,24 @@ function scoreClass(value?: QaMaturityScoreObject): string {
 }
 
 function scoreLabel(value?: QaMaturityScoreObject): string {
-  if (!value || typeof value !== "object") {
-    return "Unscored";
-  }
-  const label = maturityDisplayLabel(value.label ?? "Unscored");
-  return `${label}${scorePercent(value) === undefined ? "" : ` - ${scorePercent(value)}%`}`;
+  return value ? `${maturityDisplayLabel(value.label)} - ${value.score}%` : "Unscored";
 }
 
 function scoreMeter(value?: QaMaturityScoreObject): string {
-  const score = scorePercent(value);
+  const score = value?.score;
   if (score === undefined) {
     return '<span className="maturity-score maturity-score-unscored"><span className="maturity-score-label"><span>Unscored</span><span>-</span></span></span>';
   }
-  return `<span className="maturity-score ${scoreClass(value)}"><span className="maturity-score-label">${maturityLabelPill(value?.label ?? "Unscored")}<span>${score}%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "${score}%" }} /></span></span>`;
+  return `<span className="maturity-score ${scoreClass(value)}"><span className="maturity-score-label">${maturityLabelPill(value?.label)}<span>${score}%</span></span><span className="maturity-meter" aria-hidden="true"><span style={{ width: "${score}%" }} /></span></span>`;
 }
 
 function scoreSummary(
   title: string,
   value: QaMaturityScoreObject | undefined,
   description: string,
-  details: readonly string[] = [],
+  details: readonly string[],
 ): string[] {
-  const score = scorePercent(value);
+  const score = value?.score;
   const displayScore = score === undefined ? "-" : `${score}%`;
   const cssScore = score === undefined ? "0" : String(score);
   return [
@@ -415,11 +428,10 @@ function scoreSummary(
 }
 
 function maturityLtsBadge(lts?: QaMaturityScoreSurfaceLts): string {
-  if (!lts || typeof lts !== "object") {
+  if (!lts) {
     return '<span className="maturity-lts maturity-lts-none">Unscored</span>';
   }
-  const supportedCategories = lts.supported_categories ?? 0;
-  const status = lts.status ?? "unknown";
+  const { supported_categories: supportedCategories, status } = lts;
   const label = status === "full" ? "Full" : status === "partial" ? "Partial" : "None";
   const detail = status === "none" ? "" : ` - ${supportedCategories}`;
   return `<span className="maturity-lts maturity-lts-${status}">${label}${detail}</span>`;
@@ -508,6 +520,63 @@ function indentMarkdown(lines: string[], spaces = 4): string[] {
   return lines.map((line) => (line ? `${prefix}${line}` : ""));
 }
 
+type DecisionContext = {
+  label: string;
+  current: QaMaturityDecision["value"] | undefined;
+  decision?: QaMaturityDecision;
+};
+
+function renderDecisionContext(entries: DecisionContext[]): string[] {
+  // The docs publisher renders HTML/Markdown, not JSX expressions. Keep authored text literal.
+  const text = (value: string | number | boolean) =>
+    `<span>${String(value)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replace(/[{}|`*_[\]\\]/gu, (character) => `&#${character.charCodeAt(0)};`)
+      .replace(/\r\n?|\n/gu, "<br />")}</span>`;
+  return [
+    "<details>",
+    "<summary>Decision context</summary>",
+    "<p>Missing history is unknown. Differences are non-gating and do not change current values.</p>",
+    ...entries.map(({ label, current, decision }) => {
+      const context = decision
+        ? [
+            `Recorded value: ${decision.value}`,
+            ...(decision.value !== current ? ["Non-gating mismatch"] : []),
+            `Rationale: ${decision.rationale}`,
+            `Reviewer: ${decision.reviewer}`,
+            `Evidence: ${decision.evidence_refs.join("; ")}`,
+            `Revalidate when: ${decision.revalidate_when}`,
+          ]
+            .map((field) => `<div>${text(field)}</div>`)
+            .join("")
+        : text("Unknown (not recorded)");
+      return `<div><p><strong>${text(label)}</strong></p><p>Current value: ${text(current ?? "Unknown")}</p><div>Recorded decision: ${context}</div></div>`;
+    }),
+    "</details>",
+  ];
+}
+
+function surfaceDecisionContext(
+  surface: QaMaturityTaxonomySurface,
+  scoreSurface: QaMaturityScoreSurface | undefined,
+): DecisionContext[] {
+  return [
+    { label: "Level", current: surface.level, decision: surface.level_decision },
+    {
+      label: "Quality",
+      current: scoreSurface?.scores.quality.score,
+      decision: scoreSurface?.scores.quality.decision,
+    },
+    {
+      label: "Completeness",
+      current: scoreSurface?.scores.completeness.score,
+      decision: scoreSurface?.scores.completeness.decision,
+    },
+  ];
+}
+
 function renderSurfaceRows({
   coverage,
   levels,
@@ -578,16 +647,11 @@ function renderSurfaceTabs({
 }
 
 function levelText(
-  surface: QaMaturityScoreSurface | QaMaturityTaxonomySurface,
+  surface: QaMaturityTaxonomySurface,
   taxonomyLevels: Map<string, QaMaturityTaxonomyLevel>,
 ): string {
-  const scoreLevel = surface.level;
-  if (scoreLevel && typeof scoreLevel === "object") {
-    return [scoreLevel.code, scoreLevel.label].filter(Boolean).join(" ");
-  }
-  const levelId = typeof scoreLevel === "string" ? scoreLevel : "";
-  const level = taxonomyLevels.get(levelId);
-  return [level?.code, level?.label ?? levelId].filter(Boolean).join(" ");
+  const level = taxonomyLevels.get(surface.level);
+  return [level?.code, level?.label ?? surface.level].filter(Boolean).join(" ");
 }
 
 function maturityLevelRank(
@@ -677,12 +741,6 @@ function surfaceScoreMap(scores: QaMaturityScores): Map<string, QaMaturityScoreS
   return new Map(scores.surfaces.map((surface) => [surface.id, surface]));
 }
 
-function categoryScoreMap(
-  scoreSurface?: QaMaturityScoreSurface,
-): Map<string, QaMaturityScoreSurface["categories"][number]> {
-  return new Map((scoreSurface?.categories ?? []).map((category) => [category.name, category]));
-}
-
 function collectQaEvidenceFiles(root?: string): string[] {
   if (!root || !fs.existsSync(root)) {
     return [];
@@ -716,15 +774,8 @@ function blockingResultLabels(entries: QaEvidenceSummaryJson["entries"]): string
     .map((entry) => `${entry.test.id} (${entry.result.status})`);
 }
 
-function numberText(value: unknown): string {
-  return Number.isFinite(value) ? String(value) : "";
-}
-
 function countText(counts?: QaEvidenceScorecardJson["categories"]): string {
-  if (!counts || typeof counts !== "object") {
-    return "";
-  }
-  return `${counts.fulfilled ?? 0} of ${counts.total ?? 0} (${numberText(counts.fulfillmentPercent)}%)`;
+  return counts ? `${counts.fulfilled} of ${counts.total} (${counts.fulfillmentPercent}%)` : "";
 }
 
 function averageScores(
@@ -762,6 +813,10 @@ function resultCountsText(statuses: StatusCounts): string {
   return parts.join(", ");
 }
 
+function unresolvedInstancesText(count: number): string {
+  return `${count} unresolved scheduled ${count === 1 ? "instance" : "instances"}`;
+}
+
 function readinessStatusText(status: string): string {
   if (status === "fulfilled") {
     return "Ready";
@@ -789,14 +844,22 @@ function readEvidenceSummaries(
   const identity = qaMaturityTaxonomyIdentity(taxonomy);
   return collectQaEvidenceFiles(evidenceDir).map((filePath) => {
     const payload = validateQaEvidenceSummaryJson(JSON.parse(fs.readFileSync(filePath, "utf8")));
+    const entries = getEffectiveQaEvidenceEntries(payload);
+    // Rows retain diagnostics; the canonical root projection also exposes scheduled gaps.
+    const unresolved = projectQaEvidenceScenarioOutcomes(payload).filter(
+      (item) => item.status === null,
+    );
     return {
       sourcePath: filePath,
       path: path.relative(process.cwd(), filePath),
       generatedAt: payload.generatedAt,
       profile: payload.profile ?? "",
-      entryCount: payload.entries.length,
-      statuses: countStatuses(payload.entries),
-      blockingResults: blockingResultLabels(payload.entries),
+      entryCount: entries.length,
+      unresolvedCount: unresolved.length,
+      statuses: countStatuses(entries),
+      blockingResults: blockingResultLabels(entries).concat(
+        unresolved.map((item) => `${item.scenarioId} (unresolved)`),
+      ),
       scorecard: payload.scorecard,
       taxonomyStatus: !payload.profilePlan?.taxonomyIdentity
         ? "unknown"
@@ -815,11 +878,12 @@ function rejectBlockingEvidence(evidenceSummaries: EvidenceSummary[]): void {
   }
   throw new Error(
     [
-      "maturity docs require passing QA evidence; failing or blocked QA entries cannot be rendered into the scorecard.",
+      "maturity docs require passing QA evidence; failing or blocked QA entries and unresolved scheduled instances cannot be rendered into the scorecard.",
       ...blocked.map((item) => {
         const counts = [
           item.statuses.fail > 0 ? `${item.statuses.fail} failed` : undefined,
           item.statuses.blocked > 0 ? `${item.statuses.blocked} blocked` : undefined,
+          item.unresolvedCount > 0 ? unresolvedInstancesText(item.unresolvedCount) : undefined,
         ]
           .filter(Boolean)
           .join(", ");
@@ -986,10 +1050,6 @@ function copyStaticSourceAssets({
   return copied.map(([, target]) => target);
 }
 
-function surfaceNameMap(surfaces: QaMaturityTaxonomySurface[]): Map<string, string> {
-  return new Map(surfaces.map((surface) => [surface.id, surface.name]));
-}
-
 function renderEvidenceSection(
   evidenceSummaries: EvidenceSummary[],
   surfaceNames: Map<string, string>,
@@ -1014,6 +1074,9 @@ function renderEvidenceSection(
       `    <span>${markdownEscape(item.generatedAt)}</span>`,
       `    <span>${item.taxonomyStatus === "current" ? "Current taxonomy evidence" : `Historical evidence: taxonomy identity ${item.taxonomyStatus}`}</span>`,
       `    <span>${item.entryCount} checks - ${markdownEscape(resultCountsText(item.statuses))}</span>`,
+      ...(item.unresolvedCount > 0
+        ? [`    <span>${unresolvedInstancesText(item.unresolvedCount)}</span>`]
+        : []),
       `    <span>${markdownEscape(countText(scorecard?.categories))} areas - ${markdownEscape(countText(scorecard?.features))} features - ${markdownEscape(countText(scorecard?.coverageIds))} coverage IDs</span>`,
       "  </div>",
     );
@@ -1100,7 +1163,7 @@ function renderMaturityScorecard({
   taxonomy,
   scores,
   evidenceSummaries,
-}: RenderMaturityScorecardInputs): string {
+}: RenderInputs & { evidenceSummaries: EvidenceSummary[] }): string {
   const levels = qaMaturityTaxonomyLevelMap(taxonomy);
   const scoreSurfaces = surfaceScoreMap(scores);
   const surfaces = sortedMaturitySurfaces(
@@ -1108,7 +1171,7 @@ function renderMaturityScorecard({
     scoreSurfaces,
     levels,
   );
-  const surfaceNames = surfaceNameMap(surfaces);
+  const surfaceNames = new Map(surfaces.map((surface) => [surface.id, surface.name]));
   const updatedDate = latestScoreRunDate(scores);
   const surfaceAverage = coverage.rollups.surface_average;
   const qualityAverage = scores.rollups.surface_average.quality;
@@ -1157,8 +1220,18 @@ function renderMaturityScorecard({
     "",
     ...renderSurfaceTabs({ coverage, levels, scoreSurfaces, surfaces }),
     "",
-    ...renderEvidenceSection(evidenceSummaries, surfaceNames),
+    "## Decision context",
+    "",
   );
+  for (const surface of surfaces) {
+    lines.push(
+      `### ${markdownEscape(surface.name)}`,
+      "",
+      ...renderDecisionContext(surfaceDecisionContext(surface, scoreSurfaces.get(surface.id))),
+      "",
+    );
+  }
+  lines.push(...renderEvidenceSection(evidenceSummaries, surfaceNames));
   if (updatedDate) {
     lines.push(`> Last updated: ${updatedDate}`, "");
   }
@@ -1220,7 +1293,7 @@ function renderTaxonomy({
           [
             `<a className="maturity-surface-link" href="#${markdownSlug(surface.name)}">`,
             `  <span className="maturity-surface-title">${markdownEscape(surface.name)}</span>`,
-            `  <span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas - ${scorePercent(scoreSurface?.scores?.completeness) ?? "-"}% complete</span></span>`,
+            `  <span className="maturity-surface-meta">${maturityLevelPillFromText(levelText(surface, levels))}<span>${surface.categories.length} areas - ${scoreSurface?.scores.completeness.score ?? "-"}% complete</span></span>`,
             "</a>",
           ],
           4,
@@ -1237,7 +1310,9 @@ function renderTaxonomy({
     for (const surface of surfaces.filter((candidate) => candidate.family === family)) {
       const surfaceName = surface.name;
       const scoreSurface = scoreSurfaces.get(surface.id);
-      const categoryScores = categoryScoreMap(scoreSurface);
+      const categoryScores = new Map(
+        (scoreSurface?.categories ?? []).map((category) => [category.name, category]),
+      );
       const categoryLines = [
         '<div className="maturity-category-list">',
         '  <div className="maturity-category-row maturity-category-row-header"><span>Area</span><span>Coverage</span><span>Quality</span><span>Completeness</span><span>Docs</span></div>',
@@ -1276,9 +1351,34 @@ function renderTaxonomy({
         "",
         `    ${markdownEscape(surface.rationale ?? "")}`,
         "",
+        ...indentMarkdown(renderCatalogMembers(surface.id), 4),
         ...indentMarkdown(
           [
             `<div className="maturity-surface-rollup"><span>Coverage ${scoreLabel(coverage.surfaces.get(surface.id))}</span><span>Quality ${scoreLabel(scoreSurface?.scores?.quality)}</span><span>Completeness ${scoreLabel(scoreSurface?.scores?.completeness)}</span><span>${maturityLtsBadge(scoreSurface?.lts)}</span></div>`,
+            "",
+            ...renderDecisionContext([
+              ...surfaceDecisionContext(surface, scoreSurface),
+              ...surface.categories.flatMap((category): DecisionContext[] => {
+                const score = categoryScores.get(category.name);
+                return [
+                  {
+                    label: `${category.name} / Quality`,
+                    current: score?.quality.score,
+                    decision: score?.quality.decision,
+                  },
+                  {
+                    label: `${category.name} / Completeness`,
+                    current: score?.completeness.score,
+                    decision: score?.completeness.decision,
+                  },
+                  {
+                    label: `${category.name} / LTS`,
+                    current: score?.lts.supported,
+                    decision: score?.lts.decision,
+                  },
+                ];
+              }),
+            ]),
             "",
             ...categoryLines,
             "",
@@ -1310,41 +1410,7 @@ function writeOrCheck(outputPath: string, content: string, check: boolean): bool
   return false;
 }
 
-function checkEvidenceIndependentInputs({
-  args,
-  docsRouteIndex,
-  scoresPath,
-  taxonomy,
-  taxonomyPath,
-}: {
-  args: Args;
-  docsRouteIndex: DocsRouteIndex;
-  scoresPath: string;
-  taxonomy: QaMaturityTaxonomy;
-  taxonomyPath: string;
-}): void {
-  validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
-  const { warnings } = readValidatedQaMaturityScoreSources({
-    scoresPath,
-    taxonomy,
-    taxonomyPath,
-  });
-  writeInputWarnings(warnings);
-  if (args.strictInputs) {
-    enforceStrictInputs(warnings);
-  }
-
-  const missing = MATURITY_DOC_OUTPUTS.map((fileName) =>
-    path.join(args.outputDir, fileName),
-  ).filter((outputPath) => !fs.existsSync(outputPath));
-  if (missing.length > 0) {
-    throw new Error(
-      `maturity docs check cannot skip evidence-backed freshness because generated docs are missing:\n${missing.map((file) => `- ${file}`).join("\n")}`,
-    );
-  }
-}
-
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const taxonomyPath = path.normalize(args.taxonomy);
   const scoresPath = path.normalize(args.scores);
@@ -1352,21 +1418,30 @@ function main(): void {
   const outputDir = path.normalize(args.outputDir);
   const taxonomy = readQaMaturityTaxonomySource(taxonomyPath);
   const docsRouteIndex = collectDocsRouteIndex(docsRoot);
+  validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
   if (args.check && !args.evidenceDir?.trim()) {
-    checkEvidenceIndependentInputs({
-      args: { ...args, outputDir },
-      docsRouteIndex,
+    const { warnings } = readValidatedQaMaturityScoreSources({
       scoresPath,
       taxonomy,
       taxonomyPath,
     });
+    writeInputWarnings(warnings);
+    if (args.strictInputs) {
+      enforceStrictInputs(warnings);
+    }
+    const missing = MATURITY_DOC_OUTPUTS.map((fileName) => path.join(outputDir, fileName)).filter(
+      (outputPath) => !fs.existsSync(outputPath),
+    );
+    if (missing.length > 0) {
+      throw new Error(
+        `maturity docs check cannot skip evidence-backed freshness because generated docs are missing:\n${missing.map((file) => `- ${file}`).join("\n")}`,
+      );
+    }
     process.stdout.write(
       `maturity docs inputs are valid in ${outputDir}; evidence-backed freshness check skipped because --evidence-dir was not supplied\n`,
     );
     return;
   }
-
-  validateTaxonomyDocsReferences(taxonomy, docsRouteIndex);
 
   const evidenceSummaries = readEvidenceSummaries(taxonomy, args.evidenceDir);
   if (!args.allowFailures) {
@@ -1417,7 +1492,11 @@ function main(): void {
   const changed: string[] = [];
   for (const [fileName, content] of outputs) {
     const outputPath = path.join(outputDir, fileName);
-    if (writeOrCheck(outputPath, content, args.check)) {
+    const formatted = await format(outputPath, content, { proseWrap: "preserve" });
+    if (formatted.errors.length > 0) {
+      throw new Error(`Maturity Markdown formatting failed: ${JSON.stringify(formatted.errors)}`);
+    }
+    if (writeOrCheck(outputPath, formatted.code, args.check)) {
       changed.push(outputPath);
     }
   }
@@ -1438,7 +1517,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);

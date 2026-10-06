@@ -71,20 +71,18 @@ export function normalizeActBoundedNonNegativeMs(
 
 /** Clamp interaction actions to the supported browser-control timeout window. */
 export function resolveActInteractionTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_INTERACTION_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_INTERACTION_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_INTERACTION_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_INTERACTION_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 /** Clamp wait actions to their wider supported browser-control timeout window. */
 export function resolveActWaitTimeoutMs(timeoutMs?: number): number {
-  const normalized =
-    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? Math.floor(timeoutMs)
-      : ACT_DEFAULT_WAIT_TIMEOUT_MS;
-  return Math.max(ACT_MIN_TIMEOUT_MS, Math.min(ACT_MAX_WAIT_TIMEOUT_MS, normalized));
+  return Math.min(
+    ACT_MAX_WAIT_TIMEOUT_MS,
+    resolveTimerTimeoutMs(timeoutMs, ACT_DEFAULT_WAIT_TIMEOUT_MS, ACT_MIN_TIMEOUT_MS),
+  );
 }
 
 function parseTimerInteger(value: unknown): number | undefined {
@@ -119,10 +117,6 @@ function addNavigationGraceMs(durationMs: number, count = 1): number {
   );
 }
 
-function isActionObject(value: unknown): value is BrowserActRequest {
-  return isRecord(value);
-}
-
 function resolveLeafExecutionBudgetMs(
   request: Exclude<BrowserActRequest, { kind: "batch" | "wait" }>,
 ): number {
@@ -152,6 +146,8 @@ function resolveLeafExecutionBudgetMs(
     }
     case "press":
       return addNavigationGraceMs(resolveNonNegativeTimerMs(request.delayMs));
+    case "insertText":
+      return addNavigationGraceMs(0);
     case "fill": {
       const fields = Array.isArray(request.fields) ? request.fields : [];
       const fieldCount = fields.filter(
@@ -167,7 +163,6 @@ function resolveLeafExecutionBudgetMs(
       );
     }
     case "evaluate":
-      return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "scrollIntoView":
       return addNavigationGraceMs(resolveActWaitTimeoutMs(parseTimerInteger(request.timeoutMs)));
     case "hover":
@@ -185,7 +180,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
   if (request.kind === "batch") {
     // Model-facing schemas keep child actions permissive for provider compatibility.
     // Budget valid entries only; the browser route remains the validation owner.
-    const actions = Array.isArray(request.actions) ? request.actions.filter(isActionObject) : [];
+    const actions = Array.isArray(request.actions) ? request.actions.filter(isRecord) : [];
     return actions.reduce(
       (totalMs, action) => addExecutionBudgetMs(totalMs, resolveExecutionBudgetMs(action)),
       0,
@@ -221,7 +216,6 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
     requestedTimeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   );
   let actionTimeoutMs = timeoutMs;
-  let timerOnlyWait = false;
   if (request.kind === "wait") {
     const timeMs = resolveNonNegativeTimerMs(request.timeMs);
     const hasCondition = [
@@ -232,7 +226,6 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
       request.loadState,
       request.fn,
     ].some((value) => typeof value === "string" && Boolean(value.trim()));
-    timerOnlyWait = !hasCondition;
     actionTimeoutMs = hasCondition
       ? addExecutionBudgetMs(timeMs, Math.max(250, timeoutMs))
       : Math.max(timeMs, timeoutMs);
@@ -243,8 +236,8 @@ export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
       : addExecutionBudgetMs(timeoutMs, EXISTING_SESSION_NAVIGATION_GRACE_MS);
   return {
     timeoutMs,
-    // A pure wait's own cancellable timer must win at the requested delay boundary.
-    bodyTimeoutMs: timerOnlyWait ? undefined : actionTimeoutMs,
+    // Waits own their delay and condition deadlines; only the request bounds preparation.
+    bodyTimeoutMs: request.kind === "wait" ? undefined : actionTimeoutMs,
     verificationTimeoutMs,
     requestTimeoutMs: addExecutionBudgetMs(actionTimeoutMs, verificationTimeoutMs),
   };

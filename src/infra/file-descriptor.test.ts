@@ -44,7 +44,6 @@ describe("pinned file descriptors", () => {
       const observed = createHash("sha256");
       expect(
         await copyFileHandle(source, target, {
-          noProgressMessage: "copy stalled",
           onChunk: (chunk) => {
             observed.update(chunk);
           },

@@ -1,3 +1,13 @@
+/** A completed inspection proved schema drift; native read failures retain their own type. */
+export class SqliteSchemaMismatchError extends Error {
+  override name = "SqliteSchemaMismatchError";
+}
+
+export function isSqliteSchemaMismatchError(error: unknown): boolean {
+  // Native worker envelopes preserve error names without changing their wire contract.
+  return error instanceof Error && error.name === "SqliteSchemaMismatchError";
+}
+
 export type SqliteSchemaIssueCode =
   | "column-definition-drift"
   | "missing-column"
@@ -123,7 +133,7 @@ export function throwSqliteSchemaMismatches(
   }
   // Drift is repairable by the doctor migration owner, so the throw must name it:
   // callers surface this straight to operators, and the gateway refuses to start.
-  throw new Error(
+  throw new SqliteSchemaMismatchError(
     `SQLite schema is incomplete or noncanonical for ${databaseLabel}: ${shown.join("; ")}; run openclaw doctor --fix to repair it.`,
   );
 }

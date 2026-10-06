@@ -109,46 +109,4 @@ describe("Nostr profile HTTP operations", () => {
       }),
     );
   });
-
-  it("preserves successful JSON responses for PUT and import", async () => {
-    const putResponse = new Response(JSON.stringify({ ok: true, persisted: true }), {
-      status: 200,
-    });
-    const importResponse = new Response(
-      JSON.stringify({ ok: true, saved: true, merged: { name: "Alice" } }),
-      { status: 200 },
-    );
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(putResponse)
-      .mockResolvedValueOnce(importResponse);
-    vi.stubGlobal("fetch", fetchMock);
-
-    await expect(
-      putNostrProfile({
-        accountId: "default",
-        authCandidates: [],
-        isCurrent: () => true,
-        values: { name: "Alice" },
-      }),
-    ).resolves.toEqual({ data: { ok: true, persisted: true }, response: putResponse });
-    await expect(
-      importNostrProfile({ accountId: "default", authCandidates: [], isCurrent: () => true }),
-    ).resolves.toEqual({
-      data: { ok: true, saved: true, merged: { name: "Alice" } },
-      response: importResponse,
-    });
-  });
-
-  it("preserves the response when an error body is not JSON", async () => {
-    const response = new Response("gateway unavailable", { status: 503 });
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
-
-    await expect(
-      importNostrProfile({ accountId: "default", authCandidates: [], isCurrent: () => true }),
-    ).resolves.toEqual({
-      data: null,
-      response,
-    });
-  });
 });

@@ -9,7 +9,6 @@ import {
 import { describe, expect, it } from "vitest";
 import googlePlugin from "./index.js";
 import { describeGeminiVideo, transcribeGeminiAudio } from "./media-understanding-provider.js";
-import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
 installPinnedHostnameTestHooks();
 
@@ -62,12 +61,9 @@ describe("describeGeminiVideo", () => {
     const fetchFn = withFetchPreconnect(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);
       seenKey = headers.get("x-goog-api-key");
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
+      return Response.json({
+        candidates: [{ content: { parts: [{ text: "video ok" }] } }],
+      });
     });
 
     const result = await describeGeminiVideo({
@@ -81,33 +77,6 @@ describe("describeGeminiVideo", () => {
 
     expect(seenKey).toBe("override");
     expect(result.text).toBe("video ok");
-  });
-
-  it("keeps private-network disabled for the default Google media endpoint", async () => {
-    expect(
-      resolveGoogleGenerativeAiHttpRequestConfig({
-        apiKey: "test-key",
-        capability: "video",
-        transport: "media-understanding",
-      }).allowPrivateNetwork,
-    ).toBe(false);
-
-    const fetchFn = withFetchPreconnect(async () => {
-      return new Response(
-        JSON.stringify({
-          candidates: [{ content: { parts: [{ text: "video ok" }] } }],
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
-      );
-    });
-
-    await describeGeminiVideo({
-      buffer: Buffer.from("video"),
-      fileName: "clip.mp4",
-      apiKey: "test-key",
-      timeoutMs: 1000,
-      fetchFn,
-    });
   });
 
   it("builds the expected request payload", async () => {

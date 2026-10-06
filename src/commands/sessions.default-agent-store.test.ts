@@ -1,6 +1,7 @@
 // Sessions default-agent store tests cover default session-store selection and runtime config loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../agents/agent-scope-config.js";
+import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const loadConfigMock = vi.hoisted(() => vi.fn());
@@ -46,14 +47,13 @@ function toSessionEntrySummaries(store: Record<string, Record<string, unknown>>)
 function createSessionsConfig(store = "/tmp/sessions-{agentId}.json") {
   return {
     agents: {
+      ownership: "explicit" as const,
       defaults: {
+        systemAgent: { agentId: "voice" },
         model: { primary: "test:opus" },
         models: { "test:opus": {} },
       },
-      list: [
-        { id: "main", default: false },
-        { id: "voice", default: true },
-      ],
+      entries: { main: {}, voice: {} },
     },
     session: { store },
   };
@@ -81,33 +81,6 @@ describe("sessionsCommand default store agent selection", () => {
       },
     );
     listSessionEntriesMock.mockImplementation(() => []);
-  });
-
-  it("includes agentId on sessions rows for --all-agents JSON output", async () => {
-    resolveStorePathMock.mockClear();
-    listSessionEntriesMock.mockReset();
-    listSessionEntriesMock
-      .mockReturnValueOnce(
-        toSessionEntrySummaries({
-          main_row: { sessionId: "s1", updatedAt: Date.now() - 60_000, model: "test:opus" },
-        }),
-      )
-      .mockReturnValueOnce(
-        toSessionEntrySummaries({
-          voice_row: { sessionId: "s2", updatedAt: Date.now() - 120_000, model: "test:opus" },
-        }),
-      );
-    const { runtime, logs } = createRuntime();
-
-    await sessionsCommand({ allAgents: true, json: true }, runtime);
-
-    const payload = JSON.parse(logs[0] ?? "{}") as {
-      allAgents?: boolean;
-      sessions?: Array<{ key: string; agentId?: string }>;
-    };
-    expect(payload.allAgents).toBe(true);
-    expect(payload.sessions?.map((session) => session.agentId)).toContain("main");
-    expect(payload.sessions?.map((session) => session.agentId)).toContain("voice");
   });
 
   it("lists each SQLite owner when --all-agents resolves to a shared store path", async () => {
@@ -187,40 +160,33 @@ describe("sessionsCommand default store agent selection", () => {
     });
   });
 
-  it("uses configured default agent id when resolving implicit session store path", async () => {
-    listSessionEntriesMock.mockReset();
-    listSessionEntriesMock.mockReturnValue([]);
-    const { runtime, logs } = createRuntime();
+  it.each([undefined])(
+    "requires session-list selection without a designation despite provenance %s",
+    async (retainedAgentId) => {
+      loadConfigMock.mockReturnValue(
+        retainLegacyDefaultAgentId(
+          {
+            agents: {
+              ownership: "explicit",
+              entries: { main: {}, helper: {}, third: {} },
+            },
+          },
+          retainedAgentId,
+        ),
+      );
+      const { runtime } = createRuntime();
 
-    await sessionsCommand({}, runtime);
-
-    expect(listSessionEntriesMock).toHaveBeenCalledWith({
-      agentId: "voice",
-      storePath: "/tmp/sessions-voice.json",
-      projection: "list",
-    });
-    expect(logs[0]).toContain("Session store: /tmp/sessions-voice.voice.sqlite");
-  });
-
-  it("names both supported escapes when an explicit roster has no session-list owner", async () => {
-    loadConfigMock.mockReturnValue({
-      agents: {
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, helper: {}, third: {} },
-      },
-    });
-    const { runtime } = createRuntime();
-
-    const result = sessionsCommand({}, runtime);
-    await expect(result).rejects.toBeInstanceOf(AgentSelectionRequiredError);
-    await expect(result).rejects.toMatchObject({
-      message:
-        "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
-    });
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+      const result = sessionsCommand({}, runtime);
+      await expect(result).rejects.toBeInstanceOf(AgentSelectionRequiredError);
+      await expect(result).rejects.toMatchObject({
+        message:
+          "Multiple agents are configured, but session-store selection has no explicit owner. Pass --agent <id> to select one agent, or --all-agents to include every configured agent.",
+      });
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(listSessionEntriesMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("uses all configured agent stores with --all-agents", async () => {
     listSessionEntriesMock.mockReset();

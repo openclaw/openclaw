@@ -1,16 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   loadSessionEntry,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { collectSessionMaintenancePreserveKeys } from "../config/sessions/store-maintenance-preserve.js";
+import { observeSessionMaintenanceChanges } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import * as reclamationRun from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
+import { prepareSessionMaintenancePreservation } from "../config/sessions/store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "../config/sessions/store-maintenance.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as workspaceRetention from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import {
+  createWorkerSessionPlacementStore,
+  type WorkerSessionPlacementStore,
+} from "./worker-environments/placement-store.js";
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
@@ -37,6 +47,7 @@ vi.mock("./worker-environments/placement-disk-space.js", async (importOriginal) 
   createWorkerPlacementDiskSpaceMonitor: runtimeFactoryMocks.createDiskSpace,
 }));
 
+import { getRuntimeConfig } from "../config/config.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type PlacementFixture = {
@@ -47,7 +58,7 @@ type PlacementFixture = {
   generation: number;
   environmentId: string | null;
   activeOwnerEpoch: number | null;
-  turnClaim: null;
+  turnClaim: WorkerSessionPlacementRecord["turnClaim"];
 };
 
 function createPlacementFixture(
@@ -69,7 +80,8 @@ function createPlacementFixture(
 
 function createMaintenanceRuntime(params: {
   placements: PlacementFixture[];
-  onRecovery?: () => void;
+  preservationStore?: WorkerSessionPlacementStore;
+  onRecovery?: () => void | Promise<void>;
   recoveryError?: Error;
   stopError?: Error;
 }) {
@@ -103,26 +115,50 @@ function createMaintenanceRuntime(params: {
     stop,
   };
   const runtime = createGatewayWorkerPlacementRuntime({
+    scheduler: createTestGatewayScheduler(),
+    getCommittedRuntimeConfig: getRuntimeConfig,
     cancelSessionWork: vi.fn(async () => {}),
     placements: {
       workspaceResultInstanceId: () => "gateway-test",
       get: (sessionId: string) =>
         params.placements.find((placement) => placement.sessionId === sessionId),
       list: () => params.placements,
-      listForReconcile: () =>
-        params.placements.filter(
-          (placement) => placement.state !== "local" && placement.state !== "reclaimed",
-        ),
+      listForReconcile: (sessionKey?: string) =>
+        params.preservationStore
+          ? params.preservationStore.listForReconcile(sessionKey)
+          : params.placements.filter(
+              (placement) =>
+                placement.state !== "local" &&
+                placement.state !== "reclaimed" &&
+                (sessionKey === undefined || placement.sessionKey === sessionKey),
+            ),
+      prepareMaintenancePlacements: async () =>
+        params.preservationStore
+          ? await params.preservationStore.prepareMaintenancePlacements()
+          : {
+              placements: params.placements.filter(
+                (placement) => placement.state !== "local" && placement.state !== "reclaimed",
+              ),
+              assertCurrent: () => {},
+              release: () => {},
+            },
       retireSessionPlacement: vi.fn(),
-      pruneOrphanedWorkspaceReconciliations: () => {
-        params.onRecovery?.();
+      pruneOrphanedWorkspaceReconciliations: async () => {
+        await params.onRecovery?.();
         if (params.recoveryError) {
           throw params.recoveryError;
         }
         return [];
       },
-      listWorkspaceReconciliationOwners: () => [],
-      listPendingWorkspaceResults: () => [],
+      listWorkspaceReconciliationOwners: async () => [],
+      listPendingWorkspaceResultsAsync: async () => [],
+      prepareRuntimeRefresh: async (sessionId: string) => ({
+        placement: params.placements.find((placement) => placement.sessionId === sessionId),
+        move: undefined,
+        pendingResult: undefined,
+        assertCurrent: () => {},
+        release: () => {},
+      }),
     } as never,
     environments: environments as never,
     gatewayNamespace: "gateway-test",
@@ -146,7 +182,47 @@ async function startMaintenanceRuntime(
   return sidecar;
 }
 
+async function preservedSessionKeys() {
+  const prepared = await prepareSessionMaintenancePreservation("unused-store");
+  try {
+    return new Set(prepared.capture().providerKeys);
+  } finally {
+    prepared.dispose();
+  }
+}
+
 describe("worker placement session maintenance ownership", () => {
+  it("prepares and recaptures placement preservation without caller-thread SQL", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const store = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
+      const placement = await store.startDispatch({
+        sessionId: "preserved-placement",
+        sessionKey: "agent:main:preserved-placement",
+        agentId: "main",
+      });
+      const { runtime } = createMaintenanceRuntime({
+        placements: [placement],
+        preservationStore: store,
+      });
+      const sidecar = await startMaintenanceRuntime(runtime);
+      const sql = observeHostDataSql();
+      let prepared: Awaited<ReturnType<typeof prepareSessionMaintenancePreservation>> | undefined;
+      try {
+        prepared = await prepareSessionMaintenancePreservation(
+          resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+        );
+        for (let grant = 0; grant < 4; grant += 1) {
+          expect(prepared.capture().providerKeys).toEqual([placement.sessionKey]);
+        }
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+        prepared?.dispose();
+        await sidecar.stop();
+      }
+    });
+  });
+
   it("retains a configured-store repository base after its placement manifest advances", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const storePath = state.path("custom-sessions", "openclaw-agent.sqlite");
@@ -156,13 +232,13 @@ describe("worker placement session maintenance ownership", () => {
         workspaceBaseManifestRef: `sha256:${"a".repeat(64)}`,
       };
       const repositories = getSessionRepositoryWorkspaceStore();
-      const repository = repositories.create({
+      const repository = await repositories.create({
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
         url: "https://github.com/openclaw/fixture.git",
         assertCurrent: () => {},
       });
-      repositories.bindBase({
+      await repositories.bindBase({
         workspaceId: repository.workspaceId,
         expectedRevision: repository.revision,
         baseCommit: "c".repeat(40),
@@ -180,18 +256,24 @@ describe("worker placement session maintenance ownership", () => {
       });
       expect(loadSessionEntryReadOnly(placement)).toBeUndefined();
       const createRetention = vi.spyOn(workspaceRetention, "createNodeWorkspaceRetainCoordinator");
+      let prepared:
+        | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
+        | undefined;
       try {
         createMaintenanceRuntime({ placements: [placement] });
         const options = createRetention.mock.calls.at(-1)?.[0];
         const additionalManifestRefs = options?.additionalManifestRefs;
-        const currentPlacement = options?.placements.list()[0];
+        prepared = await options?.placements.prepareRuntimeRefresh(placement.sessionId);
+        const currentPlacement = prepared?.placement;
         if (!additionalManifestRefs || !currentPlacement) {
           throw new Error("startup did not bind repository manifest retention");
         }
         const originalManifest = placement.workspaceBaseManifestRef;
         placement.workspaceBaseManifestRef = `sha256:${"b".repeat(64)}`;
-        expect(additionalManifestRefs(currentPlacement)).toEqual([originalManifest]);
+        const currentManifestRefs = await additionalManifestRefs(currentPlacement);
+        expect(currentManifestRefs()).toEqual([originalManifest]);
       } finally {
+        prepared?.release();
         createRetention.mockRestore();
       }
     });
@@ -202,7 +284,7 @@ describe("worker placement session maintenance ownership", () => {
     { maintenance: "stale pruning", sessionKey: "agent:main:explicit:cloud-owned-prune" },
     { maintenance: "entry capping", sessionKey: "agent:main:explicit:cloud-owned-cap" },
   ] as const)(
-    "preserves active placements during write-triggered $maintenance and releases them on stop",
+    "preserves active placements during $maintenance and releases them for maintenance after stop",
     async ({ maintenance, sessionKey }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const now = Date.now();
@@ -253,11 +335,25 @@ describe("worker placement session maintenance ownership", () => {
           await patchSessionEntryCore(
             sessionScope("agent:main:explicit:maintenance-trigger"),
             () => triggerEntry,
-            { fallbackEntry: triggerEntry, maintenanceConfig },
+            { fallbackEntry: triggerEntry, replaceEntry: true, maintenanceConfig },
           );
+        const agePublished = createDeferredCore();
+        const reclaim = reclamationRun.runSqliteSessionReclamation;
+        const ageObserver = vi
+          .spyOn(reclamationRun, "runSqliteSessionReclamation")
+          .mockImplementation(async (params) => {
+            const result = await reclaim(params);
+            if (params.plan.kind === "maintenance-age" && params.plan.expected === undefined) {
+              agePublished.resolve();
+            }
+            return result;
+          });
 
         try {
+          const sentinelArchived = observeSessionMaintenanceChanges(storePath, sentinelKey);
           await triggerMaintenance();
+          await sentinelArchived;
+          await agePublished.promise;
           await vi.waitFor(() => {
             expect(loadSessionEntry(sessionScope(sentinelKey))).toMatchObject({
               sessionId: sentinelEntry.sessionId,
@@ -269,11 +365,15 @@ describe("worker placement session maintenance ownership", () => {
           });
           expect(loadSessionEntry(sessionScope(sessionKey))?.archivedAt).toBeUndefined();
           expect(forceDestroyEnvironment).not.toHaveBeenCalled();
-          expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).toBe(true);
+          expect((await preservedSessionKeys()).has(sessionKey)).toBe(true);
 
           await sidecar.stop();
-          expect(collectSessionMaintenancePreserveKeys()?.has(sessionKey)).not.toBe(true);
+          expect((await preservedSessionKeys()).has(sessionKey)).not.toBe(true);
+          // A managed backdate invalidates the age fact held by the native worker.
+          triggerEntry.updatedAt -= 1;
+          const placementArchived = observeSessionMaintenanceChanges(storePath, sessionKey);
           await triggerMaintenance();
+          await placementArchived;
           await vi.waitFor(() => {
             expect(loadSessionEntry(sessionScope(sessionKey))).toMatchObject({
               sessionId: placement.sessionId,
@@ -281,6 +381,7 @@ describe("worker placement session maintenance ownership", () => {
             });
           });
         } finally {
+          ageObserver.mockRestore();
           await sidecar.stop();
         }
       });
@@ -312,9 +413,9 @@ describe("worker placement session maintenance ownership", () => {
     }
     goneEnvironmentIds.add(failedGone.environmentId);
     const sidecar = await startMaintenanceRuntime(runtime);
-
+    const prepared = await prepareSessionMaintenancePreservation("unused-store");
     try {
-      const preserveKeys = collectSessionMaintenancePreserveKeys();
+      const preserveKeys = new Set(prepared.capture().providerKeys);
       for (const placement of [...protectedPlacements, failedLive]) {
         expect(preserveKeys?.has(placement.sessionKey)).toBe(true);
       }
@@ -323,13 +424,13 @@ describe("worker placement session maintenance ownership", () => {
       }
 
       goneEnvironmentIds.add(failedLive.environmentId);
-      expect(collectSessionMaintenancePreserveKeys()?.has(failedLive.sessionKey)).not.toBe(true);
+      expect(prepared.capture().providerKeys).not.toContain(failedLive.sessionKey);
     } finally {
       await sidecar.stop();
+      expect(() => prepared.capture()).toThrow("providers changed");
+      prepared.dispose();
     }
-    expect(collectSessionMaintenancePreserveKeys()?.has("agent:main:placement-requested")).not.toBe(
-      true,
-    );
+    expect((await preservedSessionKeys()).has("agent:main:placement-requested")).not.toBe(true);
   });
 
   it("unregisters preservation synchronously when environment stop fails and is retried", async () => {
@@ -341,13 +442,18 @@ describe("worker placement session maintenance ownership", () => {
     });
     const sidecar = await startMaintenanceRuntime(runtime);
 
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).toBe(true);
-    const firstStop = sidecar.stop();
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).not.toBe(true);
-    expect(sidecar.stop()).toBe(firstStop);
-    await expect(firstStop).rejects.toBe(stopError);
-    await expect(sidecar.stop()).resolves.toBeUndefined();
-    expect(environments.stop).toHaveBeenCalledTimes(2);
+    const prepared = await prepareSessionMaintenancePreservation("unused-store");
+    try {
+      expect(prepared.capture().providerKeys).toContain(placement.sessionKey);
+      const firstStop = sidecar.stop();
+      expect(() => prepared.capture()).toThrow("providers changed");
+      expect(sidecar.stop()).toBe(firstStop);
+      await expect(firstStop).rejects.toBe(stopError);
+      await expect(sidecar.stop()).resolves.toBeUndefined();
+      expect(environments.stop).toHaveBeenCalledTimes(2);
+    } finally {
+      prepared.dispose();
+    }
   });
 
   it("unregisters preservation and its sidecar when initial workspace recovery fails", async () => {
@@ -357,9 +463,8 @@ describe("worker placement session maintenance ownership", () => {
     const { environments, runtime } = createMaintenanceRuntime({
       placements: [placement],
       recoveryError,
-      onRecovery: () => {
-        protectedDuringRecovery =
-          collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey) === true;
+      onRecovery: async () => {
+        protectedDuringRecovery = (await preservedSessionKeys()).has(placement.sessionKey);
       },
     });
     const registerSidecar = vi.fn();
@@ -377,6 +482,6 @@ describe("worker placement session maintenance ownership", () => {
     expect(registerSidecar).toHaveBeenCalledOnce();
     expect(unregisterSidecar).toHaveBeenCalledWith(registerSidecar.mock.calls[0]?.[0]);
     expect(environments.stop).toHaveBeenCalledOnce();
-    expect(collectSessionMaintenancePreserveKeys()?.has(placement.sessionKey)).not.toBe(true);
+    expect((await preservedSessionKeys()).has(placement.sessionKey)).not.toBe(true);
   });
 });

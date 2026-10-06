@@ -3,11 +3,9 @@ import type { CallManagerContext } from "./context.js";
 import { copyCallRecord } from "./state.js";
 import { persistCallRecord } from "./store.js";
 
-type CallMutationContext = Pick<CallManagerContext, "activeCalls" | "storePath" | "mutationQueue">;
-
 /** Commit one live call update while preserving the call identity held by its callbacks. */
 export function updateCall(
-  ctx: CallMutationContext,
+  ctx: CallManagerContext,
   call: CallRecord,
   update: (next: CallRecord) => void,
   isCurrent?: () => boolean,
@@ -22,7 +20,7 @@ export function updateCall(
     }
     const next = copyCallRecord(call);
     update(next);
-    await persistCallRecord(ctx.storePath, next);
+    await persistCallRecord(ctx.storePath, next, ctx.stateRuntime);
     Object.assign(call, next);
     return true;
   });

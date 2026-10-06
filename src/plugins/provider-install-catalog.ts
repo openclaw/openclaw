@@ -1,4 +1,3 @@
-// Builds provider install catalog entries from plugin metadata.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -16,7 +15,8 @@ import {
 } from "./official-external-plugin-catalog.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { loadPluginRegistrySnapshot, type PluginRegistryRecord } from "./plugin-registry.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import {
   resolveManifestProviderAuthChoices,
   type ProviderAuthChoiceMetadata,
@@ -50,6 +50,7 @@ type PreferredInstallSources = {
 type ProviderInstallCatalogChoiceFields = Pick<
   ProviderAuthChoiceMetadata,
   | "choiceHint"
+  | "modelTarget"
   | "assistantPriority"
   | "assistantVisibility"
   | "groupId"
@@ -68,10 +69,6 @@ const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   workspace: 3,
 };
-
-function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
-  return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
-}
 
 function resolveInstallInfoFromInstallRecord(
   record: InstalledPluginInstallRecordInfo | undefined,
@@ -140,19 +137,6 @@ function resolveInstallInfoFromPackageSource(params: {
   };
 }
 
-function resolveInstallInfoFromRegistryRecord(params: {
-  record: PluginRegistryRecord;
-  installRecord?: InstalledPluginInstallRecordInfo;
-}): PluginPackageInstall | null {
-  return (
-    resolveInstallInfoFromInstallRecord(params.installRecord) ??
-    resolveInstallInfoFromPackageSource({
-      origin: params.record.origin,
-      source: params.record.packageInstall,
-    })
-  );
-}
-
 function resolvePreferredInstallsByPluginId(
   params: ProviderInstallCatalogParams,
 ): PreferredInstallSources {
@@ -178,15 +162,20 @@ function resolvePreferredInstallsByPluginId(
     ) {
       continue;
     }
-    const install = resolveInstallInfoFromRegistryRecord({
-      record,
-      installRecord: index.installRecords[record.pluginId],
-    });
+    const install =
+      resolveInstallInfoFromInstallRecord(index.installRecords[record.pluginId]) ??
+      resolveInstallInfoFromPackageSource({
+        origin: record.origin,
+        source: record.packageInstall,
+      });
     if (!install) {
       continue;
     }
     const existing = preferredByPluginId.get(record.pluginId);
-    if (!existing || isPreferredOrigin(record.origin, existing.origin)) {
+    if (
+      !existing ||
+      INSTALL_ORIGIN_PRIORITY[record.origin] < INSTALL_ORIGIN_PRIORITY[existing.origin]
+    ) {
       preferredByPluginId.set(record.pluginId, {
         origin: record.origin,
         install,
@@ -202,6 +191,7 @@ function resolveProviderInstallCatalogChoiceFields(
 ): Partial<ProviderInstallCatalogChoiceFields> {
   return {
     ...(choice.choiceHint ? { choiceHint: choice.choiceHint } : {}),
+    ...(choice.modelTarget ? { modelTarget: choice.modelTarget } : {}),
     ...(choice.assistantPriority !== undefined
       ? { assistantPriority: choice.assistantPriority }
       : {}),
@@ -262,6 +252,9 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
         ),
       ];
       for (const choice of provider.authChoices ?? []) {
+        if (!isProviderAuthChoicePlatformSupported(choice.platforms)) {
+          continue;
+        }
         const methodId = choice.method?.trim();
         const choiceId = choice.choiceId?.trim();
         const choiceLabel = choice.choiceLabel?.trim();
@@ -276,16 +269,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           choiceId,
           choiceLabel,
           ...resolveProviderInstallCatalogChoiceFields({
-            choiceHint: choice.choiceHint,
-            assistantPriority: choice.assistantPriority,
-            assistantVisibility: choice.assistantVisibility,
-            groupId: choice.groupId,
-            groupLabel: choice.groupLabel,
-            groupHint: choice.groupHint,
-            optionKey: choice.optionKey,
-            cliFlag: choice.cliFlag,
-            cliOption: choice.cliOption,
-            cliDescription: choice.cliDescription,
+            ...choice,
             onboardingScopes: normalizeProviderAuthChoiceScopes(choice.onboardingScopes),
           }),
           ...(choice.deprecatedChoiceIds?.length
@@ -311,25 +295,23 @@ export function resolveProviderInstallCatalogEntries(
   const installParams = params ?? {};
   const { installedPluginIds, installsByPluginId } =
     resolvePreferredInstallsByPluginId(installParams);
-  const manifestEntries = resolveManifestProviderAuthChoices(params)
-    .flatMap((choice) => {
-      const install = installsByPluginId.get(choice.pluginId);
-      if (!install) {
-        return [];
-      }
-      return [
-        {
-          ...choice,
-          label: choice.groupLabel ?? choice.choiceLabel,
-          origin: install.origin,
-          install: install.install,
-          installSource: describePluginInstallSource(install.install, {
-            expectedPackageName: install.packageName,
-          }),
-        } satisfies ProviderInstallCatalogEntry,
-      ];
-    })
-    .toSorted((left, right) => left.choiceLabel.localeCompare(right.choiceLabel));
+  const manifestEntries = resolveManifestProviderAuthChoices(params).flatMap((choice) => {
+    const install = installsByPluginId.get(choice.pluginId);
+    if (!install) {
+      return [];
+    }
+    return [
+      {
+        ...choice,
+        label: choice.groupLabel ?? choice.choiceLabel,
+        origin: install.origin,
+        install: install.install,
+        installSource: describePluginInstallSource(install.install, {
+          expectedPackageName: install.packageName,
+        }),
+      } satisfies ProviderInstallCatalogEntry,
+    ];
+  });
   const seenChoiceIds = new Set(manifestEntries.map((entry) => entry.choiceId));
   const officialEntries = resolveOfficialExternalProviderInstallCatalogEntries({
     installedPluginIds,

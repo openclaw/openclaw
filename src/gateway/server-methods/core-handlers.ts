@@ -3,7 +3,9 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import {
   listCoreGatewayHandlerMethodNames,
   type CoreGatewayHandlerFamily,
-} from "../methods/core-descriptors.js";
+} from "../methods/core-method-policy.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -31,12 +33,17 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./chat.js").then((module) => module.chatHandlers),
+  "chat-send": () =>
+    import("./chat-send-external-entry.js").then((module) => ({
+      "chat.send": module.handleDirectExternalChatSend,
+    })),
   // Cancellation must not wait for unrelated chat history and send workflows to load.
   "chat-abort": () =>
     import("./chat-abort-handler.js").then((module) => ({
       "chat.abort": module.handleChatAbortRequest,
     })),
   commands: () => import("./commands.js").then((module) => module.commandsHandlers),
+  computer: () => import("./computer.js").then((module) => module.computerHandlers),
   config: () => import("./config.js").then((module) => module.configHandlers),
   conversations: () => import("./conversations.js").then((module) => module.conversationHandlers),
   connect: () => import("./connect.js").then((module) => module.connectHandlers),
@@ -61,14 +68,18 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   terminal: () => import("./terminal.js").then((module) => module.terminalHandlers),
   transcripts: () => import("./transcripts.js").then((module) => module.transcriptsHandlers),
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
+  themes: () => import("./themes.js").then((module) => module.themeHandlers),
   "models-auth-status": () =>
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>
     import("./models-auth-login.js").then((module) => module.modelsAuthLoginHandlers),
+  "mcp-auth-login": () =>
+    import("./mcp-auth-login.js").then((module) => module.mcpAuthLoginHandlers),
   "models-auth-order": () =>
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),
   "models-probe": () => import("./models-probe.js").then((module) => module.modelsProbeHandlers),
+  "web-search": () => import("./web-search.js").then((module) => module.webSearchHandlers),
   "native-hook-relay": () =>
     import("./native-hook-relay.js").then((module) => module.nativeHookRelayHandlers),
   "nodes-pending": () =>
@@ -83,6 +94,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   portals: () => import("./portals.js").then((module) => module.portalHandlers),
   "progress-card": () => import("./progress-card.js").then((module) => module.progressCardHandlers),
   migrations: () => import("./migrations.js").then((module) => module.migrationsHandlers),
+  backup: () => import("./backup.js").then((module) => module.backupHandlers),
+  storage: () => import("./storage.js").then((module) => module.storageHandlers),
   push: () => import("./push.js").then((module) => module.pushHandlers),
   restart: () => import("./restart.js").then((module) => module.restartHandlers),
   suspend: () => import("./suspend.js").then((module) => module.suspendHandlers),
@@ -96,14 +109,6 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-abort.js").then((module) => module.sessionAbortHandlers),
   "sessions-compact": () =>
     import("./sessions-compact.js").then((module) => module.sessionCompactHandlers),
-  "sessions-compaction-checkpoints": () =>
-    import("./sessions-compaction-checkpoints.js").then(
-      (module) => module.sessionCheckpointHandlers,
-    ),
-  "sessions-compaction-queries": () =>
-    import("./sessions-compaction-queries.js").then(
-      (module) => module.sessionCheckpointQueryHandlers,
-    ),
   "sessions-create": () =>
     import("./sessions-create.js").then((module) => module.sessionCreateHandlers),
   "sessions-title": () =>
@@ -117,10 +122,14 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "sessions-groups": () =>
     import("./sessions-groups.js").then((module) => module.sessionGroupHandlers),
   "sessions-goal": () => import("./sessions-goal.js").then((module) => module.sessionGoalHandlers),
+  "sessions-provider-review": () =>
+    import("./sessions-provider-review.js").then((module) => module.sessionProviderReviewHandlers),
   "sessions-messaging": () =>
     import("./sessions-messaging.js").then((module) => module.sessionMessagingHandlers),
   "sessions-mutations": () =>
     import("./sessions-mutations.js").then((module) => module.sessionMutationHandlers),
+  "session-processes": () =>
+    import("./session-processes.js").then((module) => module.sessionProcessHandlers),
   "sessions-read": () => import("./sessions-read.js").then((module) => module.sessionReadHandlers),
   "sessions-rewind": () =>
     import("./sessions-rewind.js").then((module) => module.sessionRewindHandlers),
@@ -130,10 +139,14 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./sessions-subscriptions.js").then((module) => module.sessionSubscriptionHandlers),
   "sessions-suggestions": () =>
     import("./sessions-suggestions.js").then((module) => module.sessionSuggestionHandlers),
+  "sessions-reactions": () =>
+    import("./sessions-reactions.js").then((module) => module.sessionReactionHandlers),
   "session-catalog": () =>
     import("./session-catalog.js").then((module) => module.sessionCatalogHandlers),
   "session-discussion": () =>
     import("./session-discussion.js").then((module) => module.sessionDiscussionHandlers),
+  "session-activity-summary": () =>
+    import("./session-activity-summary.js").then((module) => module.sessionActivitySummaryHandlers),
   "session-observer-rpc": () =>
     import("../session-observer-rpc.js").then((module) => module.sessionObserverHandlers),
   "session-companion-rpc": () =>
@@ -141,10 +154,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "hooks-status": () => import("./hooks-status.js").then((module) => module.hooksStatusHandlers),
   skills: () => import("./skills.js").then((module) => module.skillsHandlers),
   system: () => import("./system.js").then((module) => module.systemHandlers),
-  talk: () => import("./talk.js").then((module) => module.talkHandlers),
+  presence: () => import("./presence.js").then((module) => module.presenceHandlers),
+  talk: () => import("../talk/handlers/index.js").then((module) => module.talkHandlers),
   // Mode synchronization does not depend on loading speech or realtime providers.
-  "talk-mode": () => import("./talk-mode.js").then((module) => module.talkModeHandlers),
-  tasks: () => import("./tasks.js").then((module) => module.tasksHandlers),
+  "talk-mode": () => import("../talk/handlers/mode.js").then((module) => module.talkModeHandlers),
   "task-suggestions": () =>
     import("./task-suggestions.js").then((module) => module.taskSuggestionsHandlers),
   "tools-catalog": () => import("./tools-catalog.js").then((module) => module.toolsCatalogHandlers),
@@ -153,6 +166,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./tools-effective.js").then((module) => module.toolsEffectiveHandlers),
   "tools-invoke": () => import("./tools-invoke.js").then((module) => module.toolsInvokeHandlers),
   "mcp-app": () => import("./mcp-app.js").then((module) => module.mcpAppHandlers),
+  "mcp-app-onboarding": () =>
+    import("./mcp-app-onboarding.js").then((module) => module.mcpAppOnboardingHandlers),
+  "mcp-app-extensions": () =>
+    import("./mcp-app-extensions.js").then((module) => module.mcpAppExtensionHandlers),
   canvas: () => import("./canvas.js").then((module) => module.canvasHandlers),
   tts: () => import("./tts.js").then((module) => module.ttsHandlers),
   update: () => import("./update.js").then((module) => module.updateHandlers),
@@ -162,6 +179,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   voicewake: () => import("./voicewake.js").then((module) => module.voicewakeHandlers),
   web: () => import("./web.js").then((module) => module.webHandlers),
   "system-agent": () => import("./system-agent.js").then((module) => module.systemAgentHandlers),
+  "system-agent-approvals": () =>
+    import("./system-agent-approvals.js").then((module) => module.systemAgentApprovalHandlers),
   "system-changes": () =>
     import("./system-changes.js").then((module) => module.systemChangesHandlers),
   wizard: () => import("./wizard.js").then((module) => module.wizardHandlers),
@@ -180,3 +199,24 @@ export const coreGatewayHandlers: GatewayRequestHandlers = Object.fromEntries(
     ),
   ),
 );
+
+// Canonical receipt owners distinguish replay from new input after authorization.
+// Overrides retain both router fences; a method name alone cannot delegate admission.
+export function gatewayRouterUploadPolicyError(
+  params: Parameters<typeof gatewayClientUploadPolicyError>[0],
+  registry: Pick<GatewayMethodRegistryView, "getHandler">,
+) {
+  switch (params.method) {
+    case "agent":
+    case "chat.send":
+    case "sessions.send":
+    case "sessions.steer":
+    case "sessions.create":
+    case "send":
+    case "message.action":
+      if (registry.getHandler(params.method) === coreGatewayHandlers[params.method]) {
+        return null;
+      }
+  }
+  return gatewayClientUploadPolicyError(params);
+}

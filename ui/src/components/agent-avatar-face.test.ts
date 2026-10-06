@@ -17,17 +17,17 @@ describe("default agent face", () => {
     expect(face("scout").outerHTML).not.toBe(first);
   });
 
-  it("bounds artwork to seven silhouettes and ten hues with vector-only geometry", () => {
-    const silhouettes = new Set<string | null>();
-    const colors = new Set<string | null>();
-    for (let index = 0; index < 1000; index++) {
+  it("fills the circular avatar with self-contained vector artwork", () => {
+    for (let index = 0; index < 32; index++) {
       const avatar = face(`agent-${index}`);
-      silhouettes.add(avatar.querySelector("path")!.getAttribute("d"));
-      colors.add(avatar.querySelector("rect")!.getAttribute("fill"));
       expect(avatar.getAttribute("viewBox")).toBe("0 0 32 32");
-      expect(avatar.querySelector("filter, image, foreignObject")).toBeNull();
+      const background = avatar.firstElementChild!;
+      expect(background.tagName).toBe("circle");
+      expect(background.getAttribute("cx")).toBe("16");
+      expect(background.getAttribute("cy")).toBe("16");
+      expect(background.getAttribute("r")).toBe("16");
+      expect(background.getAttribute("fill")).toMatch(/^hsl\(/);
+      expect(avatar.querySelector("filter, image, foreignObject, use")).toBeNull();
     }
-    expect(silhouettes.size).toBe(7);
-    expect(colors.size).toBe(10);
   });
 });

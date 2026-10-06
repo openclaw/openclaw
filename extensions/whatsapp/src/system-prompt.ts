@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements system prompt behavior.
 function resolveWhatsAppSystemPrompt(
   prompts: Record<string, { systemPrompt?: string | null }> | undefined,
   targetId: string | null | undefined,

@@ -1,32 +1,29 @@
-// Configure wizard model/auth selection and gateway auth config helpers.
 import { resolveMutableAgentEntry } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
-import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
-import { isInvalidGatewaySecret } from "../gateway/known-weak-gateway-secrets.js";
-import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
-import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
-import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
   promptDefaultModel,
   promptModelAllowlist,
-} from "./model-picker.js";
+} from "../flows/model-picker.js";
+import { resolvePreferredProviderForAuthChoice } from "../plugins/provider-auth-choice-preference.js";
+import { resolveManifestProviderAuthChoice } from "../plugins/provider-auth-choices.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
+import { applyAuthChoice } from "./auth-choice.apply.js";
 import { loadStaticManifestCatalogRowsForList } from "./models/list.manifest-catalog.js";
 import {
   applyAgentModelDefaults,
   applyOnboardingPrimaryModel,
+  applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
 import type { OnboardingAgentTarget } from "./onboard-agent-target.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
-import { randomToken } from "./random-token.js";
 
-type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type ProviderChoiceModelPrompt = {
   provider?: string;
   allowedKeys?: string[];
@@ -117,14 +114,9 @@ function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
   target: OnboardingAgentTarget,
   selectedModels: readonly string[],
 ): string | undefined {
-  const currentModel =
-    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model;
-  const primary =
-    typeof currentModel === "string"
-      ? currentModel.trim()
-      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
-        ? currentModel.primary.trim()
-        : undefined;
+  const primary = resolveAgentModelPrimaryValue(
+    resolveMutableAgentEntry(cfg, target.agentId)?.model ?? cfg.agents?.defaults?.model,
+  );
   const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
   if (!modelId) {
     return undefined;
@@ -158,45 +150,6 @@ function resolveConfiguredProviderFromAuthChange(params: {
     params.preferredProvider ??
     (configuredProviders.length === 1 ? configuredProviders[0] : undefined)
   );
-}
-
-/** Preserve unrelated auth policy; replace mode-owned credentials and proxy settings. */
-export function buildGatewayAuthConfig(params: {
-  existing?: GatewayAuthConfig;
-  mode: GatewayAuthChoice;
-  token?: SecretInput;
-  password?: string;
-  trustedProxy?: GatewayAuthConfig["trustedProxy"];
-}): GatewayAuthConfig | undefined {
-  const base: GatewayAuthConfig = { ...params.existing };
-  delete base.token;
-  delete base.password;
-  delete base.trustedProxy;
-
-  if (params.mode === "token") {
-    if (isSecretRef(params.token)) {
-      return { ...base, mode: "token", token: params.token };
-    }
-    // Keep token mode always valid: treat empty/undefined/"undefined"/"null" as missing and generate a token.
-    const token =
-      typeof params.token === "string" && !isInvalidGatewaySecret(params.token)
-        ? params.token.trim()
-        : randomToken();
-    return { ...base, mode: "token", token };
-  }
-  if (params.mode === "password") {
-    const password = params.password?.trim();
-    return { ...base, mode: "password", ...(password && { password }) };
-  }
-  if (params.mode === "trusted-proxy") {
-    if (!params.trustedProxy) {
-      throw new Error(
-        `trustedProxy config is required when mode is trusted-proxy. Run ${formatCliCommand("openclaw configure --section gateway")} to configure Gateway auth interactively.`,
-      );
-    }
-    return { ...base, mode: "trusted-proxy", trustedProxy: params.trustedProxy };
-  }
-  return base;
 }
 
 /** Prompt for model provider credentials and explicit default model policy settings. */
@@ -241,7 +194,6 @@ export async function promptAuthConfig(
         config: next,
         prompter,
         allowKeep: true,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: false,
         loadCatalog: true,
         browseCatalogOnDemand: true,
@@ -273,6 +225,9 @@ export async function promptAuthConfig(
       preserveExistingDefaultModel: true,
     });
     next = applied.config;
+    if (applied.utilityModelOverride) {
+      return applyOnboardingUtilityModel(next, target, applied.utilityModelOverride);
+    }
     // Auth recommendations initialize an unset primary; reauth must not replace
     // the target's explicit or inherited model.
     if (

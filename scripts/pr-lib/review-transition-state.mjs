@@ -7,7 +7,7 @@ const readBuffer = Buffer.alloc(128 * 1024);
 
 function git(...args) {
   const output = execFileSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", ...args],
     { maxBuffer: 64 * 1024 * 1024 },
   );
@@ -31,6 +31,118 @@ function tree(commit) {
       return [match[3], `${match[1]} ${match[2]}`];
     }),
   );
+}
+
+function mergeResolveUndoCandidate() {
+  const merge = git("rev-list", "--first-parent", "--merges", "-n", "1", source).trim();
+  const parents = merge
+    ? (git("cat-file", "-p", merge)
+        .split("\n\n", 1)[0]
+        .match(/^parent [a-f0-9]{40}$/gm) ?? [])
+    : [];
+  if (parents.length !== 2) {
+    return undefined;
+  }
+  const parentIds = parents.map((parent) => parent.slice(7));
+  let bases;
+  try {
+    bases = git("merge-base", "--all", ...parentIds)
+      .trim()
+      .split("\n")
+      .filter(Boolean);
+  } catch (error) {
+    if (error.status === 1) {
+      return undefined;
+    }
+    throw error;
+  }
+  return bases.length === 1 ? [bases[0], ...parentIds] : undefined;
+}
+
+function singleParentCommits(...args) {
+  return records(
+    "log",
+    "-z",
+    "--date=raw",
+    "--format=%H%n%P%n%an%n%ae%n%ad%n%B",
+    "--no-merges",
+    ...args,
+  ).flatMap((record) => {
+    const match = /^([a-f0-9]{40})\n([a-f0-9]{40})\n([\s\S]*)$/.exec(record);
+    return match ? [{ commit: match[1], parent: match[2], identity: match[3] }] : [];
+  });
+}
+
+function rebaseResolveUndoCandidates() {
+  let original;
+  try {
+    original = git("rev-parse", "--verify", "-q", "ORIG_HEAD^{commit}").trim();
+  } catch {
+    return [];
+  }
+  const originals = singleParentCommits(original, `^${source}`);
+  const rewrites = singleParentCommits("--first-parent", source, `^${original}`);
+  return originals.flatMap((commit) =>
+    rewrites
+      .filter((rewrite) => rewrite.identity === commit.identity)
+      .map((rewrite) => [commit.parent, rewrite.parent, commit.commit]),
+  );
+}
+
+// Admit committed stage-0 state bound to the latest first-parent merge or an
+// ORIG_HEAD rebase pick with preserved author/message identity. Unknown, edited,
+// or ambiguous conflict metadata still belongs to the operator.
+function committedResolveUndo(from, index) {
+  const undo = records("ls-files", "--resolve-undo", "-z");
+  if (undo.length === 0) {
+    return [];
+  }
+  const cache = new Map();
+  function entry(commit, pathname) {
+    const key = `${commit}\0${pathname}`;
+    if (!cache.has(key)) {
+      const [record] = records(
+        "--literal-pathspecs",
+        "ls-tree",
+        "-z",
+        "--full-tree",
+        commit,
+        "--",
+        pathname,
+      );
+      const match =
+        record && /^([0-7]{6}) (blob|commit|tree) ([a-f0-9]{40})\t([\s\S]+)$/.exec(record);
+      if (record && !match) {
+        throw new Error("Invalid transition tree entry");
+      }
+      cache.set(key, match ? (match[2] === "tree" ? null : `${match[1]} ${match[3]}`) : undefined);
+    }
+    return cache.get(key);
+  }
+  const paths = new Map();
+  for (const record of undo) {
+    const match = /^([0-7]{6}) ([a-f0-9]{40}) ([123])\t([\s\S]+)$/.exec(record);
+    if (!match) {
+      throw new Error("Invalid transition resolve-undo entry");
+    }
+    const [, mode, oid, stage, pathname] = match;
+    const entries = paths.get(pathname) ?? new Map();
+    entries.set(Number(stage), `${mode} ${oid}`);
+    paths.set(pathname, entries);
+  }
+  const merge = mergeResolveUndoCandidate();
+  let rebases;
+  for (const [pathname, entries] of paths) {
+    const matches = (candidate) =>
+      candidate.every((commit, offset) => entry(commit, pathname) === entries.get(offset + 1));
+    if (
+      index.get(pathname) !== from.get(pathname) ||
+      !((merge && matches(merge)) || (rebases ??= rebaseResolveUndoCandidates()).some(matches))
+    ) {
+      throw new Error(`Unowned transition resolve-undo entry ${JSON.stringify(pathname)}`);
+    }
+  }
+  return paths.keys();
 }
 
 function stat(pathname) {
@@ -129,14 +241,14 @@ try {
   ];
   if (
     records("ls-files", "-v", "-z").some((record) => record[0] !== "H") ||
-    records("ls-files", "--resolve-undo", "-z").length > 0 ||
     git(...indexDiff, "--ita-visible-in-index", source) !==
       git(...indexDiff, "--ita-invisible-in-index", source)
   ) {
     throw new Error("Transition index contains hidden or unsupported entries");
   }
-  const inspect = new Set(
-    records(
+  const inspect = new Set([
+    ...committedResolveUndo(from, index),
+    ...records(
       "-c",
       "core.filemode=true",
       "-c",
@@ -148,7 +260,7 @@ try {
       "--name-only",
       "-z",
     ),
-  );
+  ]);
   for (const pathname of new Set([...from.keys(), ...to.keys(), ...index.keys()])) {
     const entry = index.get(pathname);
     if (entry !== from.get(pathname) && entry !== to.get(pathname)) {

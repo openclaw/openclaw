@@ -1,5 +1,6 @@
 /** Reads recent gateway service logs for actionable daemon restart diagnostics. */
 import fs, { type FileHandle } from "node:fs/promises";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 // Error patterns worth surfacing from gateway service logs after failed starts.
@@ -19,14 +20,7 @@ async function readTailWindow(handle: FileHandle, size: number) {
   const length = Math.min(size, GATEWAY_DIAGNOSTIC_LOG_TAIL_BYTES);
   const readStart = size - length;
   const buffer = Buffer.alloc(length);
-  let bytesRead = 0;
-  while (bytesRead < length) {
-    const result = await handle.read(buffer, bytesRead, length - bytesRead, readStart + bytesRead);
-    if (result.bytesRead === 0) {
-      break;
-    }
-    bytesRead += result.bytesRead;
-  }
+  const bytesRead = await readFileWindowFully(handle, buffer, readStart);
   return { buffer, bytesRead, readStart };
 }
 
@@ -73,16 +67,6 @@ export async function readGatewayLogTailLines(filePath: string): Promise<string[
   }
 }
 
-function findLastNonEmptyLine(lines: string[]): string | null {
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]?.trim();
-    if (line) {
-      return line;
-    }
-  }
-  return null;
-}
-
 export async function readLastGatewayErrorLine(
   env: NodeJS.ProcessEnv,
   options?: { platform?: NodeJS.Platform; requirePatternMatch?: boolean },
@@ -93,28 +77,15 @@ export async function readLastGatewayErrorLine(
   // handles at one file (buildLaunchAgentPlist); break that and darwin startup
   // crashes stop reaching this reader. Other platforms keep stderr separate.
   const { stdoutPath, stderrPath } =
-    platform === "darwin"
-      ? resolveGatewaySupervisorLogPaths(env, { platform })
-      : resolveGatewayLogPaths(env);
+    platform === "darwin" ? resolveGatewaySupervisorLogPaths(env) : resolveGatewayLogPaths(env);
   const stderrLines = readStderr ? await readGatewayLogTailLines(stderrPath).catch(() => []) : [];
   const stdoutLines = await readGatewayLogTailLines(stdoutPath).catch(() => []);
   // stderr is the strongest failure signal on non-darwin platforms, so place it
   // last and scan from the end: the most recent stderr error line then wins over
   // any (possibly stale) stdout match, matching the stderr-first fallback below.
   const lines = [...stdoutLines, ...stderrLines].map((line) => line.trim());
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i];
-    if (!line) {
-      continue;
-    }
-    if (GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line))) {
-      return line;
-    }
-  }
-  if (options?.requirePatternMatch) {
-    return null;
-  }
-  return readStderr
-    ? (findLastNonEmptyLine(stderrLines) ?? findLastNonEmptyLine(stdoutLines))
-    : findLastNonEmptyLine(stdoutLines);
+  const match = lines.findLast((line) =>
+    GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line)),
+  );
+  return match ?? (options?.requirePatternMatch ? null : (lines.findLast(Boolean) ?? null));
 }

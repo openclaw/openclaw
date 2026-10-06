@@ -90,9 +90,7 @@ export function removeInlineSlashSelection(
   const current = host.getTextarea()?.value ?? host.getDraft();
   const before = current.slice(0, completion.start);
   let after = current.slice(completion.end);
-  if (/\s$/u.test(before) && /^\s/u.test(after)) {
-    after = after.slice(1);
-  } else if (before.length === 0 && /^\s/u.test(after)) {
+  if ((before.length === 0 || /\s$/u.test(before)) && /^\s/u.test(after)) {
     after = after.slice(1);
   }
   commitDraftWithCaret(host, `${before}${after}`, before.length);
@@ -117,7 +115,7 @@ export function hasActiveInlineSlashArgumentPrefix(
 
 export function findDirectInlineSlashArgumentInvocation(
   text: string,
-  caret = text.length,
+  caret: number,
 ): InlineSlashArgumentInvocation | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);

@@ -1,8 +1,17 @@
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
+import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
+
+type ChatTerminalProducer = {
+  sessionId: string;
+  sessionKey: string;
+  handoff: (settle: (producerCompleted: Promise<void>) => Promise<void>) => boolean;
+};
 
 export type ChatAbortControllerEntry = {
   controller: AbortController;
+  /** Captures this run's canonical producer before cancellation releases its live slot. */
+  resolveTerminalProducer?: () => ChatTerminalProducer | undefined;
   sessionId: string;
   sessionKey: string;
   lifecycleGeneration?: string;
@@ -20,6 +29,8 @@ export type ChatAbortControllerEntry = {
   providerId?: string;
   authProviderId?: string;
   abortStopReason?: string;
+  /** Owner-recorded diagnostic cause; does not change terminal lifecycle semantics. */
+  abortDiagnosticReason?: ChatAbortDiagnosticReason;
   /** Latest argument-free validation diagnostic for operator-initiated aborts. */
   toolErrorSummary?: string;
   /**
@@ -43,6 +54,15 @@ export type ChatAbortControllerEntry = {
   projectSessionTerminalPersistence?: Promise<void>;
   /** Caller completion requested cleanup before terminal lifecycle persistence settled. */
   registrationCleanupRequested?: boolean;
+  /** The exact execution still owns async disposal after logical cleanup. */
+  executionSettlement?: {
+    /** True only after successful execution cleanup or an owner-certified completed cleanup fault. */
+    cleanupSettled: boolean;
+    completion: Promise<void>;
+    status: "pending" | "fulfilled" | "rejected";
+  };
+  /** Bounded private timeout settlement while the aborted producer unwinds. */
+  pendingTimeoutCompletion?: { expiresAtMs: number; settle: () => void };
   /** False after the owning reply run commits a terminal outcome. */
   isAbortable?: (entry: ChatAbortControllerEntry) => boolean;
   /** Runs once when this registration is actually removed. */

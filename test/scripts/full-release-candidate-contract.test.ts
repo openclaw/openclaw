@@ -4,10 +4,15 @@ import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildFullReleaseCandidateRequest,
-  fullReleaseCandidateArtifactName,
+  candidateRequestSha256,
+  canonicalFullReleaseCandidateRequestJson,
   validateFullReleaseCandidateBinding,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  candidateArtifactJsonFromBinding,
+  resolveCandidateBinding,
+} from "../../scripts/lib/full-release-candidate-reuse.mjs";
 import {
   canonicalTestJson,
   canonicalTestSha256,
@@ -21,10 +26,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Golden v2 request bytes bind the complete effective reported-issues inventory.
+// Golden v3 request bytes bind the selected baseline and complete effective inventory.
 const CANONICAL_REQUEST_JSON =
-  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v2","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
-const CANONICAL_REQUEST_SHA256 = "eb44f56c41111dfe83d087148eb5f61cc7823525e9d9d434443872d2b42462c4";
+  '{"allowFrozenTargetScenarioOmissions":false,"allowUnreleasedChangelog":false,"contractVersions":{"package":1,"prepublishPluginRegistry":1,"sharedImage":1},"packagePublished":false,"releaseProfile":"stable","releaseSoak":true,"repository":"openclaw/openclaw","schema":"openclaw.full-release-candidate-request/v3","sharedImagePolicy":"no-push-artifact","targetSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","toolingSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","upgradeBaseline":"openclaw@latest","upgradeSurvivorBaselines":["openclaw@latest"],"upgradeSurvivorScenarios":["acpx-openclaw-tools-bridge","base","bootstrap-persona","channel-post-core-restore","configured-plugin-installs","cron-scheduled-authority","custom-plugin-siblings","feishu-channel","legacy-operator-state","meeting-transcripts-sqlite","plugin-deps-cleanup","stale-source-plugin-shadow","tilde-log-path","versioned-runtime-deps"]}\n';
+const CANONICAL_REQUEST_SHA256 = "58a45e9e0b13c2417f50c5cf4abb421cb50bdfa02af4aef958dfd6b511d09b26";
 
 function manifest(overrides: Record<string, unknown> = {}) {
   return {
@@ -61,13 +66,6 @@ function replaceBindingRequest(
 }
 
 describe("full release candidate contract", () => {
-  it("uses the canonical request digest directly in the evidence artifact name", () => {
-    const requestSha256 = "a".repeat(64);
-    expect(fullReleaseCandidateArtifactName(requestSha256)).toBe(
-      `full-release-candidate-v2-${requestSha256}`,
-    );
-  });
-
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     const reordered = Object.fromEntries(
@@ -76,6 +74,7 @@ describe("full release candidate contract", () => {
     const reorderedRequest = buildFullReleaseCandidateRequest(reordered);
 
     expect(request).toEqual(reorderedRequest);
+    expect(request.upgradeBaseline).toBe("openclaw@latest");
     expect(request.upgradeSurvivorBaselines).toEqual(["openclaw@latest"]);
     expect(request.upgradeSurvivorScenarios).toContain("acpx-openclaw-tools-bridge");
     expect(request.upgradeSurvivorScenarios).not.toContain("prerelease-plugin-registry");
@@ -87,40 +86,120 @@ describe("full release candidate contract", () => {
     expect(canonicalTestSha256(request)).toBe(CANONICAL_REQUEST_SHA256);
   });
 
-  it("canonicalizes equivalent baseline and scenario set ordering", () => {
+  it("canonicalizes historical baseline receipts and equivalent scenario set ordering", () => {
     const request = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "beta latest",
+        upgradeSurvivorBaselines: "beta latest 2026.4.23",
         upgradeSurvivorScenarios: "base feishu-channel",
       }),
     );
     const reordered = buildFullReleaseCandidateRequest(
       fullReleaseCandidateRequestInput({
-        upgradeSurvivorBaselines: "latest,beta",
+        upgradeSurvivorBaselines: "2026.4.23,latest,beta",
         upgradeSurvivorScenarios: "feishu-channel,base",
       }),
     );
 
     expect(request).toEqual(reordered);
+    expect(request.upgradeBaseline).toBe("openclaw@latest");
+    expect(request.upgradeSurvivorBaselines).toEqual([
+      "openclaw@2026.4.23",
+      "openclaw@beta",
+      "openclaw@latest",
+    ]);
     expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reordered));
   });
 
-  it.each([
-    ["repository", { repository: "openclaw/fork" }],
-    ["target SHA", { targetSha: "4".repeat(40) }],
-    ["tooling SHA", { toolingSha: "5".repeat(40) }],
-    ["release profile", { releaseProfile: "beta" }],
-    ["release soak", { releaseSoak: false }],
-    ["survivor baseline", { upgradeSurvivorBaseline: "beta" }],
-    ["survivor scenarios", { upgradeSurvivorScenarios: "base" }],
-    ["frozen omissions", { allowFrozenTargetScenarioOmissions: true }],
-    ["changelog policy", { allowUnreleasedChangelog: true }],
-    ["package provenance", { packagePublished: true }],
-    ["shared image policy", { sharedImagePolicy: "existing-only" }],
-  ])("changes the request digest when %s changes", (_label, overrides) => {
-    const baseline = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
-    const changed = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
-    expect(canonicalTestSha256(changed)).not.toBe(canonicalTestSha256(baseline));
+  it("preserves retired scenario evidence while rejecting new preparation", () => {
+    const retainedManifest = fullReleaseCandidateManifestFixture();
+    const request = retainedManifest.request;
+    request.upgradeSurvivorScenarios = ["base", "msteams-polls"];
+    retainedManifest.requestSha256 = canonicalTestSha256(request);
+    expect(candidateRequestSha256(request)).toBe(
+      "3eb7c6d0842ca3cdc217b4db7a32664b282743ad20c610b58b527f9ff67715fc",
+    );
+    expect(canonicalFullReleaseCandidateRequestJson(request)).toBe(canonicalTestJson(request));
+    const binding = fullReleaseCandidateBindingFixture();
+    binding.request = request;
+    binding.requestSha256 = retainedManifest.requestSha256;
+    binding.manifestSha256 = canonicalTestSha256(retainedManifest);
+    binding.evidenceArtifact.name = `full-release-candidate-v2-${binding.requestSha256}`;
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow(
+      "invalid published upgrade survivor scenario",
+    );
+    expect(() =>
+      buildFullReleaseCandidateRequest(
+        fullReleaseCandidateRequestInput({ upgradeSurvivorScenarios: "msteams-polls" }),
+      ),
+    ).toThrow("invalid published upgrade survivor scenario");
+    expect(runManifestContract(retainedManifest).stderr).toContain(
+      "invalid published upgrade survivor scenario",
+    );
+    for (const source of ["freshBinding", "reusedBinding"]) {
+      expect(() => resolveCandidateBinding({ [source]: binding, request, required: true })).toThrow(
+        "invalid published upgrade survivor scenario",
+      );
+    }
+  });
+
+  it("validates retained v1 request and manifest digests without rewriting them", () => {
+    const currentManifest = fullReleaseCandidateManifestFixture();
+    const {
+      packagePublished: _packagePublished,
+      upgradeBaseline: _upgradeBaseline,
+      ...requestFields
+    } = currentManifest.request;
+    const request = {
+      ...requestFields,
+      schema: "openclaw.full-release-candidate-request/v1" as const,
+    };
+    const requestSha256 = canonicalTestSha256(request);
+    const retainedManifest = { ...currentManifest, request, requestSha256 };
+    const currentBinding = fullReleaseCandidateBindingFixture();
+    const binding = {
+      ...currentBinding,
+      request,
+      requestSha256,
+      evidenceArtifact: {
+        ...currentBinding.evidenceArtifact,
+        name: `full-release-candidate-v2-${requestSha256}`,
+      },
+      manifestSha256: canonicalTestSha256(retainedManifest),
+    };
+
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(candidateRequestSha256(request)).toBe(requestSha256);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
+    expect(() => candidateArtifactJsonFromBinding(binding)).toThrow(
+      "retained v1 candidate evidence cannot supply package provenance",
+    );
+  });
+
+  it("validates retained v2 request and manifest digests without rewriting them", () => {
+    const currentManifest = fullReleaseCandidateManifestFixture();
+    const { upgradeBaseline: _upgradeBaseline, ...requestFields } = currentManifest.request;
+    const request = {
+      ...requestFields,
+      schema: "openclaw.full-release-candidate-request/v2" as const,
+    };
+    const requestSha256 = canonicalTestSha256(request);
+    const retainedManifest = { ...currentManifest, request, requestSha256 };
+    const currentBinding = fullReleaseCandidateBindingFixture();
+    const binding = {
+      ...currentBinding,
+      request,
+      requestSha256,
+      evidenceArtifact: {
+        ...currentBinding.evidenceArtifact,
+        name: `full-release-candidate-v2-${requestSha256}`,
+      },
+      manifestSha256: canonicalTestSha256(retainedManifest),
+    };
+
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(candidateRequestSha256(request)).toBe(requestSha256);
+    expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
   });
 
   it("rejects malformed or noncanonical request policy", () => {
@@ -158,14 +237,6 @@ describe("full release candidate contract", () => {
         contractVersions: { ...request.contractVersions, sharedImage: 2 },
       }),
     ).toThrow("contract versions are invalid");
-  });
-
-  it("validates one canonical binding across the request, plan, producer, and artifacts", () => {
-    const value = manifest();
-    const binding = fullReleaseCandidateBindingFixture();
-    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
-    expect(binding.request).toEqual(value.request);
-    expect(binding.manifestSha256).toBe(canonicalTestSha256(value));
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {

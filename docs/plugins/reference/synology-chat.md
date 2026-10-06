@@ -15,7 +15,7 @@ Synology Chat channel plugin for OpenClaw channels and direct messages.
 ## Distribution
 
 - Package: `@openclaw/synology-chat`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/synology-chat`
 
 ## Surface
 

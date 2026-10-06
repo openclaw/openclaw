@@ -8,7 +8,6 @@ import type { QaGatewayChildCommand } from "../../gateway-child.js";
 import { runQaFlowSuiteFromRuntime } from "../../suite-launch.runtime.js";
 import type { QaSuiteRoundTripProbe } from "../../suite-round-trip.js";
 import { readQaSuiteFailedOrSkippedScenarioCountFromFile } from "../../suite-summary.js";
-// Qa Lab plugin module implements cli behavior.
 import { printLiveTransportQaArtifacts } from "../shared/live-artifacts.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 import { resolveTelegramQaRunOptions } from "./run-options.runtime.js";
@@ -179,6 +178,7 @@ export async function runQaTelegramSuite(opts: TelegramQaSuiteOptions) {
     ],
     adapterOptions: {
       repoRoot: runOptions.repoRoot,
+      ...(runOptions.credentialFile ? { credentialFile: runOptions.credentialFile } : {}),
       ...(runOptions.credentialRole ? { credentialRole: runOptions.credentialRole } : {}),
       ...(runOptions.credentialSource ? { credentialSource: runOptions.credentialSource } : {}),
       ...(runOptions.sutAccountId ? { sutAccountId: runOptions.sutAccountId } : {}),

@@ -1,184 +1,108 @@
-// Doctor state integrity cloud-storage tests cover macOS cloud-synced state directory detection.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { detectMacCloudSyncedStateDir } from "./doctor-state-integrity.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as boundaryPath from "../infra/boundary-path.js";
+import {
+  detectMacCloudSyncedStateDir,
+  detectWindowsCloudSyncedStateDir,
+  formatWindowsCloudSyncedStateDirWarning,
+} from "./doctor-state-integrity.js";
 
-const tempDirs = createTempDirTracker();
-
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  tempDirs.cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
-describe("detectMacCloudSyncedStateDir", () => {
-  const home = "/Users/tester";
-
-  it("detects state dir under iCloud Drive", () => {
-    const stateDir = path.join(
-      home,
-      "Library",
-      "Mobile Documents",
-      "com~apple~CloudDocs",
-      "OpenClaw",
-      ".openclaw",
-    );
-
-    const result = detectMacCloudSyncedStateDir(stateDir, {
-      platform: "darwin",
-      homedir: home,
-    });
-
-    expect(result).toEqual({
-      path: path.resolve(stateDir),
+describe("cloud-synced state directories", () => {
+  it("anchors iCloud detection to the OS home despite OPENCLAW_HOME", () => {
+    const home = path.resolve("/Users/tester");
+    const stateDir = path.join(home, "Library/Mobile Documents/com~apple~CloudDocs/.openclaw");
+    vi.stubEnv("OPENCLAW_HOME", "/tmp/openclaw-home-override");
+    vi.spyOn(os, "homedir").mockReturnValue(home);
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    expect(detectMacCloudSyncedStateDir(stateDir)).toEqual({
+      path: stateDir,
       storage: "iCloud Drive",
     });
   });
 
-  it("detects state dir under Library/CloudStorage", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "Dropbox", "OpenClaw", ".openclaw");
+  it.each([false, true])(
+    "resolves a missing macOS state leaf through its ancestor (local symlink=%s)",
+    (local) => {
+      const sandbox = fs.realpathSync(tempDirs.make("openclaw-cloud-storage-"));
+      const home = path.join(sandbox, "home");
+      const cloudRoot = path.join(home, "Library", "CloudStorage");
+      const syncedDir = path.join(cloudRoot, "OneDrive-Personal");
+      fs.mkdirSync(cloudRoot, { recursive: true });
+      if (local) {
+        const target = path.join(sandbox, "local-openclaw");
+        fs.mkdirSync(target);
+        fs.symlinkSync(target, syncedDir, process.platform === "win32" ? "junction" : "dir");
+      } else {
+        fs.mkdirSync(syncedDir);
+      }
+      const stateDir = path.join(syncedDir, "OpenClaw", ".openclaw");
+      expect(fs.existsSync(stateDir)).toBe(false);
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      vi.spyOn(os, "homedir").mockReturnValue(home);
+      expect(detectMacCloudSyncedStateDir(stateDir)).toEqual(
+        local ? null : { path: stateDir, storage: "CloudStorage provider" },
+      );
+    },
+  );
 
-    const result = detectMacCloudSyncedStateDir(stateDir, {
-      platform: "darwin",
-      homedir: home,
-    });
-
-    expect(result).toEqual({
-      path: path.resolve(stateDir),
-      storage: "CloudStorage provider",
-    });
-  });
-
-  it("detects cloud-synced target when state dir resolves via symlink", () => {
-    const symlinkPath = "/tmp/openclaw-state";
-    const resolvedCloudPath = path.join(
-      home,
-      "Library",
-      "CloudStorage",
-      "OneDrive-Personal",
-      "OpenClaw",
-      ".openclaw",
+  it("detects a missing OneDrive business leaf case-insensitively and explains service relocation", () => {
+    const personal = path.resolve("/Users/tester/OneDrive");
+    const business = path.resolve("/Users/tester/OneDrive - Contoso");
+    const root = path.join(business, "OpenClaw").toUpperCase();
+    const stateDir = path.join(root, ".openclaw");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+      target === root ? root : null,
     );
-
-    const result = detectMacCloudSyncedStateDir(symlinkPath, {
-      platform: "darwin",
-      homedir: home,
-      resolveRealPath: () => resolvedCloudPath,
-    });
-
-    expect(result).toEqual({
-      path: path.resolve(resolvedCloudPath),
-      storage: "CloudStorage provider",
-    });
-  });
-
-  it("ignores cloud-synced symlink prefix when resolved target is local", () => {
-    const symlinkPath = path.join(
-      home,
-      "Library",
-      "CloudStorage",
-      "OneDrive-Personal",
-      "OpenClaw",
-      ".openclaw",
+    const result = detectWindowsCloudSyncedStateDir(
+      stateDir,
+      Object.freeze({
+        OneDrive: personal,
+        onedriveconsumer: personal,
+        oNeDrIvEcOmMeRcIaL: business,
+      }),
     );
-    const resolvedLocalPath = path.join(home, ".openclaw");
-
-    const result = detectMacCloudSyncedStateDir(symlinkPath, {
-      platform: "darwin",
-      homedir: home,
-      resolveRealPath: () => resolvedLocalPath,
-    });
-
-    expect(result).toBeNull();
+    expect(result).toEqual({ path: stateDir, storage: "OneDrive for Business" });
+    if (!result) {
+      throw new Error("expected OneDrive warning");
+    }
+    const warning = formatWindowsCloudSyncedStateDirWarning(stateDir, result);
+    expect(warning).toContain("Windows cloud-synced storage");
+    expect(warning).toContain("OneDrive for Business");
+    expect(warning).toContain("stop the Gateway");
+    expect(warning).toContain("for the Gateway service");
+    expect(warning).toContain("re-run doctor");
+    expect(warning).not.toMatch(/(?:^|\s)OPENCLAW_STATE_DIR=\S+\s+\S*openclaw\b/m);
+    expect(warning).not.toContain("$env:OPENCLAW_STATE_DIR");
+    expect(warning).not.toContain('set "OPENCLAW_STATE_DIR=');
   });
 
-  it("follows a real symlink out of the sync root when the state dir leaf is absent", () => {
-    const sandbox = fs.realpathSync(tempDirs.make("openclaw-cloud-storage-symlink-"));
-    const realHome = path.join(sandbox, "home");
-    const cloudStorage = path.join(realHome, "Library", "CloudStorage");
-    const localTarget = path.join(sandbox, "local-openclaw");
-    fs.mkdirSync(cloudStorage, { recursive: true });
-    fs.mkdirSync(localTarget, { recursive: true });
-    const syncedLink = path.join(cloudStorage, "OneDrive-Personal");
-    fs.symlinkSync(localTarget, syncedLink, process.platform === "win32" ? "junction" : "dir");
-
-    const stateDir = path.join(syncedLink, "OpenClaw", ".openclaw");
-    expect(fs.existsSync(stateDir)).toBe(false);
-
+  it("follows a junction out of OneDrive when the state leaf is absent", () => {
+    const root = path.resolve("/Users/tester/OneDrive/OpenClaw");
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.spyOn(boundaryPath, "safeRealpathSync").mockImplementation((target) =>
+      target === root ? path.resolve("/local-openclaw") : null,
+    );
     expect(
-      detectMacCloudSyncedStateDir(stateDir, {
-        platform: "darwin",
-        homedir: realHome,
+      detectWindowsCloudSyncedStateDir(path.join(root, ".openclaw"), {
+        OneDrive: path.dirname(root),
       }),
     ).toBeNull();
   });
 
-  it("still warns for a real absent leaf that stays inside the sync root", () => {
-    const sandbox = fs.realpathSync(tempDirs.make("openclaw-cloud-storage-real-"));
-    const realHome = path.join(sandbox, "home");
-    const syncedDir = path.join(
-      realHome,
-      "Library",
-      "CloudStorage",
-      "OneDrive-Personal",
-      "OpenClaw",
-    );
-    fs.mkdirSync(syncedDir, { recursive: true });
-
-    const stateDir = path.join(syncedDir, ".openclaw");
-    expect(fs.existsSync(stateDir)).toBe(false);
-
+  it("does not infer a sync root from a OneDrive-named folder without the client's environment", () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     expect(
-      detectMacCloudSyncedStateDir(stateDir, {
-        platform: "darwin",
-        homedir: realHome,
-      }),
-    ).toEqual({
-      path: path.resolve(stateDir),
-      storage: "CloudStorage provider",
-    });
-  });
-
-  it("anchors cloud detection to OS homedir when OPENCLAW_HOME is overridden", () => {
-    const stateDir = path.join(home, "Library", "CloudStorage", "iCloud Drive", ".openclaw");
-    const originalOpenClawHome = process.env.OPENCLAW_HOME;
-    process.env.OPENCLAW_HOME = "/tmp/openclaw-home-override";
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(home);
-    try {
-      const result = detectMacCloudSyncedStateDir(stateDir, {
-        platform: "darwin",
-      });
-
-      expect(result).toEqual({
-        path: path.resolve(stateDir),
-        storage: "CloudStorage provider",
-      });
-    } finally {
-      homedirSpy.mockRestore();
-      if (originalOpenClawHome === undefined) {
-        delete process.env.OPENCLAW_HOME;
-      } else {
-        process.env.OPENCLAW_HOME = originalOpenClawHome;
-      }
-    }
-  });
-
-  it("returns null outside darwin", () => {
-    const stateDir = path.join(
-      home,
-      "Library",
-      "Mobile Documents",
-      "com~apple~CloudDocs",
-      "OpenClaw",
-      ".openclaw",
-    );
-
-    const result = detectMacCloudSyncedStateDir(stateDir, {
-      platform: "linux",
-      homedir: home,
-    });
-
-    expect(result).toBeNull();
+      detectWindowsCloudSyncedStateDir(path.resolve("/Users/tester/OneDrive/.openclaw"), {}),
+    ).toBeNull();
   });
 });

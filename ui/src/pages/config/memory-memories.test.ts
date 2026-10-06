@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import "./memory-memories.ts";
@@ -13,16 +14,6 @@ type MemoryMemoriesTestElement = HTMLElement & {
   agentId: string | null;
   updateComplete: Promise<unknown>;
 };
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (error: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, resolve, reject };
-}
 
 function createElement(request: Request, advertised = true) {
   const element = document.createElement("openclaw-memory-memories") as MemoryMemoriesTestElement;

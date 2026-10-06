@@ -1,50 +1,29 @@
-import type { RouteMatch, Router } from "@openclaw/uirouter";
 import { html, nothing } from "lit";
-import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { createRef, ref } from "lit/directives/ref.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
-import { renderLazyViewError } from "../components/lazy-view-error.ts";
+import type { ApplicationRouter } from "../app-routes.ts";
+import { renderAgentStartupState, renderLazyViewError } from "../components/lazy-view-error.ts";
 import { renderLoadingState } from "../components/loading-state.ts";
 import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
+import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
-import {
-  RouterOutletController,
-  selectRenderedRouteMatch,
-  type RouterOutletSnapshot,
-} from "./router-outlet-controller.ts";
+import type { ApplicationContext } from "./context.ts";
+import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
-export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
+type ApplicationRouteMatch = ReturnType<ApplicationRouter["getState"]>["matches"][number];
 
-type RenderableModule<TData> = {
-  render: (data: TData | undefined, loaderPending: boolean, presented?: boolean) => unknown;
-  retainOnNavigate?: boolean;
-  renderOwnerKey?: (
-    match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
-    settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
-  ) => string | undefined;
-};
-
-type RouterOutletOptions<TLoadContext = unknown> = {
-  retryContext?: TLoadContext;
+type RouterOutletOptions = {
+  retryContext?: ApplicationContext;
   presented?: boolean;
 };
-
-function isRenderableModule<TData>(module: unknown): module is RenderableModule<TData> {
-  return (
-    typeof module === "object" &&
-    module !== null &&
-    "render" in module &&
-    typeof module.render === "function"
-  );
-}
 
 function measureRoutedRender<T>(routeId: string, render: () => T): T {
   const startedAt = globalThis.performance?.now() ?? 0;
@@ -75,17 +54,20 @@ function markButtonReloading(button: HTMLButtonElement | null): () => void {
   };
 }
 
-function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-  retryContext: TLoadContext | undefined,
+function renderError(
+  router: ApplicationRouter,
+  retryContext: ApplicationContext | undefined,
   error: unknown,
-  routeId: TRouteId,
+  routeId: ApplicationRouteMatch["routeId"],
   render?: () => unknown,
 ) {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return renderAgentStartupState();
+  }
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
-    // The chunk this document references was replaced by a newer build;
-    // revalidate cannot fix that, only a reload against the fresh index.html.
+    // Asset failures can mean an interrupted connection or a replaced build.
+    // Reload also resets failed browser imports and Vite stylesheet preloads.
     void scheduleStaleChunkReload();
   }
   const revalidate = () => {
@@ -99,9 +81,8 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       revalidate();
       return;
     }
-    // The gateway is usually still restarting when this is clicked (that update
-    // is what stranded the chunk), so wait for it to answer and then reload
-    // instead of declining on the first failed probe — a silent no-op here is
+    // The Gateway may still be restarting or unreachable, so wait for it to answer
+    // and then reload instead of declining on the first failed probe — a silent no-op here is
     // what drives people to a manual hard reload. Reloading against an
     // unreachable gateway would replace the recoverable panel error with a
     // fatal navigation error in app webviews, so the wait is still bounded.
@@ -111,55 +92,38 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
       if (reloading) {
         return;
       }
+      // Vite marks CSS dependencies seen before loading them. Retrying the
+      // module after a failed or blocked reload can mount it without its styles.
       restoreButton();
-      revalidate();
     });
   };
-  // Stale-chunk failures are routine after a gateway update, so present them
-  // as an update prompt instead of a generic failure.
+  // Resource errors alone cannot establish that a newer build exists.
   return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 
-function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
-  router: Router<TRouteId, TLoadContext, TModule, TData>,
-  selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
-  renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
-  options: RouterOutletOptions<TLoadContext> = {},
+function renderRouterOutlet(
+  router: ApplicationRouter,
+  showPending: boolean,
+  renderedMatch: ApplicationRouteMatch | undefined,
+  options: RouterOutletOptions = {},
 ): unknown {
-  if (renderedMatch?.status === "notFound") {
-    return nothing;
-  }
-  if (renderedMatch?.status === "redirected") {
-    return nothing;
-  }
-  if (!renderedMatch) {
+  if (
+    !renderedMatch ||
+    renderedMatch.status === "notFound" ||
+    renderedMatch.status === "redirected"
+  ) {
     return nothing;
   }
 
   const routeId = renderedMatch.routeId;
-  if (!renderedMatch?.module) {
+  if (!renderedMatch.module) {
     return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
-      : selection.showPending
+      ? renderError(router, options.retryContext, renderedMatch.error, routeId)
+      : showPending
         ? renderLoadingState()
         : nothing;
   }
   const routeModule = renderedMatch.module;
-  if (!isRenderableModule<TData>(routeModule)) {
-    return renderedMatch.error
-      ? renderError<TRouteId, TLoadContext, TModule, TData>(
-          router,
-          options.retryContext,
-          renderedMatch.error,
-          routeId,
-        )
-      : null;
-  }
   const renderedPage = () =>
     measureRoutedRender(routeId, () =>
       options.presented === false
@@ -167,7 +131,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
         : routeModule.render(renderedMatch.data, renderedMatch.isFetching === "loader"),
     );
   return renderedMatch.error
-    ? renderError<TRouteId, TLoadContext, TModule, TData>(
+    ? renderError(
         router,
         options.retryContext,
         renderedMatch.error,
@@ -175,46 +139,6 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
         routeModule.retainOnNavigate ? undefined : renderedPage,
       )
     : renderedPage();
-}
-
-type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
-  router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => boolean | void;
-  notFoundRecoveryReady?: boolean;
-};
-
-class LitRouterOutletController<
-  TRouteId extends string,
-  TLoadContext,
-  TModule,
-  TData,
-> implements ReactiveController {
-  private readonly controller: RouterOutletController<TRouteId, TLoadContext, TModule, TData>;
-
-  constructor(
-    host: ReactiveControllerHost,
-    private readonly inputs: () => RouterOutletInputs<TRouteId, TLoadContext, TModule, TData>,
-  ) {
-    this.controller = new RouterOutletController(() => host.requestUpdate());
-    host.addController(this);
-  }
-
-  get snapshot(): RouterOutletSnapshot<TRouteId, TModule, TData> {
-    return this.controller.snapshot;
-  }
-
-  hostConnected(): void {
-    this.controller.setInputs(this.inputs());
-    this.controller.connect();
-  }
-
-  hostUpdate(): void {
-    this.controller.setInputs(this.inputs());
-  }
-
-  hostDisconnected(): void {
-    this.controller.disconnect();
-  }
 }
 
 /** Presentation can retire immediately while its connected subtree finishes MCP teardown. */
@@ -241,36 +165,57 @@ class OpenClawRoutePresentation extends OpenClawLightDomElement {
   }
 }
 
-class OpenClawRouterOutlet<
-  TRouteId extends string = string,
-  TLoadContext = unknown,
-  TModule = unknown,
-  TData = unknown,
-> extends OpenClawLightDomElement {
-  @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  @property({ attribute: false }) retryContext?: TLoadContext;
+class OpenClawRouterOutlet extends OpenClawLightDomElement {
+  @property({ attribute: false }) router?: ApplicationRouter;
+  @property({ attribute: false }) retryContext?: ApplicationContext;
   @property({ attribute: false }) onNotFound?: () => boolean | void;
   @property({ attribute: false }) notFoundRecoveryReady?: boolean;
-  private readonly outlet = new LitRouterOutletController(this, () => ({
-    router: this.router,
-    onNotFound: this.onNotFound,
-    notFoundRecoveryReady: this.notFoundRecoveryReady,
-  }));
+  @property({ attribute: false }) retryEnabled = true;
+  private readonly outlet = new RouterOutletController<
+    ApplicationRouteMatch["routeId"],
+    ApplicationContext,
+    NonNullable<ApplicationRouteMatch["module"]>
+  >(() => this.requestUpdate());
   @property({ attribute: false }) retentionScope?: object;
   private readonly retainedUnmountGate = new McpAppUnmountGate(this);
   private readonly transientUnmountGate = new McpAppUnmountGate(this);
   private readonly retainedPresentation = createRef<OpenClawRoutePresentation>();
-  private retainedMatch?: RouteMatch<TRouteId, TModule, TData>;
+  private retainedMatch?: ApplicationRouteMatch;
   private retainedOwnerKey?: string;
   private retainedPresented = false;
-  private scopeRouter?: Router<TRouteId, TLoadContext, TModule, TData>;
+  private scopeRouter?: ApplicationRouter;
   private scopeOwner?: object;
   private scopeInitialized = false;
   private scopeGeneration = 0;
   private scopeRefreshing = false;
   private retiredSessionMatches = new Set<string>();
 
-  private synchronizeRetentionScope(router: Router<TRouteId, TLoadContext, TModule, TData>): void {
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.synchronizeOutletInputs();
+    this.outlet.connect();
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.outlet.disconnect();
+  }
+
+  protected override willUpdate(): void {
+    this.synchronizeOutletInputs();
+  }
+
+  private synchronizeOutletInputs(): void {
+    this.outlet.setInputs({
+      router: this.router,
+      onNotFound: this.onNotFound,
+      notFoundRecoveryReady: this.notFoundRecoveryReady,
+      retryContext: this.retryContext,
+      retryEnabled: this.retryEnabled,
+    });
+  }
+
+  private synchronizeRetentionScope(router: ApplicationRouter): void {
     const routerChanged = this.scopeRouter !== router;
     const changed =
       this.scopeInitialized && (routerChanged || this.scopeOwner !== this.retentionScope);
@@ -333,8 +278,7 @@ class OpenClawRouterOutlet<
       renderedMatch !== undefined && this.retiredSessionMatches.has(renderedMatch.id);
     const scopeReady = !this.scopeRefreshing && !retiredSession;
     const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
-    const routeModule = renderedMatch?.module;
-    const module = isRenderableModule<TData>(routeModule) ? routeModule : undefined;
+    const module = renderedMatch?.module;
     const declaredOwnerKey = renderedMatch
       ? module?.renderOwnerKey?.(renderedMatch, snapshot.settled)
       : undefined;
@@ -361,6 +305,9 @@ class OpenClawRouterOutlet<
     const retainedKey = `${this.scopeGeneration}:${this.retainedOwnerKey ?? "empty"}`;
     const transientKey = presentRetained ? "empty" : (explicitOwnerKey ?? routeKey);
     const renderTransient = () => {
+      if (snapshot.startupPending) {
+        return renderAgentStartupState();
+      }
       if (isSessionRouteId(renderedMatch?.routeId) && !scopeReady) {
         return !retiredSession && renderedMatch?.error !== undefined
           ? renderError(router, this.retryContext, renderedMatch.error, renderedMatch.routeId)
@@ -369,9 +316,16 @@ class OpenClawRouterOutlet<
       // Returning from another page must not revive the previously selected
       // session while the requested destination is still unresolved.
       if (module?.retainOnNavigate && waiting) {
+        // Chat's module can arrive before its submitted-prompt preview loader.
+        // Keep the launcher visible until that first Chat presentation is ready.
+        if (renderedMatch?.routeId === "chat" && snapshot.settled?.routeId === "new-session") {
+          return renderRouterOutlet(router, snapshot.showPending, snapshot.settled, {
+            retryContext: this.retryContext,
+          });
+        }
         return renderLoadingState();
       }
-      return renderRouterOutlet(router, snapshot, renderedMatch, {
+      return renderRouterOutlet(router, snapshot.showPending, renderedMatch, {
         retryContext: this.retryContext,
       });
     };
@@ -387,7 +341,7 @@ class OpenClawRouterOutlet<
                   .ownerKey=${retainedKey}
                   .presented=${presentRetained}
                   .renderPage=${(presented: boolean) =>
-                    renderRouterOutlet(router, snapshot, retained, {
+                    renderRouterOutlet(router, snapshot.showPending, retained, {
                       retryContext: this.retryContext,
                       presented,
                     })}

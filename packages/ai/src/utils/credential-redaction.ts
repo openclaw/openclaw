@@ -24,6 +24,19 @@ const MEDIA_FIELD_NAME_RE = new RegExp(
 );
 const MEDIA_PAYLOAD_SUFFIX_RE = new RegExp(`^(?:${MEDIA_PAYLOAD_SUFFIXES})$`, "u");
 const MEDIA_WRAPPER_NAME_RE = /^(?:input_|output_)?(?:audio|image|video)s?(?:_|$)/iu;
+const DIAGNOSTIC_FIELD_SEPARATOR_RE = /[^a-z0-9]/g;
+const MEDIA_TYPE_RE = /^(?:input|output)?(?:audio|image|video)/u;
+const MEDIA_MIME_RE = /^(?:audio|image|video)\//iu;
+const MEDIA_ARRAY_INDEX_RE = /^(?:0|[1-9]\d*)$/u;
+const MEDIA_URL_SUFFIX_RE = /(?:uri|url)$/u;
+const MEDIA_MIME_FIELDS = [
+  "mimeType",
+  "mime_type",
+  "mediaType",
+  "media_type",
+  "contentType",
+  "content_type",
+];
 const AUTHORIZATION_VALUE_RE = /\b(Bearer|Basic)\s+[A-Za-z0-9+/._~=-]{8,}/giu;
 const JWT_VALUE_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const COOKIE_HEADER_RE = /\b((?:set-)?cookie\s*:\s*)([^\r\n]+)/giu;
@@ -38,6 +51,9 @@ const LOOSE_CREDENTIAL_PAIR_RE =
 const MEDIA_DATA_URL_RE =
   /data:(?:audio|image|video)\/[a-z0-9.+-]+(?:;[^,;\s]+)*;base64,[ \t]*(?:\r?\n[ \t]*)?[a-z0-9+/_=-]+(?:[ \t]*\r?\n[ \t]*[a-z0-9+/_=-]+)*/giu;
 const MAX_DIAGNOSTIC_JSON_LENGTH = 16 * 1024;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES = 2_048;
+const UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH = 2_048;
+const unchangedDiagnosticText = new Set<string>();
 const BRACKET_PROSE_PATTERN = String.raw`(\[+)([A-Za-z][A-Za-z0-9 _.-]*|\s*\d+\s+(?!(?:true|false|null)(?![\w-]))[A-Za-z][A-Za-z0-9 _.=-]*)(\]+)`;
 const BRACKET_PROSE_RE = new RegExp(`^${BRACKET_PROSE_PATTERN}$`, "u");
 const BRACKET_PROSE_PART_RE = new RegExp(String.raw`(?<!\[)${BRACKET_PROSE_PATTERN}`, "gu");
@@ -93,10 +109,12 @@ function hasSensitiveProseContent(value: string): boolean {
 }
 
 function normalizeDiagnosticFieldName(value: string): string {
-  return value.toLowerCase().replaceAll(/[^a-z0-9]/g, "");
+  return value.toLowerCase().replaceAll(DIAGNOSTIC_FIELD_SEPARATOR_RE, "");
 }
 
-function isCredentialFieldName(normalized: string): boolean {
+/** Classifies credential-bearing fields, including case-insensitive HTTP header names. */
+export function isCredentialFieldName(name: string): boolean {
+  const normalized = normalizeDiagnosticFieldName(name);
   if (!normalized || NON_CREDENTIAL_FIELD_NAMES.has(normalized)) {
     return false;
   }
@@ -132,16 +150,16 @@ function diagnosticBytes(value: unknown, numericArrays = false): Uint8Array | un
 
 function isDiagnosticMediaPayload(descriptors: PropertyDescriptorMap): boolean {
   const type = descriptors.type?.value;
-  return (
-    (typeof type === "string" &&
-      /^(?:input|output)?(?:audio|image|video)/u.test(normalizeDiagnosticFieldName(type))) ||
-    ["mimeType", "mime_type", "mediaType", "media_type", "contentType", "content_type"].some(
-      (key) => {
-        const mime = descriptors[key]?.value;
-        return typeof mime === "string" && /^(?:audio|image|video)\//iu.test(mime);
-      },
-    )
-  );
+  if (typeof type === "string" && MEDIA_TYPE_RE.test(normalizeDiagnosticFieldName(type))) {
+    return true;
+  }
+  for (const key of MEDIA_MIME_FIELDS) {
+    const mime = descriptors[key]?.value;
+    if (typeof mime === "string" && MEDIA_MIME_RE.test(mime)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type DiagnosticMediaField =
@@ -171,11 +189,13 @@ function extractDiagnosticMediaField(
   const mediaField = MEDIA_FIELD_NAME_RE.test(normalized) || MEDIA_WRAPPER_NAME_RE.test(key);
   const contextualPayload = parentMedia && MEDIA_PAYLOAD_SUFFIX_RE.test(normalized);
   if (!privateField && !mediaField && !contextualPayload) {
-    const nestedMedia =
-      value !== null && (typeof value === "object" || /^(?:0|[1-9]\d*)$/u.test(key));
-    return parentMedia && nestedMedia ? { kind: "context" } : undefined;
+    return parentMedia &&
+      value !== null &&
+      (typeof value === "object" || MEDIA_ARRAY_INDEX_RE.test(key))
+      ? { kind: "context" }
+      : undefined;
   }
-  if (/(?:uri|url)$/u.test(normalized)) {
+  if (MEDIA_URL_SUFFIX_RE.test(normalized)) {
     return { kind: "redacted" };
   }
   const encoded = diagnosticBytes(value, true) ?? (typeof value === "string" ? value : undefined);
@@ -185,6 +205,15 @@ function extractDiagnosticMediaField(
   const bytes =
     typeof encoded === "string" ? estimateBase64DecodedBytes(encoded) : encoded.byteLength;
   return { kind: "redacted", bytes, source: encoded };
+}
+
+const diagnosticRecords = new WeakSet<object>();
+
+/** Fresh records need no native-object probe while their prototype stays ordinary. */
+export function createDiagnosticRecord(): Record<string, unknown> {
+  const record = {};
+  diagnosticRecords.add(record);
+  return record;
 }
 
 export function projectDiagnosticValue(
@@ -220,22 +249,30 @@ export function projectDiagnosticValue(
       state.changed = true;
       return "[Truncated]";
     }
-    try {
-      // Brand-check without provider getters; retain only numeric retry timing.
-      Headers.prototype.has.call(value, "retry-after");
-      const seconds = parseRetryAfterHeadersSeconds(value);
-      state.changed = true;
-      return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
-    } catch {
-      // Other objects follow the bounded descriptor walk below.
+    if (!diagnosticRecords.has(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+      try {
+        // Brand-check without provider getters; retain only numeric retry timing.
+        Headers.prototype.has.call(value, "retry-after");
+        const seconds = parseRetryAfterHeadersSeconds(value);
+        state.changed = true;
+        return seconds === undefined ? {} : { "retry-after-ms": seconds * 1000 };
+      } catch {
+        // Other objects follow the bounded descriptor walk below.
+      }
     }
-    const keys = Reflect.ownKeys(value).slice(0, 65);
-    const descriptors = Object.fromEntries(
-      keys.slice(0, 64).flatMap((key) => {
-        const descriptor = typeof key === "string" && Object.getOwnPropertyDescriptor(value, key);
-        return descriptor ? [[key, descriptor]] : [];
-      }),
-    );
+    const keys = Reflect.ownKeys(value);
+    // Snapshot descriptors before recursion; the map restores numeric key order from proxies.
+    const descriptors: PropertyDescriptorMap = Object.create(null);
+    for (let index = 0; index < Math.min(keys.length, 64); index += 1) {
+      const key = keys[index];
+      if (typeof key !== "string") {
+        continue;
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor) {
+        descriptors[key] = descriptor;
+      }
+    }
     state.changed ||= keys.length > 64;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
@@ -245,7 +282,8 @@ export function projectDiagnosticValue(
       keys.length > 64 ||
       (typeof rawName === "string" && isCredentialFieldName(normalizeDiagnosticFieldName(rawName)));
     const redactMedia = mediaPayload || keys.length > 64 || isDiagnosticMediaPayload(descriptors);
-    for (const [key, descriptor] of Object.entries(descriptors)) {
+    for (const key in descriptors) {
+      const descriptor = expectDefined(descriptors[key], "diagnostic descriptor");
       if (
         !("value" in descriptor) ||
         (!descriptor.enumerable &&
@@ -286,6 +324,21 @@ export function projectDiagnosticValue(
 
 /** Redacts bounded structured JSON while preserving harmless diagnostic text byte-for-byte. */
 export function redactDiagnosticText(value: string): string {
+  if (unchangedDiagnosticText.has(value)) {
+    return value;
+  }
+  const projected = projectDiagnosticText(value);
+  // Only this fixed policy is cached; downstream configured/exact-secret redaction stays live.
+  if (projected === value && value.length <= UNCHANGED_DIAGNOSTIC_TEXT_MAX_LENGTH) {
+    if (unchangedDiagnosticText.size >= UNCHANGED_DIAGNOSTIC_TEXT_MAX_ENTRIES) {
+      unchangedDiagnosticText.clear();
+    }
+    unchangedDiagnosticText.add(value);
+  }
+  return projected;
+}
+
+function projectDiagnosticText(value: string): string {
   const text = redactCredentialText(value).replace(MEDIA_DATA_URL_RE, "<redacted>");
   if (!looksLikeDiagnosticJson(text)) {
     return text;

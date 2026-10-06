@@ -1,8 +1,8 @@
-// Whatsapp plugin module implements peer behavior.
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getSenderIdentity } from "../../identity.js";
 import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { jidToE164, normalizeE164 } from "../../text-runtime.js";
+import { jidToE164 } from "../../targets-runtime.js";
 
 export function resolvePeerId(msg: AdmittedWebInboundMessage) {
   const admission = requireWhatsAppInboundAdmission(msg);

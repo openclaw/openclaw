@@ -3,16 +3,17 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   cellAuthSecretDir,
   cellNetworkName,
-  cellOwnerId,
   FLEET_DISK_LIMIT_LABEL,
   validateDiskSize,
   FLEET_GATEWAY_PORT,
-  FLEET_OWNER_LABEL,
-  FLEET_TENANT_LABEL,
 } from "./cell-profile.js";
 import type { FleetContainerRuntime } from "./containers.runtime.js";
 import { listFleetCells } from "./registry.js";
-import { probeCellHealth, requireCell } from "./service-support.runtime.js";
+import {
+  inspectionHasFleetOwner,
+  probeCellHealth,
+  requireCell,
+} from "./service-support.runtime.js";
 
 type FleetDoctorFinding = {
   check: string;
@@ -109,12 +110,10 @@ export async function runFleetDoctor(params: {
   containers: FleetContainerRuntime;
   fetchImpl: typeof fetch;
   tenant?: string;
-  getuid?: () => number | undefined;
-  getgid?: () => number | undefined;
 }): Promise<FleetDoctorCellReport[]> {
   const records = params.tenant
-    ? [requireCell(params.env, params.tenant)]
-    : listFleetCells(params.env);
+    ? [await requireCell(params.env, params.tenant)]
+    : await listFleetCells(params.env);
   const stateDir = resolveStateDir(params.env);
   return await Promise.all(
     records.map(async (record) => {
@@ -163,9 +162,7 @@ export async function runFleetDoctor(params: {
       findings.push(
         finding("container-present", "pass", `Container ${record.containerName} is present.`),
       );
-      const owned =
-        inspection.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-        inspection.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir);
+      const owned = inspectionHasFleetOwner(record, inspection);
       findings.push(
         owned
           ? finding(
@@ -312,9 +309,7 @@ export async function runFleetDoctor(params: {
         );
       } else {
         findings.push(finding("network-present", "pass", `Network ${networkName} is present.`));
-        const networkOwned =
-          network.labels[FLEET_TENANT_LABEL] === record.tenantId &&
-          network.labels[FLEET_OWNER_LABEL] === cellOwnerId(record.dataDir);
+        const networkOwned = inspectionHasFleetOwner(record, network);
         findings.push(
           networkOwned
             ? finding(

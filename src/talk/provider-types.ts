@@ -1,7 +1,9 @@
-// Talk provider types describe realtime voice provider configuration and APIs.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { TalkClientCreateResult } from "../../packages/gateway-protocol/src/schema/channels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { RealtimeVoiceAudioOutputPort } from "./audio-output-port.js";
 import type { TalkTransport } from "./talk-events.js";
 
 export type RealtimeVoiceProviderId = string;
@@ -189,7 +191,13 @@ export type RealtimeVoiceBridgeCallbacks = {
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   /** Scoped acknowledgments are valid only for the provider connection that emitted the mark. */
   onMark?: (markName: string, acknowledge?: () => void) => void;
-  onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  /** Snapshot metadata replaces provisional text; omission retains incremental deltas. */
+  onTranscript?: (
+    role: RealtimeVoiceRole,
+    text: string,
+    isFinal: boolean,
+    metadata?: { textMode: "snapshot" },
+  ) => void;
   /** Synchronously admits native control; only consult permits task fallthrough. Respond is call-bound. */
   handleDelegationInput?: (
     text: string,
@@ -212,7 +220,7 @@ export type RealtimeVoiceProviderCapabilities = {
   outputAudioFormats: RealtimeVoiceAudioFormat[];
   supportsBrowserSession?: boolean;
   supportsBargeIn?: boolean;
-  /** True when provider VAD reports confirmed interruptions through onClearAudio("barge-in"). */
+  /** True when the provider owns interruption from incoming audio. */
   handlesInputAudioBargeIn?: boolean;
   supportsToolCalls?: boolean;
   /** True when user transcripts are reliable enough to gate responses on a leading wake name. */
@@ -297,65 +305,30 @@ export type RealtimeVoiceGatewayControl = Omit<
   bindBridge: (bridge: RealtimeVoiceBridge) => void;
 };
 
-export type RealtimeVoiceBrowserAudioContract = {
-  inputEncoding: "pcm16" | "g711_ulaw";
-  inputSampleRateHz: number;
-  outputEncoding: "pcm16" | "g711_ulaw";
-  outputSampleRateHz: number;
-};
+export type RealtimeVoiceBrowserAudioContract = Extract<
+  TalkClientCreateResult,
+  { transport: "provider-websocket" }
+>["audio"];
 
-type RealtimeVoiceBrowserWebRtcSdpSession = {
-  provider: RealtimeVoiceProviderId;
-  transport: "webrtc";
-  clientSecret: string;
-  offerUrl?: string;
-  offerHeaders?: Record<string, string>;
-  offerResponseMaxBytes?: number;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-};
-
-type RealtimeVoiceBrowserJsonPcmWebSocketSession = {
-  provider: RealtimeVoiceProviderId;
-  transport: "provider-websocket";
-  protocol: string;
-  clientSecret: string;
-  websocketUrl: string;
-  audio: RealtimeVoiceBrowserAudioContract;
-  initialMessage?: unknown;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-};
-
-type RealtimeVoiceBrowserGatewayRelaySession = {
-  provider: RealtimeVoiceProviderId;
-  transport: "gateway-relay";
-  relaySessionId: string;
-  audio: RealtimeVoiceBrowserAudioContract;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-};
-
-type RealtimeVoiceBrowserManagedRoomSession = {
-  provider: RealtimeVoiceProviderId;
-  transport: "managed-room";
-  roomUrl: string;
-  token?: string;
-  model?: string;
-  voice?: string;
-  expiresAt?: number;
-};
-
-export type RealtimeVoiceBrowserSession =
-  | RealtimeVoiceBrowserWebRtcSdpSession
-  | RealtimeVoiceBrowserJsonPcmWebSocketSession
-  | RealtimeVoiceBrowserGatewayRelaySession
-  | RealtimeVoiceBrowserManagedRoomSession;
+/** Providers return transport details; the Gateway attaches client ownership fields. */
+export type RealtimeVoiceBrowserSession = SchemaContract<
+  | (Omit<
+      Extract<TalkClientCreateResult, { transport: "webrtc" }>,
+      "voiceSessionId" | "clientControl"
+    > & { offerResponseMaxBytes?: number })
+  | Omit<Extract<TalkClientCreateResult, { transport: "provider-websocket" }>, "voiceSessionId">
+  | Omit<Extract<TalkClientCreateResult, { transport: "gateway-relay" }>, "voiceSessionId">
+  | Omit<Extract<TalkClientCreateResult, { transport: "managed-room" }>, "voiceSessionId">
+>;
 
 export type RealtimeVoiceBridge = {
+  /** Bind before connect: continuous PCM and interruption go to this call-bound worker sink,
+   * not onAudio/onClearAudio. Transcripts, delegation and lifecycle stay on the host. */
+  setAudioOutputPort?(output: RealtimeVoiceAudioOutputPort): void;
+  /** Continuous audio has no response boundaries; the provider owns interruption. */
+  outputAudioMode?: "response" | "continuous";
+  /** Buffers input at its sample rate and supplies silence between microphone writes. */
+  pacesInputAudio?: boolean;
   supportsToolResultContinuation?: boolean;
   /** False when the provider cannot accept a tool result without starting a response. */
   supportsToolResultSuppression?: boolean;

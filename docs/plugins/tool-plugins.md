@@ -6,6 +6,7 @@ read_when:
   - You want to build a simple OpenClaw plugin that only adds agent tools
   - You want to use defineToolPlugin instead of hand-writing plugin manifest metadata
   - You need to scaffold, generate, validate, test, or publish a tool-only plugin
+  - You need the plugin tool context's memory audience and currency guards
 ---
 
 `defineToolPlugin` builds a plugin that only adds agent-callable tools: no
@@ -161,6 +162,29 @@ account, thread, and local-media policy; plugins cannot retarget this helper,
 and retained copies stop working after the turn closes. The helper is unavailable
 for channels whose delivery is owned by a Gateway transport.
 
+For an admitted session turn, the optional
+`memoryAudience?: MemoryAudience` field carries the same host-resolved memory
+audience used by the selected memory provider. It is either
+`{ kind: "owner-private", agentId }` or
+`{ kind: "conversation", agentId, sessionKey, sessionId }`. The field is absent
+when the host cannot prove an audience or when no session turn exists. Plugins
+must consume this prepared value and must not infer memory authority from
+`senderIsOwner`, session-key patterns, or session lookups.
+
+Tools that retain or use `memoryAudience` across awaited work must call both
+currency guards immediately before releasing data or performing an effect:
+
+```typescript
+toolContext.assertInvocationCurrent();
+toolContext.assertMemoryAudienceCurrent?.();
+```
+
+The optional `assertMemoryAudienceCurrent?(): void` guard fails after any session
+in the captured lineage changes incarnation or lifecycle.
+`assertInvocationCurrent` separately checks the admitted tool invocation and
+plugin lifetime. Use a version 2 tool context when the tool depends on these live
+authority checks.
+
 A factory may return a core `AgentTool`, an array of them, or `null` or
 `undefined` to opt out, as the example above does. When it returns a concrete
 tool, that tool uses the core runtime signature
@@ -178,6 +202,53 @@ runtime properties, schemas, and display metadata come from the current factory
 context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
+
+### Owner-authorized continuations
+
+To participate when the exact parent resumes after an explicit `sessions_yield`,
+register an `OpenClawPluginToolFactory<2>` descriptor through `api.registerTool`:
+
+```typescript
+api.registerTool(
+  {
+    contextVersion: 2,
+    create(context) {
+      if (context.senderIsOwner !== true) return null;
+      return createPrivilegedTool({ assertCurrent: context.assertInvocationCurrent });
+    },
+  },
+  { name: "my_privileged_tool" },
+);
+```
+
+The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent` and
+may provide `memoryAudience` with `assertMemoryAudienceCurrent`.
+Carry `assertInvocationCurrent` through awaited work and invoke it in the final
+synchronous write or request guard, before effects—not only before starting work
+or after returning. It checks the captured plugin lifetime and admitted
+run/worker authority; a continuation also checks the original owner's live
+exact-parent binding. Standalone HTTP/RPC calls use their authenticated request
+lifetime, while MCP tools retain the existing authenticated grant or
+loopback-runtime lifetime.
+Metadata-only catalog construction does not grant invocation authority. A retained
+versioned tool without an admitted invocation fails when its guard is called.
+
+Client-input tools may also receive `assertInputCommitAllowed`. Carry this
+host-bound, synchronous policy callback to the storage owner's final admission
+guard when persisting client-supplied bytes. Calling it checks the current upload
+policy even for custom tool names the Gateway cannot classify. Do not call it for
+text-only actions that do not upload bytes. It performs no database reads, so
+it can run inside worker-backed write admission. It does not replace invocation
+or mutation authority. Preserve it across awaited preparation, but do not apply
+it to already accepted results or compensating cleanup. Agent-generated input
+does not require this client-upload policy callback.
+
+Legacy function and static-tool registrations remain supported with their existing
+direct-turn context; this change introduces no removal date or shortened
+compatibility window. They do **not** receive continued owner identity. Opt-in
+alone grants nothing: management-only callers, unrelated sessions, and detached
+cron runs still cannot acquire the owner's identity. `senderIsOwner` is an
+availability check, never a substitute for the required final-effect guard.
 
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
@@ -279,6 +350,64 @@ marks the call failed unless `ok` or `success` is explicitly `true`, even when
 `execute` returned normally. Domain data that
 uses one of those names belongs under a wrapper key, such as `{ card }`,
 instead of at the top level of `details`.
+
+For a tool-owned timeout, return `timedOut: true` and a positive integer
+`timeoutMs` in `details`. If the agent provides no final reply, OpenClaw includes
+that duration in the fallback warning without exposing raw error text. Return
+`partial: true` with a nonempty `results` array when usable partial results are
+available; the warning includes their count. These diagnostics do not turn an
+incomplete operation into a successful call.
+
+## Deliver the reply directly
+
+By default the model reads every tool result and writes the user-visible reply
+itself. A tool that already produces the finished reply, such as a report or a
+confirmation text, can hand it to OpenClaw instead and end the turn without
+that extra model step.
+
+Declare the capability on the tool and return the reply in
+`details.sourceReply`:
+
+```typescript
+api.registerTool({
+  name: "order_status",
+  description: "Report the status of one order.",
+  parameters: Type.Object({ orderId: Type.String() }),
+  canDeliverSourceReply: true,
+  catalogMode: "direct-only",
+  async execute(_toolCallId, params) {
+    const report = await buildOrderStatusReport(params.orderId);
+    return {
+      content: [{ type: "text", text: report.text }],
+      details: {
+        ok: true,
+        sourceReply: {
+          text: report.text,
+          mediaUrls: report.pdfPath ? [report.pdfPath] : [],
+        },
+      },
+    };
+  },
+});
+```
+
+OpenClaw delivers the reply to the conversation the turn came from and ends the
+turn, so no further model turn restates the result. Other tool calls from the
+same model step still run to completion and are recorded. After a successful
+send, delivery records the reply as the assistant turn in the session
+transcript, with the same session checks as any other delivered reply. A reply
+needs `text`, `mediaUrl`, or `mediaUrls`; `attachments` ride along with them.
+Error results, results without a deliverable reply, and `sourceReply.final:
+false` are ignored, and the model continues as usual with `content`.
+
+OpenClaw reads the reply after tool hooks and result middleware run, so
+middleware can rewrite or withdraw it. Only the tool author can grant the
+capability: `canDeliverSourceReply` lives on the tool definition, never in a
+result. A call made from inside a Code Mode program returns to that program and
+is never delivered as a reply. On the Codex harness, only calls the model makes
+directly in the `direct-only` catalog can deliver, so declare
+`catalogMode: "direct-only"` as in the example; otherwise the model restates the
+result as usual.
 
 ## Configuration
 
@@ -429,9 +558,10 @@ openclaw plugins install npm-pack:./openclaw-plugin-stock-quotes-0.1.0.tgz
 openclaw plugins inspect stock-quotes --runtime --json
 ```
 
-After installing, restart or reload the Gateway and ask the agent to use the
-tool. If the tool is not visible, inspect the plugin runtime and the effective
+Installation applies to a running local Gateway automatically; start the Gateway
+if it was stopped. Ask the agent to use the tool. If the tool is not visible, inspect the plugin runtime and the effective
 tool catalog before changing code (see [Troubleshooting](#troubleshooting)).
+After later source or manifest edits, use [plugin Reload](/cli/plugins#reload).
 
 ## Publish
 
@@ -498,7 +628,7 @@ Check these in order:
 2. `openclaw plugins validate --root <plugin-root> --entry ./dist/index.js`
 3. `openclaw.plugin.json` has `contracts.tools` with the expected tool names.
 4. `package.json` has `openclaw.extensions: ["./dist/index.js"]`.
-5. The Gateway was restarted or reloaded after installing the plugin.
+5. Installation reported successful runtime application; after source edits or a repaired activation failure, run `openclaw plugins reload <plugin-id>`.
 
 ## See also
 

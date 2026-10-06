@@ -4,6 +4,7 @@
  * session retention, and process cleanup for reconnect/poll flows.
  */
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type {
@@ -13,7 +14,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
-import { readEnvInt } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
 const DEFAULT_JOB_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const MIN_JOB_TTL_MS = 60 * 1000; // 1 minute
@@ -23,10 +24,7 @@ const MAX_FINISHED_SESSION_COUNT = 50;
 const MAX_FINISHED_SESSION_OUTPUT_CHARS = 2_000_000;
 
 function clampTtl(value: number | undefined) {
-  if (value === undefined || Number.isNaN(value)) {
-    return DEFAULT_JOB_TTL_MS;
-  }
-  return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
+  return clampWithDefault(value, DEFAULT_JOB_TTL_MS, MIN_JOB_TTL_MS, MAX_JOB_TTL_MS);
 }
 
 const defaultJobTtlMs = clampTtl(readEnvInt("OPENCLAW_BASH_JOB_TTL_MS", "PI_BASH_JOB_TTL_MS"));
@@ -66,6 +64,7 @@ export interface ProcessSession {
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
+  notifyFromConversationTurn?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -101,6 +100,10 @@ export interface ProcessSession {
   exitCode?: number | null;
   exitSignal?: NodeJS.Signals | number | null;
   exitReason?: TerminationReason;
+  /** Explicit process/task stop intent; the terminal reason still owns confirmation. */
+  cancellationRequested?: boolean;
+  /** Cleanup failure prevents an intentional stop from being treated as successful observation. */
+  finalizationFailed?: boolean;
   /** Preserve the lifecycle owner's verdict for polls that captured the running session. */
   terminalStatus?: Exclude<ProcessStatus, "running">;
   noOutputTimedOut?: boolean;
@@ -118,6 +121,7 @@ const finishedSessions = new Map<string, ProcessSession & { endedAt: number; exp
 // Display uses start chronology; retained records are evicted in completion order.
 let processSessionStartOrders = new WeakMap<object, number>();
 let nextProcessSessionStartOrder = 0;
+const processInstanceIds = new WeakMap<ProcessSession, string>();
 // Promotion stays live when process removal clears its presentation state.
 const activeExecSessions = new Map<
   string,
@@ -135,6 +139,7 @@ export function isProcessSessionIdTaken(id: string): boolean {
 /** Adds a running session; retention starts only after background completion. */
 export function addSession(session: ProcessSession) {
   processSessionStartOrders.set(session, nextProcessSessionStartOrder++);
+  processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
 }
@@ -148,6 +153,15 @@ export function compareProcessSessionStartOrder(
     right.startedAt - left.startedAt ||
     processSessionStartOrders.get(right)! - processSessionStartOrders.get(left)!
   );
+}
+
+/** Stable while this exact process is retained, including after its friendly ID is reused. */
+export function processSessionInstanceId(session: ProcessSession): string {
+  const id = processInstanceIds.get(session);
+  if (!id) {
+    throw new Error("Process is not registered");
+  }
+  return id;
 }
 
 /** Returns a running session by id. */
@@ -207,7 +221,9 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingMaxOutputChars ?? DEFAULT_PENDING_OUTPUT_CHARS,
     session.maxOutputChars,
   );
-  session.pendingOutput.push({ stream, text: chunk });
+  // Producer chunks may themselves be slices of a much larger decoded callback.
+  const ownedChunk = copyOutputText(chunk);
+  session.pendingOutput.push({ stream, text: ownedChunk });
   let pendingChars = streamChars + chunk.length;
   if (pendingChars > pendingCap) {
     session.truncated = true;
@@ -220,7 +236,7 @@ export function appendOutput(session: ProcessSession, stream: "stdout" | "stderr
     session.pendingStderrChars = pendingChars;
   }
   session.totalOutputChars += chunk.length;
-  const aggregated = trimWithCap(session.aggregated + chunk, session.maxOutputChars);
+  const aggregated = tail(session.aggregated + ownedChunk, session.maxOutputChars);
   session.truncated =
     session.truncated || aggregated.length < session.aggregated.length + chunk.length;
   session.aggregated = aggregated;
@@ -246,32 +262,25 @@ export function prepareSessionPoll(session: ProcessSession, scope: object | unde
   if (!scope) {
     return { ...drainSession(session), acknowledge() {} };
   }
-  const pending = session.pendingPollDelivery;
-  if (pending) {
+  let delivery = session.pendingPollDelivery;
+  if (delivery) {
     // The first retry claims the staged bytes for its turn. Parallel siblings then
     // observe that scope and cannot duplicate the recovery result.
-    if (pending.scope === scope) {
+    if (delivery.scope === scope) {
       return { output: "", outputDropped: false, acknowledge() {} };
     }
-    pending.scope = scope;
-    return {
-      output: pending.output,
-      outputDropped: pending.outputDropped,
-      acknowledge() {
-        if (session.pendingPollDelivery === pending) {
-          session.pendingPollDelivery = undefined;
-        }
-      },
-    };
+    delivery.scope = scope;
+  } else {
+    const drained = drainSession(session);
+    if (drained.output.length === 0 && !drained.outputDropped) {
+      return { ...drained, acknowledge() {} };
+    }
+    delivery = { ...drained, scope };
+    session.pendingPollDelivery = delivery;
   }
-  const drained = drainSession(session);
-  if (drained.output.length === 0 && !drained.outputDropped) {
-    return { ...drained, acknowledge() {} };
-  }
-  const delivery = { ...drained, scope };
-  session.pendingPollDelivery = delivery;
   return {
-    ...drained,
+    output: delivery.output,
+    outputDropped: delivery.outputDropped,
     acknowledge() {
       if (session.pendingPollDelivery === delivery) {
         session.pendingPollDelivery = undefined;
@@ -310,11 +319,17 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  if (!session.finalizing) {
+    settleExecSessionFinalization(session);
+  }
+}
+
+/** Releases scope joins after the process owner's task and notification work settles. */
+export function settleExecSessionFinalization(session: ProcessSession): void {
+  session.finalizing = false;
   const active = activeExecSessions.get(session.id);
   if (active?.session === session) {
     activeExecSessions.delete(session.id);
-    // The exec owner's synchronous task/notification callbacks run before
-    // these promise continuations resume and release the environment state.
     active.settled?.resolve();
   }
 }
@@ -352,11 +367,6 @@ export function acknowledgeNotifyOnExit(record: {
   }
   remove();
   record.notifyOnExitRemoval = undefined;
-}
-
-/** Reports owner-tracked process liveness even after visibility is removed. */
-export function hasActiveBackgroundExecSession(sessionId: string): boolean {
-  return activeExecSessions.get(sessionId)?.promoted === true;
 }
 
 /** Returns the number of live background exec sessions without exposing process details. */
@@ -423,12 +433,17 @@ function moveToFinished(session: ProcessSession) {
   scheduleSweeper();
 }
 
+function copyOutputText(text: string): string {
+  // Own code units without replacing lone surrogates as UTF-8 would.
+  return Buffer.from(text, "utf16le").toString("utf16le");
+}
+
 /** Returns the last `max` characters of text without adding ellipses. */
 export function tail(text: string, max = 2000) {
   if (text.length <= max) {
     return text;
   }
-  return sliceUtf16Safe(text, text.length - max);
+  return copyOutputText(sliceUtf16Safe(text, text.length - max));
 }
 
 function capPendingStream(
@@ -439,30 +454,32 @@ function capPendingStream(
 ) {
   let pendingChars = pendingCharsInput;
   let overflow = pendingChars - cap;
-  for (let index = 0; index < output.length && overflow > 0;) {
+  let writeIndex = 0;
+  let index = 0;
+  for (; index < output.length && overflow > 0; index += 1) {
     const chunk = output[index];
     if (!chunk || chunk.stream !== stream) {
-      index += 1;
+      if (writeIndex !== index) {
+        output.copyWithin(writeIndex, index, index + 1);
+      }
+      writeIndex += 1;
       continue;
     }
     if (chunk.text.length <= overflow) {
       overflow -= chunk.text.length;
       pendingChars -= chunk.text.length;
-      output.splice(index, 1);
       continue;
     }
-    const trimmed = sliceUtf16Safe(chunk.text, overflow);
+    const trimmed = tail(chunk.text, chunk.text.length - overflow);
     const removedChars = chunk.text.length - trimmed.length;
     pendingChars -= removedChars;
     chunk.text = trimmed;
     break;
   }
+  if (writeIndex !== index) {
+    output.splice(writeIndex, index - writeIndex);
+  }
   return pendingChars;
-}
-
-/** Keeps only the last `max` characters for bounded aggregate output storage. */
-function trimWithCap(text: string, max: number) {
-  return tail(text, max);
 }
 
 /** Lists backgrounded running sessions visible to reconnect/poll callers. */

@@ -2,13 +2,26 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { GatewayCompletionRouteSchema } from "./model-runtime-options.js";
+import { GatewayEventLoopHealthSchema, GatewayProcessMemorySchema } from "./runtime-vitals.js";
 
 /** Empty request payload for Gateway host system information. */
 export const SystemInfoParamsSchema = closedObject({});
 
+/** Where utility completions execute; absent when no owner can serve them. */
+const UtilityModelRuntimeSchema = Type.Optional(GatewayCompletionRouteSchema);
+
 const UtilityModelStatusSchema = Type.Union([
-  closedObject({ status: Type.Literal("auto"), model: Type.String({ minLength: 1 }) }),
-  closedObject({ status: Type.Literal("configured"), model: Type.String({ minLength: 1 }) }),
+  closedObject({
+    status: Type.Literal("auto"),
+    model: Type.String({ minLength: 1 }),
+    runtime: UtilityModelRuntimeSchema,
+  }),
+  closedObject({
+    status: Type.Literal("configured"),
+    model: Type.String({ minLength: 1 }),
+    runtime: UtilityModelRuntimeSchema,
+  }),
   closedObject({ status: Type.Literal("disabled") }),
   closedObject({ status: Type.Literal("unavailable") }),
 ]);
@@ -33,6 +46,8 @@ export const SystemInfoResultSchema = closedObject({
   loadAverage: Type.Optional(Type.Tuple([Type.Number(), Type.Number(), Type.Number()])),
   memoryTotalBytes: Type.Integer(),
   memoryFreeBytes: Type.Integer(),
+  eventLoop: Type.Optional(GatewayEventLoopHealthSchema),
+  processMemory: Type.Optional(GatewayProcessMemorySchema),
   diskTotalBytes: Type.Optional(Type.Integer()),
   diskAvailableBytes: Type.Optional(Type.Integer()),
   diskPath: Type.Optional(Type.String()),

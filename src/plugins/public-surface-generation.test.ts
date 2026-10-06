@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
+  MissingPublicSurfaceError,
   createLazyFacadeObjectValue,
   loadBundledPluginPublicSurfaceModuleSyncCore,
   resetFacadeLoaderStateForTest,
@@ -17,12 +18,14 @@ import {
 import { createPluginModuleLoader } from "./loader-module-runtime.js";
 import { adoptProcessPluginCache, createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
+import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import { loadPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, stageActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
+import { resolvePluginWebSearchProviders } from "./web-search-providers.runtime.js";
 
 type PublicApi = {
   read: () => string;
@@ -114,136 +117,225 @@ function prepare(
 }
 
 describe("managed plugin public surfaces", () => {
-  it.each(["global", "bundled"] as const)(
-    "resolves native filesystem dist APIs without losing their managed owner (%s)",
-    (origin) => {
-      const hooks = Reflect.get(Module, "registerHooks");
-      Reflect.set(Module, "registerHooks", undefined);
-      try {
-        const root = fs.realpathSync(temp.make("openclaw-native-public-dist-"));
-        writeSource(root, "library");
-        fs.rmSync(path.join(root, "api.ts"));
-        fs.rmSync(path.join(root, "runtime-api.ts"));
-        fs.mkdirSync(path.join(root, "dist"));
-        fs.writeFileSync(path.join(root, "dist/api.js"), 'export { read } from "../state.js";');
-        const active = prepare(root, "native-dist-fixture", origin);
-        active.entry.default.register("registered");
-        active.publish();
-        const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
-          pluginRoot: root,
-          artifactBasename: "api.js",
-          origin,
-        });
-        expect(api.read()).toBe("registered");
-        expect(getPluginValueInstance(api)).toBe(active.instance);
-      } finally {
-        Reflect.set(Module, "registerHooks", hooks);
+  it("keeps a prepared source overlay's setup web provider under a merged environment", async () => {
+    const parent = temp.make("openclaw-web-provider-overlay-");
+    const pluginId = "overlay-web-provider";
+    const bundledDir = path.join(parent, "stock");
+    const stock = path.join(bundledDir, pluginId);
+    const overlay = path.join(parent, "overlay", pluginId);
+    fs.mkdirSync(stock, { recursive: true });
+    fs.mkdirSync(overlay, { recursive: true });
+    writeSource(stock, "packaged-peer", "js");
+    writeSource(overlay, "source");
+    const providerModule = `
+      import { read } from "./state.js";
+      export const createFixtureWebSearchProvider = () => ({
+        id: ${JSON.stringify(pluginId)}, label: read(), hint: "", envVars: [],
+        placeholder: "", signupUrl: "", credentialPath: "apiKey",
+        getCredentialValue: read, setCredentialValue() {}, createTool() { return null; },
+      });
+    `;
+    fs.writeFileSync(path.join(stock, "web-search-contract-api.js"), providerModule);
+    const overlayArtifact = path.join(overlay, "web-search-contract-api.ts");
+    fs.writeFileSync(overlayArtifact, providerModule);
+    const active = prepare(overlay, pluginId, "bundled");
+    active.entry.default.register("registered-overlay");
+    active.publish();
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
+    vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+    vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "0");
+    // Secret refresh copies env while retaining the selected manifest and live source generation.
+    const env = { ...process.env };
+    const providers = resolvePluginWebSearchProviders({
+      env,
+      mode: "setup",
+      onlyPluginIds: [pluginId],
+      config: { plugins: { allow: [pluginId] } },
+      manifestRecords: [
+        createPluginManifestRecordFixture({
+          id: pluginId,
+          rootDir: overlay,
+          source: active.record.source,
+          sourcePreferred: true,
+          contracts: { webSearchProviders: [pluginId] },
+        }),
+      ],
+    });
+    expect(providers.map((provider) => provider.label)).toEqual(["registered-overlay"]);
+    const provider = expectDefined(providers[0], "retained overlay web provider");
+    expect(provider.getCredentialValue()).toBe("registered-overlay");
+    await active.instance.dispose();
+    expect(provider.getCredentialValue()).toBe("registered-overlay");
+  });
+
+  it.each(["id", "folder", "channel"] as const)(
+    "selects the unique loaded %s owner before considering lower-priority aliases",
+    (tier) => {
+      const parent = fs.realpathSync(temp.make("openclaw-public-owner-priority-"));
+      const dirName = "runtime-selected";
+      const prepareOwner = (name: string, folder: string, id: string) => {
+        const root = path.join(parent, name, folder);
+        fs.mkdirSync(root, { recursive: true });
+        writeSource(root, name, "js");
+        const active = prepare(root, id, "global", "js");
+        active.record.channelIds.push(dirName);
+        return active;
+      };
+      const winner = prepareOwner(
+        "winner",
+        tier === "folder" ? dirName : "winner-root",
+        tier === "id" ? dirName : "winner",
+      );
+      const first = prepareOwner(
+        "first",
+        tier === "id" || tier === "channel" ? dirName : "first-root",
+        tier === "channel" ? dirName : "first",
+      );
+      const second = prepareOwner("second", tier === "id" ? dirName : "second-root", "second");
+      if (tier === "channel") {
+        first.record.status = "disabled";
+        second.record.status = "disabled";
       }
+      winner.registry.plugins.unshift(first.record, second.record);
+      winner.publish();
+      const load = () =>
+        loadBundledPluginPublicSurfaceModuleSyncCore<Pick<PublicApi, "read">>({
+          dirName,
+          artifactBasename: "api.js",
+        });
+      expect(load().read()).toBe("winner");
+
+      winner.registry.plugins.push(
+        createPluginRecord({
+          ...winner.record,
+          rootDir: path.join(parent, "duplicate", path.basename(winner.record.rootDir!)),
+        }),
+      );
+      expect(load).toThrow(/ambiguous runtime ownership/);
     },
   );
 
-  it.each(["global", "bundled"] as const)(
-    "shares registration state with captured APIs, refreshes a retained facade, and fences old exports (%s)",
-    async (origin) => {
-      const root = fs.realpathSync(temp.make("openclaw-public-generation-"));
-      writeSource(root, "source-one");
-      const first = prepare(root, "surface-fixture", origin);
-      first.entry.default.register("registered-one");
-      first.publish();
-      const loadApi = () =>
-        loadPluginPublicArtifactModuleSync<PublicApi>({
-          pluginRoot: root,
-          artifactBasename: "api.js",
-        });
-      const loadFacade = () =>
-        loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({
-          dirName: first.record.id,
-          artifactBasename: "runtime-api.js",
-        });
-      const lazy = createLazyFacadeObjectValue(() => loadFacade().view);
-      const frozen = createLazyFacadeObjectValue(() => loadFacade().view.frozen);
-
-      // Neither public entry has executed yet. The captured graph survives source deletion.
+  it("resolves installed native filesystem dist APIs without losing their managed owner", () => {
+    const hooks = Reflect.get(Module, "registerHooks");
+    Reflect.set(Module, "registerHooks", undefined);
+    try {
+      const root = fs.realpathSync(temp.make("openclaw-native-public-dist-"));
+      writeSource(root, "library");
       fs.rmSync(path.join(root, "api.ts"));
       fs.rmSync(path.join(root, "runtime-api.ts"));
-      fs.writeFileSync(
-        path.join(root, "state.ts"),
-        'export const read = () => "uncommitted edit";',
-      );
-      const originalApi = loadApi();
-      const originalRead = originalApi.read;
-      expect(originalRead()).toBe("registered-one");
-      expect(loadFacade().read()).toBe("registered-one");
-      expect(lazy.read()).toBe("registered-one");
-      const retainedLazyRead = lazy.read;
-      for (const [property, descriptor] of [
-        ["read", { configurable: false, writable: false }],
-        ["added", { value: "fixed" }],
-        [Symbol("fixed"), { get: () => "fixed", configurable: false }],
-      ] as const) {
-        const before = Object.getOwnPropertyDescriptor(originalApi.view, property);
-        expect(Reflect.defineProperty(lazy, property, descriptor)).toBe(false);
-        expect(Object.getOwnPropertyDescriptor(originalApi.view, property)).toEqual(before);
-      }
-      expect(Reflect.set(lazy, "note", "first")).toBe(true);
-      expect(Reflect.defineProperty(lazy, "note", { value: "updated" })).toBe(true);
-      expect(Reflect.get(originalApi.view, "note")).toBe("updated");
-      const configurable = Symbol("configurable");
-      expect(
-        Reflect.defineProperty(lazy, configurable, { value: "allowed", configurable: true }),
-      ).toBe(true);
-      expect(Reflect.get(originalApi.view, configurable)).toBe("allowed");
-      expect(Object.getOwnPropertyDescriptor(frozen, "length")).toMatchObject({
-        value: 1,
-        configurable: true,
+      fs.mkdirSync(path.join(root, "dist"));
+      fs.writeFileSync(path.join(root, "dist/api.js"), 'export { read } from "../state.js";');
+      const active = prepare(root, "native-dist-fixture");
+      active.entry.default.register("registered");
+      active.publish();
+      const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
+        pluginRoot: root,
+        artifactBasename: "api.js",
+        origin: "global",
       });
-      expect(Object.keys(frozen)).toEqual(["0"]);
-      for (const operation of ["preventExtensions", "seal", "freeze"] as const) {
-        const applyIntegrity: (value: object) => object = Object[operation];
-        expect(() => applyIntegrity(lazy)).toThrow(TypeError);
-        expect(Object.isExtensible(lazy)).toBe(true);
-        expect(lazy.read()).toBe("registered-one");
-      }
-      const probes = [
-        vi.spyOn(fs, "existsSync"),
-        vi.spyOn(fs, "realpathSync"),
-        vi.spyOn(fs, "statSync"),
-        vi.spyOn(fs, "openSync"),
-      ];
-      expect(loadApi()).toBe(originalApi);
+      expect(api.read()).toBe("registered");
+      expect(getPluginValueInstance(api)).toBe(active.instance);
+    } finally {
+      Reflect.set(Module, "registerHooks", hooks);
+    }
+  });
+
+  it("shares installed registration state with captured APIs, refreshes a retained facade, and fences old exports", async () => {
+    const root = fs.realpathSync(temp.make("openclaw-public-generation-"));
+    writeSource(root, "source-one");
+    const first = prepare(root);
+    first.entry.default.register("registered-one");
+    first.publish();
+    const loadApi = () =>
+      loadPluginPublicArtifactModuleSync<PublicApi>({
+        pluginRoot: root,
+        artifactBasename: "api.js",
+      });
+    const loadFacade = () =>
+      loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>({
+        dirName: first.record.id,
+        artifactBasename: "runtime-api.js",
+      });
+    const lazy = createLazyFacadeObjectValue(() => loadFacade().view);
+    const frozen = createLazyFacadeObjectValue(() => loadFacade().view.frozen);
+
+    // Neither public entry has executed yet. The captured graph survives source deletion.
+    fs.rmSync(path.join(root, "api.ts"));
+    fs.rmSync(path.join(root, "runtime-api.ts"));
+    fs.writeFileSync(path.join(root, "state.ts"), 'export const read = () => "uncommitted edit";');
+    const originalApi = loadApi();
+    const originalRead = originalApi.read;
+    expect(originalRead()).toBe("registered-one");
+    expect(loadFacade().read()).toBe("registered-one");
+    expect(lazy.read()).toBe("registered-one");
+    const retainedLazyRead = lazy.read;
+    for (const [property, descriptor] of [
+      ["read", { configurable: false, writable: false }],
+      ["added", { value: "fixed" }],
+      [Symbol("fixed"), { get: () => "fixed", configurable: false }],
+    ] as const) {
+      const before = Object.getOwnPropertyDescriptor(originalApi.view, property);
+      expect(Reflect.defineProperty(lazy, property, descriptor)).toBe(false);
+      expect(Object.getOwnPropertyDescriptor(originalApi.view, property)).toEqual(before);
+    }
+    expect(Reflect.set(lazy, "note", "first")).toBe(true);
+    expect(Reflect.defineProperty(lazy, "note", { value: "updated" })).toBe(true);
+    expect(Reflect.get(originalApi.view, "note")).toBe("updated");
+    const configurable = Symbol("configurable");
+    expect(
+      Reflect.defineProperty(lazy, configurable, { value: "allowed", configurable: true }),
+    ).toBe(true);
+    expect(Reflect.get(originalApi.view, configurable)).toBe("allowed");
+    expect(Object.getOwnPropertyDescriptor(frozen, "length")).toMatchObject({
+      value: 1,
+      configurable: true,
+    });
+    expect(Object.keys(frozen)).toEqual(["0"]);
+    for (const operation of ["preventExtensions", "seal", "freeze"] as const) {
+      const applyIntegrity: (value: object) => object = Object[operation];
+      expect(() => applyIntegrity(lazy)).toThrow(TypeError);
+      expect(Object.isExtensible(lazy)).toBe(true);
       expect(lazy.read()).toBe("registered-one");
-      for (const probe of probes) {
-        expect(probe).not.toHaveBeenCalled();
-        probe.mockRestore();
-      }
+    }
+    const probes = [
+      vi.spyOn(fs, "existsSync"),
+      vi.spyOn(fs, "realpathSync"),
+      vi.spyOn(fs, "statSync"),
+      vi.spyOn(fs, "openSync"),
+    ];
+    expect(loadApi()).toBe(originalApi);
+    expect(lazy.read()).toBe("registered-one");
+    for (const probe of probes) {
+      expect(probe).not.toHaveBeenCalled();
+      probe.mockRestore();
+    }
 
-      await first.instance.dispose();
-      writeSource(root, "source-two", "ts", 2);
-      const second = prepare(root, "surface-fixture", origin);
-      second.entry.default.register("registered-two");
-      second.publish();
-      expect(loadApi().read()).toBe("registered-two");
-      expect(lazy.read()).toBe("registered-two");
-      expect(frozen.length).toBe(2);
-      expect(Object.keys(frozen)).toEqual(["0", "1"]);
-      expect(frozen[1]?.()).toBe("registered-two");
-      expect(originalRead).toThrow(/reloaded|disabled|retiring/);
-      expect(retainedLazyRead).toThrow(/reloaded|disabled|retiring/);
-      expect(() =>
-        withPluginRuntimeGatewayRequestScope(
-          { pluginRegistry: first.registry, isWebchatConnect: () => false },
-          loadApi,
-        ),
-      ).toThrow(/reloaded|disabled|retiring/);
+    await first.instance.dispose();
+    writeSource(root, "source-two", "ts", 2);
+    const second = prepare(root);
+    second.entry.default.register("registered-two");
+    second.publish();
+    expect(loadApi().read()).toBe("registered-two");
+    expect(lazy.read()).toBe("registered-two");
+    expect(frozen.length).toBe(2);
+    expect(Object.keys(frozen)).toEqual(["0", "1"]);
+    expect(frozen[1]?.()).toBe("registered-two");
+    expect(originalRead).toThrow(/reloaded|disabled|retiring/);
+    expect(retainedLazyRead).toThrow(/reloaded|disabled|retiring/);
+    expect(() =>
+      withPluginRuntimeGatewayRequestScope(
+        { pluginRegistry: first.registry, isWebchatConnect: () => false },
+        loadApi,
+      ),
+    ).toThrow(MissingPublicSurfaceError);
 
-      const retained = loadApi();
-      const nextRegistry = createEmptyPluginRegistry();
-      nextRegistry.plugins.push(second.record);
-      stageActivePluginRegistry(nextRegistry, "unrelated-change", "default");
-      expect(loadApi()).toBe(retained);
-      expect(lazy.read()).toBe("registered-two");
-    },
-  );
+    const retained = loadApi();
+    const nextRegistry = createEmptyPluginRegistry();
+    nextRegistry.plugins.push(second.record);
+    stageActivePluginRegistry(nextRegistry, "unrelated-change", "default");
+    expect(loadApi()).toBe(retained);
+    expect(lazy.read()).toBe("registered-two");
+  });
 
   it.each(["relative", "tsconfig"] as const)(
     "loads captured dependencies and %s source mappings after originals are removed",
@@ -469,15 +561,8 @@ describe("managed plugin public surfaces", () => {
       stageActivePluginRegistry(disabled, "disabled", "gateway-bindable");
       await active.instance.dispose();
       const inspection = loadBundledPluginPublicSurfaceModuleSyncCore<PublicApi>(request);
-      if (extension === "js") {
-        expect(inspection).toBe(library);
-        expect(library.read()).toBe("registered");
-      } else {
-        // Vitest deep-compares unequal references; retired export getters must stay fenced.
-        expect(Object.is(inspection, library)).toBe(false);
-        expect(inspection.read()).toBe("library");
-        expect(() => library.read()).toThrow(/reloaded|disabled|retiring/);
-      }
+      expect(inspection).toBe(library);
+      expect(library.read()).toBe("registered");
       expect(retainedRead).toThrow(/reloaded|disabled|retiring/);
       expect(() => runtime.read()).toThrow(/reloaded or disabled/);
       await expect(async () => await loadActivated(request)).rejects.toThrow(/access blocked/);

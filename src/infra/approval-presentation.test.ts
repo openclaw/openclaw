@@ -1,7 +1,6 @@
 // Canonical durable approval presentation safety tests.
 import { describe, expect, it } from "vitest";
 import { buildApprovalPresentation } from "./approval-presentation.js";
-import { PLUGIN_APPROVAL_DETAIL_MAX_LENGTH } from "./plugin-approvals.js";
 
 const allowedDecisions = ["allow-once", "deny"] as const;
 
@@ -158,7 +157,7 @@ describe("buildApprovalPresentation", () => {
     const presentation = buildPluginPresentation({
       title: "Review tool input",
       description: "Bounded channel summary",
-      detail: "x".repeat(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH + 1),
+      detail: "x".repeat(16_385),
     });
 
     expect(presentation).toMatchObject({
@@ -168,7 +167,7 @@ describe("buildApprovalPresentation", () => {
     if (presentation?.kind !== "plugin" || !presentation.detail) {
       throw new Error("expected plugin detail");
     }
-    expect(Array.from(presentation.detail)).toHaveLength(PLUGIN_APPROVAL_DETAIL_MAX_LENGTH);
+    expect(Array.from(presentation.detail)).toHaveLength(16_384);
   });
 
   it("projects only bounded reviewer-safe external verification metadata", () => {

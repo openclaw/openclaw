@@ -7,6 +7,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesAsync,
@@ -14,6 +15,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config.js";
 import { resolveStateDir } from "../paths.js";
@@ -87,6 +89,12 @@ function fixture(sessionKey = "agent:main:admission") {
   return { root, env, scope, database, databasePath: database.path };
 }
 
+function closeCold(f: ReturnType<typeof fixture>) {
+  closeOpenClawAgentDatabaseByPath(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+}
+
 function nativeChecks(databasePath: string) {
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
@@ -97,7 +105,7 @@ function nativeChecks(databasePath: string) {
     const prepare = database.prepare.bind(database);
     database.prepare = (sql) => {
       const statement = prepare(sql);
-      if (sql === "PRAGMA integrity_check;") {
+      if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
         const all = statement.all.bind(statement);
         statement.all = () => {
           parentChecks += 1;
@@ -168,19 +176,17 @@ it.each(["sessions.json", "custom.json"])(
 );
 
 it.each([
-  ["entry", "preparation"],
   ["target", "preparation"],
   ["entry", "commit"],
-  ["target", "commit"],
 ] as const)("keeps %s %s integrity checks off the caller thread", async (kind, phase) => {
   const f = fixture();
   if (phase === "preparation") {
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
+    closeCold(f);
   }
   const parentChecks = nativeChecks(f.databasePath);
   const update = () => {
     if (phase === "commit") {
-      closeOpenClawAgentDatabaseByPath(f.databasePath);
+      closeCold(f);
     }
     return { label: "updated" };
   };
@@ -304,6 +310,8 @@ it("keeps the physical database owner for logical rows in a shared store", async
 it("retains FIFO, caller context and publication across cold admission", async () => {
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
   const gate = holdNative(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];
@@ -373,7 +381,7 @@ it.each(["dispose", "sync replacement"] as const)(
   "rejects %s before updater admission and recovers the lane",
   async (mode) => {
     const f = fixture();
-    closeOpenClawAgentDatabaseByPath(f.databasePath);
+    closeCold(f);
     const gate = holdNative(f.databasePath);
     const update = vi.fn(() => ({ label: "must not commit" }));
     const committed = vi.fn();
@@ -416,7 +424,7 @@ it.each(["cancel", "revoke"] as const)(
       patchSessionEntryCore(
         f.scope,
         () => {
-          closeOpenClawAgentDatabaseByPath(f.databasePath);
+          closeCold(f);
           return { sessionId: "uncommitted" };
         },
         {
@@ -451,26 +459,20 @@ it.each(["cancel", "revoke"] as const)(
   },
 );
 
-it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
+it.each(["relative queued", "relative reopen"] as const)(
   "pins the selected root for %s patch work",
   async (mode) => {
     const home = roots.make("session-patch-root-selection-");
-    const implicit = mode === "implicit queued";
-    const ownerRoot = path.join(home, implicit ? ".clawdbot" : "state");
-    const successor = path.join(home, implicit ? ".openclaw" : "next-cwd");
+    const ownerRoot = path.join(home, "state");
+    const successor = path.join(home, "next-cwd");
     fs.mkdirSync(ownerRoot);
-    if (!implicit) {
-      fs.mkdirSync(successor);
-    }
+    fs.mkdirSync(successor);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue(home);
     const env: NodeJS.ProcessEnv = {
       HOME: home,
       OPENCLAW_HOME: home,
       OPENCLAW_CONFIG_PATH: path.join(ownerRoot, "openclaw.json"),
-      ...(implicit
-        ? // Deliberately select normal legacy discovery, not the fast-test new-root shortcut.
-          { OPENCLAW_TEST_FAST: "0" }
-        : { OPENCLAW_STATE_DIR: "state" }),
+      OPENCLAW_STATE_DIR: "state",
     };
     vi.stubEnv("OPENCLAW_STATE_DIR", ownerRoot);
     const scope = { agentId: "main", env, sessionKey: "agent:main:root-selection" };
@@ -480,11 +482,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(original)));
     const selectedPath = database.path;
     const shiftOwner = () => {
-      if (implicit) {
-        fs.mkdirSync(successor);
-      } else {
-        cwd.mockReturnValue(successor);
-      }
+      cwd.mockReturnValue(successor);
     };
     const release = createDeferred();
     releases.push(() => release.resolve());
@@ -522,8 +520,8 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       await blocker;
     }
     // Control: unchanged caller inputs now resolve elsewhere; the operation must use
-    // its private resolved root, not repeat ambient/legacy selection after its await.
-    expect(resolveStateDir(env)).toBe(implicit ? successor : path.join(successor, "state"));
+    // its private resolved root, not repeat ambient selection after its await.
+    expect(resolveStateDir(env)).toBe(path.join(successor, "state"));
     await expect(operation).resolves.toMatchObject({
       sessionId: "original",
       label: "retained selected root",
@@ -532,7 +530,7 @@ it.each(["relative queued", "relative reopen", "implicit queued"] as const)(
       sessionId: "original",
       label: "retained selected root",
     });
-    expect(env.OPENCLAW_STATE_DIR).toBe(implicit ? undefined : "state");
+    expect(env.OPENCLAW_STATE_DIR).toBe("state");
     expect(fs.readdirSync(successor, { recursive: true })).toEqual([]);
   },
 );

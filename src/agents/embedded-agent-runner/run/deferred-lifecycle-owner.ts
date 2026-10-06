@@ -142,6 +142,8 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
   sessionFile?: string;
   abortSignal?: AbortSignal;
 }): DeferredEmbeddedRunLifecycleManager {
+  // Recovery projections time the whole logical turn, not the current runtime attempt.
+  const startedAtMs = Date.now();
   const controller = new AbortController();
   const signal = params.abortSignal
     ? AbortSignal.any([params.abortSignal, controller.signal])
@@ -185,6 +187,7 @@ export function createDeferredEmbeddedRunLifecycleManager(params: {
       cliOwner = {
         kind: "embedded",
         runId: params.runId,
+        startedAtMs,
         diagnosticOwner,
         closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
         queueMessage: async () => {

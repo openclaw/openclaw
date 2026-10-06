@@ -1,4 +1,3 @@
-// Shared doctor state helpers for previewing or applying config mutations.
 import { inheritLegacyDefaultAgentId } from "../../../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 

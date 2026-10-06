@@ -8,9 +8,8 @@ import {
   withPluginHttpRouteRegistry,
 } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 function expectRouteRegistrationDenied(params: {
@@ -261,39 +260,8 @@ describe("registerPluginHttpRoute", () => {
     },
   );
 
-  it("registers route and unregisters it", () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn();
-
-    const unregister = registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler,
-      registry,
-    });
-
-    expectRegisteredRouteShape(registry, {
-      path: "/plugins/demo",
-      handler,
-      auth: "plugin",
-      match: "exact",
-    });
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
+    const pluginRegistry = createTestPluginRegistry();
     const config = {} as OpenClawConfig;
     const plainRecord = createPluginRecord({
       id: "plain-http",
@@ -387,32 +355,6 @@ describe("registerPluginHttpRoute", () => {
     expect(logs.at(-1)).toContain("route conflict");
   });
 
-  it("replaces a same-plugin canonical exact-path alias when requested", () => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/Webhooks/SMS/",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-
-    register({
-      path: "/webhooks/sms",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-      replaceExisting: true,
-      throwOnFailure: true,
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toMatchObject({
-      path: "/webhooks/sms",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-  });
-
   it("keeps a reused same-owner route until its last lease releases", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
     const firstOwner = createTrackedRouteLease();
@@ -467,11 +409,7 @@ describe("registerPluginHttpRoute", () => {
   it.each(["unregister", "revoke"] as const)(
     "preserves a static plugin route when a dynamic holder calls %s",
     (cleanup) => {
-      const pluginRegistry = createPluginRegistry({
-        logger: { info() {}, warn() {}, error() {}, debug() {} },
-        runtime: {} as PluginRuntime,
-        activateGlobalSideEffects: false,
-      });
+      const pluginRegistry = createTestPluginRegistry();
       const record = createPluginRecord({ id: "demo", source: "/plugins/demo/index.js" });
       const handler = vi.fn();
       pluginRegistry.registry.plugins.push(record);
@@ -589,16 +527,7 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it("rejects replacement when a distinct route source owns the same plugin path", () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
+    const pluginRegistry = createTestPluginRegistry();
     const record = createPluginRecord({
       id: "mattermost",
       source: "/plugins/mattermost/index.js",

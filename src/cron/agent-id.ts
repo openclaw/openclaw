@@ -1,9 +1,5 @@
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-
-type CronAgentScope = {
-  agentId?: string | null;
-  sessionKey?: string | null;
-};
+import type { CronAgentScope } from "./types-shared.js";
 
 export const CRON_AGENT_SELECTION_REQUIRED_MESSAGE =
   "Agent-less cron job has no resolvable owner. Pass --agent <id> when creating or editing the job, or set agents.defaults.systemAgent.agentId.";

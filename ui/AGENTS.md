@@ -20,6 +20,76 @@ This directory owns Control UI-specific guidance that should not live in the rep
 - Background updates may refresh their own scoped cache; they must not replace
   the foreground selection or publish another context's state into its view.
 
+## Session Roster Refresh
+
+- Session rosters apply nested Gateway row snapshots through the shared reconciler.
+  `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
+  window: lifecycle, participants, placement, patch/send/steer, run-start/settlement/capacity, and title
+  updates can avoid list reads when membership, lineage, and pin/owner/archive
+  facts stay unchanged and recency does not move backwards. Tree events require
+  the Gateway's complete, access-scoped `ancestorSessions` snapshots plus any
+  `ancestorSessionRefs`; references require the held row's admitted content revision. Each row
+  retains its own generation and field receipts. Certified nested rows own their
+  facts; only explicit null clearing receipts may fill omissions from the event
+  envelope. Unknown rows, incomplete ancestor coverage, broad changes, catalog
+  changes, Gateway-owned filters, failed reads,
+  owner-prefix boundary uncertainty, and overlapping reads retain an authoritative
+  refresh. Events never create filtered list membership; Current Work's complete
+  unfiltered active-only window may admit a certified full active row as described below.
+- List callers use compact rows and bounded source attribution. Enrichment flags
+  and inclusion of global/unknown kinds do not change held membership when kind
+  stays unchanged; dashboard filters require matching `hasBoard`/`boardFace`
+  receipts. Gallery pagination extends the shared managed window. Full settings
+  come from row descriptors on demand. Applied row traffic retains one fallback
+  through the refresh coordinator after at least 60 seconds.
+  Child-query membership uses `childOwnerSessionKeys` from the Gateway's retention
+  owner. Parent-only events must certify the complete child window; unheld
+  ancestors need explicit exclusion facts, or an admitted reference resolved
+  through the connection's existing row provenance.
+- Re-adopting cached lineage rows changes presentation without invalidating
+  managed list membership. Fresh descriptor reads and Gateway events retain
+  their authoritative invalidation paths.
+- Descriptor observations apply admitted rows immediately; incomplete ancestor coverage retains one paced authoritative descriptor refresh through the coordinator instead of a read per event.
+- Activity's current-work and unfiltered history views apply admitted row events without refetching the list.
+  History uses the shared row-provenance owner: admitted live rows retain field clocks,
+  including recap updates and clearing receipts, while returned lists remain the sole
+  membership authority. Its `excludeSubagents` query ignores key-proven child exclusions
+  only with complete access-scoped ancestor coverage; held parent snapshots and certified
+  references still update locally. Missing held parents or supplied unheld ancestors
+  require authority; named unheld parents absent from certified coverage may be invisible.
+  Refreshes merge those live facts instead of replaying/coalescing
+  History packets; missing initial membership retains a catch-up read. Query/connection
+  changes reset provenance. Current Work coalesces only consecutive full active snapshots
+  for one generation, retaining the first receipt and latest tail. Partial events,
+  references, terminal snapshots, and other identities are FIFO barriers. A complete Current Work window below its limit
+  admits a certified active snapshot sampled after the accepted list and that session
+  generation's observed retirement and liveness clocks, with a real session ID and kind, preserving
+  the Gateway's cron-run exclusion. Truncated/full windows, conflicting generations,
+  partial unknown rows, ambiguous settlement, and removals from an incomplete window require an authoritative
+  refresh. History requires forward activity clocks and retains omitted recap enrichment;
+  person/search filters keep authoritative refreshes. Healthy row traffic retains one
+  fallback refresh after at least 60 seconds, including whole-query people and pulse facets.
+  Current Work applies supplied ancestor snapshots and references through the shared
+  row reconciler; pending references retain their prerequisite full row receipts.
+  Its controller retains at most 1,000 fence records, coalesced by session generation;
+  the Current Work reconciler owns their independent retirement, liveness-observation,
+  and generation-authority facts. Only retirements prune stale returned rows. A fresh
+  certified full row can resolve older clocked liveness, while unclocked observations
+  and conflicting generations require a list read. Query/connection changes clear
+  records; an authoritative list clears uncertainty and covered retirements before
+  pending events replay, preserving later retirements. Saturation blocks
+  unseen admission until an authoritative read restores the bounded state.
+- `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
+  collect events in a four-to-five-second window sampled once when armed so
+  browsers spread their reads and subsequent events cannot postpone them.
+  After each automatic refresh, wait three times its duration
+  (at least five seconds, at most 15 seconds) before the next automatic read.
+  Trailing invalidation stays with that owner, including while a request is pending.
+- Explicit refreshes, filter/agent changes, reconnects, and foreground replacements
+  bypass event backoff and absorb pending invalidation. Recheck visibility and
+  current intent after background admission; hidden pages retain one catch-up
+  refresh until visible.
+
 ## i18n Rules
 
 - Foreign-language files in `ui/src/i18n/locales/*.ts` are stable, source-owned lazy-module adapters; their translations are generated from canonical grouped memory in `ui/src/i18n/.i18n/*.tm.jsonl`.
@@ -47,6 +117,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Stylesheet Policy
 
+- No universal targets or pseudo-elements after a `:has()` compound, no `:has()` with `::placeholder` (measured ~9/~8 ms subtree restyles per insertion with 534 messages), and no descendant after a sibling-relative `:has(+ …)` on repeated items (it restyled every position-rail tick per transcript row); use owner-set classes, named children, or a custom property on the `:has()` subject. Stylelint enforces these. No `:has()` on `.shell`, `.content`, `.chat-thread`, `.chat-split-view`, `:root`, `html`, or `body` compounds, including modifiers, `:is()`/`:where()` list subjects, and nested `&` forms: every insertion below a `:has()` subject schedules a global `:has` restyle of that subtree (stylelint cannot resolve nesting). Third-party global CSS goes through the Vite PostCSS pipeline; `ui/config/control-ui-web-awesome-page-rule.ts` drops Web Awesome's never-matching `:is(html, body):has(wa-page)` rule.
 - Cursors: links and controls that open a new tab use the pointer; state-changing controls keep the default arrow.
 - Colors: stylesheet colors flow through custom-property tokens defined in `ui/src/styles/base.css`; `color-no-hex` enforces this. Exempt surfaces (token definitions, `lobster-pet.css` sprite artwork, `--theme-chip-*` preview swatches) each carry a stated contract. Lit `css\`\`` templates are not yet gated — prefer tokens there too.
 - Breakpoints: `max-width` media conditions use the canonical ladder 400/560/640/768/900/1100/1320px (plus the 932×500 landscape-phone compound); stylelint's allowed-list enforces it. New thresholds round up to the next rung. Don't add rungs without updating the config comment and this note.
@@ -63,7 +134,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Build Chunking
 
-- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
+- `ui/config/control-ui-boot-modules.json` is generated from ready `/new` and `/chat` captures. Each route records only fetched modules reachable from the HTML entry and the dynamic entries it requested (static imports, plus dynamic imports that resolve into an already-fetched chunk without a request), so chat-only code co-located in a fetched common chunk stays out of New Session. Shared modules and each route's exclusive modules get separate `control-ui-boot-*` groups in `ui/config/control-ui-chunking.ts`, reducing requests without pulling chat-only code into New Session. Its `entries` record contains the dynamic entry points actually requested by each route; `control-ui-boot-preloads.ts` follows their static dependencies to emit inert route preload templates, which the Gateway activates for the requested route. CSS hints preload bytes without changing stylesheet insertion order. Regenerate with `pnpm ui:boot-manifest:gen` when boot-path surfaces change materially; it builds into a temporary directory with all measured boot groups disabled and inactive preload templates so stale entries cannot feed back into the capture. Rebuild with `pnpm ui:build` afterward to verify grouped output. Do not hand-edit the manifest.
 
 ## Live Verification
 

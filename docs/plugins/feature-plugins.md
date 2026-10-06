@@ -48,9 +48,11 @@ including local development plugins. The equivalent config is:
 }
 ```
 
-Restart the Gateway and reload connected browser tabs after changing this
-setting. Disabling it prevents custom native UI from loading; it does not
-uninstall plugins or disable their backend operations, tools, or services.
+Changes apply without restarting the Gateway, and connected Control UI pages
+refresh their plugin views automatically. Disabling it prevents custom native UI
+from loading and removes its views. Reload browser tabs to clear plugin
+JavaScript that already ran. This does not uninstall plugins or disable their
+backend operations, tools, or services.
 Ordinary plugin APIs, sandboxed dashboard widgets, and MCP Apps are unaffected.
 
 Native UI shipped with OpenClaw remains available for enabled bundled plugins,
@@ -70,14 +72,18 @@ npm install
 npm run build
 npm run validate
 openclaw plugins install .
-openclaw gateway restart
 ```
 
 The scaffold includes a draft-analysis operation, an agent tool, a native page,
 and a composer replacement. Open Draft Review from the Control UI sidebar, or
-open **Plugins → Customize UI** and choose Draft composer. Choose Built-in to
+open **Plugins → Advanced → Customize UI** and choose Draft composer. Choose Built-in to
 restore a view. Replacement selection belongs to the current browser runtime;
 it is not a persistent configuration setting.
+
+Customization controls are the first section in **Plugins → Advanced**. If a
+workspace replacement hides navigation, open
+`/settings/plugins?tab=advanced` under your Control UI base URL to choose Built-in; plugin settings
+always use the built-in workspace.
 
 The project has three public SDK imports:
 
@@ -140,11 +146,39 @@ Its id must match the plugin manifest. Register contributions through
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
+Set a navigation item's `parent` to another navigation ID in the same plugin to
+show it nested while the parent or a child destination is active; children only
+appear as top-level entries when pinned. Set `defaultVisible: false` to offer an
+item in **Customize**, and call `host.ui.pinNavigation(id)` after registering it
+to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
+already pinned ID; call it for a user action such as creation, not on every
+catalog refresh, so a later manual removal stays removed.
+
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget
 kinds for the current connection's scopes; a native view renders only when its
 matching backend descriptor is advertised.
+
+Use `host.ui.openPanel("editor", { sessionKey, agentId })` to open one of your
+registered panels beside a session. Omitting the session uses the currently
+selected session. The host owns navigation and sidebar presentation, including
+opening from a plugin page before the session pane has mounted. Only the same
+plugin's registered panels can be opened; retained handles expire with their
+view or activation.
+
+For a document link, use `host.navigation.pageHref(...)` to build a link to a
+registered plugin page. That page can resolve its document and call `openPanel`
+with the target session. This does not intercept ordinary file links or change
+the Files plugin's ownership.
 
 Use `host.ui.invalidate()` when plugin-owned state changes the presentation of
 an action or another contribution. Namespace custom elements and CSS with the
@@ -181,19 +215,76 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-The host also exposes session and agent snapshots and operations, plugin page
-navigation, authenticated requests, and subscriptions. Session and agent
-`refresh()` operations fetch new snapshots and reject on failure, so a plugin
+Session-header accessories also receive `props.session`, the pane's current
+session snapshot. It can be absent while loading and does not depend on the
+filtered sidebar roster. Changes arrive through the accessory's `update`.
+
+For a standard direct link, register an accessory using the shared browser
+helper. The plugin decides when and where the link appears:
+
+```typescript
+import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
+
+export default defineControlUiPlugin({
+  id: "example-chat",
+  activate(host) {
+    return host.ui.registerAccessory({
+      id: "conversation-origin",
+      placement: "session-header",
+      mount: createSessionHeaderLink(({ conversationLink }) =>
+        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
+          ? conversationLink
+          : undefined,
+      ),
+    });
+  },
+});
+```
+
+The helper is bundled into the plugin's browser code. It creates an HTTP(S)
+anchor with the shared header style, opens directly in a new tab, and removes
+the link when the resolver returns `undefined` or the view is hidden/disposed.
+Without a registered accessory, saved conversation-link metadata creates no
+button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
+
+### Host capabilities
+
+Use the host for shared application behavior:
+
+| Capability              | Purpose                                                                                                       |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `agents`                | Agent snapshots, selection, scope, and refresh.                                                               |
+| `components`            | Host-owned dialogs, pickers, and session dashboards.                                                          |
+| `connection`            | Current connection and operator capabilities.                                                                 |
+| `dock` (optional)       | Open a conversation beside the current page with `openSession`, close the dock, and observe `openSessionKey`. |
+| `navigation`            | Open plugin pages and build their URLs.                                                                       |
+| `request` and `onEvent` | Authenticated Gateway requests and event subscriptions.                                                       |
+| `sessions`              | Session snapshots, independent queries, navigation, creation, and updates.                                    |
+| `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
+| `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
+
+Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
 list's filters. Use `host.sessions.observe(query, onChange)` to maintain an
 independent session query without replacing it. The query accepts `agentId`,
 `search`, `archived` (`true`, `false`, or `"all"`), `limit`, `configuredAgentsOnly`,
-`includeGlobal`, `includeUnknown`, `includeDerivedTitles`, and
+`includeGlobal`, `includeUnknown`, `excludeDock`, `includeDerivedTitles`, and
 `includeLastMessage`. The callback receives `{ result, loading, error }`,
 starting with the current snapshot; `result` is null until data is available.
 Results contain `sessions` and the Gateway's `hasMore`, `nextOffset`, and
 `totalCount` pagination metadata.
+
+Create a conversation with `host.sessions.create({ agentId, displayName?, label?,
+surface? })`. `displayName` is a reusable display title; `label` is a unique
+session label. For a conversation owned by a plugin page's dock, pass
+`surface: "plugin-dock"`. This immutable creation-surface marker hides the
+conversation from ordinary session lists without changing its human creator,
+access, sharing, or sandbox rules. Rows expose `isDock` and `createdSurface`;
+`createdVia` retains its ordinary operator provenance.
+Independent host list queries exclude dock conversations by default; pass
+`excludeDock: false` when deliberately including them.
+The session key remains usable with `host.dock.openSession` and direct reads.
 
 The host fetches the query and keeps it current through session events,
 observer recovery, and its normal deletion handling. `observe` returns
@@ -213,10 +304,28 @@ when the roster changes, and actions check the current row again when invoked.
 Actions can inspect `session.hasActiveRun`; an absent value means activity is
 not yet known.
 `host.components`
-mounts host-owned dialogs, agent pickers, and session dashboards from plain
-props and DOM content. Each component returns `update` and `dispose` methods;
+mounts host-owned dialogs, agent pickers, searchable select pickers, and session
+dashboards from plain props and DOM content. Each component returns `update` and `dispose` methods;
 the host retains permission checks, focus handling, and dashboard provider
-ownership.
+ownership. Use `mountSelectPicker` for a list of `{ value, label, description? }`
+options, a selected `value`, an `accessibleLabel`, and an `onSelect` callback.
+With `searchable: true`, lists longer than eight options show a search field.
+The picker matches option labels, values, and descriptions.
+
+### Dock a conversation
+
+Check `host.dock` before offering a dock action. From a mounted view, use
+`context.host.dock.openSession({ sessionKey, agentId, label, context })` to open
+the named conversation alongside your plugin page. `label` supplies the dock
+tab title; the optional `context` is `{ page, detail? }`, where `page` can be
+your plugin page id and `detail` contains string reference fields.
+
+The host reuses the Home dock's placement controls, chat pane, drafts, and
+attachments. Page navigation keeps the conversation dock open; ending the
+plugin activation closes a dock that activation still owns. Use
+`host.subscribe(...)` to refresh your action when `host.dock.openSessionKey`
+changes. See the [dock contract](/plugins/sdk-subpaths#control-ui-conversation-dock)
+for replacement, visibility, access, and context limits.
 
 ## Build and reload
 
@@ -253,7 +362,7 @@ limits. TypeScript sources, source maps, and hidden files are excluded. Keep all
 dependencies inside that directory; traversal is limited to eight nested directory
 levels and 128 entries, counting both files and directories.
 
-After browser-only edits, rebuild the installed plugin and open **Plugins →
+After browser-only edits, rebuild the installed plugin and open **Plugins → Advanced →
 Customize UI → Reload plugin UI** as an administrator. The Gateway captures a fresh asset revision and
 notifies connected browsers. Asset loading or activation failures are reported
 in the UI customization controls; the previous working activation is retained
@@ -285,7 +394,8 @@ Custom element definitions belong to the browser document. If a plugin changes
 an existing custom element class, reload the browser tab as well, or use a new
 versioned tag name.
 
-Backend changes still use the normal plugin update and Gateway restart. Browser
+Backend changes use [plugin update or Reload](/cli/plugins/uninstall-and-update)
+to replace the running plugin without restarting the Gateway. Browser
 reload does not replace backend services or change an already running agent's
 tool catalog.
 
@@ -340,8 +450,11 @@ layouts; adjust those layouts before installation.
 Artifact activation also refuses to replace the plugin backing OpenClaw's active
 inference route. Stop OpenClaw and install that artifact from a trusted shell.
 
-After the Gateway restarts, inspect `plugins.controlUi.status` to see activation
-reports from currently connected Control UI clients. A report names the plugin
+Gateway-hosted artifact activation waits for backend runtime application. Terminal
+or other hosts without a live Gateway lifecycle callback save the install and
+report the writer's follow-up; that result is not a runtime application receipt.
+Once the Gateway has applied the plugin, inspect `plugins.controlUi.status` to see
+activation reports from currently connected Control UI clients. A report names the plugin
 revision and either `activated` or `failed`; it is a browser activation receipt,
 not proof that every feature operation has been exercised. No connected browser
 means no browser activation receipt yet.

@@ -31,20 +31,18 @@ describe("legacy workspace Doctor multi-agent migration", () => {
     const mtime = new Date("2026-07-15T11:02:03.456Z");
     const sources: string[] = [];
     for (const { workspace } of workspaces) {
-      await fsp.mkdir(path.join(workspace, ".openclaw"), { recursive: true });
-      for (const relative of ["openclaw-workspace-state.json", ".openclaw/workspace-state.json"]) {
-        const setupPath = path.join(workspace, relative);
-        await fsp.writeFile(
-          setupPath,
-          JSON.stringify({
-            version: 1,
-            bootstrapSeededAt: seededAt,
-            setupCompletedAt: completedAt,
-          }),
-          "utf8",
-        );
-        sources.push(setupPath);
-      }
+      await fsp.mkdir(workspace, { recursive: true });
+      const setupPath = path.join(workspace, "openclaw-workspace-state.json");
+      await fsp.writeFile(
+        setupPath,
+        JSON.stringify({
+          version: 1,
+          bootstrapSeededAt: seededAt,
+          setupCompletedAt: completedAt,
+        }),
+        "utf8",
+      );
+      sources.push(setupPath);
       const identity = resolveWorkspaceStateIdentity(workspace);
       const attestationPath = path.join(
         context.stateDir,
@@ -60,15 +58,16 @@ describe("legacy workspace Doctor multi-agent migration", () => {
       await fsp.utimes(attestationPath, mtime, mtime);
       sources.push(attestationPath);
     }
-    const db = openOpenClawStateDatabase({ env: context.env }).db;
-    expect(db.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
+    const beforeDb = openOpenClawStateDatabase({ env: context.env }).db;
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM workspace_setup_state").get()).toEqual({
       count: 0,
     });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
+    expect(beforeDb.prepare("SELECT COUNT(*) AS count FROM migration_sources").get()).toEqual({
       count: 0,
     });
 
     const result = await migrate({ ...context, cfg });
+    const db = openOpenClawStateDatabase({ env: context.env }).db;
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(sources.length);

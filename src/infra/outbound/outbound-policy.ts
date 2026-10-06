@@ -15,38 +15,13 @@ import { MessageActionDeniedError } from "./message-action-denial.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { formatTargetDisplay, lookupDirectoryDisplay } from "./target-resolver.js";
 
-/**
- * Builds a channel-native presentation for forwarded cross-context text.
- */
-type CrossContextPresentationBuilder = (message: string) => MessagePresentation;
-
-/**
- * Text and optional rich-presentation wrapper for cross-context outbound sends.
- */
 export type CrossContextDecoration = {
   prefix: string;
   suffix: string;
-  presentationBuilder?: CrossContextPresentationBuilder;
+  presentationBuilder?: (message: string) => MessagePresentation;
 };
 
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "poll-vote",
-  "reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "thread-create",
-  "thread-reply",
-  "sticker",
-]);
-
-// Mutations are guarded above, but markers only apply to outbound payloads that
+// All mutations are guarded, but markers only apply to outbound payloads that
 // create new visible content. Existing-message edits/pins/deletes should not
 // grow cross-context forwarding text.
 const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
@@ -60,32 +35,17 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "sticker",
 ]);
 
-function resolveContextGuardTarget(
-  action: ChannelMessageActionName,
-  params: Record<string, unknown>,
-): string | undefined {
-  if (!CONTEXT_GUARDED_ACTIONS.has(action)) {
-    return undefined;
-  }
-
-  if (action === "thread-reply" || action === "thread-create") {
-    if (typeof params.channelId === "string") {
-      return params.channelId;
-    }
-    if (typeof params.to === "string") {
-      return params.to;
-    }
-    return undefined;
-  }
-
-  if (typeof params.to === "string") {
-    return params.to;
-  }
-  if (typeof params.channelId === "string") {
-    return params.channelId;
-  }
-  return undefined;
-}
+const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
+  ...CONTEXT_MARKER_ACTIONS,
+  "poll-vote",
+  "edit",
+  "delete",
+  "pin",
+  "unpin",
+  "thread-create",
+  "topic-create",
+  "topic-edit",
+]);
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
   return normalizeTargetForProvider(channel, raw) ?? raw.trim();
@@ -121,10 +81,12 @@ function isCrossContextTarget(params: {
   );
 }
 
-function resolveAgentMessageToolsConfig(
-  cfg: OpenClawConfig,
-  agentId?: string | null,
-): MessageToolsConfig | undefined {
+/** Resolves message-tool policy after applying agent-specific overrides. */
+export function resolveEffectiveMessageToolsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): MessageToolsConfig | undefined {
+  const { cfg, agentId } = params;
   const trimmedAgentId = agentId?.trim();
   const globalConfig = cfg.tools?.message;
   if (!trimmedAgentId) {
@@ -170,16 +132,6 @@ function resolveAgentMessageToolsConfig(
 }
 
 /**
- * Resolves the message-tool policy after applying any agent-specific overrides.
- */
-export function resolveEffectiveMessageToolsConfig(params: {
-  cfg: OpenClawConfig;
-  agentId?: string | null;
-}): MessageToolsConfig | undefined {
-  return resolveAgentMessageToolsConfig(params.cfg, params.agentId);
-}
-
-/**
  * Returns the normalized allowed message actions for an agent or the global policy.
  */
 export function resolveAllowedMessageActions(params: {
@@ -214,7 +166,7 @@ export function enforceMessageActionAllowlist(params: {
 }
 
 /**
- * Enforces cross-context message-send policy for a bound channel/thread context.
+ * Enforces source-provider policy independently of channel/thread target availability.
  */
 export function enforceCrossContextPolicy(params: {
   channel: ChannelId;
@@ -224,12 +176,6 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
 }): void {
-  const currentTarget =
-    params.toolContext?.currentChannelId?.trim() ??
-    params.toolContext?.currentMessagingTarget?.trim();
-  if (!currentTarget) {
-    return;
-  }
   if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
     return;
   }
@@ -242,7 +188,7 @@ export function enforceCrossContextPolicy(params: {
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
   const allowWithinProvider = messageConfig?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders === true;
+  const allowAcrossProviders = messageConfig?.crossContext?.allowAcrossProviders !== false;
 
   // Provider mismatch is stronger than target mismatch; normalize targets only within one provider.
   if (currentProvider && currentProvider !== params.channel) {
@@ -260,7 +206,24 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  const target = resolveContextGuardTarget(params.action, params.args);
+  const currentTarget =
+    params.toolContext?.currentChannelId?.trim() ??
+    params.toolContext?.currentMessagingTarget?.trim();
+  if (!currentTarget) {
+    return;
+  }
+
+  const targetKeys =
+    params.action === "thread-reply" || params.action === "thread-create"
+      ? ["channelId", "to"]
+      : ["to", "channelId"];
+  let target: string | undefined;
+  for (const key of targetKeys) {
+    if (typeof params.args[key] === "string") {
+      target = params.args[key];
+      break;
+    }
+  }
   if (!target) {
     return;
   }
@@ -358,16 +321,14 @@ export function applyCrossContextDecoration(params: {
 }): {
   message: string;
   presentation?: MessagePresentation;
-  usedPresentation: boolean;
 } {
-  const usePresentation = params.preferPresentation && params.decoration.presentationBuilder;
-  if (usePresentation) {
+  const buildPresentation = params.decoration.presentationBuilder;
+  if (params.preferPresentation && buildPresentation) {
     return {
       message: params.message,
-      presentation: params.decoration.presentationBuilder?.(params.message),
-      usedPresentation: true,
+      presentation: buildPresentation(params.message),
     };
   }
   const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message, usedPresentation: false };
+  return { message };
 }

@@ -1,5 +1,4 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-// Devices page renders the unified paired-device / node inventory sections.
 import { html, nothing, type TemplateResult } from "lit";
 import type { PresenceEntry } from "../../api/types.ts";
 import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.ts";
@@ -12,12 +11,9 @@ import {
 } from "../../components/settings-ui.ts";
 import { workerCapacityPresentation } from "../../components/worker-capacity.ts";
 import { t } from "../../i18n/index.ts";
-import {
-  formatDurationCompact,
-  formatList,
-  formatRelativeTimestamp,
-  formatTimeAgo,
-} from "../../lib/format.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
+import { formatDurationCompact } from "../../lib/format-duration.ts";
+import { formatList, formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
 import { macFamilyLabel } from "../../lib/mac-form-factor.ts";
 import type { DeviceTokenSummary } from "../../lib/nodes/index.ts";
 import {
@@ -37,6 +33,8 @@ import { renderHostStats } from "./host-stats.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 function toRemovalRequest(entry: DeviceInventoryEntry): InventoryRemovalRequest {
   const removal = resolveInventoryRemoval(entry);
@@ -196,7 +194,6 @@ function resolveNodeCoreVersion(entry: DeviceInventoryEntry): string | undefined
   return legacyHeadless ? normalizeOptionalString(entry.node?.version) : undefined;
 }
 
-/** Warn statuses (dot + text) replacing the former warning chips. */
 function entryWarnStatuses(
   entry: DeviceInventoryEntry,
   gatewayVersion: string | null,
@@ -250,7 +247,9 @@ function formatInputRecency(lastInputSeconds: number): string {
   });
 }
 
-function entryMetaLine(entry: DeviceInventoryEntry): string {
+function identityMetaParts(
+  entry: Pick<PresenceEntry, "platform" | "deviceFamily" | "modelIdentifier" | "version">,
+): string[] {
   const parts: string[] = [];
   if (entry.platform) {
     parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
@@ -265,6 +264,11 @@ function entryMetaLine(entry: DeviceInventoryEntry): string {
   if (entry.version) {
     parts.push(entry.version);
   }
+  return parts;
+}
+
+function entryMetaLine(entry: DeviceInventoryEntry): string {
+  const parts = identityMetaParts(entry);
   if (entry.node?.workerBundle?.status === "installed") {
     parts.push(t("devices.inventory.workerVersion", { version: entry.node.workerBundle.version }));
   }
@@ -419,34 +423,16 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
   `;
 }
 
-function presenceMetaParts(entry: PresenceEntry): string[] {
-  const parts: string[] = [];
-  if (entry.platform) {
-    parts.push(prettifyPlatform(entry.platform, entry.deviceFamily));
-  }
-  if (entry.modelIdentifier) {
-    const family = macFamilyLabel(entry.modelIdentifier);
-    if (family) {
-      parts.push(family);
-    }
-    parts.push(entry.modelIdentifier);
-  }
-  if (entry.version) {
-    parts.push(entry.version);
-  }
-  if (entry.lastInputSeconds != null) {
-    parts.push(formatInputRecency(entry.lastInputSeconds));
-  }
-  return parts;
-}
-
 function renderPresenceRow(
-  presence: { kind: "gateway"; entry: PresenceEntry } | { kind: "unpaired"; entry: PresenceEntry },
+  presence: { kind: "gateway" | "unpaired"; entry: PresenceEntry },
   props: DevicesProps,
 ) {
   const { entry } = presence;
   const gateway = presence.kind === "gateway";
-  const parts = presenceMetaParts(entry);
+  const parts = identityMetaParts(entry);
+  if (entry.lastInputSeconds != null) {
+    parts.push(formatInputRecency(entry.lastInputSeconds));
+  }
   if (gateway && props.gatewaySystemInfo) {
     parts.push(
       t("devices.inventory.uptime", {

@@ -1,6 +1,9 @@
+import path from "node:path";
 import { vi } from "vitest";
 import { resolveAgentEntry } from "../agents/agent-scope-config.js";
 import * as configModule from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -10,7 +13,7 @@ type ConfigSnapshot = {
   path: string;
   hash: string | null;
   parsed: unknown;
-  sourceConfigBeforeMigrations?: OpenClawConfig;
+  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -123,7 +126,7 @@ export const runtime: RuntimeEnv = {
 
 export function snapshot(
   hash: string | null,
-  sourceConfig: OpenClawConfig,
+  sourceConfig: OpenClawConfigWithLegacyRoster,
   runtimeConfig: OpenClawConfig = sourceConfig,
 ): ConfigSnapshot {
   return {
@@ -202,11 +205,139 @@ export function baseParams(
 }
 
 export function mainAgentModelConfig(model = "openai/gpt-5.5"): OpenClawConfig {
-  return { agents: { defaults: { model }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model }, entries: { main: {} } } };
 }
 
 export function setSetupCommitState(config: OpenClawConfig, initialSnapshot: ConfigSnapshot): void {
   mocks.state.initialSnapshot = initialSnapshot;
   mocks.state.commitConfig = config;
   mocks.state.commitSnapshot = initialSnapshot;
+}
+
+export function resetSetupApplyMocks(): void {
+  vi.resetAllMocks();
+  mocks.events.length = 0;
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { model: { primary: "openai/gpt-5.5" } },
+      entries: { main: {} },
+    },
+  };
+  setSetupCommitState(structuredClone(config), snapshot("probe", config));
+  mocks.state.commitPreviousHash = "probe";
+  mocks.state.persistedConfig = undefined;
+  mocks.ensureOnboardingAgent.mockImplementation(
+    async ({ config: current, firstAgent, workspace }) => {
+      const name = firstAgent?.name ?? "main";
+      const id = name === "Research Buddy" ? "research-buddy" : name.toLowerCase();
+      const team = firstAgent?.team === true;
+      const createdAgentIds = team ? [id, "researcher", "writer", "reviewer"] : [id];
+      const next = {
+        ...current,
+        agents: {
+          ...current.agents,
+          ...(team
+            ? {
+                ownership: "explicit" as const,
+                defaults: { ...current.agents?.defaults, systemAgent: { agentId: id } },
+              }
+            : {}),
+          entries: Object.fromEntries(
+            createdAgentIds.map((agentId) => [
+              agentId,
+              {
+                workspace: team ? path.join(workspace, agentId) : workspace,
+                agentDir: `/agents/${agentId}`,
+                ...(team
+                  ? {
+                      subagents:
+                        agentId === id
+                          ? {
+                              allowAgents: createdAgentIds.slice(1),
+                              delegationMode: "prefer" as const,
+                            }
+                          : { allowAgents: [] },
+                    }
+                  : {}),
+              },
+            ]),
+          ),
+        },
+      };
+      mocks.state.persistedConfig = next;
+      setSetupCommitState(next, snapshot("agent-create", next));
+      mocks.state.commitPreviousHash = "agent-create";
+      mocks.events.push("agent-create");
+      return {
+        config: next,
+        agentId: id,
+        bootstrapPending: true,
+        createdAgent: true,
+        createdAgentIds,
+        configHash: "agent-create",
+      };
+    },
+  );
+  mocks.readSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+  mocks.readVerifiedSnapshot.mockImplementation(async () => mocks.state.initialSnapshot);
+  mocks.readVerifiedSnapshotWithPluginMetadata.mockImplementation(async () => ({
+    snapshot: await mocks.readVerifiedSnapshot(),
+  }));
+  mocks.commit.mockImplementation(async (params: { transform: CommitTransform }) => {
+    const currentConfig = structuredClone(mocks.state.commitConfig);
+    const result = await params.transform(currentConfig, {
+      previousHash: mocks.state.commitPreviousHash,
+      snapshot: mocks.state.commitSnapshot,
+      attempt: 0,
+    });
+    mocks.events.push("commit");
+    mocks.state.persistedConfig = result.nextConfig;
+    mocks.state.initialSnapshot = snapshot("persisted", result.nextConfig);
+    return {
+      nextConfig: result.nextConfig,
+      path: "/tmp/openclaw.json",
+      previousHash: mocks.state.commitPreviousHash,
+      persistedHash: "persisted",
+      result: result.result,
+    };
+  });
+  mocks.configureGateway.mockImplementation(
+    async ({
+      nextConfig,
+      quickstartGateway,
+    }: {
+      nextConfig: OpenClawConfig;
+      quickstartGateway: {
+        authMode: GatewayAuthMode;
+        bind: "loopback" | "lan";
+        customBindHost?: string;
+        port: number;
+        token?: string;
+      };
+    }) => ({
+      nextConfig,
+      settings: {
+        authMode: quickstartGateway.authMode,
+        bind: quickstartGateway.bind,
+        customBindHost: quickstartGateway.customBindHost,
+        gatewayToken: quickstartGateway.token,
+        port: quickstartGateway.port,
+      },
+    }),
+  );
+  mocks.ensureWorkspace.mockImplementation(async () => {
+    mocks.events.push("workspace");
+    return { bootstrapPending: true };
+  });
+  mocks.ensureGatewayService.mockResolvedValue({
+    gateway: { status: "skipped", reason: "explicit" },
+    containerWithoutUserSystemd: false,
+  });
+  mocks.waitForGatewayReachable.mockResolvedValue({ ok: true });
+  mocks.updateExecApprovals.mockResolvedValue(undefined);
+  mocks.verifySetupInferenceConfig.mockResolvedValue({
+    ok: true,
+    modelRef: "openai/gpt-5.5",
+    latencyMs: 1,
+  });
 }

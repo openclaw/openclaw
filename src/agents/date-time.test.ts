@@ -1,9 +1,43 @@
 // Covers prompt date/time formatting, timezone changes, and timestamp fallbacks.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatDateStamp, formatUserTime, resolveUserTimezone } from "./date-time.js";
+import { resolveCronStyleNow } from "./current-time.js";
+import {
+  formatDateStamp,
+  formatUserTime,
+  resolveUserTimeFormat,
+  resolveUserTimezone,
+} from "./date-time.js";
+
+vi.mock("node:child_process", () => ({
+  execFileSync: () => {
+    throw new Error("No explicit operating-system clock preference");
+  },
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("resolveUserTimeFormat", () => {
+  it("uses a 24-hour locale even when its hour digits are not Latin", () => {
+    const RealDateTimeFormat = Intl.DateTimeFormat;
+    const native = new RealDateTimeFormat("fa-IR", { hour: "numeric" });
+    expect(native.resolvedOptions().hour12).toBe(false);
+    expect(native.format(new Date(2000, 0, 1, 13))).not.toContain("13");
+    vi.spyOn(Intl, "DateTimeFormat").mockImplementation(function (locales, options) {
+      return new RealDateTimeFormat(locales ?? "fa-IR", options);
+    });
+
+    expect(resolveUserTimeFormat()).toBe("24");
+    const current = resolveCronStyleNow(
+      { agents: { defaults: { userTimezone: "UTC" } } },
+      Date.parse("2026-09-13T13:05:00.000Z"),
+    );
+    expect(current.formattedTime).toBe("Sunday, September 13th, 2026 - 13:05");
+    expect(current.timeLine).toContain("Reference UTC: 2026-09-13 13:05 UTC");
+    expect(resolveUserTimeFormat("12")).toBe("12");
+    expect(resolveUserTimeFormat("24")).toBe("24");
+  });
 });
 
 describe("resolveUserTimezone", () => {

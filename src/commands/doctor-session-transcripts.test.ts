@@ -9,6 +9,15 @@ import {
   sessionTranscriptIssueToRepairEffect,
 } from "./doctor-session-transcripts.js";
 
+function transcriptMessage(
+  id: string,
+  parentId: string | null | undefined,
+  role: "user" | "assistant",
+  content: string,
+) {
+  return { type: "message", id, parentId, message: { role, content } };
+}
+
 describe("doctor session transcript health", () => {
   let root: string;
   beforeEach(async () => {
@@ -30,12 +39,7 @@ describe("doctor session transcript health", () => {
   it("reports affected prompt-rewrite branches without rewriting", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
-      {
-        type: "message",
-        id: "parent",
-        parentId: null,
-        message: { role: "assistant", content: "previous" },
-      },
+      transcriptMessage("parent", null, "assistant", "previous"),
       {
         type: "message",
         id: "runtime-user",
@@ -51,39 +55,33 @@ describe("doctor session transcript health", () => {
           ].join("\n"),
         },
       },
-      {
-        type: "message",
-        id: "runtime-assistant",
-        parentId: "runtime-user",
-        message: { role: "assistant", content: "stale" },
-      },
-      {
-        type: "message",
-        id: "plain-user",
-        parentId: "parent",
-        message: { role: "user", content: "visible ask" },
-      },
-      {
-        type: "message",
-        id: "plain-assistant",
-        parentId: "plain-user",
-        message: { role: "assistant", content: "answer" },
-      },
+      transcriptMessage("runtime-assistant", "runtime-user", "assistant", "stale"),
+      transcriptMessage("plain-user", "parent", "user", "visible ask"),
+      transcriptMessage("plain-assistant", "plain-user", "assistant", "answer"),
     ]);
     const original = await fs.readFile(filePath);
-    const [issue] = await detectSessionTranscriptHealthIssues({
-      sessionDirs: [path.dirname(filePath)],
+    const sessionsDir = path.dirname(filePath);
+    const nestedDir = path.join(sessionsDir, "nested");
+    await fs.mkdir(nestedDir);
+    await fs.writeFile(path.join(nestedDir, "nested.jsonl"), original);
+    if (process.platform !== "win32") {
+      await fs.symlink(filePath, path.join(sessionsDir, "linked.jsonl"));
+    }
+    const entries = await fs.readdir(sessionsDir);
+    const issues = await detectSessionTranscriptHealthIssues({
+      sessionDirs: [sessionsDir],
     });
+    expect(issues).toHaveLength(1);
+    const [issue] = issues;
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 6,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
     });
     expect(await fs.readFile(filePath)).toEqual(original);
-    expect(await fs.readdir(path.dirname(filePath))).toEqual(["session.jsonl"]);
+    expect(await fs.readdir(sessionsDir)).toEqual(entries);
   });
 
   it.each(["ENOENT", "EACCES"])(
@@ -168,7 +166,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 3,
       activeEntries: 1,
       legacyOpenAICodexEntries: 0,
@@ -180,46 +177,17 @@ describe("doctor session transcript health", () => {
   it("detects the branch selected by a terminal leaf control", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-06-15T00:00:00Z" },
-      {
-        type: "message",
-        id: "parent",
-        parentId: null,
-        message: { role: "assistant", content: "previous" },
-      },
-      {
-        type: "message",
-        id: "runtime-user",
-        parentId: "parent",
-        message: {
-          role: "user",
-          content:
-            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        },
-      },
-      {
-        type: "message",
-        id: "runtime-assistant",
-        parentId: "runtime-user",
-        message: { role: "assistant", content: "stale" },
-      },
-      {
-        type: "message",
-        id: "active-user",
-        parentId: "parent",
-        message: { role: "user", content: "visible ask" },
-      },
-      {
-        type: "message",
-        id: "active-assistant",
-        parentId: "active-user",
-        message: { role: "assistant", content: "answer" },
-      },
-      {
-        type: "message",
-        id: "side-delivery",
-        parentId: "active-assistant",
-        message: { role: "assistant", content: "side delivery" },
-      },
+      transcriptMessage("parent", null, "assistant", "previous"),
+      transcriptMessage(
+        "runtime-user",
+        "parent",
+        "user",
+        "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ),
+      transcriptMessage("runtime-assistant", "runtime-user", "assistant", "stale"),
+      transcriptMessage("active-user", "parent", "user", "visible ask"),
+      transcriptMessage("active-assistant", "active-user", "assistant", "answer"),
+      transcriptMessage("side-delivery", "active-assistant", "assistant", "side delivery"),
       {
         type: "metadata",
         id: "plugin-metadata",
@@ -247,7 +215,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 10,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -259,37 +226,16 @@ describe("doctor session transcript health", () => {
   it("classifies parentless visible history with a disjoint append cursor", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-disjoint", timestamp: "2026-06-15T00:00:00Z" },
-      {
-        type: "message",
-        id: "visible-parent",
-        message: { role: "assistant", content: "previous" },
-      },
-      {
-        type: "message",
-        id: "active-user",
-        message: { role: "user", content: "visible ask" },
-      },
-      {
-        type: "message",
-        id: "active-assistant",
-        message: { role: "assistant", content: "answer" },
-      },
-      {
-        type: "message",
-        id: "runtime-user",
-        parentId: "visible-parent",
-        message: {
-          role: "user",
-          content:
-            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        },
-      },
-      {
-        type: "message",
-        id: "runtime-assistant",
-        parentId: "runtime-user",
-        message: { role: "assistant", content: "stale" },
-      },
+      transcriptMessage("visible-parent", undefined, "assistant", "previous"),
+      transcriptMessage("active-user", undefined, "user", "visible ask"),
+      transcriptMessage("active-assistant", undefined, "assistant", "answer"),
+      transcriptMessage(
+        "runtime-user",
+        "visible-parent",
+        "user",
+        "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ),
+      transcriptMessage("runtime-assistant", "runtime-user", "assistant", "stale"),
       {
         type: "metadata",
         id: "append-root",
@@ -311,7 +257,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 8,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -323,40 +268,16 @@ describe("doctor session transcript health", () => {
   it("classifies the visible branch with an explicit root append cursor", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-root", timestamp: "2026-06-15T00:00:00Z" },
-      {
-        type: "message",
-        id: "parent",
-        parentId: null,
-        message: { role: "assistant", content: "previous" },
-      },
-      {
-        type: "message",
-        id: "runtime-user",
-        parentId: "parent",
-        message: {
-          role: "user",
-          content:
-            "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-        },
-      },
-      {
-        type: "message",
-        id: "runtime-assistant",
-        parentId: "runtime-user",
-        message: { role: "assistant", content: "stale" },
-      },
-      {
-        type: "message",
-        id: "active-user",
-        parentId: "parent",
-        message: { role: "user", content: "visible ask" },
-      },
-      {
-        type: "message",
-        id: "active-assistant",
-        parentId: "active-user",
-        message: { role: "assistant", content: "answer" },
-      },
+      transcriptMessage("parent", null, "assistant", "previous"),
+      transcriptMessage(
+        "runtime-user",
+        "parent",
+        "user",
+        "visible ask\n\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nsecret\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+      ),
+      transcriptMessage("runtime-assistant", "runtime-user", "assistant", "stale"),
+      transcriptMessage("active-user", "parent", "user", "visible ask"),
+      transcriptMessage("active-assistant", "active-user", "assistant", "answer"),
       {
         type: "leaf",
         id: "root-append-control",
@@ -372,7 +293,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 7,
       activeEntries: 3,
       legacyOpenAICodexEntries: 0,
@@ -403,7 +323,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 2,
       activeEntries: 1,
       legacyOpenAICodexEntries: 1,
@@ -434,7 +353,6 @@ describe("doctor session transcript health", () => {
     expect(issue).toMatchObject({
       filePath,
       broken: true,
-      repaired: false,
       originalEntries: 2,
       activeEntries: 1,
       legacyOpenAICodexEntries: 1,
@@ -446,18 +364,8 @@ describe("doctor session transcript health", () => {
   it("ignores ordinary branch history without internal runtime context", async () => {
     const filePath = await writeTranscript([
       { type: "session", version: 3, id: "session-1", timestamp: "2026-04-25T00:00:00Z" },
-      {
-        type: "message",
-        id: "branch-a",
-        parentId: null,
-        message: { role: "user", content: "draft A" },
-      },
-      {
-        type: "message",
-        id: "branch-b",
-        parentId: null,
-        message: { role: "user", content: "draft B" },
-      },
+      transcriptMessage("branch-a", null, "user", "draft A"),
+      transcriptMessage("branch-b", null, "user", "draft B"),
     ]);
     const original = await fs.readFile(filePath);
     await expect(
@@ -487,7 +395,7 @@ describe("doctor session transcript health", () => {
       const [issue] = await detectSessionTranscriptHealthIssues({
         sessionDirs: [path.dirname(filePath)],
       });
-      expect(issue).toMatchObject({ filePath, deferred: true, broken: false, repaired: false });
+      expect(issue).toMatchObject({ filePath, deferred: true, broken: false });
       expect(readSpy).not.toHaveBeenCalled();
     } finally {
       readSpy.mockRestore();

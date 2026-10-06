@@ -15,12 +15,12 @@ with the core install.
 
 ```bash
 openclaw channels add --channel wecom
-openclaw gateway restart
 openclaw channels status --channel wecom
 ```
 
 The OpenClaw catalog installs an exact version of
-`@wecom/wecom-openclaw-plugin`.
+`@wecom/wecom-openclaw-plugin`. Start the Gateway if it is offline; see
+[Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Configure
 

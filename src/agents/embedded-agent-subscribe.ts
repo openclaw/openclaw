@@ -4,10 +4,13 @@ import { createInlineCodeState } from "../../packages/markdown-core/src/code-spa
  * Subscribes to embedded-agent sessions and streams formatted replies/events.
  */
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { createAbortError } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { MAX_MESSAGING_HISTORY_ENTRIES } from "./embedded-agent-messaging-history.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import { mergeEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import { consumeEmbeddedToolReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
@@ -31,6 +34,7 @@ import {
   filterToolResultMediaUrls,
 } from "./embedded-agent-tool-media.js";
 import { stripDowngradedToolCallText } from "./embedded-agent-utils.js";
+import { sessionManagerReadTranscriptStart } from "./sessions/session-manager-current-turn.js";
 import { setSessionModelUsageSink } from "./sessions/session-model-usage.js";
 
 const embeddedLog = createSubsystemLogger("agent/embedded");
@@ -43,7 +47,30 @@ function resolveEmbeddedAgentSessionLogger(messageChannel?: string) {
   return embeddedLog;
 }
 
-export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSessionParams) {
+export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessionParams) {
+  let params = input;
+  const onAgentEvent = params.onAgentEvent;
+  if (onAgentEvent) {
+    let transcriptStartPublished = false;
+    const sessionManager = params.session.sessionManager;
+    params = {
+      ...params,
+      onAgentEvent: (event) => {
+        if (
+          transcriptStartPublished ||
+          (event.stream === "lifecycle" && typeof event.data.phase !== "string")
+        ) {
+          return onAgentEvent(event);
+        }
+        const transcriptStart = sessionManager[sessionManagerReadTranscriptStart]();
+        transcriptStartPublished = true;
+        return onAgentEvent({
+          ...event,
+          transcriptStart,
+        });
+      },
+    };
+  }
   const log = resolveEmbeddedAgentSessionLogger(params.messageChannel);
   const toolResultFormat = params.toolResultFormat ?? "markdown";
   const useMarkdown = toolResultFormat === "markdown";
@@ -54,8 +81,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getUsageTotals,
     getLastAssistantUsage,
     getCurrentAttemptAssistant,
+    hasSuccessfulModelResponse,
   } = createEmbeddedModelState(params, log);
   let compactionCount = 0;
+  let compactionRetry: Deferred | undefined;
   const assistantTexts = state.assistantTexts;
   const toolMetas = state.toolMetas;
   const toolMetaById = state.toolMetaById;
@@ -78,51 +107,30 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   } = replyDelivery;
 
   // Suppress duplicate block replies only after confirmed messaging-tool delivery.
-  const MAX_MESSAGING_SENT_TEXTS = 200;
-  const MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS = 200;
-  const MAX_MESSAGING_SENT_TARGETS = 200;
-  const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
-  const MAX_MESSAGING_SOURCE_REPLY_PAYLOADS = 200;
   const trimMessagingToolSent = () => {
-    if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
-      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
+    if (messagingToolSentTexts.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+      const overflow = messagingToolSentTexts.length - MAX_MESSAGING_HISTORY_ENTRIES;
       messagingToolSentTexts.splice(0, overflow);
       messagingToolSentTextsNormalized.splice(0, overflow);
     }
-    if (
-      state.currentSourceMessagingToolSentTextsNormalized.length >
-      MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS
-    ) {
-      const overflow =
-        state.currentSourceMessagingToolSentTextsNormalized.length -
-        MAX_CURRENT_SOURCE_MESSAGING_SENT_TEXTS;
-      state.currentSourceMessagingToolSentTextsNormalized.splice(0, overflow);
-    }
-    if (messagingToolSentTargets.length > MAX_MESSAGING_SENT_TARGETS) {
-      const overflow = messagingToolSentTargets.length - MAX_MESSAGING_SENT_TARGETS;
-      messagingToolSentTargets.splice(0, overflow);
-    }
-    if (messagingToolSentMediaUrls.length > MAX_MESSAGING_SENT_MEDIA_URLS) {
-      const overflow = messagingToolSentMediaUrls.length - MAX_MESSAGING_SENT_MEDIA_URLS;
-      messagingToolSentMediaUrls.splice(0, overflow);
-    }
-    if (messagingToolSourceReplyPayloads.length > MAX_MESSAGING_SOURCE_REPLY_PAYLOADS) {
-      const overflow =
-        messagingToolSourceReplyPayloads.length - MAX_MESSAGING_SOURCE_REPLY_PAYLOADS;
-      messagingToolSourceReplyPayloads.splice(0, overflow);
+    for (const history of [
+      state.currentSourceMessagingToolSentTextsNormalized,
+      messagingToolSentTargets,
+      messagingToolSentMediaUrls,
+      messagingToolSourceReplyPayloads,
+    ]) {
+      if (history.length > MAX_MESSAGING_HISTORY_ENTRIES) {
+        history.splice(0, history.length - MAX_MESSAGING_HISTORY_ENTRIES);
+      }
     }
   };
 
   const ensureCompactionPromise = () => {
-    if (!state.compactionRetryPromise) {
-      // Create a single promise that resolves when ALL pending compactions complete
-      // (tracked by pendingCompactionRetry counter, decremented in resolveCompactionRetry)
-      state.compactionRetryPromise = new Promise((resolve, reject) => {
-        state.compactionRetryResolve = resolve;
-        state.compactionRetryReject = reject;
-      });
+    if (!compactionRetry) {
+      // One wait covers both active compaction and queued retries.
+      compactionRetry = createDeferredCore();
       // Prevent unhandled rejection if rejected after all consumers have resolved
-      state.compactionRetryPromise.catch((err: unknown) => {
+      compactionRetry.promise.catch((err: unknown) => {
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
@@ -133,14 +141,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     ensureCompactionPromise();
   };
 
-  const resolveCompactionPromiseIfIdle = () => {
+  const maybeResolveCompactionWait = () => {
     if (state.pendingCompactionRetry !== 0 || state.compactionInFlight) {
       return;
     }
-    state.compactionRetryResolve?.();
-    state.compactionRetryResolve = undefined;
-    state.compactionRetryReject = undefined;
-    state.compactionRetryPromise = null;
+    compactionRetry?.resolve();
+    compactionRetry = undefined;
   };
 
   const resolveCompactionRetry = () => {
@@ -148,12 +154,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       return;
     }
     state.pendingCompactionRetry -= 1;
-    resolveCompactionPromiseIfIdle();
+    maybeResolveCompactionWait();
   };
 
-  const maybeResolveCompactionWait = () => {
-    resolveCompactionPromiseIfIdle();
-  };
   const incrementCompactionCount = () => {
     compactionCount += 1;
   };
@@ -265,16 +268,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     pushAssistantText: replyDelivery.pushAssistantText,
     shouldSkipAssistantText: replyDelivery.shouldSkipAssistantText,
   });
-  const {
-    consumePartialReplyDirectives,
-    emitBlockChunk,
-    emitReasoningStream,
-    flushBlockReplyBuffer,
-    resetAssistantMessageState,
-    resetBlockReplyDirectives,
-    resetPartialReplyDirectives,
-    stripBlockTags,
-  } = streamRendering;
 
   const resetForCompactionRetry = () => {
     state.hadDeterministicSideEffect =
@@ -288,6 +281,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       state.acceptedSessionSpawns.length > 0 ||
       state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
+    state.answerSegments.length = 0;
+    state.inputAnswer = undefined;
+    state.keptAnswer = undefined;
+    state.lastAssistant = undefined;
     state.lastAssistantTextMessageIndex = -1;
     state.lastAssistantTextContentIndex = undefined;
     state.lastAssistantTextItemId = undefined;
@@ -317,7 +314,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolAudioAsVoice = false;
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
-    state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
+    state.deferBlockReplyDelivery =
+      typeof params.onBeforeTerminalDelivery === "function" &&
+      params.deferTerminalDelivery !== false;
     clearAssistantStream();
     clearDeferredBlockReplies();
     state.deterministicApprovalPromptPending = false;
@@ -326,14 +325,14 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
-    resetAssistantMessageState(0);
+    streamRendering.resetAssistantMessageState(0);
   };
 
   // Re-filter the full raw buffer. Reusing live scanner state would hide the
   // visible prefix when timeout interrupts an open <think> or <final> block.
   const finalizeFlushedAssistantText = (text: string) =>
     stripDowngradedToolCallText(
-      stripBlockTags(
+      streamRendering.stripBlockTags(
         text,
         {
           thinking: false,
@@ -366,6 +365,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   };
 
   const ctx: EmbeddedAgentSubscribeContext = {
+    ...streamRendering,
     params,
     state,
     log,
@@ -379,20 +379,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     shouldEmitToolOutput,
     emitToolSummary,
     emitToolOutput,
-    stripBlockTags,
-    emitBlockChunk,
-    flushBlockReplyBuffer,
     emitAssistantStreamData,
     emitBlockReply,
     flushAssistantStream,
     releaseDeferredReplies,
     clearAssistantStream,
     clearDeferredBlockReplies,
-    emitReasoningStream,
-    consumePartialReplyDirectives,
-    resetBlockReplyDirectives,
-    resetPartialReplyDirectives,
-    resetAssistantMessageState,
     resetForCompactionRetry,
     finalizeAssistantTexts,
     trimMessagingToolSent,
@@ -426,16 +418,11 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.
     // Don't resolve, as that would incorrectly signal "compaction complete" when it's still in-flight.
-    if (state.compactionRetryPromise) {
+    if (compactionRetry) {
       log.debug(`unsubscribe: rejecting compaction wait runId=${params.runId}`);
-      const reject = state.compactionRetryReject;
-      state.compactionRetryResolve = undefined;
-      state.compactionRetryReject = undefined;
-      state.compactionRetryPromise = null;
-      // Reject with AbortError so it's caught by isAbortError() check in cleanup paths
-      const abortErr = new Error("Unsubscribed during compaction");
-      abortErr.name = "AbortError";
-      reject?.(abortErr);
+      const { reject } = compactionRetry;
+      compactionRetry = undefined;
+      reject(createAbortError("Unsubscribed during compaction"));
     }
     // Cancel any in-flight compaction to prevent resource leaks when unsubscribing.
     // Only abort if compaction is actually running to avoid unnecessary work.
@@ -453,7 +440,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
 
   return {
     assistantTexts,
+    answerSegments: state.answerSegments,
     getCurrentAttemptAssistant,
+    getKeptAnswer: () => state.keptAnswer,
+    hasSuccessfulModelResponse,
     getLastAssistantTextMessageIndex: () =>
       state.lastAssistantTextMessageIndex >= 0 ? state.lastAssistantTextMessageIndex : undefined,
     toolMetas,
@@ -502,6 +492,8 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     getMessagingToolSourceReplyPayloads: () => messagingToolSourceReplyPayloads.slice(),
     getSourceReplyDelivered: () => state.sourceReplyDelivered,
+    getSourceReplyDeliveryState: () => state.sourceReplyDeliveryState,
+    endsWithSourceProgress: () => state.lastToolTurnOnlySourceProgress === true,
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
@@ -536,25 +528,21 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     waitForCompactionRetry: () => {
       // Reject after unsubscribe so callers treat it as cancellation, not success
       if (state.unsubscribed) {
-        const err = new Error("Unsubscribed during compaction wait");
-        err.name = "AbortError";
-        return Promise.reject(err);
+        return Promise.reject(createAbortError("Unsubscribed during compaction wait"));
       }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
         ensureCompactionPromise();
-        return state.compactionRetryPromise ?? Promise.resolve();
+        return compactionRetry?.promise ?? Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
           if (state.unsubscribed) {
-            const err = new Error("Unsubscribed during compaction wait");
-            err.name = "AbortError";
-            reject(err);
+            reject(createAbortError("Unsubscribed during compaction wait"));
             return;
           }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
             ensureCompactionPromise();
-            void (state.compactionRetryPromise ?? Promise.resolve()).then(resolve, reject);
+            void (compactionRetry?.promise ?? Promise.resolve()).then(resolve, reject);
           } else {
             resolve();
           }

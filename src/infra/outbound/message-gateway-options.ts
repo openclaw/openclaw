@@ -9,6 +9,16 @@ import {
   type GatewayClientName,
 } from "../../utils/message-channel.js";
 
+export type OutboundGatewayRequest = Pick<
+  CallGatewayOptions,
+  "method" | "params" | "timeoutMs" | "signal"
+>;
+
+export type OutboundGatewayRequestContext = {
+  sourceReplyFinal?: boolean;
+  sourceReplyToolCallId?: string;
+};
+
 /** Raw gateway options accepted by outbound message senders. */
 export type OutboundMessageGatewayOptionsInput = Pick<
   CallGatewayOptions,
@@ -20,6 +30,11 @@ export type OutboundMessageGatewayOptionsInput = Pick<
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   mode?: GatewayClientMode;
+  /** Host-bound dispatch keeps delivery with its Gateway without opening a transport. */
+  request?: <T>(
+    request: OutboundGatewayRequest,
+    context?: OutboundGatewayRequestContext,
+  ) => Promise<T>;
   resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
 };
 

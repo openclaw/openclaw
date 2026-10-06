@@ -3,7 +3,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { trimToUndefined } from "./credentials.js";
 import {
-  resolveConfiguredSecretInputWithFallback,
+  resolveCanonicalConfiguredSecretInputWithFallback,
   type SecretInputUnresolvedReasonStyle,
 } from "./resolve-configured-secret-input-string.js";
 
@@ -24,6 +24,7 @@ export async function resolveGatewayAuthToken(params: {
   source?: GatewayAuthTokenResolutionSource;
   secretRefConfigured: boolean;
   unresolvedRefReason?: string;
+  unresolvedRefCode?: "SECRET_REF_REDACTED_VALUE";
 }> {
   const explicitToken = trimToUndefined(params.explicitToken);
   if (explicitToken) {
@@ -34,7 +35,7 @@ export async function resolveGatewayAuthToken(params: {
     };
   }
 
-  const resolved = await resolveConfiguredSecretInputWithFallback({
+  const resolved = await resolveCanonicalConfiguredSecretInputWithFallback({
     config: params.cfg,
     env: params.env,
     value: params.cfg.gateway?.auth?.token,
@@ -51,5 +52,6 @@ export async function resolveGatewayAuthToken(params: {
       : {}),
     secretRefConfigured: resolved.secretRefConfigured,
     ...(resolved.unresolvedRefReason ? { unresolvedRefReason: resolved.unresolvedRefReason } : {}),
+    ...(resolved.unresolvedRefCode ? { unresolvedRefCode: resolved.unresolvedRefCode } : {}),
   };
 }

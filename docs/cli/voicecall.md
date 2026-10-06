@@ -10,15 +10,17 @@ title: "Voicecall"
 
 `voicecall` is a plugin-provided command. It only appears when the voice-call
 plugin is installed and enabled. If `openclaw voicecall` is not recognized,
-install and enable the plugin on the Gateway host, then restart the Gateway:
+install and enable the plugin on the Gateway host:
 
 ```bash
 openclaw plugins install @openclaw/voice-call
 openclaw plugins enable voice-call
 ```
 
+The commands apply to a running Gateway automatically; start it if it is offline.
 See [Voice call plugin](/plugins/voice-call) for provider credentials and
-webhook configuration.
+webhook configuration, and [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+for runtime verification.
 
 When the Gateway is running, operational commands (`call`, `start`,
 `continue`, `speak`, `dtmf`, `end`, `status`) route to that Gateway's

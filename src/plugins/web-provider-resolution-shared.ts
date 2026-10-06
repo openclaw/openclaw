@@ -5,7 +5,9 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { sortPluginEntriesById } from "./plugin-entry-order.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 type WebProviderConfigKey = "webSearch" | "webFetch";
@@ -37,31 +39,20 @@ function loadInstalledWebProviderManifestRecords(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   pluginIds?: readonly string[];
-  manifestRecords?: readonly PluginManifestRecord[];
 }): readonly PluginManifestRecord[] {
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env ?? process.env,
-    }).plugins;
+  const records = loadManifestMetadataSnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+  }).plugins;
   const pluginIdSet = createPluginIdScopeSet(params.pluginIds);
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
 /** Returns only plugin ids for manifest-declared web provider candidates. */
-export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
-  contract: WebProviderContract;
-  configKey: WebProviderConfigKey;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  onlyPluginIds?: readonly string[];
-  origin?: PluginManifestRecord["origin"];
-  sandboxed?: boolean;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] | undefined {
+export function resolveManifestDeclaredWebProviderCandidatePluginIds(
+  params: Parameters<typeof resolveManifestDeclaredWebProviderCandidates>[0],
+): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
 
@@ -115,22 +106,6 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   return { pluginIds: undefined, manifestRecords };
 }
 
-function resolveBundledWebProviderCompatPluginIds(params: {
-  contract: WebProviderContract;
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-  manifestRecords?: readonly PluginManifestRecord[];
-}): string[] {
-  return loadInstalledWebProviderManifestRecords(params)
-    .filter(
-      (plugin) =>
-        plugin.origin === "bundled" && (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
-    )
-    .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
 /** Builds bundled-plugin activation config for provider families with legacy enablement defaults. */
 export function resolveBundledWebProviderResolutionConfig(params: {
   contract: WebProviderContract;
@@ -160,17 +135,19 @@ export function resolveBundledWebProviderResolutionConfig(params: {
       ? { manifestRegistry: { plugins: [...manifestRecords], diagnostics: [] } }
       : {}),
     ...(currentSnapshot?.discovery ? { discovery: currentSnapshot.discovery } : {}),
-    resolveBundledPluginIds: (compatParams) => {
+    resolveBundledPluginIds: () => {
       manifestRecords ??= loadInstalledWebProviderManifestRecords({
         config: params.config,
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
-      return resolveBundledWebProviderCompatPluginIds({
-        contract: params.contract,
-        ...compatParams,
-        manifestRecords,
-      });
+      return manifestRecords
+        .filter(
+          (plugin) =>
+            plugin.origin === "bundled" && (plugin.contracts?.[params.contract]?.length ?? 0) > 0,
+        )
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
     },
   });
 
@@ -184,6 +161,7 @@ export function resolveBundledWebProviderResolutionConfig(params: {
 
 /** Adds plugin ids to registry provider records, applies an optional plugin scope, then sorts. */
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {
+  registry: PluginRegistry;
   entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];
 }): Array<TProvider & { pluginId: string }> {
@@ -191,6 +169,10 @@ export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   return sortPluginEntriesById(
     params.entries
       .filter((entry) => !onlyPluginIdSet || onlyPluginIdSet.has(entry.pluginId))
-      .map((entry) => Object.assign({}, entry.provider, { pluginId: entry.pluginId })),
+      .map(({ pluginId, provider }) => {
+        const record = params.registry.plugins.find((entry) => entry.id === pluginId);
+        const instance = record && getPluginInstance(record);
+        return Object.assign({}, instance?.wrap(provider) ?? provider, { pluginId });
+      }),
   );
 }

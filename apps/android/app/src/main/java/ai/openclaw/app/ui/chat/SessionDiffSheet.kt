@@ -9,6 +9,7 @@ import ai.openclaw.app.chat.parseSessionDiffPatch
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawTheme
 import ai.openclaw.app.ui.foldAwareSheet
@@ -102,7 +103,6 @@ import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -184,7 +184,7 @@ internal fun SessionDiffSheet(
     }
   }
 
-  Dialog(
+  AppDialog(
     onDismissRequest = onDismiss,
     properties =
       DialogProperties(

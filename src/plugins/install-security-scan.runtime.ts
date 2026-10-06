@@ -1,12 +1,14 @@
 // Runtime bridge for plugin install security scanning.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { isPackageDependencyName } from "../infra/package-json.js";
 import {
   runInstallPolicy,
   type InstallPolicyFinding,
@@ -16,6 +18,7 @@ import {
 } from "../security/install-policy.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
+import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
   InstallSecurityScanResult,
@@ -96,32 +99,38 @@ type InstalledPackageScanRoot = {
   realPath: string;
 };
 
-function failOversizedInstallPolicyWarning(params: {
+function formatInstallPolicyFailure(params: {
   result: Awaited<ReturnType<typeof runInstallPolicy>>;
   targetName: string;
   targetType: "skill" | "plugin";
 }): InstallSecurityScanResult | undefined {
-  if (!params.result?.warning) {
-    return undefined;
+  if (params.result?.warning) {
+    const notice = formatInstallPolicyNotice({
+      decision: "warn",
+      findings: params.result.findings,
+      guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
+      reason: params.result.warning.reason,
+      targetName: params.targetName,
+      targetType: params.targetType,
+    });
+    if (notice.length > MAX_INSTALL_POLICY_NOTICE_CHARS) {
+      return {
+        blocked: {
+          code: "security_scan_failed",
+          reason:
+            "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
+        },
+      };
+    }
   }
-  const notice = formatInstallPolicyNotice({
-    decision: "warn",
-    findings: params.result.findings,
-    guidance: INSTALL_POLICY_REVIEW_GUIDANCE,
-    reason: params.result.warning.reason,
-    targetName: params.targetName,
-    targetType: params.targetType,
-  });
-  if (notice.length <= MAX_INSTALL_POLICY_NOTICE_CHARS) {
-    return undefined;
-  }
-  return {
-    blocked: {
-      code: "security_scan_failed",
-      reason:
-        "install policy failed closed: policy review exceeds the 4,000-character display limit; reduce or coalesce the reason and findings",
-    },
-  };
+  return params.result?.blocked
+    ? formatBlockedInstallPolicyResult({
+        blocked: params.result.blocked,
+        findings: params.result.findings,
+        targetName: params.targetName,
+        targetType: params.targetType,
+      })
+    : undefined;
 }
 
 function formatBlockedInstallPolicyResult(params: {
@@ -279,12 +288,7 @@ async function inspectNodeModulesSymlinkTarget(params: {
 }
 
 function readPositiveIntegerEnv(name: string, fallback: number): number {
-  const rawValue = process.env[name];
-  if (!rawValue) {
-    return fallback;
-  }
-  const parsedValue = parseStrictPositiveInteger(rawValue);
-  return parsedValue ?? fallback;
+  return parseStrictPositiveInteger(process.env[name]) ?? fallback;
 }
 
 function resolvePackageTraversalLimits(): PackageTraversalLimits {
@@ -304,37 +308,17 @@ function isSamePathOrInside(parentPath: string, candidatePath: string): boolean 
   return parentPath === candidatePath || isPathInside(parentPath, candidatePath);
 }
 
-function getErrnoCode(error: unknown): string | undefined {
-  if (typeof error !== "object" || error === null || !("code" in error)) {
-    return undefined;
-  }
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" ? code : undefined;
-}
-
-function isInstallScannableDependencyName(name: string): boolean {
-  if (name.startsWith("@")) {
-    const parts = name.split("/");
-    return (
-      parts.length === 2 && parts.every((part) => part.length > 0 && part !== "." && part !== "..")
-    );
-  }
-  return (
-    name.length > 0 && !name.includes("/") && !name.includes("\\") && name !== "." && name !== ".."
-  );
-}
-
 function collectManifestRuntimeDependencyNames(manifest: PackageManifest): string[] {
   const dependencyNames = new Set<string>();
   for (const dependencies of [manifest.dependencies, manifest.optionalDependencies]) {
     for (const dependencyName of Object.keys(dependencies ?? {})) {
-      if (isInstallScannableDependencyName(dependencyName)) {
+      if (isPackageDependencyName(dependencyName)) {
         dependencyNames.add(dependencyName);
       }
     }
   }
   for (const dependencyName of Object.keys(manifest.peerDependencies ?? {})) {
-    if (dependencyName !== "openclaw" && isInstallScannableDependencyName(dependencyName)) {
+    if (dependencyName !== "openclaw" && isPackageDependencyName(dependencyName)) {
       dependencyNames.add(dependencyName);
     }
   }
@@ -353,7 +337,7 @@ async function resolveInstalledPackageScanRoot(params: {
   try {
     stats = await fs.stat(packageDir);
   } catch (error) {
-    if (getErrnoCode(error) === "ENOENT") {
+    if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
     }
     throw error;
@@ -484,67 +468,39 @@ async function validatePackageDependencyBoundaries(params: {
   const rootDir = params.rootDir;
   const rootRealPath = await fs.realpath(rootDir).catch(() => rootDir);
   const trustedHostOpenClawRootRealPath = await resolveTrustedHostOpenClawRootRealPath();
-  const queue: Array<{ depth: number; dir: string }> = [{ depth: 0, dir: rootDir }];
-  const visitedDirectories = new Set<string>();
-  let queueIndex = 0;
-
-  while (queueIndex < queue.length) {
-    const current = queue[queueIndex];
-    queueIndex += 1;
-    if (!current) {
-      continue;
-    }
-
-    if (current.depth > limits.maxDepth) {
-      throw new Error(
-        `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${current.dir}`,
-      );
-    }
-
-    const currentDir = current.dir;
-    const currentRealPath = await fs.realpath(currentDir).catch(() => currentDir);
-    if (visitedDirectories.has(currentRealPath)) {
-      continue;
-    }
-    visitedDirectories.add(currentRealPath);
-    if (visitedDirectories.size > limits.maxDirectories) {
-      throw new Error(
-        `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
-      );
-    }
-
-    let entries: Array<{
-      name: string;
-      isDirectory(): boolean;
-      isSymbolicLink(): boolean;
-    }>;
-    try {
-      entries = await fs.readdir(currentDir, { encoding: "utf8", withFileTypes: true });
-    } catch (error) {
-      throw new Error(`dependency boundary scan could not read ${currentDir}: ${String(error)}`, {
-        cause: error,
-      });
-    }
-
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
-      const nextPath = path.join(currentDir, entry.name);
-      const relativeNextPath = path.relative(rootDir, nextPath) || entry.name;
-      if (entry.isSymbolicLink()) {
-        if (pathContainsNodeModulesSegment(relativeNextPath)) {
-          await inspectNodeModulesSymlinkTarget({
+  let directories = 1;
+  const { failedDirs } = await walkDirectory(rootDir, {
+    symlinks: "include",
+    include: (entry) =>
+      entry.kind === "symlink" && pathContainsNodeModulesSegment(entry.relativePath)
+        ? inspectNodeModulesSymlinkTarget({
             allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
             rootRealPath,
-            symlinkPath: nextPath,
-            symlinkRelativePath: relativeNextPath,
+            symlinkPath: entry.path,
+            symlinkRelativePath: entry.relativePath,
             trustedHostOpenClawRootRealPath,
-          });
-        }
-        continue;
+          }).then(() => false)
+        : false,
+    descend: (entry) => {
+      if (entry.depth > limits.maxDepth) {
+        throw new Error(
+          `dependency boundary scan exceeded max depth (${limits.maxDepth}) at ${entry.path}`,
+        );
       }
-      if (entry.isDirectory()) {
-        queue.push({ depth: current.depth + 1, dir: nextPath });
+      if (++directories > limits.maxDirectories) {
+        throw new Error(
+          `dependency boundary scan exceeded max directories (${limits.maxDirectories}) under ${rootDir}`,
+        );
       }
-    }
+      return true;
+    },
+  });
+  if (failedDirs.length > 0) {
+    const failure = failedDirs[0]!;
+    throw new Error(
+      `dependency boundary scan could not read ${failure.path}: ${String(failure.error)}`,
+      { cause: failure.error },
+    );
   }
 }
 
@@ -560,18 +516,8 @@ async function runBeforeInstallHook(params: {
   requestKind: InstallPolicyRequestKind;
   requestMode: "install" | "update";
   requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
+  skill?: PluginHookBeforeInstallSkill;
+  plugin?: PluginHookBeforeInstallPlugin;
 }): Promise<InstallSecurityScanResult | undefined> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_install")) {
@@ -697,33 +643,16 @@ function shouldBypassOpenClawInstallFriction(params: {
   );
 }
 
-async function runOperatorInstallPolicy(params: {
-  config?: OpenClawConfig;
-  logger: InstallScanLogger;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  origin: InstallPolicyOrigin;
-  source?: InstallPolicySource;
-  sourcePath: string;
-  sourcePathKind: "file" | "directory";
-  targetName: string;
-  targetType: "skill" | "plugin";
-  requestKind: InstallPolicyRequestKind;
-  requestMode: "install" | "update";
-  requestedSpecifier?: string;
-  skill?: {
-    installId: string;
-    installSpec?: SkillInstallSpecMetadata;
-  };
-  plugin?: {
-    contentType: "bundle" | "package" | "file" | "dependency-tree";
-    pluginId: string;
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    extensions?: string[];
-  };
-  trustedSourceLinkedOfficialInstall?: boolean;
-}): Promise<InstallSecurityScanResult | undefined> {
+async function runOperatorInstallPolicy(
+  params: Omit<Parameters<typeof runBeforeInstallHook>[0], "installLabel" | "origin" | "plugin"> & {
+    config?: OpenClawConfig;
+    onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+    origin: InstallPolicyOrigin;
+    plugin?: Omit<PluginHookBeforeInstallPlugin, "contentType"> & {
+      contentType: PluginHookBeforeInstallPlugin["contentType"] | "dependency-tree";
+    };
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   const request = {
     targetName: params.targetName,
     targetType: params.targetType,
@@ -784,21 +713,13 @@ async function runOperatorInstallPolicy(params: {
   };
 
   const result = await evaluatePolicy();
-  const presentationFailure = failOversizedInstallPolicyWarning({
+  const policyFailure = formatInstallPolicyFailure({
     result,
     targetName: params.targetName,
     targetType: params.targetType,
   });
-  if (presentationFailure) {
-    return presentationFailure;
-  }
-  if (result?.blocked) {
-    return formatBlockedInstallPolicyResult({
-      blocked: result.blocked,
-      findings: result.findings,
-      targetName: params.targetName,
-      targetType: params.targetType,
-    });
+  if (policyFailure) {
+    return policyFailure;
   }
   if (!result?.warning) {
     logPolicyResult(result);
@@ -833,21 +754,13 @@ async function runOperatorInstallPolicy(params: {
   });
   if (acknowledgement.status === "approved") {
     const reevaluated = await evaluatePolicy();
-    const reevaluatedPresentationFailure = failOversizedInstallPolicyWarning({
+    const reevaluatedFailure = formatInstallPolicyFailure({
       result: reevaluated,
       targetName: params.targetName,
       targetType: params.targetType,
     });
-    if (reevaluatedPresentationFailure) {
-      return reevaluatedPresentationFailure;
-    }
-    if (reevaluated?.blocked) {
-      return formatBlockedInstallPolicyResult({
-        blocked: reevaluated.blocked,
-        findings: reevaluated.findings,
-        targetName: params.targetName,
-        targetType: params.targetType,
-      });
+    if (reevaluatedFailure) {
+      return reevaluatedFailure;
     }
     if (reevaluated?.warning) {
       const warningUnchanged = reevaluated.warning.fingerprint === result.warning.fingerprint;
@@ -890,157 +803,136 @@ async function runOperatorInstallPolicy(params: {
   };
 }
 
-export async function scanBundleInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    logger: InstallScanLogger;
-    pluginId: string;
-    sourceDir: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
-    version?: string;
-    source?: InstallPolicySource;
-  },
+type InstallPolicyAndHookRequest = Omit<
+  Parameters<typeof runBeforeInstallHook>[0],
+  "installLabel" | "origin"
+> & {
+  config?: OpenClawConfig;
+  hookOrigin: string;
+  installLabel: string;
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  policyOrigin: InstallPolicyOrigin;
+  skipHook?: boolean;
+};
+
+async function runInstallPolicyAndHook(
+  params: InstallPolicyAndHookRequest,
 ): Promise<InstallSecurityScanResult | undefined> {
-  const runPolicy = () =>
-    runOperatorInstallPolicy({
-      config: params.config,
-      logger: params.logger,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      origin: { type: "plugin-bundle", ...(params.version ? { version: params.version } : {}) },
-      source:
-        params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
-      sourcePath: params.sourceDir,
-      sourcePathKind: "directory",
-      targetName: params.pluginId,
-      targetType: "plugin",
-      requestKind: params.requestKind ?? "plugin-dir",
-      requestMode: params.mode ?? "install",
-      requestedSpecifier: params.requestedSpecifier,
-      plugin: {
-        contentType: "bundle",
-        pluginId: params.pluginId,
-        manifestId: params.pluginId,
-        ...(params.version ? { version: params.version } : {}),
-      },
-    });
+  const policyResult = await runOperatorInstallPolicy({
+    ...params,
+    origin: params.policyOrigin,
+  });
+  if (params.skipHook || policyResult?.blocked) {
+    return policyResult;
+  }
+  return await runBeforeInstallHook({
+    ...params,
+    origin: params.hookOrigin,
+  });
+}
+
+type PluginInstallPolicyParams = {
+  config?: OpenClawConfig;
+  logger: InstallScanLogger;
+  mode?: "install" | "update";
+  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  requestedSpecifier?: string;
+  source?: InstallPolicySource;
+};
+
+function pluginInstallPolicyRequest(params: PluginInstallPolicyParams, targetName: string) {
+  return {
+    config: params.config,
+    logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    targetName,
+    targetType: "plugin" as const,
+    requestMode: params.mode ?? ("install" as const),
+    requestedSpecifier: params.requestedSpecifier,
+  };
+}
+
+export async function scanBundleInstallSourceRuntime(
+  params: PluginInstallPolicyParams &
+    InstallSafetyOverrides & {
+      pluginId: string;
+      sourceDir: string;
+      requestKind?: PluginInstallRequestKind;
+      version?: string;
+    },
+): Promise<InstallSecurityScanResult | undefined> {
+  const requestKind = params.requestKind ?? "plugin-dir";
+  const source = params.source ?? resolvePolicySource({ requestKind });
+  const plugin = {
+    contentType: "bundle" as const,
+    pluginId: params.pluginId,
+    manifestId: params.pluginId,
+    ...(params.version ? { version: params.version } : {}),
+  };
   await validatePackageDependencyBoundaries({
     rootDir: params.sourceDir,
   });
-  if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
-    return await runPolicy();
-  }
-
-  const policyResult = await runPolicy();
-  if (policyResult?.blocked) {
-    return policyResult;
-  }
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
-    installLabel: `Bundle "${params.pluginId}" installation`,
-    origin: "plugin-bundle",
-    sourcePath: params.sourceDir,
-    sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "bundle",
-      pluginId: params.pluginId,
-      manifestId: params.pluginId,
+  return await runInstallPolicyAndHook({
+    ...pluginInstallPolicyRequest(params, params.pluginId),
+    policyOrigin: {
+      type: "plugin-bundle",
       ...(params.version ? { version: params.version } : {}),
     },
+    hookOrigin: "plugin-bundle",
+    installLabel: `Bundle "${params.pluginId}" installation`,
+    source,
+    sourcePath: params.sourceDir,
+    sourcePathKind: "directory",
+    requestKind,
+    plugin,
+    skipHook: shouldBypassOpenClawInstallFriction({ source: params.source }),
   });
-  return hookResult;
 }
 
 export async function scanPackageInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    extensions: string[];
-    logger: InstallScanLogger;
-    packageDir: string;
-    pluginId: string;
-    requestKind?: PluginInstallRequestKind;
-    requestedSpecifier?: string;
-    mode?: "install" | "update";
-    packageName?: string;
-    manifestId?: string;
-    version?: string;
-    source?: InstallPolicySource;
-    trustedSourceLinkedOfficialInstall?: boolean;
-  },
+  params: PluginInstallPolicyParams &
+    InstallSafetyOverrides & {
+      extensions: string[];
+      packageDir: string;
+      pluginId: string;
+      requestKind?: PluginInstallRequestKind;
+      packageName?: string;
+      manifestId?: string;
+      version?: string;
+    },
 ): Promise<InstallSecurityScanResult | undefined> {
-  const runPolicy = () =>
-    runOperatorInstallPolicy({
-      config: params.config,
-      logger: params.logger,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      origin: {
-        type: "plugin-package",
-        ...(params.packageName ? { packageName: params.packageName } : {}),
-        ...(params.version ? { version: params.version } : {}),
-      },
-      source:
-        params.source ?? resolvePolicySource({ requestKind: params.requestKind ?? "plugin-dir" }),
-      sourcePath: params.packageDir,
-      sourcePathKind: "directory",
-      targetName: params.pluginId,
-      targetType: "plugin",
-      requestKind: params.requestKind ?? "plugin-dir",
-      requestMode: params.mode ?? "install",
-      requestedSpecifier: params.requestedSpecifier,
-      plugin: {
-        contentType: "package",
-        pluginId: params.pluginId,
-        ...(params.packageName ? { packageName: params.packageName } : {}),
-        ...(params.manifestId ? { manifestId: params.manifestId } : {}),
-        ...(params.version ? { version: params.version } : {}),
-        extensions: params.extensions.slice(),
-      },
-    });
+  const requestKind = params.requestKind ?? "plugin-dir";
+  const source = params.source ?? resolvePolicySource({ requestKind });
+  const plugin = {
+    contentType: "package" as const,
+    pluginId: params.pluginId,
+    ...(params.packageName ? { packageName: params.packageName } : {}),
+    ...(params.manifestId ? { manifestId: params.manifestId } : {}),
+    ...(params.version ? { version: params.version } : {}),
+    extensions: params.extensions.slice(),
+  };
   await validatePackageDependencyBoundaries({
     rootDir: params.packageDir,
   });
-  if (
-    shouldBypassOpenClawInstallFriction({
-      source: params.source,
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    })
-  ) {
-    return await runPolicy();
-  }
-
-  const policyResult = await runPolicy();
-  if (policyResult?.blocked) {
-    return policyResult;
-  }
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
+  return await runInstallPolicyAndHook({
+    ...pluginInstallPolicyRequest(params, params.pluginId),
+    policyOrigin: {
+      type: "plugin-package",
+      ...(params.packageName ? { packageName: params.packageName } : {}),
+      ...(params.version ? { version: params.version } : {}),
+    },
+    hookOrigin: "plugin-package",
     installLabel: `Plugin "${params.pluginId}" installation`,
-    origin: "plugin-package",
+    source,
     sourcePath: params.packageDir,
     sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: params.requestKind ?? "plugin-dir",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "package",
-      pluginId: params.pluginId,
-      ...(params.packageName ? { packageName: params.packageName } : {}),
-      ...(params.manifestId ? { manifestId: params.manifestId } : {}),
-      ...(params.version ? { version: params.version } : {}),
-      extensions: params.extensions.slice(),
-    },
+    requestKind,
+    plugin,
+    skipHook: shouldBypassOpenClawInstallFriction({
+      source: params.source,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    }),
   });
-  return hookResult;
 }
 
 export async function scanInstalledPackageDependencyTreeRuntime(params: {
@@ -1059,26 +951,6 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const requestKind = params.requestKind ?? "plugin-npm";
-  const runPolicy = () =>
-    runOperatorInstallPolicy({
-      config: params.config,
-      logger: params.logger,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      origin: { type: "plugin-dependency-tree" },
-      source: params.source ?? resolvePolicySource({ requestKind }),
-      sourcePath: params.dependencyScanRootDir ?? params.packageDir,
-      sourcePathKind: "directory",
-      targetName: params.pluginId,
-      targetType: "plugin",
-      requestKind,
-      requestMode: params.mode ?? "install",
-      requestedSpecifier: params.requestedSpecifier,
-      plugin: {
-        contentType: "dependency-tree",
-        pluginId: params.pluginId,
-      },
-      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    });
   const scanRoots = await collectInstalledPackageScanRoots({
     ...(params.additionalPackageDirs
       ? { additionalPackageDirs: params.additionalPackageDirs }
@@ -1094,89 +966,42 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     });
   }
-  return await runPolicy();
-}
-
-export async function scanFileInstallSourceRuntime(
-  params: InstallSafetyOverrides & {
-    config?: OpenClawConfig;
-    filePath: string;
-    logger: InstallScanLogger;
-    mode?: "install" | "update";
-    pluginId: string;
-    requestedSpecifier?: string;
-    source?: InstallPolicySource;
-  },
-): Promise<InstallSecurityScanResult | undefined> {
-  const policyResult = await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
-    origin: { type: "plugin-file" },
-    source: params.source ?? resolvePolicySource({ requestKind: "plugin-file" }),
-    sourcePath: params.filePath,
-    sourcePathKind: "file",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: "plugin-file",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "file",
-      pluginId: params.pluginId,
-      extensions: [path.basename(params.filePath)],
-    },
-  });
-  if (policyResult?.blocked) {
-    return policyResult;
-  }
-
-  const hookResult = await runBeforeInstallHook({
-    logger: params.logger,
-    installLabel: `Plugin file "${params.pluginId}" installation`,
-    origin: "plugin-file",
-    sourcePath: params.filePath,
-    sourcePathKind: "file",
-    targetName: params.pluginId,
-    targetType: "plugin",
-    requestKind: "plugin-file",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
-    plugin: {
-      contentType: "file",
-      pluginId: params.pluginId,
-      extensions: [path.basename(params.filePath)],
-    },
-  });
-  return hookResult;
-}
-
-export async function preflightPluginNpmInstallPolicyRuntime(params: {
-  config?: OpenClawConfig;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  packageName: string;
-  pluginId?: string;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  sourcePath: string;
-  sourcePathKind: "file" | "directory";
-}): Promise<InstallSecurityScanResult | undefined> {
-  const pluginId = params.pluginId ?? params.packageName;
   return await runOperatorInstallPolicy({
     config: params.config,
     logger: params.logger,
     onInstallPolicyWarning: params.onInstallPolicyWarning,
+    origin: { type: "plugin-dependency-tree" },
+    source: params.source ?? resolvePolicySource({ requestKind }),
+    sourcePath: params.dependencyScanRootDir ?? params.packageDir,
+    sourcePathKind: "directory",
+    targetName: params.pluginId,
+    targetType: "plugin",
+    requestKind,
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    plugin: {
+      contentType: "dependency-tree",
+      pluginId: params.pluginId,
+    },
+  });
+}
+
+export async function preflightPluginNpmInstallPolicyRuntime(
+  params: PluginInstallPolicyParams & {
+    packageName: string;
+    pluginId?: string;
+    sourcePath: string;
+    sourcePathKind: "file" | "directory";
+  },
+): Promise<InstallSecurityScanResult | undefined> {
+  const pluginId = params.pluginId ?? params.packageName;
+  return await runOperatorInstallPolicy({
+    ...pluginInstallPolicyRequest(params, pluginId),
     origin: { type: "plugin-npm", packageName: params.packageName },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-npm" }),
     sourcePath: params.sourcePath,
     sourcePathKind: params.sourcePathKind,
-    targetName: pluginId,
-    targetType: "plugin",
     requestKind: "plugin-npm",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
     plugin: {
       contentType: "package",
       pluginId,
@@ -1185,29 +1010,19 @@ export async function preflightPluginNpmInstallPolicyRuntime(params: {
   });
 }
 
-export async function preflightPluginGitInstallPolicyRuntime(params: {
-  config?: OpenClawConfig;
-  logger: InstallScanLogger;
-  mode?: "install" | "update";
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  pluginId: string;
-  requestedSpecifier?: string;
-  source?: InstallPolicySource;
-  sourcePath: string;
-}): Promise<InstallSecurityScanResult | undefined> {
+export async function preflightPluginGitInstallPolicyRuntime(
+  params: PluginInstallPolicyParams & {
+    pluginId: string;
+    sourcePath: string;
+  },
+): Promise<InstallSecurityScanResult | undefined> {
   return await runOperatorInstallPolicy({
-    config: params.config,
-    logger: params.logger,
-    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    ...pluginInstallPolicyRequest(params, params.pluginId),
     origin: { type: "plugin-git" },
     source: params.source ?? resolvePolicySource({ requestKind: "plugin-git" }),
     sourcePath: params.sourcePath,
     sourcePathKind: "directory",
-    targetName: params.pluginId,
-    targetType: "plugin",
     requestKind: "plugin-git",
-    requestMode: params.mode ?? "install",
-    requestedSpecifier: params.requestedSpecifier,
     plugin: {
       contentType: "package",
       pluginId: params.pluginId,
@@ -1228,39 +1043,20 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
   skillName: string;
   sourceDir: string;
 }): Promise<InstallSecurityScanResult | undefined> {
-  const runPolicy = () =>
-    runOperatorInstallPolicy({
-      config: params.config,
-      logger: params.logger,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      origin: params.origin,
-      source:
-        params.source ??
-        resolvePolicySource({ requestKind: "skill-install", origin: params.origin }),
-      sourcePath: params.sourceDir,
-      sourcePathKind: "directory",
-      targetName: params.skillName,
-      targetType: "skill",
-      requestKind: "skill-install",
-      requestMode: params.mode ?? "install",
-      requestedSpecifier: params.requestedSpecifier,
-      skill: {
-        installId: params.installId,
-        ...(params.installSpec ? { installSpec: params.installSpec } : {}),
-      },
-    });
-  if (shouldBypassOpenClawInstallFriction({ source: params.source })) {
-    return await runPolicy();
-  }
-  const policyResult = await runPolicy();
-  if (policyResult?.blocked) {
-    return policyResult;
-  }
-
-  const hookResult = await runBeforeInstallHook({
+  const source =
+    params.source ?? resolvePolicySource({ requestKind: "skill-install", origin: params.origin });
+  const skill = {
+    installId: params.installId,
+    ...(params.installSpec ? { installSpec: params.installSpec } : {}),
+  };
+  return await runInstallPolicyAndHook({
+    config: params.config,
     logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    policyOrigin: params.origin,
+    hookOrigin: formatInstallPolicyOriginForHook(params.origin),
     installLabel: `Skill "${params.skillName}" installation`,
-    origin: formatInstallPolicyOriginForHook(params.origin),
+    source,
     sourcePath: params.sourceDir,
     sourcePathKind: "directory",
     targetName: params.skillName,
@@ -1268,11 +1064,8 @@ export async function evaluateSkillInstallPolicyRuntime(params: {
     requestKind: "skill-install",
     requestMode: params.mode ?? "install",
     requestedSpecifier: params.requestedSpecifier,
-    skill: {
-      installId: params.installId,
-      ...(params.installSpec ? { installSpec: params.installSpec } : {}),
-    },
+    skill,
+    skipHook: shouldBypassOpenClawInstallFriction({ source: params.source }),
   });
-  return hookResult;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

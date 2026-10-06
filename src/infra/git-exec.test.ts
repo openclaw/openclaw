@@ -4,9 +4,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { requireGitBuffer } from "../agents/worktrees/git.js";
 import * as execRunner from "../process/exec-runner.js";
 import * as processExec from "../process/exec.js";
 import type { SpawnResult } from "../process/exec.js";
@@ -21,11 +23,13 @@ import {
   createGitCommandError,
   enqueueGitRefMutation,
   executeGitCommand,
+  executeGitCommandBytes,
+  executeGitCommandBuffered,
+  GitCommandTimeoutError,
   gitNullConfigPath,
   normalizeGitPathForFilesystem,
   requireGitCommand,
-  requireGitCommandBuffer,
-  requireGitCommandRaw,
+  requireGitCommandOutput,
 } from "./git-exec.js";
 
 const refLogs = vi.hoisted(() => ({ info: vi.fn(), isEnabled: vi.fn() }));
@@ -91,8 +95,18 @@ describe("Git ref mutation timing", () => {
         await releaseCallback.promise;
         return result;
       });
+      const abort = new AbortController();
       const queued = runWithDiagnosticTraceContext(trace, () =>
-        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback),
+        enqueueGitRefMutation("/private/linked-checkout", "../shared.git", callback, abort.signal),
+      );
+      let callbackSettled = false;
+      void queued.then(
+        () => {
+          callbackSettled = true;
+        },
+        () => {
+          callbackSettled = true;
+        },
       );
       pending.push(queued);
       clock += 25;
@@ -107,6 +121,9 @@ describe("Git ref mutation timing", () => {
       clock += 1_200;
       releaseHolder.resolve();
       await callbackEntered.promise;
+      abort.abort(new Error("cancelled after ref mutation started"));
+      await nextTurn();
+      expect(callbackSettled).toBe(false);
       expect(refLogs.info).not.toHaveBeenCalled();
       clock += 175;
       releaseCallback.resolve();
@@ -300,12 +317,10 @@ describe("Git filesystem paths", () => {
     expect(normalizeGitPathForFilesystem(input, "win32")).toBe(expected);
   });
 
-  it.each(["/c", "/C", "/c/", "/c/Users/example/repo"])(
-    "leaves MSYS-shaped text unchanged on non-Windows hosts: %s",
-    (input) => {
-      expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
-    },
-  );
+  it("leaves MSYS-shaped text unchanged on non-Windows hosts", () => {
+    const input = "/c/Users/example/repo";
+    expect(normalizeGitPathForFilesystem(input, "linux")).toBe(input);
+  });
 });
 
 const progress = Array.from({ length: 1000 }, (_, i) => `Updating files: ${i}/1000`).join("\r");
@@ -318,18 +333,40 @@ const failure = {
   termination: "exit",
 } satisfies SpawnResult;
 
+it.skipIf(process.platform === "win32").each([
+  ["text", executeGitCommand],
+  ["bytes", executeGitCommandBytes],
+  ["buffered", executeGitCommandBuffered],
+] as const)("lowers Git %s child priority without changing the parent", async (_kind, run) => {
+  const parentPriority = os.getPriority();
+  const result = await run(process.cwd(), ["-c", "alias.priority=!ps -o ni= -p $$", "priority"], {
+    lowerPriority: true,
+    killProcessTree: true,
+  });
+  expect(result.code).toBe(0);
+  expect(Number(result.stdout.toString().trim())).toBe(Math.min(19, parentPriority + 10));
+  expect(os.getPriority()).toBe(parentPriority);
+});
+
 it.each(["maintenance.autoDetach", "gc.autoDetach"])(
   "overrides %s only for an explicitly owned Git command",
   async (key) => {
     await withTestDir({ prefix: "openclaw-git-exec-maintenance-" }, async (root) => {
-      await requireGitCommand(root, ["init"]);
-      await requireGitCommand(root, ["config", key, "true"]);
+      const env = {
+        GIT_CONFIG_COUNT: "0",
+        GIT_CONFIG_PARAMETERS: undefined,
+      };
+      await requireGitCommand(root, ["init"], { env });
+      await requireGitCommand(root, ["config", key, "true"], { env });
       const owned = await executeGitCommand(root, ["config", "--get", key], {
+        env,
         killProcessTree: true,
       });
       expect(owned.code).toBe(0);
       expect(owned.stdout.trim()).toBe("false");
-      await expect(requireGitCommand(root, ["config", "--get", key])).resolves.toBe("true");
+      await expect(requireGitCommand(root, ["config", "--get", key], { env })).resolves.toBe(
+        "true",
+      );
     });
   },
 );
@@ -346,7 +383,9 @@ it.each([
   const args = ["worktree", "add"];
   const result = await executeGitCommand("/repo", args, { timeoutMs });
   const label = `timed out after ${seconds} seconds`;
-  const message = createGitCommandError("git worktree add", result).message;
+  const error = createGitCommandError("git worktree add", result);
+  expect(error).toBeInstanceOf(GitCommandTimeoutError);
+  const message = error.message;
   expect(message).toContain(label);
   expect(message).toContain(
     `Git did not finish within its ${seconds}s budget; check remote reachability, repository locks, and clone shape (partial clones fetch missing objects lazily).`,
@@ -361,8 +400,7 @@ it.each([
 
 describe.each([
   ["text", requireGitCommand],
-  ["raw", requireGitCommandRaw],
-  ["buffered", requireGitCommandBuffer],
+  ["buffered", requireGitBuffer],
 ] as const)("Git %s diagnostics", (_kind, requireGit) => {
   async function failureMessage(args: string[]): Promise<string> {
     try {
@@ -496,7 +534,9 @@ describe("required Git output", () => {
   it("keeps raw text byte-for-byte and preserves the trimmed text contract", async () => {
     const stdout = " \u001b[31mname\u001b[0m\rredraw\0\r\n ";
     await withGitBlob(stdout, async (root, args) => {
-      await expect(requireGitCommandRaw(root, args)).resolves.toBe(stdout);
+      expect(
+        requireGitCommandOutput("git cat-file blob", await executeGitCommand(root, args)),
+      ).toBe(stdout);
       await expect(requireGitCommand(root, args)).resolves.toBe(stdout.trim());
     });
   });
@@ -507,22 +547,21 @@ describe("required Git output", () => {
       outputErrorStream: "stdout",
     });
     vi.spyOn(execRunner, "runCommandWithTimeout").mockRejectedValueOnce(error);
-    await expect(
-      requireGitCommandBuffer("/repo", ["cat-file", "blob", "HEAD:file"]),
-    ).rejects.toThrow("git cat-file blob HEAD:file failed");
+    await expect(requireGitBuffer("/repo", ["cat-file", "blob", "HEAD:file"])).rejects.toThrow(
+      "git cat-file blob HEAD:file failed",
+    );
   });
 
   it("keeps binary output including invalid UTF-8 and terminal control bytes", async () => {
     const stdout = Buffer.from([0, 255, 13, 10, 27, 91, 51, 49, 109, 32]);
     await withGitBlob(stdout, async (root, args) => {
-      await expect(requireGitCommandBuffer(root, args)).resolves.toEqual(stdout);
+      await expect(requireGitBuffer(root, args)).resolves.toEqual(stdout);
     });
   });
 
   it.each([
     ["text", requireGitCommand],
-    ["raw", requireGitCommandRaw],
-    ["buffered", requireGitCommandBuffer],
+    ["buffered", requireGitBuffer],
   ] as const)("rejects incomplete %s output from a real Git blob", async (_kind, requireGit) => {
     const sentinel = "complete-git-output-leading-sentinel\0";
     const blob = Buffer.alloc(17 * 1024 * 1024, "x");
@@ -554,7 +593,9 @@ describe("required Git output", () => {
       stderr: "progress tail",
       stderrTruncatedBytes: 1,
     });
-    await expect(requireGitCommandRaw("/repo", ["status"])).resolves.toBe("complete\n");
+    expect(
+      requireGitCommandOutput("git status", await executeGitCommand("/repo", ["status"])),
+    ).toBe("complete\n");
     await expect(requireGitCommand("/repo", ["status"])).resolves.toBe("complete");
   });
 });

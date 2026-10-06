@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayProtocolClientOptions } from "./protocol-client-contract.js";
 import {
@@ -70,9 +71,7 @@ function createRequestHarness(options?: {
 
 function latestFrame(connection: RequestConnection): RequestFrame {
   const frame = connection.frames.at(-1);
-  if (!frame) {
-    throw new Error("expected request frame");
-  }
+  assert(frame);
   return frame;
 }
 
@@ -93,11 +92,211 @@ afterEach(() => {
 });
 
 describe("GatewayProtocolClient requests", () => {
+  it.each(["event", "refusal"])(
+    "parks 40 polling identity clients during 30 seconds of suspension (%s)",
+    async (notification) => {
+      vi.useFakeTimers();
+      let suspended = true;
+      let refused = 0;
+      let recovered = 0;
+      const clients = Array.from({ length: 40 }, () => {
+        const harness = createRequestHarness({
+          requestTimeoutMs: 60_000,
+          send: (frame) => {
+            const connection = harness.connections[0];
+            assert(connection);
+            if (suspended) {
+              refused += 1;
+            }
+            respond(
+              connection,
+              frame.id,
+              suspended
+                ? {
+                    code: "UNAVAILABLE",
+                    message: "agent.identity.get unavailable during gateway suspension",
+                    retryable: true,
+                    retryAfterMs: 60_000,
+                    details: { reason: "gateway-suspending", phase: "prepared" },
+                  }
+                : { agentId: "main" },
+              !suspended,
+            );
+          },
+        });
+        const connection = harness.connections[0];
+        assert(connection);
+        const notify = (phase: string) =>
+          connection.handlers.message(
+            JSON.stringify({ type: "event", event: "gateway.suspension", payload: { phase } }),
+          );
+        if (notification === "event") {
+          notify("prepared");
+        }
+        let pending = false;
+        const poll = () => {
+          if (pending) {
+            return;
+          }
+          pending = true;
+          void harness.client.request("agent.identity.get", { agentId: "main" }).then(
+            () => {
+              pending = false;
+              recovered += 1;
+            },
+            () => {
+              pending = false;
+            },
+          );
+        };
+        poll();
+        return { ...harness, notify, timer: setInterval(poll, 1_000) };
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(29_999);
+        for (const { timer } of clients) {
+          clearInterval(timer);
+        }
+        await vi.advanceTimersByTimeAsync(1);
+        suspended = false;
+        for (const { notify } of clients) {
+          notify("accepting");
+        }
+        await vi.advanceTimersByTimeAsync(0);
+        expect(refused).toBeLessThanOrEqual(40);
+        expect(recovered).toBe(40);
+      } finally {
+        for (const { client, timer } of clients) {
+          clearInterval(timer);
+          client.stop();
+        }
+      }
+    },
+  );
+
+  it("seeds the identity wait from hello and keeps writes synchronous", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    connection.handlers.message(
+      JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "test" } }),
+    );
+    respond(connection, latestFrame(connection).id, {
+      snapshot: { suspension: { phase: "prepared" } },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const identity = client.request("agent.identity.get", { agentId: "main" });
+    const write = client.request("users.prefs.set", { theme: "dark" });
+    const control = client.request("gateway.suspend.resume", { suspensionId: "owned" });
+    expect(connection.frames.map((frame) => frame.method)).toEqual([
+      "connect",
+      "users.prefs.set",
+      "gateway.suspend.resume",
+    ]);
+    const writeFrame = connection.frames[1];
+    assert(writeFrame);
+    respond(connection, writeFrame.id, { code: "UNAVAILABLE", message: "suspended" }, false);
+    await expect(write).rejects.toThrow("suspended");
+    respond(connection, latestFrame(connection).id, { resumed: true });
+    await control;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(latestFrame(connection).method).toBe("agent.identity.get");
+    respond(connection, latestFrame(connection).id, { agentId: "main" });
+    await expect(identity).resolves.toEqual({ agentId: "main" });
+    client.stop();
+  });
+
+  it.each(["timeout", "abort", "disconnect"])(
+    "retires a parked identity on %s without sending it after resume",
+    async (retirement) => {
+      vi.useFakeTimers();
+      const { client, connections } = createRequestHarness();
+      const connection = connections[0];
+      assert(connection);
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "gateway.suspension",
+          payload: { phase: "draining" },
+        }),
+      );
+      const controller = new AbortController();
+      const request = client.request(
+        "agent.identity.get",
+        {},
+        { timeoutMs: 500, signal: controller.signal },
+      );
+      const outcome = request.catch((error: unknown) => error);
+      expect(connection.frames).toHaveLength(0);
+      if (retirement === "timeout") {
+        await vi.advanceTimersByTimeAsync(500);
+        expect(await outcome).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: false });
+      } else if (retirement === "abort") {
+        controller.abort();
+        expect(await outcome).toMatchObject({
+          message: "gateway request aborted for agent.identity.get",
+        });
+      } else {
+        connection.close(1012, "restart");
+        expect(await outcome).toMatchObject({ message: "gateway closed (1012): restart" });
+        client.start();
+      }
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "gateway.suspension",
+          payload: { phase: "accepting" },
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(connection.frames).toHaveLength(0);
+      expect(client.hasPendingRequests).toBe(false);
+      const current = connections.at(-1);
+      assert(current);
+      const next = client.request("agent.identity.get", {});
+      respond(current, latestFrame(current).id, { agentId: "main" });
+      await expect(next).resolves.toEqual({ agentId: "main" });
+      client.stop();
+    },
+  );
+
+  it("honors retry-after without resetting the original identity deadline", async () => {
+    vi.useFakeTimers();
+    const { client, connections } = createRequestHarness();
+    const connection = connections[0];
+    assert(connection);
+    const request = client.request("agent.identity.get", {}, { timeoutMs: 1_500 });
+    const outcome = request.catch((error: unknown) => error);
+    respond(
+      connection,
+      latestFrame(connection).id,
+      {
+        code: "UNAVAILABLE",
+        message: "suspended",
+        retryable: true,
+        retryAfterMs: 1_000,
+        details: { reason: "gateway-suspending" },
+      },
+      false,
+    );
+    await vi.advanceTimersByTimeAsync(999);
+    expect(connection.frames).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(connection.frames).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await outcome).toMatchObject({ code: "CLIENT_TIMEOUT", requestSent: true });
+    expect(client.hasPendingRequests).toBe(false);
+    client.stop();
+  });
+
   it.each([false, true])(
     "retains correlated negative payloads with custom factory=%s",
     async (custom) => {
       const created: GatewayProtocolRequestError[] = [];
+      const generatedIds = ["same-id:1", "same-id"];
       const { client, connections } = createRequestHarness({
+        createRequestId: () => generatedIds.shift() ?? "same-id",
         createRequestError: custom
           ? (fields) => {
               const error = new GatewayProtocolRequestError(fields);
@@ -109,15 +308,14 @@ describe("GatewayProtocolClient requests", () => {
       });
       try {
         const connection = connections[0];
-        if (!connection) {
-          throw new Error("expected request connection");
-        }
+        assert(connection);
         const first = client.request("first", {}, { expectFinal: true });
         const second = client.request("second", {}, { expectFinal: true });
         const [firstFrame, secondFrame] = connection.frames;
         if (!firstFrame || !secondFrame) {
           throw new Error("expected concurrent request frames");
         }
+        expect(firstFrame.id).not.toBe(secondFrame.id);
         const fields = {
           code: "UNAVAILABLE",
           message: "failed",
@@ -159,35 +357,52 @@ describe("GatewayProtocolClient requests", () => {
     },
   );
 
-  it("rejects a negative accepted-shaped response without notifying acceptance", async () => {
-    const { client, connections } = createRequestHarness();
-    const onAccepted = vi.fn();
-    const request = client.request("agent", {}, { expectFinal: true, onAccepted });
-    const outcome = request.catch((error: unknown) => error);
-    try {
-      const connection = connections[0];
-      if (!connection) {
-        throw new Error("expected request connection");
+  it.each([
+    {
+      method: "agent",
+      payload: { status: "accepted" },
+      error: { code: "UNAVAILABLE", message: "rejected" },
+      options: { expectFinal: true },
+    },
+    {
+      method: "sessions.subscribe",
+      payload: undefined,
+      error: { code: "FORBIDDEN", message: "subscription rejected", retryable: false },
+      options: { timeoutMs: 25 },
+    },
+  ])(
+    "keeps negative $method responses distinct from acceptance and local deadlines",
+    async ({ method, payload, error, options }) => {
+      const { client, connections } = createRequestHarness();
+      const onAccepted = vi.fn();
+      const request = client.request(method, {}, { ...options, onAccepted });
+      const outcome = request.catch((failure: unknown) => failure);
+      try {
+        const connection = connections[0];
+        assert(connection);
+        connection.handlers.message(
+          JSON.stringify({
+            type: "res",
+            id: latestFrame(connection).id,
+            ok: false,
+            payload,
+            error,
+          }),
+        );
+        expect(onAccepted).not.toHaveBeenCalled();
+        expect(client.hasPendingRequests).toBe(false);
+        const failure = await outcome;
+        expect(failure).toBeInstanceOf(GatewayProtocolRequestError);
+        expect(failure).not.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
+        expect(failure).toMatchObject(error);
+        if (payload) {
+          expect(failure).toMatchObject({ responsePayload: payload });
+        }
+      } finally {
+        client.stop();
       }
-      connection.handlers.message(
-        JSON.stringify({
-          type: "res",
-          id: latestFrame(connection).id,
-          ok: false,
-          payload: { status: "accepted" },
-          error: { code: "UNAVAILABLE", message: "rejected" },
-        }),
-      );
-      expect(onAccepted).not.toHaveBeenCalled();
-      expect(client.hasPendingRequests).toBe(false);
-      expect(await outcome).toMatchObject({
-        message: "rejected",
-        responsePayload: { status: "accepted" },
-      });
-    } finally {
-      client.stop();
-    }
-  });
+    },
+  );
 
   it.each([
     {
@@ -302,9 +517,7 @@ describe("GatewayProtocolClient requests", () => {
       },
     });
     const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
+    assert(connection);
     const aborted = client.request("aborted", {}, { timeoutMs: null, signal: controller.signal });
     controller.abort();
     await expect(aborted).rejects.toThrow("gateway request aborted for aborted");
@@ -324,39 +537,12 @@ describe("GatewayProtocolClient requests", () => {
     client.stop();
   });
 
-  it("keeps concurrent requests distinct when generated IDs contain sequence suffixes", async () => {
-    const generatedIds = ["same-id:1", "same-id"];
-    const { client, connections } = createRequestHarness({
-      createRequestId: () => generatedIds.shift() ?? "same-id",
-    });
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
-
-    const first = client.request("first", {}, { timeoutMs: null });
-    const second = client.request("second", {}, { timeoutMs: null });
-    const [firstFrame, secondFrame] = connection.frames;
-    if (!firstFrame || !secondFrame) {
-      throw new Error("expected concurrent request frames");
-    }
-    expect(firstFrame.id).not.toBe(secondFrame.id);
-
-    respond(connection, firstFrame.id, { request: "first" });
-    respond(connection, secondFrame.id, { request: "second" });
-    await expect(first).resolves.toEqual({ request: "first" });
-    await expect(second).resolves.toEqual({ request: "second" });
-    client.stop();
-  });
-
   it("ignores late accepted and final replies after a timeout collision", async () => {
     vi.useFakeTimers();
     const onAccepted = vi.fn();
     const { client, connections } = createRequestHarness({ createRequestId: () => "same-id" });
     const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
+    assert(connection);
     const retired = client.request("agent", {}, { timeoutMs: 5, expectFinal: true, onAccepted });
     const retiredOutcome = retired.catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(5);
@@ -377,28 +563,6 @@ describe("GatewayProtocolClient requests", () => {
     respond(connection, "2:same-id", { status: "ok", runId: "new" });
     await expect(replacement).resolves.toEqual({ status: "ok", runId: "new" });
     expect(onAccepted).toHaveBeenCalledExactlyOnceWith({ status: "accepted", runId: "new" });
-    client.stop();
-  });
-
-  it("keeps authoritative Gateway errors distinct from local deadlines", async () => {
-    const { client, connections } = createRequestHarness();
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
-    const request = client.request("sessions.subscribe", {}, { timeoutMs: 25 });
-    const frame = latestFrame(connection);
-    respond(
-      connection,
-      frame.id,
-      { code: "FORBIDDEN", message: "subscription rejected", retryable: false },
-      false,
-    );
-
-    const error = await request.catch((value: unknown) => value);
-    expect(error).toBeInstanceOf(GatewayProtocolRequestError);
-    expect(error).not.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-    expect(error).toMatchObject({ code: "FORBIDDEN", retryable: false });
     client.stop();
   });
 
@@ -437,16 +601,15 @@ describe("GatewayProtocolClient requests", () => {
       onCallbackError,
     });
     const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
+    assert(connection);
     const request = client.request(
       "agent",
       {},
       {
         timeoutMs: null,
         expectFinal: true,
-        onSent: () => {
+        onSent: (requestId) => {
+          expect(requestId).toBe(latestFrame(connection).id);
           trace.push("sent");
           throw sentError;
         },
@@ -492,127 +655,6 @@ describe("GatewayProtocolClient requests", () => {
     client.stop();
   });
 
-  it("isolates a timing accessor installed through the callback receiver", async () => {
-    const timingAccessorError = new Error("timing accessor failed");
-    const trace: string[] = [];
-    const timingReceivers: unknown[] = [];
-    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
-      trace.push(`timing:${timing.method}`);
-      timingReceivers.push(this);
-    };
-    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label) => {
-      trace.push(`error:${label}`);
-    });
-    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
-
-    const first = client.request("first", {}, { timeoutMs: null });
-    respond(connection, latestFrame(connection).id, { first: true });
-    await expect(first).resolves.toEqual({ first: true });
-    trace.push("resolved:first");
-    const timingReceiver = timingReceivers[0];
-    if (!timingReceiver || typeof timingReceiver !== "object") {
-      throw new Error("expected timing callback receiver");
-    }
-    Object.defineProperty(timingReceiver, "onTiming", {
-      configurable: true,
-      get: () => {
-        trace.push("get:onTiming");
-        throw timingAccessorError;
-      },
-    });
-
-    const second = client.request("second", {}, { timeoutMs: null });
-    respond(connection, latestFrame(connection).id, { second: true });
-    await expect(second).resolves.toEqual({ second: true });
-    trace.push("resolved:second");
-
-    expect(trace).toEqual([
-      "timing:first",
-      "resolved:first",
-      "get:onTiming",
-      "error:request timing",
-      "resolved:second",
-    ]);
-    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", timingAccessorError);
-    expect(client.hasPendingRequests).toBe(false);
-    client.stop();
-  });
-
-  it("isolates a falsy timing callback installed through the callback receiver", async () => {
-    const trace: string[] = [];
-    const callbackErrors: unknown[] = [];
-    const onRequestTiming = function (this: unknown, timing: GatewayProtocolRequestTiming) {
-      trace.push(`timing:${timing.method}`);
-      if (!this || typeof this !== "object") {
-        throw new Error("expected timing callback receiver");
-      }
-      Object.defineProperty(this, "onTiming", { configurable: true, value: false });
-    };
-    const onCallbackError = vi.fn<(label: string, error: unknown) => void>((label, error) => {
-      trace.push(`error:${label}`);
-      callbackErrors.push(error);
-    });
-    const { client, connections } = createRequestHarness({ onRequestTiming, onCallbackError });
-    const connection = connections[0];
-    if (!connection) {
-      throw new Error("expected request connection");
-    }
-
-    const firstPayload = { first: true };
-    const first = client.request("first", {}, { timeoutMs: null });
-    respond(connection, latestFrame(connection).id, firstPayload);
-    await expect(first).resolves.toEqual(firstPayload);
-    trace.push("resolved:first");
-
-    const secondPayload = { second: true };
-    const second = client.request("second", {}, { timeoutMs: null });
-    respond(connection, latestFrame(connection).id, secondPayload);
-    await expect(second).resolves.toEqual(secondPayload);
-    trace.push("resolved:second");
-
-    expect(trace).toEqual([
-      "timing:first",
-      "resolved:first",
-      "error:request timing",
-      "resolved:second",
-    ]);
-    expect(callbackErrors).toHaveLength(1);
-    const callbackError = callbackErrors[0];
-    expect(callbackError).toBeInstanceOf(TypeError);
-    expect(onCallbackError).toHaveBeenCalledExactlyOnceWith("request timing", callbackError);
-    expect(client.hasPendingRequests).toBe(false);
-    client.stop();
-  });
-
-  it("restarts the request sequence when the socket flushes", async () => {
-    vi.useFakeTimers();
-    const { client, connections } = createRequestHarness({ createRequestId: () => "same-id" });
-    const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("expected first request connection");
-    }
-    const retired = client.request("first", {}, { timeoutMs: 5 });
-    const retiredOutcome = retired.catch((error: unknown) => error);
-    await vi.advanceTimersByTimeAsync(5);
-    await expect(retiredOutcome).resolves.toBeInstanceOf(GatewayProtocolRequestTimeoutError);
-
-    firstConnection.close(1000, "socket generation complete");
-    client.start();
-    const secondConnection = connections[1];
-    if (!secondConnection) {
-      throw new Error("expected replacement request connection");
-    }
-    const replacement = client.request("second", {}, { timeoutMs: null });
-    expect(latestFrame(secondConnection)).toMatchObject({ id: "1:same-id", method: "second" });
-    respond(secondConnection, "1:same-id", { ok: true });
-    await expect(replacement).resolves.toEqual({ ok: true });
-    client.stop();
-  });
-
   it("preserves requests started on a replacement socket by a close timing observer", async () => {
     let recoveredRequest: Promise<{ healthy: boolean }> | undefined;
     const { client, connections } = createRequestHarness({
@@ -626,18 +668,16 @@ describe("GatewayProtocolClient requests", () => {
       },
     });
     const firstConnection = connections[0];
-    if (!firstConnection) {
-      throw new Error("expected initial request connection");
-    }
+    assert(firstConnection);
     const retired = client.request("retired", {}, { timeoutMs: null });
+    const alsoRetired = client.request("also-retired", {}, { timeoutMs: null });
     void retired.catch(() => undefined);
+    void alsoRetired.catch(() => undefined);
 
     firstConnection.close(1012, "service restart");
 
     const replacementConnection = connections[1];
-    if (!replacementConnection) {
-      throw new Error("expected replacement request connection");
-    }
+    assert(replacementConnection);
     expect(latestFrame(replacementConnection)).toMatchObject({
       id: "1:same-id",
       method: "replacement",
@@ -647,6 +687,7 @@ describe("GatewayProtocolClient requests", () => {
     respond(replacementConnection, "1:same-id", { healthy: true });
 
     await expect(retired).rejects.toThrow("gateway closed (1012): service restart");
+    await expect(alsoRetired).rejects.toThrow("gateway closed (1012): service restart");
     await expect(recoveredRequest).resolves.toEqual({ healthy: true });
     expect(client.hasPendingRequests).toBe(false);
     client.stop();

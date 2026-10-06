@@ -1,4 +1,3 @@
-// Defines plugin tool metadata and filesystem policy types.
 import type { ConversationRecallContext } from "../agents/conversation-recall.types.js";
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
@@ -6,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { MemoryAudience } from "./memory-provider-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -19,7 +19,7 @@ export type OpenClawPluginToolDelivery = {
 };
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
-export type OpenClawPluginToolContext = {
+type OpenClawPluginToolContextBase = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
@@ -65,6 +65,20 @@ export type OpenClawPluginToolContext = {
   requesterSenderId?: string;
   /** Trusted owner bit from inbound context (runtime-provided, not tool args). */
   senderIsOwner?: boolean;
+  /** Host-resolved memory partition for this turn. Providers must not reconstruct it. */
+  memoryAudience?: MemoryAudience;
+  /** Stable identity for one provider-owned pre-compaction flush cycle. */
+  memoryFlush?: { flushId: string };
+  /** Rejects a retained audience after any captured session incarnation changes. */
+  assertMemoryAudienceCurrent?: () => void;
+  /** Live host-bound authority. Recheck inside the final synchronous effect/write guard. */
+  assertInvocationCurrent?: () => void;
+  /**
+   * Host-bound client-input policy. Pure synchronous guard for final storage admission;
+   * performs no database reads and grants no invocation or mutation authority.
+   * Omitted for agent-generated input. Do not apply to accepted results or cleanup.
+   */
+  assertInputCommitAllowed?: () => void;
   /**
    * Server-owned origin for this operation. Missing values are delegated.
    * Plugins must use it only for conversation-read visibility policy.
@@ -78,9 +92,18 @@ export type OpenClawPluginToolContext = {
   oneShotCliRun?: boolean;
 };
 
-export type OpenClawPluginToolFactory = (
-  ctx: OpenClawPluginToolContext,
-) => AnyAgentTool | AnyAgentTool[] | null | undefined;
+/** Version 1 is the source-compatible direct-turn context; version 2 requires final-effect authority. */
+export type OpenClawPluginToolContext<Version extends 1 | 2 = 1> = Version extends 2
+  ? OpenClawPluginToolContextBase & { assertInvocationCurrent: () => void }
+  : OpenClawPluginToolContextBase;
+
+/** A version 2 descriptor explicitly opts into owner-authorized continuations. */
+export type OpenClawPluginToolFactory<Version extends 1 | 2 = 1> = Version extends 2
+  ? {
+      contextVersion: 2;
+      create: (ctx: OpenClawPluginToolContext<2>) => ReturnType<OpenClawPluginToolFactory>;
+    }
+  : (ctx: OpenClawPluginToolContext) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 
 export type OpenClawPluginToolOptions = {
   name?: string;

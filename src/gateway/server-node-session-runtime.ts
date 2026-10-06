@@ -15,14 +15,16 @@ import {
   NodeRegistry,
   serializeEventPayload,
   type NodeRegistryOptions,
+  type NodeEventPayloadPreparation,
   type SerializedEventPayload,
 } from "./node-registry.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
-import { hasConnectedTalkNode } from "./server-talk-nodes.js";
+import { hasConnectedTalkNode } from "./talk/nodes.js";
 
 // Node session runtime owns connected node registry state, session event
 // subscriptions, and voice-wake fanout helpers for the gateway process.
@@ -76,11 +78,7 @@ export function createGatewayNodeSessionRuntime(params: {
         { dropIfSlow: true },
       );
     }
-    if (change.availabilityChanged) {
-      params.broadcast("sessions.changed", { reason: "runner-availability" }, { dropIfSlow: true });
-    }
   });
-  const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;
   const sessionMessageSubscribers = params.sessionMessageSubscribers;
   const nodeSendEvent = (opts: {
@@ -88,19 +86,24 @@ export function createGatewayNodeSessionRuntime(params: {
     pairingGeneration: string;
     event: string;
     payloadJSON?: SerializedEventPayload | null;
+    preparePayload?: NodeEventPayloadPreparation;
   }) => {
     return nodeRegistry.sendEventRawForPairingGeneration(
       opts.nodeId,
       opts.pairingGeneration,
       opts.event,
       opts.payloadJSON ?? null,
+      opts.preparePayload,
     );
   };
   // Session fanout goes through the subscription manager so node reconnects and
   // explicit unsubscribes keep both node->session indexes in sync.
-  const nodeSendToSession = (sessionKey: string, event: string, payload: unknown) => {
-    void nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent);
-  };
+  const nodeSendToSession = (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+    opts?: GatewayBroadcastOpts,
+  ) => nodeSubscriptions.sendToSession(sessionKey, event, payload, nodeSendEvent, opts);
   const nodeSendToAllSubscribed = (event: string, payload: unknown) => {
     void nodeSubscriptions.sendToAllSubscribed(event, payload, nodeSendEvent);
   };
@@ -160,9 +163,9 @@ export function createGatewayNodeSessionRuntime(params: {
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport,
-    nodePresenceTimers,
     sessionEventSubscribers,
     sessionMessageSubscribers,
+    nodeHasSessionSubscribers: nodeSubscriptions.hasSubscribers,
     nodeSendToSession,
     nodeSendToAllSubscribed,
     nodeSubscribe,

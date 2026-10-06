@@ -22,9 +22,6 @@ export const browserPanelStyles = css`
     width: 100%;
     height: 100%;
   }
-  .bp-actions {
-    flex: none;
-  }
   .bp-profile {
     max-width: 100px;
     overflow: hidden;
@@ -62,9 +59,9 @@ export const browserPanelStyles = css`
     flex: none;
   }
   .bp-toolbar .bp-icon[aria-busy="true"] > svg {
-    animation: bp-download-spin 1s linear infinite;
+    animation: bp-toolbar-spin 1s linear infinite;
   }
-  @keyframes bp-download-spin {
+  @keyframes bp-toolbar-spin {
     to {
       transform: rotate(360deg);
     }
@@ -178,6 +175,18 @@ export const browserPanelStyles = css`
   }
   .bp-overlay--annotate {
     cursor: crosshair;
+  }
+  .bp-input {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    outline: none;
+    resize: none;
+    background: transparent;
+    color: transparent;
+    caret-color: transparent;
+    cursor: default;
   }
   .bp-overlay--inspect {
     cursor: default;

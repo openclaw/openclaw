@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
+import * as accountOperations from "../../state/user-model-account-operations.js";
 import {
   clearUserProfileAuthLink,
   listUserProfileAuthLinks,
@@ -15,6 +16,73 @@ import {
 import { WITHOUT_OPENAI_ENV_AUTH } from "./models-list-result.openai-routes.test-support.js";
 
 describe("gateway chat metadata personal accounts", () => {
+  test("refuses a private account summary when its startup requester changes during the read", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const harness = createChatMetadataHarness();
+      const owner = ensureProfileForEmail("owner@example.test");
+      const viewer = ensureProfileForEmail("viewer@example.test");
+      const authProfileId = connectChatMetadataAccount(owner.id);
+      let requesterProfileId = owner.id;
+      const readSummary = accountOperations.readUserModelAccountSummaryAsync;
+      const summaryRead = vi
+        .spyOn(accountOperations, "readUserModelAccountSummaryAsync")
+        .mockImplementationOnce(async (...args) => {
+          const summary = await readSummary(...args);
+          requesterProfileId = viewer.id;
+          return summary;
+        });
+      try {
+        await harness.runtime.refresh();
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
+            readRequesterProfileId: () => requesterProfileId,
+          }),
+        ).rejects.toThrow("Personal account changed while preparing its metadata");
+      } finally {
+        summaryRead.mockRestore();
+        await harness.runtime.stop();
+      }
+    });
+  });
+
+  test("reads the startup requester after personal metadata preparation", async () => {
+    await withOpenClawTestState({ layout: "state-only" }, async () => {
+      const harness = createChatMetadataHarness();
+      const owner = ensureProfileForEmail("owner@example.test");
+      const viewer = ensureProfileForEmail("viewer@example.test");
+      const authProfileId = connectChatMetadataAccount(owner.id);
+      let requesterProfileId = viewer.id;
+      try {
+        await harness.runtime.refresh();
+        await harness.runtime.read({ agentId: "main" });
+        harness.buildProjection.mockImplementationOnce(async ({ facts }) => {
+          requesterProfileId = owner.id;
+          return { modelCatalog: facts.modelCatalog.entries, models: facts.modelCatalog.entries };
+        });
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: { authProfileOverride: authProfileId, authProfileOverrideSource: "user" },
+            readRequesterProfileId: () => requesterProfileId,
+          }),
+        ).resolves.toMatchObject({
+          metadata: {
+            accountSelection: {
+              kind: "personal",
+              authProfileId,
+              label: "Private provider account",
+              source: "user",
+            },
+          },
+        });
+      } finally {
+        await harness.runtime.stop();
+      }
+    });
+  });
+
   test("reuses published catalogs for authenticated drafts until personal defaults are selected", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "personal-chat-metadata-cache-" },
@@ -73,8 +141,16 @@ describe("gateway chat metadata personal accounts", () => {
             const metadata =
               surface === "metadata"
                 ? await harness.runtime.read(request)
-                : (await harness.runtime.readStartup(request))?.metadata;
-            expect(metadata).toEqual(shared);
+                : (
+                    await harness.runtime.readStartup({
+                      ...request,
+                      readRequesterProfileId: () => request.requesterProfileId,
+                    })
+                  )?.metadata;
+            expect(metadata).toEqual({
+              ...shared,
+              ...("sessionKey" in selector ? { runtimeSelectionLocked: false } : {}),
+            });
           }
           expect(await harness.runtime.read(bobScope)).toEqual(shared);
           expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
@@ -86,7 +162,9 @@ describe("gateway chat metadata personal accounts", () => {
               authProfileOverrideSource: "user-link" as const,
             },
           };
-          await expect(harness.runtime.readStartup(pinned)).resolves.toMatchObject({
+          await expect(
+            harness.runtime.readStartup({ ...pinned, readRequesterProfileId: () => bob.id }),
+          ).resolves.toMatchObject({
             metadata: available,
           });
           expect((await harness.runtime.read(pinned)).accountSelection).toEqual({
@@ -96,7 +174,7 @@ describe("gateway chat metadata personal accounts", () => {
           });
           const ownerView = await harness.runtime.readStartup({
             ...pinned,
-            requesterProfileId: alice.id,
+            readRequesterProfileId: () => alice.id,
           });
           expect(ownerView?.metadata?.accountSelection).toEqual({
             kind: "personal",
@@ -113,7 +191,9 @@ describe("gateway chat metadata personal accounts", () => {
             accountSelection: { kind: "personal", authProfileId: aliceAuthId, source: "user" },
           });
           expect(listUserProfileAuthLinks(alice.id)).toEqual([]);
-          await expect(harness.runtime.readStartup(pinned)).resolves.toMatchObject({
+          await expect(
+            harness.runtime.readStartup({ ...pinned, readRequesterProfileId: () => bob.id }),
+          ).resolves.toMatchObject({
             metadata: available,
           });
 
@@ -161,7 +241,12 @@ describe("gateway chat metadata personal accounts", () => {
             ]),
           };
           await expect(harness.runtime.read(request)).resolves.toMatchObject(available);
-          await expect(harness.runtime.readStartup(request)).resolves.toMatchObject({
+          await expect(
+            harness.runtime.readStartup({
+              ...request,
+              readRequesterProfileId: () => request.requesterProfileId,
+            }),
+          ).resolves.toMatchObject({
             metadata: available,
           });
           expect(harness.getPreparedAuthStore()?.profiles).toEqual({});

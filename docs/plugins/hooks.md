@@ -119,7 +119,7 @@ the field is only the sender's raw text.
 
 Hook registration does not bypass plugin loading rules. The plugin must be
 loaded and enabled; `plugins.enabled`, `plugins.allow`, and `plugins.deny` still
-apply. Restart the Gateway after changing plugin code. With the default hybrid
+apply. Run `openclaw plugins reload <id>` after changing plugin code. With the default hybrid
 reload mode, hook policy changes hot-reload the existing plugin runtime.
 
 - Non-bundled plugins need explicit
@@ -128,12 +128,22 @@ reload mode, hook policy changes hot-reload the existing plugin runtime.
   `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`,
   `agent_end`, and `before_agent_run`. Bundled plugins are allowed unless this
   option is explicitly `false`.
+- `session_end` remains available as a metadata-only lifecycle hook without
+  that grant. Its bounded `ctx.endedTranscript` reader is available only when
+  the effective conversation-access policy allows it; see the
+  [session lifecycle contract](/plugins/hooks/reference#sessions-and-compaction).
 - `allowPromptInjection: false` blocks `agent_turn_prepare`,
   `before_prompt_build`, `heartbeat_prompt_contribution`, and durable next-turn
   injections. It defaults to allowed, but does not grant conversation access.
   The first two hooks therefore need both permissions.
 - These are specific registration gates, not a sandbox or a universal filter
   for every hook that can see message data. Install only plugins you trust.
+
+Incognito sessions do not dispatch `llm_input` or `llm_output` observations.
+Their `agent_end` hooks still receive run identity, success, and duration for
+cleanup and settlement, but receive empty `messages` and no `error` text.
+Policy, provider, approval, and explicitly invoked tool hooks remain active.
+This boundary does not sandbox plugins or disable native harness telemetry.
 
 A typed handler receives `(event, ctx)`. The event describes the operation;
 the second argument carries hook-specific context. Fields such as
@@ -145,6 +155,8 @@ Read your plugin's resolved settings from `api.pluginConfig` inside the
 registration closure. Typed hooks do not receive a universal
 `event.context.pluginConfig` field; that field belongs to the internal
 `api.registerHook(...)` event contract.
+By default in hybrid reload mode, editing `plugins.entries.<id>.config` replaces the
+plugin instance and reruns registration with the new settings.
 
 ### Choose a hook
 
@@ -161,21 +173,26 @@ registration closure. Typed hooks do not receive a universal
 
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
-CLI runners; do not rely on it as a Codex or Copilot input gate. Native tool,
+CLI runners and by Gateway admission for OpenClaw node worker turns. Node admission
+supplies the Gateway's triggering prompt and loaded history before persisting the
+user message or launching the worker. Blocks and hook failures persist only the
+redacted block message. Node admission omits `systemPrompt`: the node assembles its
+bootstrap and skill context afterward. Policies that require that final context
+must use a supported local runner. Do not rely on this hook as a Codex or Copilot input gate. Native tool,
 transcript, and compaction boundaries also differ. See
 [Codex hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) and
 [Agent harness plugins](/plugins/sdk-agent-harness).
 
 ## Troubleshooting
 
-| Symptom                                    | Check                                                                                                                                                                                                                            |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; restart the Gateway too. |
-| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                             |
-| Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                    |
-| Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                      |
-| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                   |
-| One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                          |
+| Symptom                                    | Check                                                                                                                                                                                                                                                          |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin loads but the handler never runs    | Use `api.on` for typed names, inspect `openclaw plugins inspect <id> --runtime --json`, and check diagnostics for blocked registrations. Runtime inspection loads the plugin in the inspecting process; use `openclaw plugins reload <id>` after code changes. |
+| Conversation hook is blocked               | Set `plugins.entries.<id>.hooks.allowConversationAccess: true`; for prompt hooks, also check that `allowPromptInjection` is not `false`. These keys belong under `hooks`, not the plugin's `config`.                                                           |
+| Hook works for one runtime or trigger only | Check the runtime boundary and `eligibleTriggers`. Missing context fields are not proof of a different sender, agent, or authorization state.                                                                                                                  |
+| Persistence rewrite has no effect          | Return `{ message }` synchronously. An `async` handler's result is ignored.                                                                                                                                                                                    |
+| A timed-out hook still performs work       | Timeout ends the host's await, not plugin work. Pass available abort signals through I/O and bound plugin-owned work yourself.                                                                                                                                 |
+| One plugin's rewrite disappears            | Check the hook's merge rule and priority. `message_sending` uses the last returned content; `reply_payload_sending` passes each updated payload onward.                                                                                                        |
 
 ## Upcoming deprecations
 

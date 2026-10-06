@@ -2,17 +2,17 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { createNativeTypeScriptParser } from "./native-typescript.mts";
 
 type RawCopyFinding = {
   kind: "html-attribute" | "html-text" | "object-property";
-  line: number;
   name: string;
   path: string;
   text: string;
 };
 
-type RawCopyBaselineEntry = {
+export type RawCopyBaselineEntry = {
   count: number;
   kind: RawCopyFinding["kind"];
   name: string;
@@ -20,7 +20,7 @@ type RawCopyBaselineEntry = {
   text: string;
 };
 
-type RawCopyBaseline = {
+export type RawCopyBaseline = {
   entries: RawCopyBaselineEntry[];
   version: number;
 };
@@ -58,10 +58,7 @@ function parseDoubleQuotedString(raw: string): string {
   }
 }
 
-function pushRawCopyFinding(
-  findings: RawCopyFinding[],
-  params: Omit<RawCopyFinding, "text"> & { text: string },
-) {
+function pushRawCopyFinding(findings: RawCopyFinding[], params: RawCopyFinding) {
   const text = normalizeRawCopyText(params.text);
   if (!text || !/\p{L}/u.test(text)) {
     return;
@@ -69,10 +66,7 @@ function pushRawCopyFinding(
   findings.push({ ...params, text });
 }
 
-function pushRawCopySegments(
-  findings: RawCopyFinding[],
-  params: Omit<RawCopyFinding, "text"> & { text: string },
-) {
+function pushRawCopySegments(findings: RawCopyFinding[], params: RawCopyFinding) {
   for (const text of params.text.split(INTERPOLATION_MARKER)) {
     pushRawCopyFinding(findings, { ...params, text });
   }
@@ -123,15 +117,10 @@ async function walkSourceFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-export function collectControlUiRawCopyFromSource(params: {
-  filePath: string;
-  source: string;
-  sourceFile: ts.SourceFile;
-}): RawCopyFinding[] {
-  const { filePath, source, sourceFile } = params;
-  const repoPath = toRepoPath(filePath);
+export function collectControlUiRawCopyFromSource(sourceFile: ts.SourceFile): RawCopyFinding[] {
+  const source = sourceFile.text;
+  const repoPath = toRepoPath(sourceFile.fileName);
   const findings: RawCopyFinding[] = [];
-  const toLine = (offset: number) => sourceFile.getLineAndCharacterOfPosition(offset).line + 1;
   const staticAttrPattern =
     /\b(alt|aria-label|placeholder|title)\s*=\s*"((?:(?!\$\{)[^"\\]|\\.)*?\p{L}(?:(?!\$\{)[^"\\]|\\.)*?)"/gu;
   for (const match of source.matchAll(staticAttrPattern)) {
@@ -139,7 +128,6 @@ export function collectControlUiRawCopyFromSource(params: {
     if (rawText) {
       pushRawCopyFinding(findings, {
         kind: "html-attribute",
-        line: toLine(match.index ?? 0),
         name: match[1] ?? "attribute",
         path: repoPath,
         text: parseDoubleQuotedString(rawText),
@@ -154,7 +142,6 @@ export function collectControlUiRawCopyFromSource(params: {
     if (rawText) {
       pushRawCopyFinding(findings, {
         kind: "object-property",
-        line: toLine(match.index ?? 0),
         name: match[1] ?? "property",
         path: repoPath,
         text: parseDoubleQuotedString(rawText),
@@ -181,7 +168,6 @@ export function collectControlUiRawCopyFromSource(params: {
         for (const text of collectStaticStringSegments(valueArg)) {
           pushRawCopyFinding(findings, {
             kind: "html-attribute",
-            line: toLine(valueArg.getStart(sourceFile)),
             name: nameArg.text,
             path: repoPath,
             text,
@@ -199,13 +185,11 @@ export function collectControlUiRawCopyFromSource(params: {
           ...node.template.templateSpans.map((span) => span.literal.text),
         ].join(INTERPOLATION_MARKER);
       }
-      const line = toLine(node.template.getStart(sourceFile));
       for (const match of logicalText.matchAll(attrPattern)) {
         const rawText = match[2];
         if (rawText?.includes(INTERPOLATION_MARKER)) {
           pushRawCopySegments(findings, {
             kind: "html-attribute",
-            line,
             name: match[1] ?? "attribute",
             path: repoPath,
             text: parseDoubleQuotedString(rawText),
@@ -217,7 +201,6 @@ export function collectControlUiRawCopyFromSource(params: {
         if (rawText) {
           pushRawCopySegments(findings, {
             kind: "html-text",
-            line,
             name: "text",
             path: repoPath,
             text: rawText,
@@ -225,7 +208,7 @@ export function collectControlUiRawCopyFromSource(params: {
         }
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return findings;
@@ -234,10 +217,17 @@ export function collectControlUiRawCopyFromSource(params: {
 async function collectFindings(): Promise<RawCopyFinding[]> {
   const files = (await Promise.all(SOURCE_DIRS.map((dir) => walkSourceFiles(dir)))).flat();
   const findings: RawCopyFinding[] = [];
-  for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
-    const source = await readFile(filePath, "utf8");
-    const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
-    findings.push(...collectControlUiRawCopyFromSource({ filePath, source, sourceFile }));
+  const parser = createNativeTypeScriptParser({ cwd: ROOT });
+  try {
+    const sources: { fileName: string; text: string }[] = [];
+    for (const filePath of files.toSorted((left, right) => left.localeCompare(right))) {
+      sources.push({ fileName: filePath, text: await readFile(filePath, "utf8") });
+    }
+    for (const sourceFile of parser.parseSourceFiles(sources)) {
+      findings.push(...collectControlUiRawCopyFromSource(sourceFile));
+    }
+  } finally {
+    parser.close();
   }
   return findings;
 }

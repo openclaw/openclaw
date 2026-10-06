@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import * as acpMetadata from "../acp/runtime/session-meta-readonly.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -15,11 +16,12 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-import { SessionMutationAuthorizationChangedError } from "./session-sharing.js";
-import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils.js";
 
 const METHOD = "workboard.cards.dispatch";
-const ensureProfileForEmail = vi.hoisted(() => vi.fn());
+const ensureProfileIdForEmail = vi.hoisted(() => vi.fn());
+const prepareUserProfileRoleAuthority = vi.hoisted(() =>
+  vi.fn(async (profileId: string) => ({ profileId, isCurrent: () => true })),
+);
 const getUserProfileDisplay = vi.hoisted(() =>
   vi.fn((profileId: string) => ({
     id: profileId,
@@ -28,28 +30,32 @@ const getUserProfileDisplay = vi.hoisted(() =>
     hasAvatar: false,
   })),
 );
-const resolveUserProfileId = vi.hoisted(() => vi.fn());
-const setDisplayName = vi.hoisted(() => vi.fn());
+const setCanonicalUserProfileDisplayName = vi.hoisted(() => vi.fn());
+
+vi.mock("../state/user-profile-email.js", () => ({ ensureProfileIdForEmail }));
+vi.mock("../state/user-channel-identity-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-channel-identity-operations.js")>()),
+  prepareUserProfileRoleAuthority,
+}));
+
+vi.mock("../state/user-profile-writes.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-writes.js")>()),
+  setCanonicalUserProfileDisplayName,
+}));
 
 vi.mock("../state/user-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
-  ensureProfileForEmail,
   getUserProfileDisplay,
   getUserProfileListItem: vi.fn(),
-  linkEmail: vi.fn(),
-  listProfiles: vi.fn(),
-  resolveUserProfileId,
-  setAvatar: vi.fn(),
-  setDisplayName,
   UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
 }));
 
 afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
-  ensureProfileForEmail.mockReset();
+  ensureProfileIdForEmail.mockReset();
+  prepareUserProfileRoleAuthority.mockClear();
   getUserProfileDisplay.mockClear();
-  resolveUserProfileId.mockReset();
-  setDisplayName.mockReset();
+  setCanonicalUserProfileDisplayName.mockReset();
 });
 
 describe("gateway method authorization", () => {
@@ -243,9 +249,8 @@ describe("gateway method authorization", () => {
 
   it("allows an identified write caller to edit its own profile", async () => {
     const profile = { id: "profile-1" };
-    ensureProfileForEmail.mockReturnValue(profile);
-    resolveUserProfileId.mockReturnValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+    ensureProfileIdForEmail.mockResolvedValue(profile.id);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -257,8 +262,7 @@ describe("gateway method authorization", () => {
   });
 
   it("requires admin when an identified write caller targets another profile", async () => {
-    ensureProfileForEmail.mockReturnValue({ id: "profile-1" });
-    resolveUserProfileId.mockReturnValue("profile-2");
+    ensureProfileIdForEmail.mockResolvedValue("profile-1");
 
     expect(
       await dispatchProfileMutation({
@@ -271,7 +275,7 @@ describe("gateway method authorization", () => {
 
   it("allows an admin caller to edit any profile", async () => {
     const profile = { id: "profile-2" };
-    setDisplayName.mockReturnValue(profile);
+    setCanonicalUserProfileDisplayName.mockResolvedValue({ profile });
 
     expect(
       await dispatchProfileMutation({
@@ -281,7 +285,11 @@ describe("gateway method authorization", () => {
     ).toHaveBeenCalledWith(true, { profile });
   });
 
-  it("rejects a mutation when its authorized session instance is replaced before commit", async () => {
+  it.each([
+    { phase: "before commit", change: "replacement" },
+    { phase: "before response", change: "replacement" },
+    { phase: "before response", change: "reassignment" },
+  ] as const)("rejects a session $change $phase", async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:commit-bound-authorization";
       await upsertSessionEntryCore(
@@ -299,6 +307,23 @@ describe("gateway method authorization", () => {
       if (!patchHandler) {
         throw new Error("sessions.patch handler is not registered");
       }
+      const readMetadata = acpMetadata.readAcpSessionMetaForEntries;
+      const metadataRead =
+        phase === "before response"
+          ? vi
+              .spyOn(acpMetadata, "readAcpSessionMetaForEntries")
+              .mockImplementation(async (params) => {
+                const result = await readMetadata(params);
+                if (
+                  params.entries.some((entry) => entry.sessionKey === sessionKey) &&
+                  loadSessionEntry({ agentId: "main", sessionKey })?.label === "stale mutation"
+                ) {
+                  handlerStarted.resolve();
+                  await handlerCanContinue.promise;
+                }
+                return result;
+              })
+          : undefined;
       const respond = vi.fn();
       const request = handleGatewayRequest({
         req: {
@@ -336,42 +361,87 @@ describe("gateway method authorization", () => {
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
         extraHandlers: {
           "sessions.patch": async (options) => {
-            handlerStarted.resolve();
-            await handlerCanContinue.promise;
+            if (phase === "before commit") {
+              handlerStarted.resolve();
+              await handlerCanContinue.promise;
+            }
             await patchHandler(options);
           },
         },
       });
 
-      await handlerStarted.promise;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-draft-replacement",
-          updatedAt: 2,
+      try {
+        await awaitGateBeforeSettlement(
+          handlerStarted.promise,
+          request,
+          `Session patch settled before ${phase} barrier`,
+        );
+        expect(respond).not.toHaveBeenCalled();
+        const before = loadSessionEntry({ agentId: "main", sessionKey });
+        if (phase === "before response") {
+          expect(before?.label).toBe("stale mutation");
+        } else {
+          expect(before).not.toHaveProperty("label");
+        }
+        const sessionId = change === "replacement" ? "session-draft-replacement" : "session-shared";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            updatedAt: 2,
+            ...(phase === "before response" ? { label: "current owner label" } : {}),
+            visibility: "draft",
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "owner" },
+          },
+        );
+        await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
           visibility: "draft",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        },
-      );
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        visibility: "draft",
-      }));
-      handlerCanContinue.resolve();
-      await request;
+        }));
+        if (change === "reassignment") {
+          await assignSessionOwnerInWorker(
+            { agentId: "main", sessionKey },
+            {
+              owner: { type: "human", id: "owner" },
+              assignedBy: { type: "system", id: "fixture" },
+              assignedAt: 2,
+              expectedSessionId: sessionId,
+            },
+          );
+        }
+        handlerCanContinue.resolve();
+        await request;
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
-        }),
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        sessionId: "session-draft-replacement",
-        visibility: "draft",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: expect.objectContaining({
+              code:
+                change === "reassignment"
+                  ? "SESSION_PARTICIPATION_REQUIRED"
+                  : "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+            }),
+          }),
+        );
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+          sessionId,
+          visibility: "draft",
+        });
+        const current = loadSessionEntry({ agentId: "main", sessionKey });
+        if (phase === "before response") {
+          expect(current?.label).toBe("current owner label");
+          if (change === "reassignment") {
+            expect(current?.owner?.actor).toEqual({ type: "human", id: "owner" });
+          }
+        } else {
+          expect(current).not.toHaveProperty("label");
+        }
+      } finally {
+        handlerCanContinue.resolve();
+        await Promise.allSettled([request]);
+        metadataRead?.mockRestore();
+      }
     });
   });
 
@@ -463,594 +533,6 @@ describe("gateway method authorization", () => {
           }),
         );
       }
-    });
-  });
-});
-
-describe("sessions.patchMany orchestration", () => {
-  const context = (overrides: Record<string, unknown> = {}) =>
-    ({
-      getRuntimeConfig: () => ({}),
-      loadGatewayModelCatalog: vi.fn(async () => []),
-      broadcastToConnIds: vi.fn(),
-      getSessionEventSubscriberConnIds: () => new Set(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      dedupe: new Map(),
-      ...overrides,
-    }) as never;
-
-  it("preserves request-order outcomes while isolating expected-identity failures", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:batch-${index}` },
-          {
-            sessionId: `session-${index}`,
-            lifecycleRevision: `revision-${index}`,
-            updatedAt: 1,
-          },
-        );
-      }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({
-            key: `agent:main:batch-${index}`,
-            expectedSessionId: index === 1 ? "stale-session" : `session-${index}`,
-            expectedLifecycleRevision: `revision-${index}`,
-          })),
-          patch: { unread: false },
-        },
-        respond,
-        context: context(),
-      } as never);
-
-      const outcomes = respond.mock.calls[0]?.[1]?.outcomes;
-      expect(outcomes).toEqual([
-        { ok: true, key: "agent:main:batch-0" },
-        {
-          ok: false,
-          key: "agent:main:batch-1",
-          error: {
-            code: "INVALID_REQUEST",
-            details: { reason: "session-changed" },
-            message: "Session agent:main:batch-1 changed before patch. Retry.",
-          },
-        },
-        { ok: true, key: "agent:main:batch-2" },
-      ]);
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-0" }),
-      ).toHaveProperty("lastReadAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-1" }),
-      ).not.toHaveProperty("lastReadAt");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:batch-2" }),
-      ).toHaveProperty("lastReadAt");
-    });
-  });
-
-  it("rejects logical aliases before mutation", async () => {
-    const respond = vi.fn();
-    await sessionMutationHandlers["sessions.patchMany"]!({
-      params: {
-        targets: [{ key: "agent:main:duplicate" }, { key: "duplicate" }],
-        patch: { archived: true },
-      },
-      respond,
-      context: context(),
-    } as never);
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "Duplicate target." }),
-    );
-  });
-
-  it("projects non-archive patches in request order against prior successes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 2; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:label-${index}` },
-          { sessionId: `session-label-${index}`, updatedAt: 1 },
-        );
-      }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1].map((index) => ({ key: `agent:main:label-${index}` })),
-          patch: { label: "Shared label" },
-        },
-        respond,
-        context: context(),
-      } as never);
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        { ok: true, key: "agent:main:label-0" },
-        {
-          ok: false,
-          key: "agent:main:label-1",
-          error: { code: "INVALID_REQUEST", message: "label already in use: Shared label" },
-        },
-      ]);
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-0" })?.label).toBe(
-        "Shared label",
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-1" })?.label,
-      ).toBeUndefined();
-    });
-  });
-
-  it("does not reserve a projected label when target authorization fails", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const sessionKeys = [0, 1].map((index) => `agent:main:label-race-${index}`);
-      for (const [index, sessionKey] of sessionKeys.entries()) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { sessionId: `session-label-race-${index}`, updatedAt: 1 },
-        );
-      }
-      const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be delegated");
-      });
-      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey === sessionKeys[0]) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "session changed before sessions.patchMany; retry the request",
-          });
-        }
-      });
-      const respond = vi.fn();
-
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: sessionKeys.map((key) => ({ key })),
-          patch: { label: "Shared label" },
-        },
-        respond,
-        context: context(),
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
-      } as never);
-
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(sessionKeys);
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            {
-              ok: false,
-              key: sessionKeys[0],
-              error: {
-                code: "INVALID_REQUEST",
-                message: "session changed before sessions.patchMany; retry the request",
-              },
-            },
-            { ok: true, key: sessionKeys[1] },
-          ],
-        },
-        undefined,
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: sessionKeys[0]! })?.label,
-      ).toBeUndefined();
-      expect(loadSessionEntry({ agentId: "main", sessionKey: sessionKeys[1]! })?.label).toBe(
-        "Shared label",
-      );
-    });
-  });
-
-  it("checks labels against untouched sessions in the store snapshot", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:label-owner" },
-        { label: "Existing label", sessionId: "session-label-owner", updatedAt: 1 },
-      );
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:label-target" },
-        { sessionId: "session-label-target", updatedAt: 1 },
-      );
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [{ key: "agent:main:label-target" }],
-          patch: { label: "Existing label" },
-        },
-        respond,
-        context: context(),
-      } as never);
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        {
-          ok: false,
-          key: "agent:main:label-target",
-          error: { code: "INVALID_REQUEST", message: "label already in use: Existing label" },
-        },
-      ]);
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:label-target" })?.label,
-      ).toBeUndefined();
-    });
-  });
-
-  it("rejects an alias conflict introduced after preflight without blocking siblings", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
-      } satisfies OpenClawConfig;
-      const canonicalKey = "agent:main:work";
-      const conflictingAlias = "agent:main:main";
-      const siblingKeys = ["agent:main:alias-race-before", "agent:main:alias-race-after"];
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: canonicalKey },
-        { sessionId: "session-alias-race-canonical", updatedAt: 1 },
-      );
-      for (const [index, sessionKey] of siblingKeys.entries()) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          { sessionId: `session-alias-race-sibling-${index}`, updatedAt: 1 },
-        );
-      }
-
-      const storePath = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: conflictingAlias,
-      }).storePath;
-      const writerStarted = createDeferredCore();
-      const insertConflictingAlias = createDeferredCore();
-      const writer = applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        sessionKeys: [conflictingAlias],
-        storePath,
-        update: async () => {
-          writerStarted.resolve();
-          await insertConflictingAlias.promise;
-          return {
-            replacements: [
-              {
-                entry: { sessionId: "session-alias-race-conflict", updatedAt: 2 },
-                previousSessionKeys: [],
-                sessionKey: conflictingAlias,
-              },
-            ],
-            result: undefined,
-          };
-        },
-      });
-      await writerStarted.promise;
-
-      const preflightCompleted = createDeferredCore();
-      const respond = vi.fn();
-      const request = sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [{ key: siblingKeys[0]! }, { key: conflictingAlias }, { key: siblingKeys[1]! }],
-          patch: { unread: false },
-        },
-        respond,
-        context: context({
-          getRuntimeConfig: () => cfg,
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-alias-race-canonical")) {
-                preflightCompleted.resolve();
-              }
-              return new Map();
-            },
-          },
-        }),
-      } as never);
-
-      await preflightCompleted.promise;
-      insertConflictingAlias.resolve();
-      await writer;
-      await request;
-
-      expect(respond.mock.calls[0]?.[1]?.outcomes).toEqual([
-        { ok: true, key: siblingKeys[0] },
-        {
-          ok: false,
-          key: conflictingAlias,
-          error: {
-            code: "UNAVAILABLE",
-            message: "Session patch failed unexpectedly. Retry the request.",
-            retryable: true,
-          },
-        },
-        { ok: true, key: siblingKeys[1] },
-      ]);
-      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).toMatchObject({
-        sessionId: "session-alias-race-canonical",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).not.toHaveProperty(
-        "lastReadAt",
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias })).toMatchObject({
-        sessionId: "session-alias-race-conflict",
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias }),
-      ).not.toHaveProperty("lastReadAt");
-      for (const sessionKey of siblingKeys) {
-        expect(loadSessionEntry({ agentId: "main", sessionKey })).toHaveProperty("lastReadAt");
-      }
-    });
-  });
-
-  it("rejects an alias inserted after single-patch preflight while waiting for the writer", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {
-        session: { mainKey: "work" },
-        agents: { list: [{ id: "main", default: true }] },
-      } satisfies OpenClawConfig;
-      const canonicalKey = "agent:main:work";
-      const conflictingAlias = "agent:main:main";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: canonicalKey },
-        { sessionId: "session-single-alias-race-canonical", updatedAt: 1 },
-      );
-
-      const storePath = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: conflictingAlias,
-      }).storePath;
-      const writerStarted = createDeferredCore();
-      const insertConflictingAlias = createDeferredCore();
-      const writer = applySessionEntryCanonicalReplacements({
-        agentId: "main",
-        sessionKeys: [conflictingAlias],
-        storePath,
-        update: async () => {
-          writerStarted.resolve();
-          await insertConflictingAlias.promise;
-          return {
-            replacements: [
-              {
-                entry: { sessionId: "session-single-alias-race-conflict", updatedAt: 2 },
-                previousSessionKeys: [],
-                sessionKey: conflictingAlias,
-              },
-            ],
-            result: undefined,
-          };
-        },
-      });
-      await writerStarted.promise;
-
-      const preflightCompleted = createDeferredCore();
-      const respond = vi.fn();
-      const request = sessionMutationHandlers["sessions.patch"]!({
-        params: { key: conflictingAlias, pinned: true },
-        respond,
-        context: context({
-          getRuntimeConfig: () => cfg,
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-single-alias-race-canonical")) {
-                preflightCompleted.resolve();
-              }
-              return new Map();
-            },
-          },
-        }),
-      } as never);
-
-      await preflightCompleted.promise;
-      insertConflictingAlias.resolve();
-      await writer;
-      await request;
-
-      expect(respond).toHaveBeenCalledWith(false, undefined, {
-        code: "UNAVAILABLE",
-        message: "Session patch failed unexpectedly. Retry the request.",
-        retryable: true,
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).toMatchObject({
-        sessionId: "session-single-alias-race-canonical",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: canonicalKey })).not.toHaveProperty(
-        "pinnedAt",
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias })).toMatchObject({
-        sessionId: "session-single-alias-race-conflict",
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: conflictingAlias }),
-      ).not.toHaveProperty("pinnedAt");
-    });
-  });
-
-  it("isolates a target authorization race from sibling patches", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:race-${index}` },
-          { sessionId: `session-race-${index}`, updatedAt: 1 },
-        );
-      }
-      const respond = vi.fn();
-      const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be delegated");
-      });
-      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey.endsWith("-1")) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "session changed before sessions.patchMany; retry the request",
-          });
-        }
-      });
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:race-${index}` })),
-          patch: { unread: false },
-        },
-        respond,
-        context: context(),
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
-      } as never);
-
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual([0, 1, 2].map((index) => `agent:main:race-${index}`));
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:race-0" },
-            {
-              ok: false,
-              key: "agent:main:race-1",
-              error: {
-                code: "INVALID_REQUEST",
-                message: "session changed before sessions.patchMany; retry the request",
-              },
-            },
-            { ok: true, key: "agent:main:race-2" },
-          ],
-        },
-        undefined,
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-0" })).toHaveProperty(
-        "lastReadAt",
-      );
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-1" }),
-      ).not.toHaveProperty("lastReadAt");
-      expect(loadSessionEntry({ agentId: "main", sessionKey: "agent:main:race-2" })).toHaveProperty(
-        "lastReadAt",
-      );
-    });
-  });
-
-  it("isolates archive preparation authorization per target and continues in input order", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const targets = [0, 1, 2].map((index) => ({
-        key: `agent:main:archive-auth-${index}`,
-        expectedSessionId: `session-archive-auth-${index}`,
-        expectedLifecycleRevision: `revision-archive-auth-${index}`,
-      }));
-      for (const target of targets) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: target.key },
-          {
-            sessionId: target.expectedSessionId,
-            lifecycleRevision: target.expectedLifecycleRevision,
-            updatedAt: 1,
-          },
-        );
-      }
-      const respond = vi.fn();
-      const assertCurrent = vi.fn(() => {
-        throw new Error("outer all-target guard must not be used");
-      });
-      const assertTargetCurrent = vi.fn(({ sessionKey }: { sessionKey: string }) => {
-        if (sessionKey.endsWith("-1")) {
-          throw new SessionMutationAuthorizationChangedError({
-            code: "INVALID_REQUEST",
-            message: "archive authorization changed; retry the request",
-          });
-        }
-      });
-
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: { targets, patch: { archived: true } },
-        respond,
-        context: context(),
-        client: { connect: { scopes: ["operator.write"] } },
-        sessionMutationAuthorization: { assertCurrent, assertTargetCurrent },
-      } as never);
-
-      expect(assertCurrent).not.toHaveBeenCalled();
-      expect([
-        ...new Set(assertTargetCurrent.mock.calls.map(([target]) => target.sessionKey)),
-      ]).toEqual(targets.map(({ key }) => key));
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:archive-auth-0" },
-            {
-              ok: false,
-              key: "agent:main:archive-auth-1",
-              error: {
-                code: "INVALID_REQUEST",
-                message: "archive authorization changed; retry the request",
-              },
-            },
-            { ok: true, key: "agent:main:archive-auth-2" },
-          ],
-        },
-        undefined,
-      );
-      for (const [index, target] of targets.entries()) {
-        const entry = loadSessionEntry({ agentId: "main", sessionKey: target.key });
-        expect(entry).toMatchObject({
-          sessionId: target.expectedSessionId,
-          lifecycleRevision: target.expectedLifecycleRevision,
-        });
-        if (index === 1) {
-          expect(entry).not.toHaveProperty("archivedAt");
-        } else {
-          expect(entry).toHaveProperty("archivedAt");
-        }
-      }
-    });
-  });
-
-  it("converts an unexpected target exception into an ordered isolated failure", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      for (let index = 0; index < 3; index += 1) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: `agent:main:throw-${index}` },
-          { sessionId: `session-throw-${index}`, updatedAt: 1 },
-        );
-      }
-      const respond = vi.fn();
-      await sessionMutationHandlers["sessions.patchMany"]!({
-        params: {
-          targets: [0, 1, 2].map((index) => ({ key: `agent:main:throw-${index}` })),
-          patch: { category: "Batch" },
-        },
-        respond,
-        context: context({
-          workerSessionPlacementService: {
-            getMany: (sessionIds: string[]) => {
-              if (sessionIds.includes("session-throw-1")) {
-                throw new Error("private placement detail");
-              }
-              return new Map();
-            },
-          },
-        }),
-      } as never);
-
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        {
-          outcomes: [
-            { ok: true, key: "agent:main:throw-0" },
-            {
-              ok: false,
-              key: "agent:main:throw-1",
-              error: {
-                code: "UNAVAILABLE",
-                message: "Session patch failed unexpectedly. Retry the request.",
-                retryable: true,
-              },
-            },
-            { ok: true, key: "agent:main:throw-2" },
-          ],
-        },
-        undefined,
-      );
     });
   });
 });

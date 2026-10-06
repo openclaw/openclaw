@@ -3,7 +3,7 @@
  */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeThinkLevel, type ThinkLevel } from "../../auto-reply/thinking.js";
-import { isReasoningConstraintErrorMessage } from "../failover/classify.js";
+import { isReasoningConstraintErrorMessage } from "../failover/context-overflow-tables.js";
 
 function extractSupportedValues(raw: string): string[] {
   const fragment = raw.match(/supported values(?: are)?:\s*([^\n.]+)/i)?.[1];

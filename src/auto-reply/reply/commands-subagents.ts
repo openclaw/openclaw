@@ -1,22 +1,6 @@
-// Dispatches subagent inspection commands.
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { commandReply, defineAuthorizedTextCommand, matchCommandPrefix } from "./command-gates.js";
 import { buildSubagentsHelp, resolveRequesterSessionKey } from "./commands-subagents/shared.js";
 import type { CommandHandler } from "./commands-types.js";
-
-const actionAgentsLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-agents.js"),
-);
-const actionInfoLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-info.js"),
-);
-const actionListLoader = createLazyImportLoader(
-  () => import("./commands-subagents/action-list.js"),
-);
-const actionLogLoader = createLazyImportLoader(() => import("./commands-subagents/action-log.js"));
-const controlRuntimeLoader = createLazyImportLoader(
-  () => import("../../agents/subagents/registry/subagent-control-scope.js"),
-);
 
 export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextCommand(
   {
@@ -51,18 +35,24 @@ export const handleSubagentsCommand: CommandHandler = defineAuthorizedTextComman
 
     const actionHandler =
       action === "agents"
-        ? (await actionAgentsLoader.load()).handleSubagentsAgentsAction
+        ? (await import("./commands-subagents/action-agents.js")).handleSubagentsAgentsAction
         : action === "list"
-          ? (await actionListLoader.load()).handleSubagentsListAction
+          ? (await import("./commands-subagents/action-list.js")).handleSubagentsListAction
           : action === "info"
-            ? (await actionInfoLoader.load()).handleSubagentsInfoAction
-            : (await actionLogLoader.load()).handleSubagentsLogAction;
-    const { listControlledSubagentRuns } = await controlRuntimeLoader.load();
+            ? (await import("./commands-subagents/action-info.js")).handleSubagentsInfoAction
+            : (await import("./commands-subagents/action-log.js")).handleSubagentsLogAction;
+    const { buildControlledSubagentRunsReadContext } =
+      await import("../../agents/subagents/registry/subagent-control-scope.js");
+    const readContext = await buildControlledSubagentRunsReadContext(
+      requesterKey,
+      params.agentId,
+      params.cfg,
+    );
 
     return await actionHandler({
       params,
       requesterKey,
-      runs: listControlledSubagentRuns(requesterKey, params.agentId, params.cfg),
+      readContext,
       restTokens,
     });
   },

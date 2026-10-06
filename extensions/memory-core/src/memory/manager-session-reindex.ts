@@ -1,5 +1,5 @@
-// Memory Core plugin module implements manager session reindex behavior.
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { hasTargetedSessionSyncParams } from "./manager-sync-control.js";
 
 export function shouldSyncSessionsForReindex(params: {
   hasSessionSource: boolean;
@@ -11,19 +11,12 @@ export function shouldSyncSessionsForReindex(params: {
   if (!params.hasSessionSource) {
     return false;
   }
-  if (params.sync?.sessions?.some((session) => session.sessionId.trim().length > 0)) {
-    return true;
-  }
-  if (params.sync?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0)) {
-    return true;
-  }
-  if (params.sync?.force) {
-    return true;
-  }
-  if (params.needsFullReindex) {
-    return true;
-  }
-  if (params.sessionsFullRetryDirty) {
+  if (
+    hasTargetedSessionSyncParams(params.sync) ||
+    params.sync?.force ||
+    params.needsFullReindex ||
+    params.sessionsFullRetryDirty
+  ) {
     return true;
   }
   const reason = params.sync?.reason;

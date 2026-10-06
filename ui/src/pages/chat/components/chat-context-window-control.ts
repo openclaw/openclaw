@@ -3,6 +3,9 @@ import type { GatewayContextWindowOption } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSettingsSegmented } from "../../../components/settings-ui.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
+
+registerModelControlsEnglish();
 
 export type ChatContextWindowControlParams = {
   options: readonly GatewayContextWindowOption[];
@@ -27,7 +30,7 @@ export function renderContextWindowControl(
   });
   let control: ReturnType<typeof html>;
   if (contextWindow.options.length === 2) {
-    const [smaller, larger] = [...contextWindow.options].toSorted(
+    const [smaller, larger] = contextWindow.options.toSorted(
       (left, right) => left.contextWindow - right.contextWindow,
     );
     if (!smaller || !larger) {

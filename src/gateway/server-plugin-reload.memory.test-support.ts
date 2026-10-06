@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-provider-runtime.js";
+import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../test-utils/bundled-plugin-public-surface.js";
@@ -103,7 +104,7 @@ export async function verifyGatewayMemoryReplacement(
   assert(runtime);
   const independent = createPluginRegistry({
     logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
+    runtime: createPluginRuntime(),
     activateGlobalSideEffects: false,
   });
   const otherRecord = createPluginRecord({ id: "other-memory-host" });
@@ -183,8 +184,9 @@ export async function verifyGatewayMemoryReplacement(
     try {
       const closing = runtime.closeAllMemorySearchManagers?.();
       if (mode === "failed-close") {
+        await expect(closing).rejects.toThrow(PluginInstanceUnavailableError);
         await expect(closing).rejects.toThrow(
-          new Error("Plugin first was reloaded or disabled; use its current tools."),
+          "Plugin first was reloaded or disabled; use its current tools.",
         );
       } else {
         await expect(closing).resolves.toBeUndefined();

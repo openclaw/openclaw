@@ -1,6 +1,10 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
-import { parsePermissiveBooleanToken } from "../arg-utils.mts";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../release-version.mjs";
 import { trimForSummary } from "./shared.ts";
 import { type CrossOsSuite, parseCrossOsSuiteFilter } from "./suite-filter.mjs";
 
@@ -20,10 +24,9 @@ export type PackagedUpgradeTiming = {
   name: "total" | "package-install" | "package-install-omit-optional" | "staged-swap" | "doctor";
   durationMs: number;
 };
-export type PackagedUpgradeFallbackEvidence = {
-  reason: "timeout" | "swap-cleanup";
-  action: "direct-candidate-install";
-};
+export type PackagedUpgradeFallbackEvidence =
+  | { reason: "timeout" | "swap-cleanup"; action: "direct-candidate-install" }
+  | { reason: "unsettled-exit"; action: "retry-update" | "direct-candidate-install" };
 export type LaneResult = {
   status: string;
   error?: string;
@@ -62,7 +65,6 @@ export type GatewayHandle = {
   waitForClose: () => Promise<void>;
 };
 export type CommandResult = { exitCode: number; stdout: string; stderr: string };
-export type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
 export type CommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -138,7 +140,6 @@ export const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
   15_000,
 );
-export const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
 
 const providerConfig = {
   openai: {
@@ -184,13 +185,13 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "talk-voice",
 ];
 
-export function buildCrossOsReleaseSmokePluginAllowlist(
+function buildCrossOsReleaseSmokePluginAllowlist(
   providerMeta: Pick<ProviderConfig, "extensionId">,
 ) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
 }
 
-export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
+function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
   return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
 }
 
@@ -200,7 +201,7 @@ function shouldSeedProviderConfigModels(providerMeta: ProviderConfig) {
   );
 }
 
-export function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
+function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig) {
   if (!shouldSeedProviderConfigModels(providerMeta)) {
     return null;
   }
@@ -214,12 +215,32 @@ export function buildReleaseProviderConfigOverride(providerMeta: ProviderConfig)
   };
 }
 
-export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-export const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
-export const OMITTED_QA_EXTENSION_PREFIXES = [
-  "dist/extensions/qa-channel/",
-  "dist/extensions/qa-lab/",
-];
+// Yield between awaited commands so failed setup does not inspect later configuration.
+export function* buildReleaseModelConfigCommands(providerMeta: ProviderConfig) {
+  yield ["models", "set", providerMeta.model];
+  const providerConfigOverride = buildReleaseProviderConfigOverride(providerMeta);
+  if (providerConfigOverride) {
+    yield [
+      "config",
+      "set",
+      `models.providers.${providerMeta.extensionId}`,
+      JSON.stringify(providerConfigOverride),
+      "--strict-json",
+      "--merge",
+    ];
+  }
+  yield [
+    "config",
+    "set",
+    "plugins.allow",
+    JSON.stringify(buildCrossOsReleaseSmokePluginAllowlist(providerMeta)),
+    "--strict-json",
+  ];
+  yield buildCrossOsReleaseSmokeMemorySlotConfigArgs();
+  yield ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"];
+  yield ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE];
+}
+
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
 export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
@@ -237,10 +258,7 @@ export function managedGatewayRestartCommandTimeoutMs(platform = process.platfor
   // harness alive long enough to receive that result plus service-manager overhead.
   return gatewayReadyDeadlineMs(platform) + 60_000;
 }
-export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
-export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
-  (CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS + 2 * 60) * 1000;
+const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
@@ -250,19 +268,6 @@ export function gatewayReadyDeadlineMs(platform = process.platform) {
   return platform === "win32"
     ? CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS
     : CROSS_OS_GATEWAY_READY_TIMEOUT_MS;
-}
-
-export function resolveNpmPackTarballFileName(value: unknown, label = "npm pack") {
-  const filename = typeof value === "string" ? value.trim() : "";
-  if (
-    !filename.endsWith(".tgz") ||
-    filename.includes("\0") ||
-    filename !== basename(filename) ||
-    filename !== pathWin32.basename(filename)
-  ) {
-    throw new Error(`${label} did not report a safe .tgz filename.`);
-  }
-  return filename;
 }
 
 export function resolvePackDestinationTarball(
@@ -323,23 +328,7 @@ export function parsePositiveIntegerEnv(name: string, fallback: number, env = pr
   return value;
 }
 
-function parseBooleanEnv(name: string, fallback: boolean, env = process.env): boolean {
-  const raw = env[name]?.trim();
-  if (!raw) {
-    return fallback;
-  }
-  const parsed = parsePermissiveBooleanToken(raw);
-  if (parsed !== undefined) {
-    return parsed;
-  }
-  throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
-}
-
-export function resolveCrossOsAgentTurnOptional(env = process.env) {
-  return parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", false, env);
-}
-
-export function looksLikeReleaseVersionRef(ref: string) {
+function looksLikeReleaseVersionRef(ref: string) {
   const trimmed = normalizeRequestedRef(ref);
   return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,
@@ -420,13 +409,30 @@ export function resolveRunnerMatrix(params: {
   const include = runners.flatMap((runner) =>
     suites
       .filter((suite) => suiteFilter.matches(runner.os_id, suite))
-      .map((suite) =>
-        Object.assign({}, runner, {
-          suite,
-          suite_label: formatSuiteLabel(suite),
-          lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
-        }),
-      ),
+      .flatMap((suite) => {
+        // Windows packaged-fresh retains the validated version before the
+        // Node 24.19 libuv fs-event crash on Windows Server 2025 RUNNER~1 paths.
+        const node24Version =
+          runner.os_id === "windows" && suite === "packaged-fresh" ? "24.16.0" : "24.21.0";
+        const nodeVersions =
+          suite === "packaged-fresh" || suite === "packaged-upgrade"
+            ? [node24Version, "26.1.0"]
+            : [node24Version];
+        return nodeVersions.map((nodeVersion) =>
+          Object.assign({}, runner, {
+            artifact_name:
+              nodeVersion === node24Version
+                ? runner.artifact_name
+                : `${runner.artifact_name}-node${nodeVersion}`,
+            node_version: nodeVersion,
+            suite,
+            suite_label:
+              formatSuiteLabel(suite) +
+              (nodeVersion === node24Version ? "" : ` (Node ${nodeVersion})`),
+            lane: suite.includes(`upgrade`) || suite === `dev-update` ? `upgrade` : `fresh`,
+          }),
+        );
+      }),
   );
   if (include.length === 0) {
     throw new Error(
@@ -486,8 +492,7 @@ export function looksLikeCommitSha(ref: string) {
 }
 
 export function resolveExpectedDevUpdateRef(ref?: string) {
-  const trimmed = normalizeRequestedRef(ref) || "main";
-  return trimmed || "main";
+  return normalizeRequestedRef(ref) || "main";
 }
 
 export function resolveDevUpdateVerificationRef(ref: string, sourceSha?: string) {
@@ -515,10 +520,35 @@ export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
   return updateEnv;
 }
 
-export function verifyPackagedUpgradeUpdateResult(
-  result: CommandResult,
-  _options?: { candidateVersion?: string },
+function isExtendedStableVersion(version: string | undefined) {
+  const parsed = version ? parseReleaseVersion(version) : null;
+  return parsed !== null && classifyReleaseTrain(parsed) === "extended-stable";
+}
+
+function usesExtendedStableRegistryRoute(
+  baselineVersion: string | undefined,
+  candidateVersion: string | undefined,
 ) {
+  return isExtendedStableVersion(baselineVersion) && isExtendedStableVersion(candidateVersion);
+}
+
+function buildPackagedUpgradeUpdateEnv(
+  env: NodeJS.ProcessEnv,
+  baselineVersion?: string,
+  candidateVersion?: string,
+) {
+  const updateEnv = buildRealUpdateEnv(env);
+  if (usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)) {
+    updateEnv.OPENCLAW_UPDATE_PACKAGE_SPEC = "openclaw";
+    // The shipped updater requires the bare package name to admit the loopback
+    // registry. Select its candidate tag only for the update process so a
+    // baseline specified as openclaw@latest still installs the published tag.
+    updateEnv.NPM_CONFIG_TAG = "extended-stable";
+  }
+  return updateEnv;
+}
+
+export function verifyPackagedUpgradeUpdateResult(result: CommandResult) {
   if (result.exitCode === 0) {
     return;
   }
@@ -582,17 +612,58 @@ function isBoundedTimingMs(value: unknown): value is number {
   );
 }
 
-export function buildPackagedUpgradeUpdateArgs(candidateUrl: string) {
+export function resolvePackagedUpgradeTimeouts(
+  baselineInstallDurationMs: number,
+  platform = process.platform,
+) {
+  if (platform !== "win32") {
+    return { stepTimeoutSeconds: 1200, wrapperTimeoutMs: 20 * 60_000 };
+  }
+  // Allow 50% registry/runner variance per install, bounded to 10–20 minutes.
+  // The updater installs and rehearses; give both steps their full budget plus
+  // two minutes for shutdown/reporting (wrapper floor 22m, ceiling 42m).
+  const measuredSeconds = Number.isFinite(baselineInstallDurationMs)
+    ? Math.ceil((baselineInstallDurationMs * 1.5) / 1000)
+    : 0;
+  const stepTimeoutSeconds = Math.min(20 * 60, Math.max(10 * 60, measuredSeconds));
+  return { stepTimeoutSeconds, wrapperTimeoutMs: (2 * stepTimeoutSeconds + 120) * 1000 };
+}
+
+export function buildPackagedUpgradeUpdateArgs(
+  candidateUrl: string,
+  timeoutSeconds = resolvePackagedUpgradeTimeouts(0).stepTimeoutSeconds,
+  baselineVersion?: string,
+  candidateVersion?: string,
+) {
   return [
     "update",
-    "--tag",
-    candidateUrl,
+    ...(usesExtendedStableRegistryRoute(baselineVersion, candidateVersion)
+      ? []
+      : ["--tag", candidateUrl]),
     "--yes",
     "--json",
     "--no-restart",
     "--timeout",
-    String(updateStepTimeoutSeconds()),
+    String(timeoutSeconds),
   ];
+}
+
+export function buildPackagedUpgradeUpdateCommand(params: {
+  env: NodeJS.ProcessEnv;
+  candidateUrl: string;
+  candidateVersion: string;
+  timeoutSeconds?: number;
+  baselineVersion: string;
+}) {
+  return {
+    env: buildPackagedUpgradeUpdateEnv(params.env, params.baselineVersion, params.candidateVersion),
+    args: buildPackagedUpgradeUpdateArgs(
+      params.candidateUrl,
+      params.timeoutSeconds,
+      params.baselineVersion,
+      params.candidateVersion,
+    ),
+  };
 }
 
 export function isRecoverableWindowsPackagedUpgradeSwapCleanupFailure(
@@ -622,9 +693,28 @@ export function isRecoverableWindowsPackagedUpgradeTimeoutError(
   const message = error instanceof Error ? error.message : String(error);
   return (
     /\bCommand timed out:/u.test(message) &&
-    /[/\\]openclaw\.mjs update --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz --yes --json(?: --no-restart)? --timeout \d+/u.test(
+    /[/\\]openclaw\.mjs update(?: --tag http:\/\/127\.0\.0\.1:\d+\/openclaw[^/\s]*\.tgz)? --yes --json(?: --no-restart)? --timeout \d+/u.test(
       message,
     )
+  );
+}
+
+export function isRecoverableWindowsPackagedUpgradeUnsettledExit(
+  result: CommandResult,
+  {
+    baselineVersion,
+    installedVersion,
+    platform = process.platform,
+  }: { baselineVersion: string; installedVersion: string; platform?: NodeJS.Platform },
+) {
+  return (
+    platform === "win32" &&
+    result.exitCode === 13 &&
+    // The shipped defect exits before emitting any JSON or switching the install.
+    result.stdout.trim() === "" &&
+    /\bWarning: Detected unsettled top-level await\b/u.test(result.stderr) &&
+    compareReleaseVersions(baselineVersion, "2026.9.7") === -1 &&
+    installedVersion === baselineVersion
   );
 }
 
@@ -665,13 +755,5 @@ export function installTimeoutMs() {
 }
 
 export function updateTimeoutMs() {
-  return process.platform === "win32"
-    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS
-    : 20 * 60 * 1000;
-}
-
-function updateStepTimeoutSeconds() {
-  return process.platform === "win32"
-    ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
-    : 1200;
+  return process.platform === "win32" ? 12 * 60 * 1000 : 20 * 60 * 1000;
 }

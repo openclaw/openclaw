@@ -75,12 +75,4 @@ describe("google auth guarded fetch", () => {
 
     expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
   });
-
-  it("leaves a fully read response alone", async () => {
-    const transport = await getGoogleAuthTransport();
-
-    await transport.request({ url: loopback.baseUrl });
-
-    expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
-  });
 });

@@ -1,11 +1,9 @@
-// Line plugin module implements status behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type {
   ChannelAccountSnapshot,
   ChannelStatusIssue,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
   collectIssuesForEnabledAccounts,
@@ -16,8 +14,6 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { hasLineCredentials } from "./account-helpers.js";
 import type { LineProbeResult, LineProbeWebhookState, ResolvedLineAccount } from "./types.js";
-
-const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
 const collectLineCredentialIssues = createDependentCredentialStatusIssueCollector({
   channel: "line",
@@ -98,7 +94,7 @@ export const lineStatusAdapter: NonNullable<
   ],
   buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
   probeAccount: async ({ account, timeoutMs }) =>
-    await (await loadLineProbeRuntime()).probeLineBot(account.channelAccessToken, timeoutMs),
+    await (await import("./probe.runtime.js")).probeLineBot(account.channelAccessToken, timeoutMs),
   resolveAccountSnapshot: ({ account, probe }) => ({
     accountId: account.accountId,
     name: account.name,

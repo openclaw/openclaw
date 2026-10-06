@@ -15,6 +15,8 @@ final class GatewaySleepCycleController {
 
     private static let resumeAttempts = 3
     private static let resumeRetryDelay: Duration = .seconds(2)
+    private static let changedRouteMessage =
+        "dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire"
 
     private let requestID: String
     private let currentRoute: CurrentRoute
@@ -48,16 +50,21 @@ final class GatewaySleepCycleController {
         guard mode == .local else { return }
         self.cycleGeneration &+= 1
         let generation = self.cycleGeneration
+        let route = self.currentRoute()
         do {
             switch try await self.prepare(self.requestID) {
             case let .ready(suspensionID):
                 guard generation == self.cycleGeneration else {
                     // The wake already happened; release the late lease right away
                     // instead of fencing the gateway until its two-minute expiry.
+                    guard let route, self.currentRoute() == route else {
+                        self.log(Self.changedRouteMessage)
+                        return
+                    }
                     try await self.resume(suspensionID)
                     return
                 }
-                self.suspension = (id: suspensionID, route: self.currentRoute())
+                self.suspension = (id: suspensionID, route: route)
             case .busy:
                 self.log("gateway sleep preparation skipped because the gateway is busy")
             }
@@ -74,7 +81,7 @@ final class GatewaySleepCycleController {
         self.cycleGeneration &+= 1
         guard mode == .local else {
             if suspension != nil {
-                self.log("dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire")
+                self.log(Self.changedRouteMessage)
             }
             return
         }
@@ -84,17 +91,21 @@ final class GatewaySleepCycleController {
         await self.refresh()
         if let suspension {
             if let route = suspension.route, self.currentRoute() == route {
-                await self.resumeWithRetries(suspension.id, generation: generation)
+                await self.resumeWithRetries(suspension.id, route: route, generation: generation)
             } else {
-                self.log("dropping gateway sleep lease: route/mode changed across sleep; lease will self-expire")
+                self.log(Self.changedRouteMessage)
             }
         }
     }
 
-    private func resumeWithRetries(_ suspensionID: String, generation: UInt64) async {
+    private func resumeWithRetries(_ suspensionID: String, route: String, generation: UInt64) async {
         for attempt in 1...Self.resumeAttempts {
             // A new sleep cycle owns the connection; abandoned leases self-expire.
             guard generation == self.cycleGeneration else { return }
+            guard self.currentRoute() == route else {
+                self.log(Self.changedRouteMessage)
+                return
+            }
             do {
                 try await self.resume(suspensionID)
                 return

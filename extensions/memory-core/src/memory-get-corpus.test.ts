@@ -279,7 +279,7 @@ describe("memory_get corpus outcomes", () => {
       const get = vi.fn(async () => wikiHit);
       registerMemoryCorpusSupplement("memory-wiki", { search: async () => [], get });
       const config = asOpenClawConfig({
-        agents: { list: [{ id: "marketing-agent", default: true }] },
+        agents: { entries: { "marketing-agent": {} } },
       });
       const tool = createMemoryGetTool({
         config,
@@ -316,7 +316,7 @@ describe("memory_get corpus outcomes", () => {
       path: lookup,
       corpus: "all",
     });
-    await vi.advanceTimersByTimeAsync(15_000);
+    await vi.advanceTimersByTimeAsync(30_000);
 
     await expect(pending).resolves.toMatchObject({
       details: {
@@ -326,7 +326,7 @@ describe("memory_get corpus outcomes", () => {
           {
             corpus: "wiki",
             outcome: "unavailable",
-            error: "memory_get timed out after 15s",
+            error: "memory_get timed out after 30s",
           },
         ],
       },

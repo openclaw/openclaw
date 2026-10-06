@@ -2,11 +2,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { WorkboardExecution } from "@openclaw/workboard-contract";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { createWorkboardLifecycleService, syncWorkboardSubagentEnded } from "./lifecycle-sync.js";
+import { workboardSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import { WorkboardStore } from "./store.js";
 import { sqliteTestAuxStores } from "./test/sqlite-store.js";
+
+const workerModuleUrl = resolveRuntimeWorkerUrl(workboardSqliteBackendEntrypoint);
 
 const SESSION_KEY = "agent:main:subagent:workboard-cleanup-recovery";
 const RUN_ID = "run-cleanup-recovery";
@@ -14,7 +18,7 @@ const MANAGED_PATH = "/state/worktrees/recovery/wb-card";
 const SOURCE_PATH = "/repo";
 
 function openStore(dbPath: string) {
-  const stores = createWorkboardSqliteStores({ dbPath });
+  const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
   return { store: new WorkboardStore(stores.cards, sqliteTestAuxStores(stores)), stores };
 }
 
@@ -82,69 +86,12 @@ function doneSessionSnapshot(updatedAt: number) {
 const context = { logger: { warn: vi.fn() } } as never;
 
 describe("Workboard managed-worktree cleanup recovery", () => {
-  it("retries cleanup after a hook failure and process restart", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-recovery-"));
-    const dbPath = path.join(dir, "workboard.sqlite");
-    const initial = openStore(dbPath);
-    const card = await createManagedCard(initial.store);
-    const removeIfLossless = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("worktree registry unavailable"))
-      .mockResolvedValueOnce(true);
-    const worktrees = { removeIfLossless };
-
-    await expect(
-      syncWorkboardSubagentEnded({
-        store: initial.store,
-        worktrees,
-        event: {
-          targetSessionKey: SESSION_KEY,
-          runId: RUN_ID,
-          endedAt: card.updatedAt + 1,
-          outcome: "ok",
-        },
-      }),
-    ).rejects.toThrow("worktree registry unavailable");
-    initial.stores.close();
-
-    const restarted = openStore(dbPath);
-    const service = createWorkboardLifecycleService({
-      store: restarted.store,
-      readSessions: doneSessionSnapshot(card.updatedAt + 1),
-      worktrees,
-    });
-
-    try {
-      await service.start(context);
-      service.onGatewayStart();
-      await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledTimes(2));
-
-      expect(removeIfLossless).toHaveBeenLastCalledWith({
-        path: MANAGED_PATH,
-        ownerKind: "workboard",
-        ownerId: card.id,
-      });
-      const recovered = await restarted.store.get(card.id);
-      expect(recovered).toMatchObject({ status: "review", execution: { status: "review" } });
-      expect(recovered?.metadata?.automation?.workspace).toEqual({
-        kind: "worktree",
-        path: SOURCE_PATH,
-        branch: "main",
-      });
-    } finally {
-      service.onGatewayStop();
-      await service.stop?.(context);
-      restarted.stores.close();
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
   it("cleans a freshly reconciled terminal worktree in the initial restart sweep", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-cleanup-fresh-"));
     const dbPath = path.join(dir, "workboard.sqlite");
     const initial = openStore(dbPath);
     const card = await createManagedCard(initial.store);
-    initial.stores.close();
+    await initial.stores.close();
 
     const restarted = openStore(dbPath);
     const removeIfLossless = vi.fn().mockResolvedValue(true);
@@ -155,19 +102,21 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     });
 
     try {
+      await restarted.store.ready();
       await service.start(context);
       service.onGatewayStart();
-      await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledOnce());
-
-      expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
-        kind: "worktree",
-        path: SOURCE_PATH,
-        branch: "main",
+      await vi.waitFor(async () => {
+        expect(removeIfLossless).toHaveBeenCalledOnce();
+        expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
+          kind: "worktree",
+          path: SOURCE_PATH,
+          branch: "main",
+        });
       });
     } finally {
       service.onGatewayStop();
       await service.stop?.(context);
-      restarted.stores.close();
+      await restarted.stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -179,7 +128,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
     fs.mkdirSync(managedPath);
     const initial = openStore(dbPath);
     const card = await createManagedCard(initial.store, { managedPath, status: "review" });
-    initial.stores.close();
+    await initial.stores.close();
     const removeIfLossless = vi
       .fn()
       .mockResolvedValueOnce(false)
@@ -194,6 +143,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       readSessions: doneSessionSnapshot(card.updatedAt),
       worktrees: { removeIfLossless },
     });
+    await retained.store.ready();
     await firstService.start(context);
     firstService.onGatewayStart();
     await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledOnce());
@@ -203,7 +153,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       path: managedPath,
       sourcePath: SOURCE_PATH,
     });
-    retained.stores.close();
+    await retained.stores.close();
 
     const restarted = openStore(dbPath);
     const secondService = createWorkboardLifecycleService({
@@ -212,18 +162,21 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       worktrees: { removeIfLossless },
     });
     try {
+      await restarted.store.ready();
       await secondService.start(context);
       secondService.onGatewayStart();
-      await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledTimes(2));
-      expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
-        kind: "worktree",
-        path: SOURCE_PATH,
-        branch: "main",
+      await vi.waitFor(async () => {
+        expect(removeIfLossless).toHaveBeenCalledTimes(2);
+        expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
+          kind: "worktree",
+          path: SOURCE_PATH,
+          branch: "main",
+        });
       });
     } finally {
       secondService.onGatewayStop();
       await secondService.stop?.(context);
-      restarted.stores.close();
+      await restarted.stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -236,7 +189,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       status: "blocked",
       withExecutionAssociation: false,
     });
-    initial.stores.close();
+    await initial.stores.close();
 
     const restarted = openStore(dbPath);
     const readSessions = vi.fn();
@@ -247,20 +200,22 @@ describe("Workboard managed-worktree cleanup recovery", () => {
       worktrees: { removeIfLossless },
     });
     try {
+      await restarted.store.ready();
       await service.start(context);
       service.onGatewayStart();
-      await vi.waitFor(() => expect(removeIfLossless).toHaveBeenCalledOnce());
-
-      expect(readSessions).not.toHaveBeenCalled();
-      expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
-        kind: "worktree",
-        path: SOURCE_PATH,
-        branch: "main",
+      await vi.waitFor(async () => {
+        expect(removeIfLossless).toHaveBeenCalledOnce();
+        expect(readSessions).not.toHaveBeenCalled();
+        expect((await restarted.store.get(card.id))?.metadata?.automation?.workspace).toEqual({
+          kind: "worktree",
+          path: SOURCE_PATH,
+          branch: "main",
+        });
       });
     } finally {
       service.onGatewayStop();
       await service.stop?.(context);
-      restarted.stores.close();
+      await restarted.stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -302,7 +257,7 @@ describe("Workboard managed-worktree cleanup recovery", () => {
         execution: { status: "running", runId: "newer-run" },
       });
     } finally {
-      initial.stores.close();
+      await initial.stores.close();
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

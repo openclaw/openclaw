@@ -111,6 +111,7 @@ describe("runIsolatedCompletion native authorization", () => {
         );
         expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
           expect.objectContaining({ profileId: "openai:key" }),
+          expect.any(Function),
         );
       } else {
         await expect(pending).rejects.toMatchObject({
@@ -411,26 +412,59 @@ describe("runIsolatedCompletion native authorization", () => {
     );
   });
 
-  it("uses host authorization for V2 API-key routes", async () => {
-    const plan = {
-      ...nativeAuthPlan,
-      modelRoute: { authRequirement: "api-key" as const },
-    };
-    mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
-      plan,
-      attempts: [{ kind: "implicit", plan }],
+  it.each([
+    {
+      mode: "api-key",
+      owner: "host",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    },
+    {
+      mode: "subscription",
+      owner: "harness",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    },
+  ] as const)("dispatches the real prepared $mode route to $owner authorization", async (route) => {
+    const { prepareAgentRuntimeAuth } = await vi.importActual<
+      typeof import("../runtime-plan/prepare-auth.js")
+    >("../runtime-plan/prepare-auth.js");
+    mocks.prepareAgentRuntimeAuth.mockImplementation((params) =>
+      prepareAgentRuntimeAuth({ ...params, env: {} }),
+    );
+    const profileId = "openai:utility";
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        [profileId]:
+          route.mode === "api-key"
+            ? { type: "api_key", provider: "openai", key: "synthetic-api-key" }
+            : {
+                type: "oauth",
+                provider: "openai",
+                access: "synthetic-access",
+                refresh: "synthetic-refresh",
+                expires: Date.now() + 60_000,
+              },
+      },
+    });
+    mocks.resolveModelAsync.mockResolvedValue({
+      model: { provider: "openai", id: "gpt-5.5", api: route.api, baseUrl: route.baseUrl },
     });
     const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "key result" }]),
+      assistant: isolatedAssistant([{ type: "text", text: "prepared route result" }]),
     }));
-    registerIsolatedHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
 
     const parent = new AsyncWorkScope();
     try {
-      await parent.run(() => runIsolatedCompletion(isolatedRequest()));
+      await parent.run(() =>
+        runIsolatedCompletion({
+          ...isolatedRequest(),
+          model: "gpt-5.5",
+          authProfileId: profileId,
+        }),
+      );
     } finally {
       await AsyncWorkScope.runWhenAllIdle(
         () => [parent],
@@ -438,14 +472,16 @@ describe("runIsolatedCompletion native authorization", () => {
       );
     }
 
-    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
-      expect.objectContaining({ preparedModelRuntime, workspaceDir: "/tmp/workspace" }),
+    expect(mocks.prepareAgentRuntimeAuth.mock.results[0]?.value.plan.modelRoute).toMatchObject({
+      authRequirement: route.mode,
+    });
+    expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledTimes(
+      route.owner === "host" ? 1 : 0,
     );
     expect(mocks.acquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
     expect(runIsolatedCompletionV2).toHaveBeenCalledWith(
-      expect.objectContaining({ authorization: expect.objectContaining({ owner: "host" }) }),
+      expect.objectContaining({ authorization: expect.objectContaining({ owner: route.owner }) }),
     );
   });
 });

@@ -24,6 +24,8 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 - Text-only cron/heartbeat announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
 - A send response without a Discord message ID stays unconfirmed. Queued delivery records the missing identity for recovery instead of reporting success or immediately sending a duplicate; inspect delivery warnings with `openclaw health --verbose`.
 
+Messages in the same channel continue reaching the [reply queue](/concepts/queue) while an earlier message waits for its turn. The queue mode decides whether to steer the active run, collect messages, or schedule a follow-up. Deferring a message preserves its durable recovery state.
+
 ## Message behavior
 
 <AccordionGroup>
@@ -49,7 +51,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
     - `all`: attaches it to every outbound message
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
-    Message IDs are surfaced in context/history so agents can target specific messages.
+    Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
     Chunked persona delivery receipts retain the reply target selected for each chunk.
 
   </Accordion>
@@ -97,7 +99,7 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
     - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
     - `progress` keeps one editable status draft until final delivery. By default it is quiet: the agent's latest preamble or narration as a status headline, 💬 commentary and 🧠 reasoning when they stream, ✅ / ▸ / ▢ plan steps, and any approval request or failed command. Ordinary tool calls do not add rows.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.progress.toolProgress: true` adds the rolling tool log underneath the headline: rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` (default `false`). `streaming.preview.toolProgress` controls tool rows in `partial` and `block` modes, where they default to `true`.
+    - `streaming.progress.toolProgress: true` adds the rolling tool log underneath the headline: rows such as `Bash: run tests` or `Web Search: for "query"` (default `false`). `streaming.preview.toolProgress` controls tool rows in `partial` and `block` modes, where they default to `true`.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
     - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `status` (default, tool label only) or `raw` (explicit command text).

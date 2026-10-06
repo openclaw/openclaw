@@ -1,42 +1,24 @@
-/**
- * Browser form field normalization.
- *
- * Converts model/client fill field payloads into the compact field shape used
- * by Playwright and Chrome MCP fill actions.
- */
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserFormField } from "./client-actions.types.js";
 
-/** Default field type for fill actions when no type is provided. */
 export const DEFAULT_FILL_FIELD_TYPE = "text";
 
-/** Keys accepted in one fill field entry. */
 const FIELD_ENTRY_KEYS = new Set(["ref", "type", "value"]);
 
 type BrowserFormFieldValue = NonNullable<BrowserFormField["value"]>;
 
-function normalizeBrowserFormFieldRef(value: unknown): string {
-  return normalizeOptionalString(value) ?? "";
-}
-
-function normalizeBrowserFormFieldType(value: unknown): string {
-  const type = normalizeOptionalString(value) ?? "";
-  return type || DEFAULT_FILL_FIELD_TYPE;
-}
-
-/** Normalize a form field value to the types accepted by fill actions. */
-export function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
+function normalizeBrowserFormFieldValue(value: unknown): BrowserFormFieldValue | undefined {
   return typeof value === "string" || typeof value === "number" || typeof value === "boolean"
     ? value
     : undefined;
 }
 
-export function normalizeBrowserFormField(
+function normalizeBrowserFormField(
   record: Record<string, unknown>,
   index: number,
 ): BrowserFormField {
   const prefix = `fields[${index}]`;
-  const ref = normalizeBrowserFormFieldRef(record.ref);
+  const ref = normalizeOptionalString(record.ref);
   if (!ref) {
     throw new Error(`${prefix} must include ref`);
   }
@@ -47,7 +29,7 @@ export function normalizeBrowserFormField(
       );
     }
   }
-  const type = normalizeBrowserFormFieldType(record.type);
+  const type = normalizeOptionalString(record.type) ?? DEFAULT_FILL_FIELD_TYPE;
   if (record.value === undefined || record.value === null) {
     return { ref, type };
   }

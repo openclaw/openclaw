@@ -2,14 +2,16 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayEventListener } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { createContext, createSessionsHarness } from "../../test-helpers/app-sidebar.ts";
+import { createContext } from "../../test-helpers/app-sidebar.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { filterSessionRows } from "../sessions/navigation.ts";
+import { createTestSessionCapability } from "../sessions/session-capability.test-support.ts";
 import { rosterActivityStore } from "./roster-activity-store.ts";
 
 function result(preview: string, hasMore = false): SessionsListResult {
@@ -23,16 +25,28 @@ function result(preview: string, hasMore = false): SessionsListResult {
   };
 }
 
-function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
+function createStore(
+  load: (params: unknown) => Promise<SessionsListResult>,
+  subscribe = async () => ({ subscribed: true }),
+) {
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "sessions.subscribe") {
-      return { subscribed: true };
+      return subscribe();
+    }
+    if (method === "sessions.groups.list") {
+      return { names: [], sectionOrder: [] };
     }
     if (method === "sessions.list") {
-      return load(params);
+      return (params as { archived?: string })?.archived === "all"
+        ? load(params)
+        : { ...result(""), sessions: [], count: 0 };
     }
     throw new Error(`Unexpected RPC: ${method}`);
   });
+  return createStoreForRequest(request);
+}
+
+function createStoreForRequest(request: ReturnType<typeof createGatewayRequestMock>) {
   const source = createApplicationGateway({
     client: createTestGatewayClient(request),
     phase: "connected",
@@ -44,12 +58,8 @@ function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
     lastError: null,
     lastErrorCode: null,
   });
-  const listeners = new Set<GatewayEventListener>();
-  source.gateway.subscribeEvents = (listener) => {
-    listeners.add(listener);
-    return () => listeners.delete(listener);
-  };
-  const context = createContext(source.gateway, createSessionsHarness("main", []).sessions, {
+  const sessions = createTestSessionCapability(source.gateway);
+  const context = createContext(source.gateway, sessions, {
     agents: [{ id: "main" }, { id: "ember" }],
     defaultId: "main",
     mainKey: "main",
@@ -59,15 +69,273 @@ function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
     store: rosterActivityStore(context),
     context,
     request,
-    emit: (event: Parameters<GatewayEventListener>[0]) => {
-      for (const listener of listeners) {
-        listener(event);
-      }
-    },
+    source,
+    sessions,
+    emit: source.publishEvent,
   };
 }
 
 describe("roster activity lifecycle", () => {
+  it("publishes committed archive and restore receipts without events", async () => {
+    vi.useFakeTimers();
+    const key = "agent:ember:receipt-only";
+    let row: GatewaySessionRow = {
+      key,
+      sessionId: "receipt-only-session",
+      kind: "direct",
+      archived: false,
+      updatedAt: 1,
+    };
+    const request = createGatewayRequestMock(async (method, params) => {
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      if (method === "sessions.groups.list") {
+        return { names: [], sectionOrder: [] };
+      }
+      if (method === "sessions.list") {
+        return { ...result(""), sessions: [row] };
+      }
+      if (method === "sessions.patch") {
+        const archived = (params as { archived: boolean }).archived;
+        row = { ...row, archived, updatedAt: row.updatedAt! + 1 };
+        return {
+          ok: true,
+          key,
+          path: "",
+          entry: {
+            sessionId: row.sessionId,
+            updatedAt: row.updatedAt,
+            ...(archived ? { archivedAt: row.updatedAt } : {}),
+          },
+        };
+      }
+      throw new Error(`Unexpected RPC: ${method}`);
+    });
+    const { store, sessions } = createStoreForRequest(request);
+    const detach = store.subscribe(() => {});
+    try {
+      await store.refresh();
+      expect(store.snapshot.result?.sessions[0]?.archived).toBe(false);
+      const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
+      for (const archived of [true, false]) {
+        await sessions.patch(
+          key,
+          { archived },
+          { agentId: "ember", expectedSessionId: row.sessionId, deferListRefresh: true },
+        );
+        // The second operation is Undo. No event or list read may supply either receipt.
+        expect(store.snapshot.result?.sessions[0]?.archived).toBe(archived);
+        expect(
+          filterSessionRows(store.snapshot.result!, { archivedFilter: "all" }).sessions,
+        ).toHaveLength(1);
+        expect(
+          filterSessionRows(store.snapshot.result!, { archivedFilter: "archived" }).sessions,
+        ).toHaveLength(archived ? 1 : 0);
+        expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+          listReads,
+        );
+      }
+    } finally {
+      detach();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+  it.each(["sessions.changed", "session.message"])(
+    "patches a paged tree window through %s without rereading it",
+    async (event) => {
+      vi.useFakeTimers();
+      const rows: GatewaySessionRow[] = Array.from({ length: 300 }, (_, index) => ({
+        key: `agent:main:row-${index}`,
+        sessionId: `session-${index}`,
+        kind: "direct",
+        updatedAt: 300 - index,
+        ...(index === 0 ? { pinned: true, pinnedAt: 1 } : {}),
+      }));
+      const parent = { ...rows[1]!, childSessions: ["agent:main:subagent:child"] };
+      const child = {
+        ...rows[200]!,
+        key: parent.childSessions[0]!,
+        spawnedBy: parent.key,
+        parentSessionKey: parent.key,
+      };
+      rows[1] = parent;
+      rows[200] = child;
+      const load = vi.fn(async (params: unknown) => {
+        const limit = Number(Reflect.get(params as object, "limit"));
+        const offset = Number(Reflect.get(params as object, "offset") ?? 0);
+        expect(limit).toBe(100);
+        return {
+          ...result(""),
+          sessions: rows.slice(offset, offset + limit),
+          count: limit,
+          totalCount: 400,
+          hasMore: true,
+          nextOffset: offset + limit,
+        };
+      });
+      const { store, emit } = createStore(load);
+      const detach = store.subscribe(() => {});
+      try {
+        await vi.advanceTimersByTimeAsync(0);
+        expect(load).toHaveBeenCalledTimes(3);
+        for (const terminal of [false, true]) {
+          const status = terminal ? "done" : "running";
+          const nextChild = {
+            ...child,
+            updatedAt: terminal ? 700 : 600,
+            hasActiveRun: !terminal,
+            status,
+          };
+          const nextParent = {
+            ...parent,
+            swarm: {
+              groups: [
+                {
+                  groupId: "fixture-swarm",
+                  createdAt: 1,
+                  children: [{ sessionKey: child.key, status }],
+                  queued: 0,
+                  running: terminal ? 0 : 1,
+                  done: terminal ? 1 : 0,
+                  failed: 0,
+                },
+              ],
+              otherActiveGroups: 0,
+            },
+          };
+          emit({
+            type: "event",
+            event,
+            payload: {
+              sessionKey: child.key,
+              ...(event === "sessions.changed" ? { reason: "patch" } : {}),
+              session: nextChild,
+              ancestorSessions: [nextParent],
+            },
+          });
+          expect(store.snapshot.result?.sessions[0]).toEqual(rows[0]);
+          expect(store.snapshot.result?.sessions[1]).toEqual(nextChild);
+          expect(store.snapshot.result?.sessions.find((row) => row.key === parent.key)).toEqual(
+            nextParent,
+          );
+          await vi.advanceTimersByTimeAsync(20_000);
+          expect(load).toHaveBeenCalledTimes(3);
+        }
+      } finally {
+        detach();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    "groups",
+    "stores",
+    "catalogChanged",
+    "unpin",
+    "archive",
+    "restore",
+    "older",
+    "involvingMe",
+  ])("coalesces uncertain %s membership into one authoritative window refresh", async (change) => {
+    vi.useFakeTimers();
+    const row: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "held",
+      updatedAt: 10,
+      ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
+      ...(change === "restore" ? { archived: true } : {}),
+    };
+    const next = {
+      ...row,
+      updatedAt: change === "older" ? 5 : 20,
+      ...(change === "archive" ? { archived: true } : {}),
+      ...(change === "restore" ? { archived: false } : {}),
+      ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+    };
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result(""), sessions: [row] })
+      .mockResolvedValue({ ...result(""), sessions: [next] });
+    const { store, emit } = createStore(load);
+    store.setInvolvingMe(change === "involvingMe");
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledWith(
+        expect.objectContaining({
+          excludeDock: true,
+          ...(change === "involvingMe" ? { involvingMe: true } : {}),
+        }),
+      );
+      const payload = ["groups", "stores"].includes(change)
+        ? { reason: change }
+        : {
+            reason: "patch",
+            sessionKey: next.key,
+            session: next,
+            ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
+          };
+      for (let index = 0; index < 10; index += 1) {
+        emit({ type: "event", event: "sessions.changed", payload });
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.snapshot.result?.sessions).toEqual([next]);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an in-flight window replace a newer broadcast row", async () => {
+    vi.useFakeTimers();
+    const row: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "held",
+      updatedAt: 1,
+    };
+    const updated = { ...row, updatedAt: 2, lastMessagePreview: "Current" };
+    const stale = createDeferred<SessionsListResult>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result(""), sessions: [row] })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue({ ...result(""), sessions: [updated] });
+    const { store, emit } = createStore(load);
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const refresh = store.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          reason: "patch",
+          sessionKey: row.key,
+          session: updated,
+        },
+      });
+      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+      await vi.advanceTimersByTimeAsync(200);
+      stale.resolve({ ...result("Stale"), sessions: [row] });
+      await refresh;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+      expect(store.snapshot.loading).toBe(false);
+    } finally {
+      stale.resolve(result(""));
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([false, true])(
     "does not admit unknown active events into the shared window (involvingMe=%s)",
     async (involvingMe) => {
@@ -126,6 +394,79 @@ describe("roster activity lifecycle", () => {
     }
   });
 
+  it("shows canonical observer failure and recovery independently of primary errors", async () => {
+    vi.useFakeTimers();
+    const firstSubscription = createDeferred<{ subscribed: boolean }>();
+    const recoveryList = createDeferred<SessionsListResult>();
+    const subscribe = vi
+      .fn()
+      .mockReturnValueOnce(firstSubscription.promise)
+      .mockResolvedValue({ subscribed: true });
+    const { store, sessions, source, request } = createStore(
+      async () => result("Usable roster"),
+      subscribe,
+    );
+    const notify = vi.fn();
+    const detach = store.subscribe(notify);
+    const operationError = "Another agent's primary list failed";
+    try {
+      source.publish(source.gateway.snapshot);
+      await vi.advanceTimersByTimeAsync(0);
+      const previous = store.snapshot.result;
+      expect(previous?.sessions[0]?.lastMessagePreview).toBe("Usable roster");
+      request.mockRejectedValueOnce(new Error(operationError));
+      await sessions.refresh({ agentId: "ember", force: true });
+      expect(sessions.state.error).toBe(operationError);
+      notify.mockClear();
+      firstSubscription.reject(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Session updates unavailable",
+          retryable: true,
+          retryAfterMs: 100,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBe(
+        "Session updates unavailable",
+      );
+      expect(notify).toHaveBeenCalled();
+      expect(store.snapshot.result).toBe(previous);
+      expect(subscribe).toHaveBeenCalledTimes(1);
+
+      // An unrelated failed read must neither replace nor hide the observer outage.
+      request.mockRejectedValueOnce(new Error(operationError));
+      await sessions.refresh({ agentId: "ember", force: true });
+      expect(sessions.state.error).toBe(operationError);
+      expect(store.snapshot.error).toBeNull();
+      expect(store.snapshot.subscriptionError).toBe("Session updates unavailable");
+      request.mockImplementationOnce(async (method) => {
+        expect(method).toBe("sessions.subscribe");
+        request.mockReturnValueOnce(recoveryList.promise);
+        return subscribe();
+      });
+      notify.mockClear();
+      await vi.advanceTimersByTimeAsync(100);
+      // Recovery is visible before any gap-closing list response can publish.
+      expect(subscribe).toHaveBeenCalledTimes(2);
+      expect(sessions.state.error).toBe(operationError);
+      expect(store.snapshot.subscriptionError).toBeNull();
+      expect(notify).toHaveBeenCalled();
+      expect(store.snapshot.result).toBe(previous);
+      recoveryList.resolve({ ...result(""), sessions: [], count: 0 });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(store.snapshot.error ?? store.snapshot.subscriptionError).toBeNull();
+      expect(store.snapshot.cards[0]?.preview).toBe("Usable roster");
+      expect(subscribe).toHaveBeenCalledTimes(2);
+    } finally {
+      firstSubscription.resolve({ subscribed: true });
+      recoveryList.resolve(result(""));
+      detach();
+      sessions.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("follows agent and identity changes without a session event or a second activity load", async () => {
     const load = vi.fn(async () => result("Existing activity"));
     const { store, context } = createStore(load);
@@ -169,6 +510,7 @@ describe("roster activity lifecycle", () => {
   });
 
   it("shares cross-agent rows and reconciles activity, unread, and new membership", async () => {
+    vi.useFakeTimers();
     let rows: GatewaySessionRow[] = [
       { key: "agent:main:pinned", kind: "direct", pinned: true, updatedAt: 1 },
       { key: "agent:ember:task", kind: "direct", updatedAt: 2 },
@@ -206,121 +548,51 @@ describe("roster activity lifecycle", () => {
           hasActiveRun: false,
         },
       );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(load).toHaveBeenCalledTimes(1);
       rows = [...rows, { key: "agent:main:new", kind: "direct", updatedAt: 6 }];
       emit({ type: "event", event: "sessions.changed", payload: { session: rows[3] } });
-      await vi.waitFor(() => expect(store.snapshot.result?.sessions).toHaveLength(4));
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(store.snapshot.result?.sessions).toHaveLength(4);
       expect(load).toHaveBeenCalledTimes(2);
     } finally {
       detach();
       detachSecond();
+      vi.useRealTimers();
     }
   });
 
-  it("loads involvement across all agents once and retires an older query response", async () => {
+  it("retires an old window when the client changes without publishing its late result", async () => {
+    vi.useFakeTimers();
     const stale = createDeferred<SessionsListResult>();
-    const scoped = { ...result("Only my session"), owners: [] };
-    const load = vi.fn().mockReturnValueOnce(stale.promise).mockResolvedValue(scoped);
-    const { store, request } = createStore(load);
-    const detach = store.subscribe(() => {});
+    const load = vi
+      .fn()
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue(result("Current activity"));
+    const { store, source, request } = createStore(load);
+    const notify = vi.fn();
+    const detach = store.subscribe(notify);
     try {
-      await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
-      store.setInvolvingMe(true);
-      store.setInvolvingMe(true);
-      expect(store.snapshot.result).toBeNull();
-      expect(store.snapshot.involvingMe).toBe(true);
-      await vi.waitFor(() => expect(store.snapshot.result).toEqual(scoped));
-      stale.resolve(result("Wrong query"));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(1);
+      source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
+      const refreshed = store.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      await refreshed;
+      expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
+      const reads = load.mock.calls.length;
+      expect(reads).toBe(2);
+      notify.mockClear();
+      stale.resolve(result("Retired activity", true));
       await stale.promise;
-      expect(store.snapshot.result).toEqual(scoped);
-      expect(load).toHaveBeenCalledTimes(2);
-      expect(request).toHaveBeenLastCalledWith(
-        "sessions.list",
-        expect.objectContaining({ archived: "all", involvingMe: true, limit: 100 }),
-        expect.anything(),
-      );
-      expect(request.mock.calls.filter(([method]) => method === "sessions.subscribe")).toHaveLength(
-        1,
-      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(reads);
+      expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
+      expect(notify).not.toHaveBeenCalled();
     } finally {
+      stale.resolve(result("Retired activity"));
       detach();
+      vi.useRealTimers();
     }
   });
-
-  it.each(["reconnect", "replace client", "detach"] as const)(
-    "retires in-flight pagination on %s and loads a fresh snapshot on return",
-    async (transition) => {
-      const stale = createDeferred<SessionsListResult>();
-      const list = vi
-        .fn()
-        .mockImplementationOnce(() => stale.promise)
-        .mockResolvedValue(result("Current activity"));
-      const request = createGatewayRequestMock(async (method) => {
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method === "sessions.list") {
-          return list();
-        }
-        throw new Error(`Unexpected RPC: ${method}`);
-      });
-      const client = createTestGatewayClient(request);
-      const source = createApplicationGateway({
-        client,
-        phase: "connected",
-        hello: null,
-        offlineStable: false,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: "main",
-        sessionKey: "agent:main:main",
-        lastError: null,
-        lastErrorCode: null,
-      });
-      const stopEvents = vi.fn();
-      source.gateway.subscribeEvents = vi.fn(() => stopEvents);
-      const context = createContext(source.gateway, createSessionsHarness("main", []).sessions, {
-        agents: [{ id: "main" }],
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-      });
-      const store = rosterActivityStore(context);
-      const notify = vi.fn();
-      let detach = store.subscribe(notify);
-      try {
-        await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
-        if (transition === "detach") {
-          detach();
-          expect(stopEvents).toHaveBeenCalledTimes(1);
-          expect(store.snapshot.cards).toEqual([]);
-          detach = store.subscribe(notify);
-        } else if (transition === "reconnect") {
-          source.publish({ ...source.gateway.snapshot, phase: "reconnecting" });
-          expect(store.snapshot.cards).toEqual([]);
-          source.publish({ ...source.gateway.snapshot, phase: "connected" });
-        } else {
-          source.publish({ ...source.gateway.snapshot, client: createTestGatewayClient(request) });
-        }
-        await vi.waitFor(() => expect(store.snapshot.cards[0]?.preview).toBe("Current activity"));
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.subscribe"),
-        ).toHaveLength(2);
-        notify.mockClear();
-        // Even a transport that resolves after abort must not publish or fetch another page.
-        stale.resolve(result("Retired activity", true));
-        await stale.promise;
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 0);
-        });
-        expect(list).toHaveBeenCalledTimes(2);
-        expect(store.snapshot.cards[0]?.preview).toBe("Current activity");
-        expect(notify).not.toHaveBeenCalled();
-      } finally {
-        detach();
-      }
-    },
-  );
 });

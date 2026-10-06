@@ -1,4 +1,3 @@
-// Health check types define doctor checks, results, and repair metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -37,6 +36,7 @@ export interface HealthFinding {
   readonly severity: HealthFindingSeverity;
   readonly message: string;
   readonly source?: string;
+  readonly errorCode?: string;
   readonly path?: string;
   readonly line?: number;
   readonly column?: number;

@@ -17,8 +17,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    timeout_minutes: 45,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {
@@ -30,12 +36,6 @@ const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "package-update-migrations",
     label: "package/update migrations",
-    timeout_minutes: 60,
-    profiles: "beta minimum stable full",
-  },
-  {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
     timeout_minutes: 60,
     profiles: "beta minimum stable full",
   },
@@ -132,6 +132,11 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "OpenCode",
     providers: "opencode-go",
+    // The release workspace does not enable Global regions, so the default high-signal
+    // selection includes DeepSeek routes that reject every request. Keep this list aligned
+    // with models proven reachable from the release workspace.
+    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "3",
     profiles: "full",
   },
   {
@@ -179,12 +184,11 @@ const LIVE_DOCKER_SUITES = [
   {
     suite_id: "live-gateway-anthropic-docker-full",
     suite_group: "live-gateway-anthropic-docker",
-    label: "Docker live gateway Anthropic (full advisory)",
+    label: "Docker live gateway Anthropic (full)",
     command:
       'OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
@@ -203,39 +207,39 @@ const LIVE_DOCKER_SUITES = [
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M3,minimax-portal/MiniMax-M3 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    profiles: "stable full",
+    // Waived from stable for 2026.9.7: MiniMax-M3 intermittently misses the Code Mode
+    // tool-read probe (model behavior, not a tool-result regression). Evidence: FRV
+    // 36534008742, job 109300784027. Restore "stable full" when #161072 is fixed.
+    profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-deepseek-fireworks",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory DeepSeek/Fireworks",
+    label: "Docker live gateway DeepSeek/Fireworks",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-opencode-openrouter",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory OpenCode/OpenRouter",
+    label: "Docker live gateway OpenCode/OpenRouter",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
     suite_id: "live-gateway-advisory-docker-xai-zai",
     suite_group: "live-gateway-advisory-docker",
-    label: "Docker live gateway advisory xAI/Z.ai",
+    label: "Docker live gateway xAI/Z.ai",
     command:
       'OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
-    advisory: true,
     profiles: "full",
   },
   {
@@ -270,6 +274,16 @@ const LIVE_DOCKER_SUITES = [
     label: "Docker live Codex harness",
     command:
       'OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+    timeout_minutes: 40,
+    profile_env_only: false,
+    profiles: "stable full",
+  },
+  {
+    suite_id: "live-codex-harness-gpt56-sol-docker",
+    suite_group: "live-codex-harness-gpt56-docker",
+    label: "Docker live Codex GPT-5.6 Sol Ultra",
+    command:
+      'OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=openai/gpt-5.6-sol=ultra OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     timeout_minutes: 40,
     profile_env_only: false,
     profiles: "stable full",
@@ -431,7 +445,6 @@ export function createReleaseSourceSelection(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const includeOpenWebUI = isEnabled(options.includeOpenWebUI);
   const prepareOnly = isEnabled(options.prepareOnly);
-  const consumers = [];
   const codexSuites = [];
   const docker = [];
   const baseline = options.upgradeSurvivorBaseline ?? "";
@@ -486,14 +499,11 @@ export function createReleaseSourceSelection(options = {}) {
       if (row.suite_id.startsWith("live-codex-harness")) {
         codexSuites.push(row.suite_id);
       }
-      if (row.suite_id.startsWith("live-gateway-") || row.suite_id.startsWith("live-cli-")) {
-        consumers.push("live-cli-backend");
-      }
     }
   }
   return {
     docker,
-    consumers: [...new Set(consumers)],
+    consumers: [],
     codexSuites,
     fsSafeNative: prepareOnly || docker.length > 0,
     preparationLanes,

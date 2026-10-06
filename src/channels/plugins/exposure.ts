@@ -1,8 +1,3 @@
-/**
- * Channel exposure helpers.
- *
- * Resolves whether channel metadata should appear in configured, setup, and docs views.
- */
 import type { ChannelMeta } from "./types.core.js";
 
 /**

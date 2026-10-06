@@ -1,10 +1,9 @@
 import {
   classifyAgentHarnessTerminalOutcome,
+  type AgentMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-  type HeartbeatToolResponse,
-  type MessagingToolSend,
-  type MessagingToolSourceReplyPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { resolveCodexTtsProvenanceTransfer } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { attemptTerminal, type EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAssistantProjection } from "./event-projector-assistant.js";
@@ -19,26 +18,28 @@ import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
+import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search-evidence.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexTurn } from "./protocol.js";
 import { CodexTranscriptCheckpoint } from "./transcript-checkpoint.js";
 
-export type CodexAppServerToolTelemetry = {
-  didSendViaMessagingTool: boolean;
-  didDeliverSourceReplyViaMessageTool?: boolean;
-  sourceReplyDelivered?: true;
-  messagingToolSentTexts: string[];
-  messagingToolSentMediaUrls: string[];
-  messagingToolSentTargets: MessagingToolSend[];
-  messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  toolMediaUrls?: string[];
-  toolAutoDeliveryMediaUrls?: string[];
-  coreTtsToolResults?: object[];
-  toolAudioAsVoice?: boolean;
-  successfulCronAdds?: number;
-} & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
+export type CodexAppServerToolTelemetry = Partial<
+  Omit<AgentHarnessToolResultTelemetry, "confirmedMediaDeliveries">
+> &
+  Pick<
+    AgentHarnessToolResultTelemetry,
+    | "didSendViaMessagingTool"
+    | "messagingToolSentTexts"
+    | "messagingToolSentMediaUrls"
+    | "messagingToolSentTargets"
+  > & {
+    didDeliverSourceReplyViaMessageTool?: boolean;
+    sourceReplyDelivered?: true;
+    confirmedMediaDeliveries?: Readonly<
+      AgentHarnessToolResultTelemetry["confirmedMediaDeliveries"]
+    >;
+  } & Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">;
 
 /** Owns per-turn projection state and builds results from the same state. */
 export abstract class CodexTurnProjection {
@@ -47,6 +48,7 @@ export abstract class CodexTurnProjection {
   protected readonly assistantProjection: CodexAssistantProjection;
   protected readonly reasoningProjection: CodexReasoningProjection;
   readonly settlement: CodexProjectionSettlement;
+  protected readonly observedItemIds = new Set<string>();
   protected readonly activeItemIds = new Set<string>();
   protected readonly completedItemIds = new Set<string>();
   protected readonly activeCompactionItemIds = new Set<string>();
@@ -55,6 +57,7 @@ export abstract class CodexTurnProjection {
   protected readonly eventProjection: CodexEventProjection;
   protected readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   protected readonly toolProgressProjection: CodexToolProgressProjection;
+  protected readonly toolSearchEvidenceProjection: CodexToolSearchEvidenceProjection | undefined;
   protected readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   protected completedTurn: CodexTurn | undefined;
   protected readonly projectionController = new AbortController();
@@ -67,7 +70,6 @@ export abstract class CodexTurnProjection {
   protected contextTokensSource: "runtime" | "runtime-configured" | "resolved" | undefined;
   protected readonly usageProjection = new CodexUsageProjection();
   protected completedCompactionCount = 0;
-  protected pendingSteeringAssistantBoundaryItemId: string | undefined;
 
   constructor(
     protected readonly params: EmbeddedRunAttemptParams,
@@ -116,6 +118,10 @@ export abstract class CodexTurnProjection {
         checkpointMessage: this.transcriptCheckpoint.enqueue,
       },
     );
+    this.toolSearchEvidenceProjection =
+      options.trajectoryRecorder && process.env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        ? new CodexToolSearchEvidenceProjection(options.trajectoryRecorder, threadId, turnId)
+        : undefined;
     this.eventProjection = new CodexEventProjection(
       params.provider,
       threadId,
@@ -145,7 +151,11 @@ export abstract class CodexTurnProjection {
 
   buildResult(
     toolTelemetry: CodexAppServerToolTelemetry,
-    options?: { yieldDetected?: boolean },
+    options?: {
+      yieldDetected?: boolean;
+      steeringMessages?: readonly AgentMessage[];
+      readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
+    },
   ): EmbeddedRunAttemptResult & { terminalTurnId: string } {
     this.eventProjection.flushPendingGuardianWarning();
     // Finalizing native tools may invoke callbacks; retain this result's terminal snapshot.
@@ -166,13 +176,29 @@ export abstract class CodexTurnProjection {
     } = this.terminalFailure;
     const upstreamUserText = this.options.upstreamUserText;
     const turnTainted = this.settlement.turnTainted;
+    const observedItemCount = new Set([...this.observedItemIds, ...this.completedItemIds]).size;
     const activeItemCount = this.activeItemIds.size;
     const completedItemCount = this.completedItemIds.size;
     const guardianReviewCount = this.eventProjection.guardianReviewCount;
     const yieldDetected = options?.yieldDetected;
-    // Result construction runs after the notification queue drains. Close any
-    // tool lacking a terminal item so audit consumers never retain an open action.
-    this.nativeToolLifecycleProjector.finalizeActive();
+    const retainedCommands = new Map<string, string>();
+    if (
+      !aborted &&
+      !this.options.runAbortSignal?.aborted &&
+      completedTurn?.status === "completed" &&
+      !initialPromptError
+    ) {
+      const pending = this.nativeToolLifecycleProjector.pendingCommands();
+      for (const [id, processId] of options?.readRetainedNativeCommands?.() ?? []) {
+        // A queued native completion wins over the earlier inventory snapshot.
+        if (pending.has(id) && (pending.get(id) === null || pending.get(id) === processId)) {
+          retainedCommands.set(id, processId);
+        }
+      }
+    }
+    // Close this turn's audit scope without inventing process completion. The
+    // existing unknown-outcome diagnostic remains distinct from execution failure.
+    this.nativeToolLifecycleProjector.finalizeActive(undefined, retainedCommands);
     const assistantTexts = this.assistantProjection.collectAssistantTexts();
     const asyncMessages = this.assistantProjection.collectAsyncMessages();
     const commentaryMessages = this.assistantProjection.collectCommentaryMessages();
@@ -192,6 +218,7 @@ export abstract class CodexTurnProjection {
     const synthesizedMissingToolResultError =
       this.toolTranscriptProjection.synthesizeMissingToolResults({
         synthesize: legacyFailClosed,
+        retainedCommands,
         // Preserve audit synthesis on every path, but completed answers must not
         // promote bookkeeping gaps into user-visible terminal failure evidence.
         terminalDisposition: aborted
@@ -224,18 +251,9 @@ export abstract class CodexTurnProjection {
     const currentAttemptAssistant = providerRefusal
       ? lastAssistant
       : this.assistantProjection.createCurrentAttemptAssistantMessage(assistantMessageOptions);
-    // Each snapshot entry is tagged with a stable mirror identity of the
-    // shape `${turnId}:${kind}`. The mirror's idempotency key is derived
-    // from this identity rather than from snapshot position or content
-    // hash, so:
-    //   - Re-mirror of the same turn (retry) → same identity → no-op.
-    //   - Re-emit of a prior turn's entry into a later turn's snapshot
-    //     (the cross-turn drift mode named in #77012) → original identity
-    //     is preserved → on-disk key still matches → also a no-op.
-    //   - Two distinct turns where the user repeats verbatim content →
-    //     distinct turnIds → distinct identities → both kept.
-    // Codex owns the canonical thread. These mirror records keep enough local
-    // context for OpenClaw history, search, and future harness switching.
+    // Stable turn/item identities deduplicate retries and cross-turn replays
+    // without collapsing identical text from distinct turns. Codex owns history;
+    // this mirror supports OpenClaw history, search, and harness switching.
     const messagesSnapshot = buildCodexMessagesSnapshot({
       runParams,
       turnId,
@@ -244,6 +262,7 @@ export abstract class CodexTurnProjection {
       asyncMessages,
       commentaryMessages,
       toolMessages: this.toolTranscriptProjection.transcriptMessages,
+      steeringMessages: options?.steeringMessages,
       lastAssistant,
       turnTainted,
     });
@@ -268,8 +287,9 @@ export abstract class CodexTurnProjection {
       Boolean(toolTelemetry.successfulCronAdds || toolTelemetry.acceptedSessionSpawns?.length) ||
       this.generatedMediaProjection.hasGeneratedMedia() ||
       this.toolProgressProjection.hasPotentialSideEffects;
+    const mediaDelivery = this.generatedMediaProjection.projectDelivery(toolTelemetry);
     const sentMediaUrls = new Set(
-      toolTelemetry.messagingToolSentMediaUrls.map((url) => url.trim()),
+      mediaDelivery.messagingToolSentMediaUrls.map((url) => url.trim()),
     );
     const toolAutoDeliveryMediaUrls = toolTelemetry.toolAutoDeliveryMediaUrls?.filter(
       (url) => !sentMediaUrls.has(url.trim()),
@@ -301,12 +321,9 @@ export abstract class CodexTurnProjection {
         toolTelemetry.didDeliverSourceReplyViaMessageTool === true,
       sourceReplyDelivered: toolTelemetry.sourceReplyDelivered,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
-      messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
-      messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
+      ...mediaDelivery,
       messagingToolSourceReplyPayloads: toolTelemetry.messagingToolSourceReplyPayloads ?? [],
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
-      toolMediaUrls: this.generatedMediaProjection.buildToolMediaUrls(toolTelemetry),
-      hostOwnedToolMediaUrls: this.generatedMediaProjection.buildHostOwnedMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       acceptedSessionSpawns: toolTelemetry.acceptedSessionSpawns,
@@ -320,7 +337,7 @@ export abstract class CodexTurnProjection {
         replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
-        startedCount: activeItemCount + completedItemCount,
+        startedCount: observedItemCount,
         completedCount: completedItemCount,
         activeCount: activeItemCount,
       },

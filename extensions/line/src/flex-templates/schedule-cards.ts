@@ -1,20 +1,10 @@
-// Line plugin module implements schedule cards behavior.
 import { normalizeLineAction } from "../actions.js";
-import { attachFooterText } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 
 function buildTitleSubtitleHeader(params: { title: string; subtitle?: string }): FlexComponent[] {
   const { title, subtitle } = params;
-  const headerContents: FlexComponent[] = [
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
-  ];
+  const headerContents: FlexComponent[] = [createCardTitle(title)];
 
   if (subtitle) {
     headerContents.push({
@@ -45,43 +35,13 @@ function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent
   ];
 }
 
-function createMegaBubbleWithFooter(params: {
-  bodyContents: FlexComponent[];
-  footer?: string;
-}): FlexBubble {
-  const bubble: FlexBubble = {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: params.bodyContents,
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-    },
-  };
-
-  if (params.footer) {
-    attachFooterText(bubble, params.footer);
-  }
-
-  return bubble;
-}
-
-/**
- * Create a receipt/summary card (for orders, transactions, data tables)
- *
- * Editorial design: Clean table layout with alternating row backgrounds,
- * prominent total section, and clear visual hierarchy.
- */
 export function createReceiptCard(params: {
   title: string;
-  subtitle?: string;
-  items: Array<{ name: string; value: string; highlight?: boolean }>;
+  items: Array<{ name: string; value: string }>;
   total?: { label: string; value: string };
   footer?: string;
 }): FlexBubble {
-  const { title, subtitle, items, total, footer } = params;
+  const { title, items, total, footer } = params;
 
   const itemRows: FlexComponent[] = items.slice(0, 12).map(
     (item, index) =>
@@ -93,8 +53,8 @@ export function createReceiptCard(params: {
             type: "text",
             text: item.name,
             size: "sm",
-            color: item.highlight ? "#111111" : "#666666",
-            weight: item.highlight ? "bold" : "regular",
+            color: "#666666",
+            weight: "regular",
             flex: 3,
             wrap: true,
           } as FlexText,
@@ -104,8 +64,8 @@ export function createReceiptCard(params: {
                   type: "text",
                   text: item.value,
                   size: "sm",
-                  color: item.highlight ? "#06C755" : "#333333",
-                  weight: item.highlight ? "bold" : "regular",
+                  color: "#333333",
+                  weight: "regular",
                   flex: 2,
                   align: "end",
                   wrap: true,
@@ -117,12 +77,8 @@ export function createReceiptCard(params: {
         backgroundColor: index % 2 === 0 ? "#FFFFFF" : "#FAFAFA",
       }) as FlexBox,
   );
-
-  // Header section
-  const headerContents = buildTitleSubtitleHeader({ title, subtitle });
-
   const bodyContents: FlexComponent[] = [
-    ...buildCardHeaderSections(headerContents),
+    ...buildCardHeaderSections([createCardTitle(title)]),
     {
       type: "box",
       layout: "vertical",
@@ -133,8 +89,6 @@ export function createReceiptCard(params: {
       borderColor: "#EEEEEE",
     } as FlexBox,
   ];
-
-  // Total section with emphasis
   if (total) {
     bodyContents.push({
       type: "box",
@@ -165,15 +119,9 @@ export function createReceiptCard(params: {
     } as FlexBox);
   }
 
-  return createMegaBubbleWithFooter({ bodyContents, footer });
+  return createCardBubble(bodyContents, footer);
 }
 
-/**
- * Create a calendar event card (for meetings, appointments, reminders)
- *
- * Editorial design: Date as hero, strong typographic hierarchy,
- * color-blocked zones, full text wrapping for readability.
- */
 export function createEventCard(params: {
   title: string;
   date: string;
@@ -185,8 +133,6 @@ export function createEventCard(params: {
   action?: Action;
 }): FlexBubble {
   const { title, date, time, location, description, calendar, isAllDay, action } = params;
-
-  // Hero date block - the most important information
   const dateBlock: FlexBox = {
     type: "box",
     layout: "vertical",
@@ -212,8 +158,6 @@ export function createEventCard(params: {
     paddingBottom: "lg",
     borderWidth: "none",
   };
-
-  // If no time and not all day, hide the time display
   if (!time && !isAllDay) {
     dateBlock.contents = [
       {
@@ -226,8 +170,6 @@ export function createEventCard(params: {
       } as FlexText,
     ];
   }
-
-  // Event title with accent bar
   const titleBlock: FlexBox = {
     type: "box",
     layout: "horizontal",
@@ -276,8 +218,6 @@ export function createEventCard(params: {
   };
 
   const bodyContents: FlexComponent[] = [dateBlock, titleBlock];
-
-  // Details section (location + description) in subtle background
   const hasDetails = location || description;
   if (hasDetails) {
     const detailItems: FlexComponent[] = [];
@@ -329,26 +269,11 @@ export function createEventCard(params: {
     } as FlexBox);
   }
 
-  return {
-    type: "bubble",
-    size: "mega",
-    body: {
-      type: "box",
-      layout: "vertical",
-      contents: bodyContents,
-      paddingAll: "xl",
-      backgroundColor: "#FFFFFF",
-      action: action === undefined ? undefined : normalizeLineAction(action, 40),
-    },
-  };
+  const bubble = createCardBubble(bodyContents);
+  bubble.body.action = action === undefined ? undefined : normalizeLineAction(action, 40);
+  return bubble;
 }
 
-/**
- * Create a calendar agenda card showing multiple events
- *
- * Editorial timeline design: Time-focused left column with event details
- * on the right. Visual accent bars indicate event priority/recency.
- */
 export function createAgendaCard(params: {
   title: string;
   subtitle?: string;
@@ -362,16 +287,10 @@ export function createAgendaCard(params: {
   footer?: string;
 }): FlexBubble {
   const { title, subtitle, events, footer } = params;
-
-  // Header with title and optional subtitle
   const headerContents = buildTitleSubtitleHeader({ title, subtitle });
-
-  // Event timeline items
   const eventItems: FlexComponent[] = events.slice(0, 6).map((event, index) => {
     const isActive = event.isNow || index === 0;
     const accentColor = isActive ? "#06C755" : "#E5E5E5";
-
-    // Time column (fixed width)
     const timeColumn: FlexBox = {
       type: "box",
       layout: "vertical",
@@ -389,8 +308,6 @@ export function createAgendaCard(params: {
       width: "65px",
       justifyContent: "flex-start",
     };
-
-    // Accent dot
     const dotColumn: FlexBox = {
       type: "box",
       layout: "vertical",
@@ -410,8 +327,6 @@ export function createAgendaCard(params: {
       justifyContent: "flex-start",
       paddingTop: "xs",
     };
-
-    // Event details column
     const detailContents: FlexComponent[] = [
       {
         type: "text",
@@ -422,8 +337,6 @@ export function createAgendaCard(params: {
         wrap: true,
       } as FlexText,
     ];
-
-    // Secondary info line
     const secondaryParts: string[] = [];
     if (event.location) {
       secondaryParts.push(event.location);
@@ -469,5 +382,5 @@ export function createAgendaCard(params: {
     } as FlexBox,
   ];
 
-  return createMegaBubbleWithFooter({ bodyContents, footer });
+  return createCardBubble(bodyContents, footer);
 }

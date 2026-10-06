@@ -1,28 +1,18 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
-import {
-  createGatewayKernel,
-  gatewayKernelLogs,
-  resetPreparedModelCatalogForTestCore,
-} from "./server-kernel.js";
+import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
-const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
-  () => import("./server-startup-post-attach.js"),
-);
-
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
 const POST_READY_WORK_START_DELAY_MS = 500;
-
-export { resetPreparedModelCatalogForTestCore };
 
 export async function startGatewayServerCore(
   port = 18789,
@@ -39,10 +29,7 @@ async function startGatewayServerWithSdkHost(
   opts: GatewayServerOptions,
   sdkResourceHost: LegacyPluginSdkResourceHost,
 ): Promise<GatewayServer> {
-  let releasePostReadyWork: () => void = () => {};
-  const postReadyWorkBarrier = new Promise<void>((resolve) => {
-    releasePostReadyWork = resolve;
-  });
+  const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     sdkResourceHost,
@@ -55,13 +42,7 @@ async function startGatewayServerWithSdkHost(
     void beginMacOSSystemCaWarmupOnce({ log });
   }
   let startupSettled: Promise<void>;
-  const {
-    beginClosePrelude,
-    closeOnStartupFailure,
-    prepareClose,
-    terminalSessions,
-    shutdownRuntime,
-  } = gatewayKernel;
+  const { closeOnStartupFailure, prepareClose, terminalSessions, shutdownRuntime } = gatewayKernel;
   try {
     const transport = await createGatewayHttpTransport({
       ...gatewayKernel.createHttpTransportOptions(),
@@ -98,7 +79,6 @@ async function startGatewayServerWithSdkHost(
       logChannels,
       logCron,
       logReload,
-      loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
     startupSettled = startup.startupSettled;
@@ -107,10 +87,21 @@ async function startGatewayServerWithSdkHost(
     releasePostReadyWork();
     return await rethrowGatewayStartupError(err, closeOnStartupFailure);
   }
-  // The public server is fully initialized now. Leave a short I/O window before
-  // background prewarms and cleanup imports compete for the startup CPU.
-  const postReadyWorkTimer = setTimeout(releasePostReadyWork, POST_READY_WORK_START_DELAY_MS);
-  postReadyWorkTimer.unref?.();
+  void startupSettled.then(
+    () => {
+      if (gatewayKernel.lifecycle.closePreludeStarted) {
+        return;
+      }
+      // Deferred sidecars must finish before the I/O window for background work begins.
+      gatewayKernel.scheduler.schedule({
+        id: "startup:post-ready-work",
+        delayMs: POST_READY_WORK_START_DELAY_MS,
+        run: releasePostReadyWork,
+      });
+    },
+    // The caller owns deferred startup failure; close releases the background waiters.
+    () => {},
+  );
 
   let closePromise: Promise<void> | undefined;
 
@@ -121,14 +112,11 @@ async function startGatewayServerWithSdkHost(
       if (!closePromise) {
         closePromise = sdkResourceHost
           .run(async () => {
-            const prelude = beginClosePrelude(optsLocal);
-            clearTimeout(postReadyWorkTimer);
+            const preparedClose = prepareClose(optsLocal);
             releasePostReadyWork();
-            await prelude;
-            const close = await prepareClose(optsLocal);
             await runGatewayCloseSteps({
               owner: gatewayKernel,
-              close,
+              close: await preparedClose,
               disposeTerminalSessions: () => terminalSessions.disposeAll(),
               runStopHooks: async () => {
                 await shutdownRuntime.runGlobalGatewayStopSafely({

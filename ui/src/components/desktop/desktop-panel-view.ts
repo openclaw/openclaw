@@ -7,8 +7,8 @@ import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { icons } from "../icons.ts";
+import { renderPanelIconButton } from "../panel-icon-button.ts";
 import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
-import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import type { DesktopSizingMode } from "./desktop-client.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
@@ -17,6 +17,7 @@ registerDesktopEnglish();
 
 export function renderDesktopPanelView(options: {
   embedded: boolean;
+  workspaceControls?: boolean;
   dock: "bottom" | "right";
   height: number;
   width: number;
@@ -32,6 +33,14 @@ export function renderDesktopPanelView(options: {
   const connection = renderDesktopConnection({
     ...options.connection,
     state: options.content.state,
+    presentationControls: options.workspaceControls
+      ? html`${renderPanelIconButton({
+          className: "desktop-toolbar-action",
+          label: t("desktop.openWindow"),
+          icon: icons.externalLink,
+          onClick: options.onOpenWindow,
+        })}${options.renderFullscreenControl()}`
+      : nothing,
   });
   const style =
     options.embedded || options.fullscreen
@@ -49,13 +58,38 @@ export function renderDesktopPanelView(options: {
       ${
         options.embedded
           ? nothing
-          : renderDesktopPanelHeader({
-              dock: options.dock,
-              fullscreenControl: options.renderFullscreenControl(),
-              onDock: options.onDock,
-              onOpenWindow: options.onOpenWindow,
-              onClose: options.onClose,
-            })
+          : html`
+              <header class="rail-header bp-header">
+                <div class="rail-header__title bp-title">${t("desktop.title")}</div>
+                <div class="rail-header__actions bp-actions">
+                  ${renderPanelIconButton({
+                    className: `rail-header__action bp-icon ${options.dock === "bottom" ? "is-active" : ""}`,
+                    label: t("desktop.dockBottom"),
+                    icon: icons.panelBottomOpen,
+                    onClick: () => options.onDock("bottom"),
+                  })}
+                  ${renderPanelIconButton({
+                    className: `rail-header__action bp-icon ${options.dock === "right" ? "is-active" : ""}`,
+                    label: t("desktop.dockRight"),
+                    icon: icons.panelRightOpen,
+                    onClick: () => options.onDock("right"),
+                  })}
+                  ${renderPanelIconButton({
+                    className: "rail-header__action bp-icon bp-open-window",
+                    label: t("desktop.openWindow"),
+                    icon: icons.externalLink,
+                    onClick: options.onOpenWindow,
+                  })}
+                  ${options.renderFullscreenControl()}
+                  ${renderPanelIconButton({
+                    className: "rail-header__action bp-icon",
+                    label: t("desktop.hide"),
+                    icon: icons.x,
+                    onClick: options.onClose,
+                  })}
+                </div>
+              </header>
+            `
       }
       ${renderDesktopPanelContent({
         ...options.content,
@@ -89,59 +123,6 @@ export function renderDesktopPanelContent(options: {
   `;
 }
 
-function renderDesktopPanelHeader(options: {
-  dock: "bottom" | "right";
-  fullscreenControl: TemplateResult;
-  onClose: () => void;
-  onDock: (dock: "bottom" | "right") => void;
-  onOpenWindow: () => void;
-}) {
-  return html`
-    <header class="rail-header bp-header">
-      <div class="rail-header__title bp-title">${t("desktop.title")}</div>
-      <div class="rail-header__actions bp-actions">
-        <button
-          class="rail-header__action bp-icon ${options.dock === "bottom" ? "is-active" : ""}"
-          type="button"
-          title=${t("desktop.dockBottom")}
-          aria-label=${t("desktop.dockBottom")}
-          @click=${() => options.onDock("bottom")}
-        >
-          ${icons.panelBottomOpen}
-        </button>
-        <button
-          class="rail-header__action bp-icon ${options.dock === "right" ? "is-active" : ""}"
-          type="button"
-          title=${t("desktop.dockRight")}
-          aria-label=${t("desktop.dockRight")}
-          @click=${() => options.onDock("right")}
-        >
-          ${icons.panelRightOpen}
-        </button>
-        <button
-          class="rail-header__action bp-icon bp-open-window"
-          type="button"
-          title=${t("desktop.openWindow")}
-          aria-label=${t("desktop.openWindow")}
-          @click=${options.onOpenWindow}
-        >
-          ${icons.externalLink}
-        </button>
-        ${options.fullscreenControl}
-        <button
-          class="rail-header__action bp-icon"
-          type="button"
-          title=${t("desktop.hide")}
-          aria-label=${t("desktop.hide")}
-          @click=${options.onClose}
-        >
-          ${icons.x}
-        </button>
-      </div>
-    </header>
-  `;
-}
-
 export function renderDesktopPicker(options: {
   automatic: boolean;
   environments: EnvironmentSummary[];
@@ -151,13 +132,9 @@ export function renderDesktopPicker(options: {
 }) {
   if (options.automatic) {
     return html`<div class="desktop-status" role="status">
-      ${
-        options.loading
-          ? t("desktop.connecting")
-          : html`<button class="desktop-button" type="button" @click=${options.onRefresh}>
-              ${t("common.retry")}
-            </button>`
-      }
+      <button class="desktop-button" type="button" @click=${options.onRefresh}>
+        ${t("common.retry")}
+      </button>
     </div>`;
   }
   return html`
@@ -265,17 +242,20 @@ export function renderDesktopCredentials(options: {
   `;
 }
 
-export function renderDesktopConnection(options: {
+function renderDesktopConnection(options: {
   state: DesktopPanelState;
   controlling: boolean;
   desktopApps: WorkerDesktopAppId[];
-  environmentSelected: boolean;
   launchingApp: WorkerDesktopAppId | null;
   showApps: boolean;
   sizing: DesktopSizingOptions;
+  pictureInPictureControl: TemplateResult;
+  audioControl?: TemplateResult;
+  presentationControls?: TemplateResult | typeof nothing;
   onDisconnect: () => void;
   onLaunch: (app: WorkerDesktopAppId) => void;
   onTakeControl: () => void;
+  onControlToggle: () => void;
 }) {
   return html`
     <div class="desktop-toolbar desktop-toolbar--connection">
@@ -284,14 +264,14 @@ export function renderDesktopConnection(options: {
           ? html`<div class="desktop-apps">
               ${options.desktopApps.map((app) => {
                 const launching = options.launchingApp === app;
-                const label = desktopAppLabel(app);
+                const label = app === "browser" ? t("browser.title") : t("terminal.title");
                 return html`<button
                   class="desktop-app-button"
                   type="button"
                   title=${label}
                   aria-label=${label}
                   aria-busy=${launching ? "true" : "false"}
-                  ?disabled=${!options.environmentSelected || launching}
+                  ?disabled=${launching}
                   @click=${() => options.onLaunch(app)}
                 >
                   <span
@@ -300,7 +280,7 @@ export function renderDesktopConnection(options: {
                     }"
                     aria-hidden="true"
                   >
-                    ${desktopAppIcon(app)}
+                    ${app === "browser" ? icons.chrome : icons.terminal}
                   </span>
                   <span>${label}</span>
                 </button>`;
@@ -309,7 +289,23 @@ export function renderDesktopConnection(options: {
           : nothing
       }
       <span class="desktop-toolbar__spacer"></span>
-      ${renderDesktopSizing(options.sizing)}
+      ${
+        options.controlling
+          ? html`<button
+              class="desktop-toolbar-action"
+              type="button"
+              aria-label=${t("desktop.switchToViewOnly")}
+              ?disabled=${options.state !== "connected"}
+              @click=${options.onControlToggle}
+            >
+              ${t("desktop.control")}
+            </button>`
+          : options.state === "connected"
+            ? html`<span class="desktop-toolbar-mode" role="status">${t("desktop.viewOnly")}</span>`
+            : nothing
+      }
+      ${renderDesktopSizing(options.sizing)} ${options.audioControl ?? nothing}
+      ${options.pictureInPictureControl} ${options.presentationControls ?? nothing}
       <button
         class="desktop-toolbar-action"
         type="button"
@@ -329,6 +325,7 @@ export function renderDesktopConnection(options: {
               type="button"
               title=${t("desktop.takeControl")}
               aria-label=${t("desktop.takeControl")}
+              ?disabled=${options.state !== "connected"}
               @click=${options.onTakeControl}
             ></button>`
           : nothing

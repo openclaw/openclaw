@@ -70,15 +70,37 @@ Outcomes are retained past the credential's own expiry.
 - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
 - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
 
+Approval lookup, history, waits, and resolution retain their original device and
+account authority while storage work is pending. Disconnecting the socket alone does not cancel an admitted request.
+Revoking that authority before commit admission prevents the verdict and withholds
+approval details; the pending approval remains available to another authorized reviewer.
+A verdict that already committed remains recorded and settles its waiting action.
+
+`exec.approvals.get` accepts optional `expectedOwnerId`; `exec.approvals.set`
+accepts `file`, optional `baseHash`, and optional `expectedOwnerId`. Existing
+snapshots require the hash returned by `get`; a stale or missing hash refuses the
+save. For an absent snapshot, an omitted hash is accepted, but a supplied hash
+must match. The default local CLI always carries its observed hash. Both methods
+return the existing redacted snapshot (`path`, `exists`, `hash`, `file`) plus
+`resolvedDefaults`; omitted socket defaults retain their existing merge behavior.
+
+Default local CLI reads and writes negotiate their separate
+[owner capabilities](/gateway/protocol/versioning#local-state-owner-routing)
+and send `expectedOwnerId`. Reading participates because it can initialize missing
+state. Existing RPC clients may omit the owner field; explicit Gateway and node
+targets retain their current transport and response contracts. This changes no
+exec policy, standing-grant, or execution-authorization semantics.
+
 ## Control UI commands
 
-- `ui.command` lets an `operator.write` caller send typed layout and navigation commands to connected Control UI clients that advertise the `ui-commands` capability.
+- `ui.command` lets an `operator.write` caller send typed layout and navigation commands to the requesting Control UI connection, which must advertise the `ui-commands` capability.
 - Commands cover pane split/close/focus, sidebar visibility, terminal/browser panel visibility and dock, and session navigation.
-- The command intentionally fans out to every connected capable Control UI. If none is connected, the request fails with `UNAVAILABLE` instead of pretending the layout changed.
+- The Gateway derives the recipient from the authenticated request or the agent turn's captured browser target, never from the destination session. Other connections keep their current view. A missing or disconnected requester fails with `UNAVAILABLE`; there is no broadcast fallback.
+- Standalone callers that relied on legacy broadcast delivery must initiate these actions from a Control UI connection or a turn started there. A standalone call without a browser target no longer controls connected dashboards.
 
 ## Automation, skills, and tools
 
 - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.get`, `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-- `cron.run` remains an enqueue-style RPC for manual runs. Clients that need completion semantics should read the returned `runId` and poll `cron.runs`.
+- `cron.run` enqueues a manual run and acknowledges with `{ ok: true, enqueued: true, runId }`. Pass `waitTimeoutMs` to hold the response until that run records its outcome: the acknowledgement then also carries `run`, the same entry `cron.runs` returns for that `runId`, or `finished: true` when the run ended but its history is not visible to the caller. If the wait ends first, neither is set and the run continues. Agent-runtime callers get the plain acknowledgement immediately for main-session jobs and jobs that run in their own session, because those runs start only after the calling turn.
 - `cron.runs` accepts an optional non-empty `runId` filter so clients can follow one queued manual run without racing against other history entries for the same job.
 - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`. See [Operator helper methods](/gateway/protocol/operator-methods#operator-helper-methods).

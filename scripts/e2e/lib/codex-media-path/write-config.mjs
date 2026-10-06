@@ -1,7 +1,7 @@
 // Writes config fixtures for Codex media-path E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { readPositiveIntEnv, readTcpPortEnv } from "./limits.mjs";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -57,7 +57,6 @@ const config = {
     },
     entries: {
       main: {
-        default: true,
         model: { primary: "openai/gpt-5.6-luna", fallbacks: [] },
         models: {
           "openai/gpt-5.6-luna": {

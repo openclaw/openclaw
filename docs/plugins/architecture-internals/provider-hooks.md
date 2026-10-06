@@ -34,6 +34,13 @@ explicit runtime-discovery invalidation clears that lookup rather than leaving
 another provider cache holding old hooks. Attempt-prepared provider handles
 retain their selected plugin, while each hook receives the current call context.
 
+Synthetic-auth lookup includes auth-only discovery entries from the declared
+provider or CLI backend owner. Static model-catalog rows do not replace those
+auth implementations. If the owner supplies no synthetic-auth hook, lookup
+returns no synthetic result without loading unrelated discovery entries. A
+lightweight entry fallback remains available for aliases with no declared owner.
+External-auth captures still prepare fresh outcomes before read-only worker work.
+
 Use manifest `setup.providers[].envVars` when the provider has env-based
 credentials that generic auth/status/model-picker paths should see without
 loading plugin runtime. Use manifest `providerAuthAliases`
@@ -99,7 +106,8 @@ listed here.
 | `fetchUsageSnapshot`              | Fetch and normalize provider-specific usage/quota snapshots after auth is resolved                             | Provider needs a provider-specific usage endpoint or payload parser                                                                           |
 | `createEmbeddingProvider`         | Build a provider-owned embedding adapter for memory/search                                                     | Memory embedding behavior belongs with the provider plugin                                                                                    |
 | `buildReplayPolicy`               | Return a replay policy controlling transcript handling for the provider                                        | Provider needs custom transcript policy (for example, thinking-block stripping)                                                               |
-| `sanitizeReplayHistory`           | Rewrite replay history after generic transcript cleanup                                                        | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
+| `sanitizeReplayHistoryAsync`      | Rewrite replay history after generic transcript cleanup, awaiting transcript metadata                          | Provider needs provider-specific replay rewrites beyond shared compaction helpers                                                             |
+| `sanitizeReplayHistory`           | Deprecated third-party compatibility hook                                                                      | Existing plugins migrating to the awaited hook and its V2 session-state contract                                                              |
 | `validateReplayTurns`             | Final replay-turn validation or reshaping before the embedded runner                                           | Provider transport needs stricter turn validation after generic sanitation                                                                    |
 | `onModelSelected`                 | Run provider-owned post-selection side effects                                                                 | Provider needs telemetry or provider-owned state when a model becomes active                                                                  |
 
@@ -123,13 +131,10 @@ Normalization dispatch is hook-specific:
 - `normalizeTransport` tries the matched provider first. Only if that does not
   change `api` or `baseUrl` and the provider has no `models.providers.<id>` entry
   does it try other transport hooks, stopping at the first change.
-- `normalizeConfig` uses the owning bundled provider's lightweight policy surface
-  first. If that surface has no `normalizeConfig` hook, OpenClaw may call the
-  matched runtime owner, provided runtime loading is allowed and, when a config
-  is supplied, that owner has explicit plugin activation. It never scans other
-  providers' hooks or falls through after the owning hook returns no change.
-  Config assembly passes `allowRuntimePluginLoad: false`, so it uses bundled
-  policy without loading provider runtime.
+- Config assembly calls `normalizeConfig` and `resolveConfigApiKey` through the
+  owning bundled provider's lightweight policy surface. It never loads provider
+  runtime, scans other providers' hooks, or falls through after the owning hook
+  returns no change.
 
 Google-family config cleanup is implemented by the Google plugin's own
 `normalizeConfig` hook, shared with its lightweight policy surface. It is not a

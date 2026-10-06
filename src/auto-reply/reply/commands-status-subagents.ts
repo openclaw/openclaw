@@ -1,15 +1,42 @@
+import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
+import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 // Formats subagent status rows for the status command response.
-import type { buildControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
-import {
-  hasSubagentRunEnded,
-  isLiveUnendedSubagentRun,
-} from "../../agents/subagents/registry/subagent-run-liveness.js";
+import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
+import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
 
+function formatExecutionObservation(observation: SubagentExecutionObservation): string {
+  switch (observation.state) {
+    case "running": {
+      const tool = sanitizeRunStatusText(observation.currentTool?.name, { maxChars: 60 });
+      return tool ? `running ${tool}` : "running";
+    }
+    case "queued":
+      return "queued";
+    case "waiting":
+      switch (observation.wait?.kind) {
+        case "approval":
+          return "waiting for approval";
+        case "user_input":
+          return "waiting for input";
+        case "agent_messages":
+          return "waiting for agent messages";
+        case "children":
+          return "waiting for child tasks";
+        default:
+          return "waiting for external work";
+      }
+    case "finished":
+      return "finished · settlement pending";
+    default:
+      return "current activity unavailable";
+  }
+}
+
 /** Builds the compact status line from the controller's ordered snapshot and descendant index. */
 export function buildSubagentsStatusLine(params: {
-  context: ReturnType<typeof buildControlledSubagentRunsReadContext>;
+  context: ControlledSubagentRunsReadContext;
   verboseEnabled: boolean;
   now?: number;
 }): string | undefined {
@@ -18,12 +45,13 @@ export function buildSubagentsStatusLine(params: {
     return undefined;
   }
   const now = params.now ?? Date.now();
+  const activeRuns = new Set(context.list.view.active);
   let active = 0;
   let done = 0;
   const detailLines: string[] = [];
   for (const entry of context.runs) {
-    const pendingDescendants = context.countPendingDescendantRuns(entry.childSessionKey);
-    if (isLiveUnendedSubagentRun(entry, now) || pendingDescendants > 0) {
+    const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    if (activeRuns.has(entry)) {
       active += 1;
       if (detailLines.length >= 3) {
         continue;
@@ -36,11 +64,12 @@ export function buildSubagentsStatusLine(params: {
       );
       const duration = formatDurationCompact(durationMs, { spaced: true }) ?? "0s";
       const label = formatRunLabel(entry, { maxLength: 56 });
+      const executionText = formatExecutionObservation(context.getExecutionObservation(entry));
       const descendantText =
         pendingDescendants > 0
-          ? ` · ${pendingDescendants} child${pendingDescendants === 1 ? "" : "ren"} active`
+          ? ` · ${pendingDescendants} child${pendingDescendants === 1 ? "" : "ren"} pending`
           : "";
-      detailLines.push(`  • ${label} · ${duration}${descendantText}`);
+      detailLines.push(`  • ${label} · ${duration} · ${executionText}${descendantText}`);
     } else if (hasSubagentRunEnded(entry) && pendingDescendants === 0) {
       done += 1;
     }

@@ -8,27 +8,18 @@ import {
   type Locator,
   type Page,
 } from "playwright";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  inject,
-  vi,
-  type TestContext,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, inject, vi } from "vitest";
 import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
-  controlUiE2eWaitTimeoutMs,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+  installControlUiRpcDiagnostics,
+} from "../test-helpers/control-ui-e2e-diagnostics.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
+import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 
 declare module "vitest" {
   export interface ProvidedContext {
@@ -56,6 +47,17 @@ type ControlUiE2eScenario<T> = {
   release?: () => Promise<void>;
   retainedState?: () => string | undefined;
 };
+type ControlUiE2eScenarioContext = {
+  readonly signal: AbortSignal;
+  readonly onTestFinished: (cleanup: () => void | Promise<void>, timeout?: number) => void;
+  readonly task: {
+    readonly result?: { errors?: readonly unknown[] };
+  };
+};
+type ControlUiE2eScenarioOwner = {
+  controller: AbortController;
+  test: ControlUiE2eScenarioContext;
+};
 type ControlUiE2eSuite = {
   readonly artifactDir: string;
   readonly browser: Browser;
@@ -63,7 +65,10 @@ type ControlUiE2eSuite = {
   closeBrowserContext: (context: BrowserContext) => Promise<void>;
   define: (defineTests: () => void) => void;
   newBrowserContext: (options: Parameters<Browser["newContext"]>[0]) => Promise<BrowserContext>;
-  runScenario: <T>(context: TestContext, scenario: ControlUiE2eScenario<T>) => Promise<T>;
+  runScenario: <T>(
+    context: ControlUiE2eScenarioContext,
+    scenario: ControlUiE2eScenario<T>,
+  ) => Promise<T>;
   withPage: <T>(
     options: Parameters<Browser["newContext"]>[0],
     run: (fixture: ControlUiE2ePage) => Promise<T>,
@@ -98,25 +103,57 @@ export function tooltipTitleText(item: Locator) {
   });
 }
 
+type HeldModuleContext = {
+  closing: boolean;
+  pages: Map<Page, Array<{ close: () => void; installed: ReturnType<Page["route"]> }>>;
+};
+const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
+
+function getHeldModuleContext(context: BrowserContext): HeldModuleContext {
+  let held = heldModuleContexts.get(context);
+  if (!held) {
+    held = { closing: false, pages: new Map() };
+    heldModuleContexts.set(context, held);
+  }
+  return held;
+}
+
 export async function holdModuleResponse(page: Page, module: RegExp) {
-  let release!: () => void;
-  let requested!: (url: string) => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const request = new Promise<string>((resolve) => {
-    requested = resolve;
-  });
+  const held = getHeldModuleContext(page.context());
+  if (held.closing) {
+    throw new Error("Cannot hold a module after browser context cleanup begins");
+  }
+  const gate = createDeferredCore();
+  const request = createDeferredCore<string>();
+  // Cleanup can cancel an unused hold; callers still receive the original rejection.
+  void request.promise.catch(() => {});
+  const release = () => gate.resolve();
   let requests = 0;
-  await page.route(module, async (route) => {
+  const installed = page.route(module, async (route) => {
     requests += 1;
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    requested(route.request().url());
-    await gate;
-    await route.fulfill({ response });
+    try {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      request.resolve(route.request().url());
+      await gate.promise;
+      await route.fulfill({ response });
+    } catch (error) {
+      request.reject(error);
+      throw error;
+    }
   });
-  return { request, release, requests: () => requests };
+  // Register before awaiting installation so teardown also owns a pending route().
+  const registrations = held.pages.get(page) ?? [];
+  registrations.push({
+    close: () => {
+      release();
+      request.reject(new Error("Browser context cleanup canceled the held module request"));
+    },
+    installed,
+  });
+  held.pages.set(page, registrations);
+  await installed;
+  return { request: request.promise, release, requests: () => requests };
 }
 
 class ControlUiE2eAcquisitionClosedError extends Error {}
@@ -173,11 +210,16 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
   const openBrowserContexts = new Map<BrowserContext, AbortController | undefined>();
   const contextClosures = new WeakMap<BrowserContext, Promise<void>>();
+  const contextDiagnostics = new WeakMap<
+    BrowserContext,
+    { test: ControlUiE2eScenarioContext | undefined; capture?: Promise<void> }
+  >();
   const contextAcquisitions = new Map<Promise<BrowserContext>, AbortController | undefined>();
   const acquisitionFailures: Array<{ owner: AbortController | undefined; error: unknown }> = [];
   const scenarios = new Set<Promise<unknown>>();
   const resourceLifetime = new AbortController();
-  let activeScenario: AbortController | undefined;
+  let activeTest: ControlUiE2eScenarioContext | undefined;
+  let activeScenario: ControlUiE2eScenarioOwner | undefined;
   let unsafeCleanup: { error: unknown; retainedState: () => string | undefined } | undefined;
   let browser: Browser | undefined;
   let server: ControlUiE2eServer | undefined;
@@ -220,12 +262,70 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     }
   };
 
+  const captureContextFailure = (
+    context: BrowserContext,
+    failure: unknown,
+    originalPage?: Page,
+  ): Promise<void> => {
+    const diagnostic = contextDiagnostics.get(context)!;
+    if (!diagnostic.capture) {
+      const serialized = asNullableRecord(failure);
+      const error =
+        failure instanceof Error
+          ? failure
+          : Object.assign(
+              new Error(
+                typeof serialized?.message === "string" ? serialized.message : String(failure),
+              ),
+              typeof serialized?.name === "string" ? { name: serialized.name } : {},
+              typeof serialized?.stack === "string" ? { stack: serialized.stack } : {},
+            );
+      diagnostic.capture = Promise.resolve().then(async () => {
+        for (const page of new Set([...(originalPage ? [originalPage] : []), ...context.pages()])) {
+          await captureControlUiE2eFailureDiagnostics(page, { error, label: options.name });
+        }
+      });
+    }
+    return diagnostic.capture;
+  };
+
   const closeBrowserContext = (context: BrowserContext): Promise<void> => {
     let closing = contextClosures.get(context);
     if (!closing) {
+      const held = getHeldModuleContext(context);
+      held.closing = true;
       // Playwright's second close can return while the first is still finalizing.
       closing = Promise.resolve().then(async () => {
-        await context.close();
+        const registrations = [...held.pages.values()].flat();
+        await runQaGatewayFixture(
+          async () => {
+            const diagnostic = contextDiagnostics.get(context);
+            const test = diagnostic?.test;
+            const failure = test?.signal.aborted
+              ? test.signal.reason
+              : test?.task.result?.errors?.[0];
+            // Native timeout rejects the wrapper before pending page operations settle.
+            if (failure !== undefined) {
+              await captureContextFailure(context, failure);
+            } else {
+              await diagnostic?.capture;
+            }
+          },
+          async () => {
+            for (const registration of registrations) {
+              registration.close();
+            }
+            // Release all gates before joining active page/context callbacks.
+            await settleControlUiCleanup(registrations.map(({ installed }) => installed));
+          },
+          () =>
+            settleControlUiCleanup([
+              ...[...held.pages.keys()].map((page) => page.unrouteAll({ behavior: "wait" })),
+              context.unrouteAll({ behavior: "wait" }),
+            ]),
+          () => context.close(),
+        );
+        held.pages.clear();
         // Requests outlive sockets; pending handlers must release their admission
         // roots before fixture cleanup. waitFor also works in afterAll.
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0), {
@@ -262,10 +362,12 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
   };
   const newBrowserContext = (
     contextOptions: Parameters<Browser["newContext"]>[0],
+    scope = activeScenario,
   ): Promise<BrowserContext> => {
     assertControlUiForkActive();
     const currentBrowser = browser;
-    const owner = activeScenario;
+    const owner = scope?.controller;
+    const test = scope?.test ?? activeTest;
     if (!currentBrowser) {
       return Promise.reject(new Error("Control UI E2E browser accessed before suite setup"));
     }
@@ -277,6 +379,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     const acquisition = Promise.resolve().then(async () => {
       const context = await currentBrowser.newContext(contextOptions);
       openBrowserContexts.set(context, owner);
+      contextDiagnostics.set(context, { test });
       if (stopping || owner?.signal.aborted) {
         await closeBrowserContext(context);
         throw new ControlUiE2eAcquisitionClosedError(
@@ -299,6 +402,78 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     return acquisition;
   };
 
+  const runOwnedScenario = <T>(
+    scope: ControlUiE2eScenarioOwner,
+    scenario: ControlUiE2eScenario<T>,
+  ): Promise<T> => {
+    assertControlUiForkActive();
+    if (stopping) {
+      throw new Error("A Control UI E2E scenario cannot start during teardown");
+    }
+    const { controller: owner, test: context } = scope;
+    const operation = createDeferredCore<T>();
+    const retainedState = scenario.retainedState ?? resources?.retainedState ?? (() => undefined);
+    let cleanupComplete = false;
+    scenarios.add(operation.promise);
+    const abort = () => {
+      owner.abort(context.signal.reason);
+      // Initiate cancellation now; finalization below joins these same closes.
+      void closeOpenBrowserContexts(owner).catch(() => {});
+    };
+    context.signal.addEventListener("abort", abort, { once: true });
+    if (context.signal.aborted) {
+      abort();
+    }
+    // Native timeout rejects its wrapper, not the callback. On failed joining,
+    // fence this file and retain state until native isolated-fork teardown exits.
+    context.onTestFinished(() => {
+      assertControlUiForkActive();
+      const finished = operation.promise.then(
+        () => undefined,
+        (error: unknown) => {
+          if (!cleanupComplete) {
+            throw retireFork(error, retainedState);
+          }
+        },
+      );
+      return joinCleanup(finished, "scenario cleanup", retainedState);
+    }, 0);
+    operation.resolve(
+      runQaGatewayFixture(
+        async () => {
+          owner.signal.throwIfAborted();
+          return await scenario.run(owner.signal);
+        },
+        async () => {
+          owner.abort();
+          try {
+            assertControlUiForkActive();
+            await settleControlUiCleanup([
+              closeOpenBrowserContexts(owner),
+              Promise.resolve().then(scenario.close),
+            ]);
+            // A close can settle after the cleanup deadline retired this fork.
+            assertControlUiForkActive();
+            await scenario.release?.();
+            cleanupComplete = true;
+            if (activeScenario?.controller === owner) {
+              activeScenario = undefined;
+            }
+          } catch (error) {
+            unsafeCleanup = { error, retainedState };
+            throw error;
+          }
+        },
+      ),
+    );
+    const settled = () => {
+      scenarios.delete(operation.promise);
+      context.signal.removeEventListener("abort", abort);
+    };
+    void operation.promise.then(settled, settled);
+    return operation.promise;
+  };
+
   return {
     get artifactDir() {
       return (artifactDir ??= createControlUiE2eArtifactDir(
@@ -319,77 +494,22 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
     },
     closeBrowserContext,
     newBrowserContext,
-    runScenario<T>(context: TestContext, scenario: ControlUiE2eScenario<T>): Promise<T> {
+    runScenario<T>(
+      context: ControlUiE2eScenarioContext,
+      scenario: ControlUiE2eScenario<T>,
+    ): Promise<T> {
       assertControlUiForkActive();
       if (stopping || activeScenario) {
         throw new Error("A Control UI E2E scenario still owns the suite");
       }
-      const owner = new AbortController();
-      const operation = createDeferredCore<T>();
-      const retainedState = scenario.retainedState ?? resources?.retainedState ?? (() => undefined);
-      let cleanupComplete = false;
-      activeScenario = owner;
-      scenarios.add(operation.promise);
-      const abort = () => {
-        owner.abort(context.signal.reason);
-        // Initiate cancellation now; finalization below joins these same closes.
-        void closeOpenBrowserContexts(owner).catch(() => {});
-      };
-      context.signal.addEventListener("abort", abort, { once: true });
-      if (context.signal.aborted) {
-        abort();
-      }
-      // Native timeout rejects its wrapper, not the callback. On failed joining,
-      // fence this file and retain state until native isolated-fork teardown exits.
-      context.onTestFinished(() => {
-        assertControlUiForkActive();
-        const finished = operation.promise.then(
-          () => undefined,
-          (error: unknown) => {
-            if (!cleanupComplete) {
-              throw retireFork(error, retainedState);
-            }
-          },
-        );
-        return joinCleanup(finished, "scenario cleanup", retainedState);
-      }, 0);
-      operation.resolve(
-        runQaGatewayFixture(
-          async () => {
-            owner.signal.throwIfAborted();
-            return await scenario.run(owner.signal);
-          },
-          async () => {
-            owner.abort();
-            try {
-              assertControlUiForkActive();
-              await settleControlUiCleanup([
-                closeOpenBrowserContexts(owner),
-                Promise.resolve().then(scenario.close),
-              ]);
-              // A close can settle after the cleanup deadline retired this fork.
-              assertControlUiForkActive();
-              await scenario.release?.();
-              cleanupComplete = true;
-              activeScenario = undefined;
-            } catch (error) {
-              unsafeCleanup = { error, retainedState };
-              throw error;
-            }
-          },
-        ),
-      );
-      const settled = () => {
-        scenarios.delete(operation.promise);
-        context.signal.removeEventListener("abort", abort);
-      };
-      void operation.promise.then(settled, settled);
-      return operation.promise;
+      activeScenario = { controller: new AbortController(), test: context };
+      return runOwnedScenario(activeScenario, scenario);
     },
     define(defineTests) {
       describeControlUiE2e(options.name, () => {
-        beforeEach(() => {
+        beforeEach((context) => {
           assertControlUiForkActive();
+          activeTest = context;
           artifactDir = undefined;
         });
         beforeAll(() => {
@@ -397,7 +517,12 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           if (!chromiumAvailable && options.unavailableMessage) {
             throw new Error(options.unavailableMessage(chromiumExecutablePath));
           }
-          const startServer = options.startServer ?? startControlUiE2eServer;
+          const startServer =
+            options.startServer ??
+            (async () => {
+              const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
+              return startControlUiE2eServer();
+            });
           setupPromise = Promise.resolve().then(async () => {
             if (options.startServerBeforeBrowser) {
               server = await startServer();
@@ -406,11 +531,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
               }
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
+                // Full tile rasterization reduced cross-pass stroke noise in the capture fixtures.
+                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
                 executablePath: chromiumExecutablePath,
               });
             } else {
               browser = await chromium.launch({
                 ...options.browserLaunchOptions,
+                args: ["--disable-partial-raster", ...(options.browserLaunchOptions?.args ?? [])],
                 executablePath: chromiumExecutablePath,
               });
               if (stopping) {
@@ -430,7 +558,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           assertControlUiForkActive();
           stopping = true;
           resourceLifetime.abort();
-          activeScenario?.abort();
+          activeScenario?.controller.abort();
           const closingContexts = closeOpenBrowserContexts();
           const contexts = Promise.allSettled([closingContexts]);
           const teardown = (async () => {
@@ -477,29 +605,56 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
       });
     },
     async withPage(contextOptions, run, cleanup) {
-      const context = await newBrowserContext(contextOptions);
-      let fixture: ControlUiE2ePage | undefined;
-      return await runQaGatewayFixture(
-        async () => {
-          const page = await context.newPage();
-          fixture = { context, page };
-          try {
-            return await run(fixture);
-          } catch (error) {
-            // Keep closed-page diagnostics and capture other live documents before teardown.
-            for (const diagnosticPage of new Set([page, ...context.pages()])) {
-              await captureControlUiE2eFailureDiagnostics(diagnosticPage, {
-                error: error instanceof Error ? error : new Error(String(error)),
-                label: options.name,
-              });
+      const explicitScenario = activeScenario;
+      const test = explicitScenario?.test ?? activeTest;
+      if (!test) {
+        throw new Error("A Control UI E2E page requires an active test");
+      }
+      const scope = explicitScenario ?? { controller: new AbortController(), test };
+      const runPage = async () => {
+        const context = await newBrowserContext(contextOptions, scope);
+        let fixture: ControlUiE2ePage | undefined;
+        return await runQaGatewayFixture(
+          async () => {
+            const page = await context.newPage();
+            fixture = { context, page };
+            installControlUiRpcDiagnostics(page);
+            // A CDP session attached after a test's own session clears that session's
+            // emulation overrides (such as safe-area insets) on the next navigation.
+            await installControlUiE2eRendererStallProbe(page);
+            try {
+              return await run(fixture);
+            } catch (error) {
+              await captureContextFailure(context, error, page);
+              throw error;
             }
-            throw error;
-          }
-        },
-        // Capture assertion diagnostics before a test closes its page or drains routes.
-        () => (fixture ? cleanup?.(fixture) : undefined),
-        () => closeBrowserContext(context),
-      );
+          },
+          // Capture assertion diagnostics before a test closes its page or drains routes.
+          () => (fixture ? cleanup?.(fixture) : undefined),
+          () => closeBrowserContext(context),
+        );
+      };
+      return explicitScenario ? await runPage() : await runOwnedScenario(scope, { run: runPage });
     },
   };
+}
+
+export async function expandCodingSection(page: Page, required = false) {
+  const toggle = page.locator('[data-session-section="work"] .sidebar-session-group-toggle');
+  if (required) {
+    await toggle.waitFor({ state: "visible" });
+  } else {
+    await page.waitForFunction(() =>
+      Boolean(
+        document.querySelector('[data-session-section="work"]') ??
+        document.querySelector('[data-session-section^="catalog:"]'),
+      ),
+    );
+    if ((await toggle.count()) === 0) {
+      return;
+    }
+  }
+  if ((await toggle.getAttribute("aria-expanded")) === "false") {
+    await toggle.click();
+  }
 }

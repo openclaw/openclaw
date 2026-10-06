@@ -1,5 +1,5 @@
-// Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
@@ -14,6 +14,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { PluginRecord } from "../../plugins/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   buildAllPluginInspectReports,
   withPluginDiagnosticsReportForInspection,
@@ -118,15 +119,13 @@ function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord |
 }
 
 async function loadPluginCommandConfig(): Promise<
-  | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
-  | { ok: false; path: string; error: string }
+  { ok: true; snapshot: ConfigSnapshotForInstallPersist } | { ok: false; error: string }
 > {
   const prepared = await readConfigFileSnapshotForWrite();
   const snapshot = prepared.snapshot;
   if (!snapshot.valid) {
     return {
       ok: false,
-      path: snapshot.path,
       error: "Config file is invalid; fix it before using /plugins.",
     };
   }
@@ -139,13 +138,11 @@ async function loadPluginCommandConfig(): Promise<
   if (pluginMutation.mode === "blocked") {
     return {
       ok: false,
-      path: snapshot.path,
       error: pluginMutation.reason,
     };
   }
   return {
     ok: true,
-    path: snapshot.path,
     snapshot: {
       config: structuredClone(snapshot.sourceConfig),
       baseHash: snapshot.hash,
@@ -178,7 +175,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       if (missingAdminScope) {
         return missingAdminScope;
       }
-      if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      if (!hasGatewayAdminScope(params)) {
         const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
         if (nonOwner) {
           return nonOwner;
@@ -191,7 +188,22 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
     }
 
     if (pluginsCommand.action === "install") {
-      return await withPluginLifecycleLease({}, async () => {
+      const resolveContext =
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx) ??
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      const context = resolveContext?.();
+      const assertInvokerOwned = () => {
+        if (!hasGatewayAdminScope(params)) {
+          params.command.assertOwnerCurrent?.();
+        }
+        params.commandInvocationSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        if (resolveContext && (!context || resolveContext() !== context)) {
+          throw new Error("The Gateway that admitted this command is no longer available.");
+        }
+      };
+      assertInvokerOwned();
+      return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
         const loadedConfig = await loadPluginCommandConfig();
         if (!loadedConfig.ok) {
           return commandReply(`⚠️ ${loadedConfig.error}`);
@@ -201,13 +213,16 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: loadedConfig.snapshot,
+          applyRuntime: context?.applyPluginLifecycleChange,
+          beforePersistentApply: assertInvokerOwned,
+          signal: params.opts?.abortSignal,
         });
         if (!installed.ok) {
           return commandReply(`⚠️ ${installed.error}`);
         }
         return commandReply(
           [
-            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            `🔌 Installed plugin "${installed.pluginId}". ${installed.application ? `Applied in Gateway generation ${installed.application.generation}.` : "Saved for the next Gateway start."}`,
             ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
           ].join("\n"),
         );
@@ -276,6 +291,9 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
+          assertCurrent: hasGatewayAdminScope(params)
+            ? undefined
+            : params.command.assertOwnerCurrent,
           ...resolvePluginCapabilityConsentCliOptions({
             acceptCapabilities:
               pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,

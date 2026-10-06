@@ -3,10 +3,12 @@
 // Prevents local primitive-coercion helpers from regrowing after consolidation.
 import fs from "node:fs";
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { isCodeFile, listRepoFilesSync } from "./check-file-utils.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { writeLine } from "./lib/guard-inventory-utils.mjs";
 import { escapeRegExp } from "./lib/regexp.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { getPropertyNameText, toLine, unwrapExpression } from "./lib/ts-guard-utils.mts";
@@ -159,6 +161,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
+      "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
       "toStringifiedError",
@@ -378,14 +381,6 @@ function carveOutKey(entry: Pick<CoercionHelperCarveOut, "file" | "kind" | "name
   return `${entry.file}\0${entry.name}\0${entry.kind}`;
 }
 
-function unwrapCallableInitializer(expression: ts.Expression) {
-  let current = unwrapExpression(expression);
-  while (ts.isSatisfiesExpression(current)) {
-    current = unwrapExpression(current.expression);
-  }
-  return current;
-}
-
 /** Returns true for tracked source files governed by the declaration guard. */
 export function isGovernedCoercionHelperPath(filePath: string) {
   return (
@@ -396,113 +391,91 @@ export function isGovernedCoercionHelperPath(filePath: string) {
 }
 
 function isCallableInitializer(expression: ts.Expression): boolean {
-  const initializer = unwrapCallableInitializer(expression);
+  let initializer = unwrapExpression(expression);
+  while (ts.isSatisfiesExpression(initializer)) {
+    initializer = unwrapExpression(initializer.expression);
+  }
   return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer);
 }
 
 function unwrapDirectAliasInitializer(expression: ts.Expression): ts.Expression | undefined {
   let current = expression;
   while (true) {
-    if (ts.isParenthesizedExpression(current) || ts.isNonNullExpression(current)) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isNonNullExpression(current) ||
+      ts.isSatisfiesExpression(current)
+    ) {
       current = current.expression;
       continue;
     }
-    if (ts.isSatisfiesExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertionExpression(current)) {
+    if (ts.isAsExpression(current) || ts.isTypeAssertion(current)) {
       return undefined;
     }
     return current;
   }
 }
 
+function isCallableOrDirectAlias(expression: ts.Expression) {
+  const alias = unwrapDirectAliasInitializer(expression);
+  return (
+    isCallableInitializer(expression) ||
+    (alias !== undefined && (ts.isIdentifier(alias) || ts.isPropertyAccessExpression(alias)))
+  );
+}
+
 /** Finds banned callable declarations in one source file. */
 export function findBannedCoercionHelperDeclarations(
   source: string,
-  file = "source.ts",
+  file: string,
+  sourceFile: ts.SourceFile,
 ): CoercionHelperDeclaration[] {
   if (!BANNED_HELPER_NAME_PATTERN.test(source)) {
     return [];
   }
-  const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind);
   const declarations: CoercionHelperDeclaration[] = [];
-  const visit = (node: ts.Node): void => {
-    if (ts.isFunctionDeclaration(node) && node.name && BANNED_HELPER_NAMES.has(node.name.text)) {
+  const addDeclaration = (node: ts.PropertyName, kind: CoercionHelperDeclarationKind) => {
+    const name = getPropertyNameText(node);
+    if (name && BANNED_HELPER_NAMES.has(name)) {
       declarations.push({
         file,
-        kind: "function",
-        line: toLine(sourceFile, node.name),
-        name: node.name.text as BannedCoercionHelperName,
+        kind,
+        line: toLine(sourceFile, node),
+        name: name as BannedCoercionHelperName,
       });
+    }
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      addDeclaration(node.name, "function");
     } else if (
       ts.isVariableDeclaration(node) &&
       ts.isIdentifier(node.name) &&
       BANNED_HELPER_NAMES.has(node.name.text) &&
       node.initializer
     ) {
-      const aliasInitializer = unwrapDirectAliasInitializer(node.initializer);
-      if (
-        isCallableInitializer(node.initializer) ||
-        (aliasInitializer !== undefined &&
-          (ts.isIdentifier(aliasInitializer) || ts.isPropertyAccessExpression(aliasInitializer)))
-      ) {
-        declarations.push({
-          file,
-          kind: "variable",
-          line: toLine(sourceFile, node.name),
-          name: node.name.text as BannedCoercionHelperName,
-        });
+      if (isCallableOrDirectAlias(node.initializer)) {
+        addDeclaration(node.name, "variable");
       }
     } else if (ts.isMethodDeclaration(node)) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name)) {
-        declarations.push({
-          file,
-          kind: "method",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
-      }
-    } else if (ts.isPropertyDeclaration(node) && node.initializer) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
-        declarations.push({
-          file,
-          kind: "field",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
-      }
-    } else if (ts.isPropertyAssignment(node)) {
-      const name = getPropertyNameText(node.name);
-      if (name && BANNED_HELPER_NAMES.has(name) && isCallableInitializer(node.initializer)) {
-        declarations.push({
-          file,
-          kind: "property",
-          line: toLine(sourceFile, node.name),
-          name: name as BannedCoercionHelperName,
-        });
+      addDeclaration(node.name, "method");
+    } else if (ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) {
+      if (node.initializer && isCallableInitializer(node.initializer)) {
+        addDeclaration(node.name, ts.isPropertyDeclaration(node) ? "field" : "property");
       }
     }
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
   visit(sourceFile);
   return declarations;
 }
 
-function hasExportModifier(node: ts.Node) {
-  return (ts.canHaveModifiers(node) ? (ts.getModifiers(node) ?? []) : []).some(
-    (modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword,
-  );
+function hasExportModifier(node: ts.ModifiersBase) {
+  return node.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
 }
 
 /** Finds directly declared callable exports in one selected canonical module. */
-export function findExportedCallableNames(source: string, file = "source.ts") {
-  const scriptKind = file.endsWith("x") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
-  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, scriptKind);
+export function findExportedCallableNames(sourceFile: ts.SourceFile) {
   const callableLocals = new Set<string>();
   const exportedNames = new Set<string>();
 
@@ -521,11 +494,7 @@ export function findExportedCallableNames(source: string, file = "source.ts") {
       if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
         continue;
       }
-      const alias = unwrapDirectAliasInitializer(declaration.initializer);
-      if (
-        !isCallableInitializer(declaration.initializer) &&
-        (!alias || (!ts.isIdentifier(alias) && !ts.isPropertyAccessExpression(alias)))
-      ) {
+      if (!isCallableOrDirectAlias(declaration.initializer)) {
         continue;
       }
       callableLocals.add(declaration.name.text);
@@ -644,18 +613,14 @@ export function auditCoercionHelperDeclarations(
   };
 }
 
-function writeLine(stream: ScriptIo["stdout"] | ScriptIo["stderr"], value: string) {
-  stream.write(`${value}\n`);
-}
-
-function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExportAudit {
+function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalCoercionExportAudit {
   const canonicalModules = new Set<string>(CANONICAL_COERCION_MODULES);
   const mixedModules = new Set<string>(MIXED_CANONICAL_COERCION_MODULES);
   const auditedModules = [...CANONICAL_COERCION_MODULES, ...MIXED_CANONICAL_COERCION_MODULES];
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      const exportedNames = findExportedCallableNames(source, file);
+      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -684,7 +649,7 @@ function auditDefaultCanonicalExports(repoRoot: string): CanonicalCoercionExport
 }
 
 /** Runs the full tracked-source declaration guard. */
-export function runCoercionHelperDeclarationGuard(
+export async function runCoercionHelperDeclarationGuard(
   options: {
     carveOuts?: readonly CoercionHelperCarveOut[];
     io?: ScriptIo;
@@ -692,32 +657,79 @@ export function runCoercionHelperDeclarationGuard(
   } = {},
 ) {
   const repoRoot = options.repoRoot ?? resolveRepoRoot(import.meta.url);
+  using parser = new API({ cwd: repoRoot });
   const io = options.io ?? { stderr: process.stderr, stdout: process.stdout };
   const carveOuts = options.carveOuts ?? COERCION_HELPER_CARVE_OUTS;
   const relativeFiles = listRepoFilesSync(repoRoot, {
     roots: SCAN_ROOTS,
     includeFile: isGovernedCoercionHelperPath,
   });
-  const declarations = relativeFiles.flatMap((file) => {
-    const absolutePath = path.join(repoRoot, file);
-    if (!fs.existsSync(absolutePath)) {
-      return [];
+  const declarations: CoercionHelperDeclaration[] = [];
+  const readBatchSize = 32;
+  for (let offset = 0; offset < relativeFiles.length; offset += readBatchSize) {
+    const files = relativeFiles.slice(offset, offset + readBatchSize);
+    // Retain only one batch of source text and join every read before reporting an error.
+    const sources = await Promise.allSettled(
+      files.map(async (file) => {
+        const absolutePath = path.join(repoRoot, file);
+        if (!fs.existsSync(absolutePath)) {
+          return undefined;
+        }
+        return { file, source: await fs.promises.readFile(absolutePath, "utf8") };
+      }),
+    );
+    for (const result of sources) {
+      // Consume in path order so an earlier parse error also precedes later read errors.
+      if (result.status === "rejected") {
+        throw result.reason;
+      }
+      if (result.value) {
+        if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
+          continue;
+        }
+        declarations.push(
+          ...findBannedCoercionHelperDeclarations(
+            result.value.source,
+            result.value.file,
+            parser.createSourceFile(result.value.file, result.value.source),
+          ),
+        );
+      }
     }
-    return findBannedCoercionHelperDeclarations(fs.readFileSync(absolutePath, "utf8"), file);
-  });
+  }
   const audit = auditCoercionHelperDeclarations(declarations, carveOuts);
   const exportAudit =
     options.carveOuts === undefined
-      ? auditDefaultCanonicalExports(repoRoot)
+      ? auditDefaultCanonicalExports(repoRoot, parser)
       : { invalidClassifications: [], staleClassifications: [], unclassifiedExports: [] };
-  const failed =
-    audit.excessDeclarations.length > 0 ||
-    audit.invalidCarveOuts.length > 0 ||
-    audit.staleCarveOuts.length > 0 ||
-    exportAudit.invalidClassifications.length > 0 ||
-    exportAudit.staleClassifications.length > 0 ||
-    exportAudit.unclassifiedExports.length > 0;
-  if (!failed) {
+  const diagnosticGroups: Array<[string, string[]]> = [
+    ["Invalid coercion-helper carve-outs:", audit.invalidCarveOuts],
+    [
+      "Banned local coercion-helper declarations:",
+      audit.excessDeclarations.map(
+        (entry) => `${entry.file}:${entry.line} ${entry.name} (${entry.kind} declaration)`,
+      ),
+    ],
+    [
+      "Stale coercion-helper carve-outs:",
+      audit.staleCarveOuts.map(
+        (entry) =>
+          `${entry.file} [${entry.name}] has no ${entry.kind} declaration; remove the carve-out`,
+      ),
+    ],
+    ["Invalid canonical-export classifications:", exportAudit.invalidClassifications],
+    [
+      "Unclassified canonical callable exports:",
+      exportAudit.unclassifiedExports.map((entry) => `${entry.file} [${entry.name}]`),
+    ],
+    [
+      "Stale canonical-export classifications:",
+      exportAudit.staleClassifications.map(
+        (entry) => `${entry.file} [${entry.name}] (${entry.status})`,
+      ),
+    ],
+  ];
+  if (diagnosticGroups.every(([, entries]) => entries.length === 0)) {
     writeLine(
       io.stdout,
       `Coercion helper declaration guard passed (${declarations.length} allowlisted declarations).`,
@@ -725,46 +737,12 @@ export function runCoercionHelperDeclarationGuard(
     return 0;
   }
 
-  if (audit.invalidCarveOuts.length > 0) {
-    writeLine(io.stderr, "Invalid coercion-helper carve-outs:");
-    for (const message of audit.invalidCarveOuts) {
-      writeLine(io.stderr, `- ${message}`);
-    }
-  }
-  if (audit.excessDeclarations.length > 0) {
-    writeLine(io.stderr, "Banned local coercion-helper declarations:");
-    for (const declaration of audit.excessDeclarations) {
-      writeLine(
-        io.stderr,
-        `- ${declaration.file}:${declaration.line} ${declaration.name} (${declaration.kind} declaration)`,
-      );
-    }
-  }
-  if (audit.staleCarveOuts.length > 0) {
-    writeLine(io.stderr, "Stale coercion-helper carve-outs:");
-    for (const carveOut of audit.staleCarveOuts) {
-      writeLine(
-        io.stderr,
-        `- ${carveOut.file} [${carveOut.name}] has no ${carveOut.kind} declaration; remove the carve-out`,
-      );
-    }
-  }
-  if (exportAudit.invalidClassifications.length > 0) {
-    writeLine(io.stderr, "Invalid canonical-export classifications:");
-    for (const message of exportAudit.invalidClassifications) {
-      writeLine(io.stderr, `- ${message}`);
-    }
-  }
-  if (exportAudit.unclassifiedExports.length > 0) {
-    writeLine(io.stderr, "Unclassified canonical callable exports:");
-    for (const entry of exportAudit.unclassifiedExports) {
-      writeLine(io.stderr, `- ${entry.file} [${entry.name}]`);
-    }
-  }
-  if (exportAudit.staleClassifications.length > 0) {
-    writeLine(io.stderr, "Stale canonical-export classifications:");
-    for (const entry of exportAudit.staleClassifications) {
-      writeLine(io.stderr, `- ${entry.file} [${entry.name}] (${entry.status})`);
+  for (const [title, entries] of diagnosticGroups) {
+    if (entries.length > 0) {
+      writeLine(io.stderr, title);
+      for (const entry of entries) {
+        writeLine(io.stderr, `- ${entry}`);
+      }
     }
   }
   writeLine(
@@ -783,7 +761,7 @@ export function runCoercionHelperDeclarationGuard(
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
-  await runWithFailedTrailer("check:coercion-helpers", () => {
-    process.exitCode = runCoercionHelperDeclarationGuard();
+  await runWithFailedTrailer("check:coercion-helpers", async () => {
+    process.exitCode = await runCoercionHelperDeclarationGuard();
   });
 }

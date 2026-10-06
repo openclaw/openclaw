@@ -1,39 +1,32 @@
-// Source readers participate in file exclusion without changing source SQLite state.
-import {
-  createSqliteLifecycleAggregateError,
-  runWithSqliteCoordinator,
-} from "./sqlite-coordinator.js";
-import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
+// Native source readers run in an isolated child or an already-drained owner.
+import type { DatabaseSync } from "node:sqlite";
+import { assertStateDatabaseAccessAllowed } from "./gateway-state-owner.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 
-export function withSqliteSourceHandle<T>(pathname: string, operation: () => T): T {
-  return runWithSqliteCoordinator(
-    acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 }),
-    "SQLite source read",
-    operation,
-  );
-}
+// A failed native close remains owned until the reader process exits.
+const unclosedSourceReads = new Set<DatabaseSync>();
 
-/** The executing source-copy child holds its own lease, including after parent loss. */
-export async function withSqliteSourceHandleAsync<T>(
+/** Closing a source in its writer's process can release that writer's POSIX locks. */
+export function withSqliteSourceReadDatabase<T>(
   pathname: string,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
-  let result: T;
+  inspectionOperation: "source" | "snapshot",
+  operation: (database: DatabaseSync) => T,
+): T {
+  assertStateDatabaseAccessAllowed(pathname);
+  const database = withSqliteInspectionOperation(inspectionOperation, () =>
+    openNodeSqliteDatabase(pathname, { readOnly: true }),
+  );
   try {
-    result = await operation();
-  } catch (error) {
+    assertStateDatabaseAccessAllowed(pathname);
+    return operation(database);
+  } finally {
     try {
-      lease.release();
-    } catch (releaseError) {
-      throw createSqliteLifecycleAggregateError(
-        [error, releaseError],
-        "SQLite source read and handle release both failed",
-        error,
-      );
+      database.close();
+    } finally {
+      if (database.isOpen) {
+        unclosedSourceReads.add(database);
+      }
     }
-    throw error;
   }
-  lease.release();
-  return result;
 }

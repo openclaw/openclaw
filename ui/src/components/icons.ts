@@ -1,11 +1,12 @@
-// Control UI module implements icons behavior.
 import { svg, type TemplateResult } from "lit";
-import { strokeIcon, toolIcons } from "./icons-tools.ts";
+import { githubMark } from "./github-mark.ts";
+import { keyboardIconShapes, strokeIcon, toolIcons } from "./icons-tools.ts";
 
 // Lucide-style SVG icons rendered through the shared strokeIcon() shell,
 // which carries the stroke presentation attributes inline (see icons-tools.ts).
 
 export const icons = {
+  github: githubMark,
   repeat: strokeIcon(
     svg`<path d="m17 2 4 4-4 4"/><path d="M3 11V9a3 3 0 0 1 3-3h15M7 22l-4-4 4-4"/><path d="M21 13v2a3 3 0 0 1-3 3H3"/>`,
   ),
@@ -13,6 +14,9 @@ export const icons = {
     svg`<path d="m12 3 10 5-10 5L2 8Z"/><path d="m2 12 10 5 10-5M2 16l10 5 10-5"/>`,
   ),
   // Navigation icons
+  messageCircle: strokeIcon(svg`<path
+    d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"
+  />`),
   messageSquare: strokeIcon(svg` <path
     d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"
   />`),
@@ -189,6 +193,10 @@ export const icons = {
     <path d="M20 14h2" />
     <path d="M15 13v2" />
     <path d="M9 13v2" />`),
+  userPlus: strokeIcon(svg`<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+    <circle cx="9" cy="7" r="4" />
+    <path d="M20 8v6" />
+    <path d="M23 11h-6" />`),
   users: strokeIcon(svg` <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
     <circle cx="9" cy="7" r="4" />
     <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
@@ -310,6 +318,8 @@ export const icons = {
     <rect width="16" height="3" x="4" y="9" rx="1" />
     <rect width="16" height="3" x="4" y="14" rx="1" />
     <rect width="16" height="3" x="4" y="19" rx="1" />`),
+  list: strokeIcon(svg`<path d="M8 6h13" /><path d="M8 12h13" /><path d="M8 18h13" />
+    <path d="M3 6h.01" /><path d="M3 12h.01" /><path d="M3 18h.01" />`),
   listFilter: strokeIcon(svg` <path d="M3 6h18" />
     <path d="M7 12h10" />
     <path d="M10 18h4" />`),
@@ -320,29 +330,32 @@ export const icons = {
     <circle cx="15" cy="6" r="1.1" fill="currentColor" stroke="none" />
     <circle cx="15" cy="12" r="1.1" fill="currentColor" stroke="none" />
     <circle cx="15" cy="18" r="1.1" fill="currentColor" stroke="none" />`),
-  arrowDown: strokeIcon(svg`<path d="M12 5v14m7-7-7 7-7-7" />`),
-  arrowUp: strokeIcon(svg`<path d="M12 19V5m-7 7 7-7 7 7" />`),
+  arrowDown: strokeIcon(keyboardIconShapes["↓"]),
+  arrowUp: strokeIcon(keyboardIconShapes["↑"]),
   audioLines: strokeIcon(svg`<path d="M2 10v3" />
     <path d="M6 6v11" />
     <path d="M10 3v18" />
     <path d="M14 8v7" />
     <path d="M18 5v13" />
     <path d="M22 10v3" />`),
-  chevronUp: strokeIcon(svg`<path d="m18 15-6-6-6 6" />`),
+  chevronUp: strokeIcon(keyboardIconShapes["⌃"]),
   chevronsUpDown: strokeIcon(svg`<path d="m7 15 5 5 5-5" />
     <path d="m7 9 5-5 5 5" />`),
-  arrowRight: strokeIcon(svg` <path d="M5 12h14" />
-    <path d="m12 5 7 7-7 7" />`),
-  arrowLeft: strokeIcon(svg` <path d="m12 19-7-7 7-7" />
-    <path d="M19 12H5" />`),
-  cornerDownLeft: strokeIcon(svg` <polyline points="9 10 4 15 9 20" />
-    <path d="M20 4v7a4 4 0 0 1-4 4H4" />`),
+  arrowRight: strokeIcon(keyboardIconShapes["→"]),
+  arrowLeft: strokeIcon(keyboardIconShapes["←"]),
+  cornerDownLeft: strokeIcon(keyboardIconShapes["⏎"]),
+  cornerUpLeft: strokeIcon(svg` <polyline points="9 14 4 9 9 4" />
+    <path d="M20 20v-7a4 4 0 0 0-4-4H4" />`),
   cornerDownRight: strokeIcon(svg` <polyline points="15 10 20 15 15 20" />
     <path d="M4 4v7a4 4 0 0 0 4 4h12" />`),
   copy: strokeIcon(svg` <rect width="14" height="14" x="8" y="8" rx="2" ry="2" />
     <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2" />`),
   search: strokeIcon(svg` <circle cx="11" cy="11" r="8" />
     <path d="m21 21-4.3-4.3" />`),
+  wrapText: strokeIcon(svg` <path d="M3 6h18" />
+    <path d="M3 12h15a3 3 0 1 1 0 6h-4" />
+    <path d="m16 16-2 2 2 2" />
+    <path d="M3 18h7" />`),
   brain: strokeIcon(svg` <path
       d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"
     />

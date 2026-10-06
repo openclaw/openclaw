@@ -2,7 +2,7 @@
 import MarkdownIt, { type Env } from "markdown-it";
 import { findCodeRegions, isInsideCode, tokenizeHtmlTags } from "openclaw/plugin-sdk/text-chunking";
 import { isMarkdownEscaped, projectMatrixMarkdown } from "./format-profile.js";
-import { findMatrixTableSourceRanges } from "./format-table-ranges.js";
+import { matrixTableSourceRangesFromTokens } from "./format-table-ranges.js";
 
 const spoilerParser = new MarkdownIt({ html: false, linkify: true, typographer: false });
 spoilerParser.linkify.set({ fuzzyLink: true });
@@ -17,8 +17,14 @@ function findInlineMetadataRanges(
   const underlineTags = [...tokenizeHtmlTags(markdown)].filter(
     (tag) => tag.name === "u" || tag.name === "ins",
   );
+  let underlineIndex = 0;
   for (let index = 0; index < markdown.length - 1; index += 1) {
-    const underlineTag = underlineTags.find((tag) => tag.start === index);
+    let nextUnderlineTag = underlineTags[underlineIndex];
+    while (nextUnderlineTag && nextUnderlineTag.start < index) {
+      underlineIndex += 1;
+      nextUnderlineTag = underlineTags[underlineIndex];
+    }
+    const underlineTag = nextUnderlineTag?.start === index ? nextUnderlineTag : undefined;
     if (underlineTag) {
       index = underlineTag.end - 1;
       continue;
@@ -89,16 +95,18 @@ function findInlineMetadataRanges(
     if (markdown[index] === "]" && !isMarkdownEscaped(markdown, index)) {
       labelStack.pop();
     }
-    const autolink = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>/u.exec(markdown.slice(index));
-    if (autolink && !isMarkdownEscaped(markdown, index)) {
-      ranges.push({ start: index, end: index + autolink[0].length });
-      index += autolink[0].length - 1;
-      continue;
-    }
-    const emailAutolink = /^<[^<>\s@]+@[^<>\s@]+>/u.exec(markdown.slice(index));
-    if (emailAutolink && !isMarkdownEscaped(markdown, index)) {
-      ranges.push({ start: index, end: index + emailAutolink[0].length });
-      index += emailAutolink[0].length - 1;
+    if (markdown[index] === "<") {
+      const autolink = /^<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^<>\s]*>/u.exec(markdown.slice(index));
+      if (autolink && !isMarkdownEscaped(markdown, index)) {
+        ranges.push({ start: index, end: index + autolink[0].length });
+        index += autolink[0].length - 1;
+        continue;
+      }
+      const emailAutolink = /^<[^<>\s@]+@[^<>\s@]+>/u.exec(markdown.slice(index));
+      if (emailAutolink && !isMarkdownEscaped(markdown, index)) {
+        ranges.push({ start: index, end: index + emailAutolink[0].length });
+        index += emailAutolink[0].length - 1;
+      }
     }
   }
   return ranges;
@@ -152,6 +160,7 @@ export function prepareMatrixMarkdownSource(markdown: string) {
   return {
     markdown,
     inlineRanges,
+    tableRanges: matrixTableSourceRangesFromTokens(tokens, lineStarts, markdown.length),
     metadataRanges: ranges,
     codeRegions,
     underlineTags: [...tokenizeHtmlTags(markdown)].filter(
@@ -197,7 +206,7 @@ function hasMatrixSpoilerMetadataCollision(
   // Matrix consumes underline tags before parsing inline code, so backticks
   // inside their attributes cannot make a literal code region.
   const literalRanges = [
-    ...findMatrixTableSourceRanges(markdown),
+    ...source.tableRanges,
     ...codeRegions.filter(
       (code) => !underlineTags.some((tag) => code.start > tag.start && code.start < tag.end),
     ),

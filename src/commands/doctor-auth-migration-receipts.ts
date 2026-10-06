@@ -14,11 +14,9 @@ import {
   recordLegacyMigrationSource,
 } from "../infra/state-migrations.receipts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
 const MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 type MigrationDatabase = Pick<OpenClawStateDatabase, "migration_runs" | "migration_sources">;
@@ -242,6 +240,11 @@ export function archiveAuthProfileMigrationSource(
 
 export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly string[]): () => void {
   const releases: Array<() => void> = [];
+  const releaseAll = () => {
+    for (const release of releases.toReversed()) {
+      release();
+    }
+  };
   try {
     for (const sourcePath of [
       ...new Set(sourcePaths.map((entry) => path.resolve(entry))),
@@ -249,16 +252,10 @@ export function acquireAuthProfileMigrationSourceLocks(sourcePaths: readonly str
       releases.push(acquireFileLockSyncWithRetry(sourcePath));
     }
   } catch (error) {
-    for (const release of releases.toReversed()) {
-      release();
-    }
+    releaseAll();
     throw error;
   }
-  return () => {
-    for (const release of releases.toReversed()) {
-      release();
-    }
-  };
+  return releaseAll;
 }
 
 function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceReceipt): void {
@@ -295,33 +292,27 @@ function verifyAuthProfileMigrationTarget(receipt: AuthProfileMigrationSourceRec
         throw new Error("auth profile migration target verification failed");
       }
     }
-    if (receipt.expectedStateSha256) {
-      if (digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256) {
-        throw new Error("auth profile migration target verification failed");
-      }
+    if (
+      receipt.expectedStateSha256 &&
+      digestAuthProfileMigrationValue(readTarget("state")) !== receipt.expectedStateSha256
+    ) {
+      throw new Error("auth profile migration target verification failed");
     }
   } finally {
     db.close();
   }
 }
 
+/** Finalize while the migration owner holds the source-file lock. */
 export function finalizeAuthProfileMigrationSource(
   receipt: AuthProfileMigrationSourceReceipt,
   status: "completed" | "archived-unparsed" = "completed",
-  options: { sourceLocked?: boolean } = {},
 ): void {
   receipt.completionStatus = status;
-  const release = options.sourceLocked
-    ? undefined
-    : acquireFileLockSyncWithRetry(receipt.sourcePath);
-  try {
-    recordAuthProfileMigrationImported(receipt);
-    verifyAuthProfileMigrationTarget(receipt);
-    archiveAuthProfileMigrationSource(receipt);
-    recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
-  } finally {
-    release?.();
-  }
+  recordAuthProfileMigrationImported(receipt);
+  verifyAuthProfileMigrationTarget(receipt);
+  archiveAuthProfileMigrationSource(receipt);
+  recordAuthProfileMigrationCompleted(receipt, Date.now(), status);
 }
 
 export function resumePendingAuthProfileMigrationArchives(
@@ -329,32 +320,38 @@ export function resumePendingAuthProfileMigrationArchives(
   recoverCompleted?: (receipt: AuthProfileMigrationSourceReceipt) => boolean,
 ): string[] {
   const changes: string[] = [];
-  const database = openOpenClawStateDatabase({ env });
-  const kysely = getNodeSqliteKysely<MigrationDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    kysely
-      .selectFrom("migration_sources as source")
-      .innerJoin("migration_runs as run", "run.id", "source.last_run_id")
-      .select([
-        "source.source_key",
-        "source.source_path",
-        "source.source_sha256",
-        "source.source_size_bytes",
-        "source.source_record_count",
-        "source.target_table",
-        "source.last_run_id",
-        "source.report_json",
-        "source.status",
-      ])
-      .where("source.migration_kind", "=", MIGRATION_KIND)
-      .where((eb) =>
-        eb.or([
-          eb.and([eb("source.status", "=", "imported"), eb("source.removed_source", "=", 0)]),
-          eb.and([eb("source.status", "=", "completed"), eb("source.removed_source", "=", 1)]),
-        ]),
-      ),
-  ).rows;
+  const rows =
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) =>
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<MigrationDatabase>(db)
+            .selectFrom("migration_sources as source")
+            .innerJoin("migration_runs as run", "run.id", "source.last_run_id")
+            .select([
+              "source.source_key",
+              "source.source_path",
+              "source.source_sha256",
+              "source.source_size_bytes",
+              "source.source_record_count",
+              "source.target_table",
+              "source.last_run_id",
+              "source.report_json",
+              "source.status",
+            ])
+            .where("source.migration_kind", "=", MIGRATION_KIND)
+            .where((eb) =>
+              eb.or([
+                eb.and([eb("source.status", "=", "imported"), eb("source.removed_source", "=", 0)]),
+                eb.and([
+                  eb("source.status", "=", "completed"),
+                  eb("source.removed_source", "=", 1),
+                ]),
+              ]),
+            ),
+        ).rows,
+      { env },
+    ) ?? [];
   for (const row of rows) {
     const report = JSON.parse(row.report_json) as Record<string, unknown>;
     const completed = row.status === "completed";
@@ -478,13 +475,16 @@ export function hasTerminalAuthProfileMigrationReceipt(
   sourceKey: string,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  const database = openOpenClawStateDatabase({ env });
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    getNodeSqliteKysely<MigrationDatabase>(database.db)
-      .selectFrom("migration_sources")
-      .select("status")
-      .where("source_key", "=", sourceKey),
+  const row = withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<MigrationDatabase>(db)
+          .selectFrom("migration_sources")
+          .select("status")
+          .where("source_key", "=", sourceKey),
+      ),
+    { env },
   );
   return row?.status === "completed" || row?.status === "archived-unparsed";
 }

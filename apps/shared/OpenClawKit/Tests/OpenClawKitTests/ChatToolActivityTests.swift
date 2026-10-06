@@ -1,9 +1,50 @@
+import Foundation
 import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
 @Suite("ChatToolActivity")
 struct ChatToolActivityTests {
+    @Test func `prepared unknown outcome does not become finished from raw result presence`() {
+        var item = ChatToolActivityItem(
+            id: "call", name: "read", arguments: nil, details: nil,
+            resultText: "result", state: .finished, liveDiffStat: nil)
+        item.activity = OpenClawAgentActivityItem(
+            itemId: "tool:call", toolCallId: "call", kind: "tool", phase: "end",
+            title: "Read — outcome unknown", name: "read", status: nil,
+            hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        #expect(item.displayState == .unavailable)
+        #expect(!item.isPending)
+        #expect(item.resultText == "result")
+        item.activity = OpenClawAgentActivityItem(
+            itemId: "tool:call", toolCallId: "call", kind: "tool", phase: "end",
+            title: "Read", name: "read", status: "blocked",
+            hideFromChannelProgress: nil, suppressChannelProgress: nil)
+        #expect(item.displayState == .blocked)
+        #expect(!item.isError)
+        #expect(!item.isPending)
+    }
+
+    @Test func `prepared skipped outcome stays neutral despite raw result error`() throws {
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "read")],
+            results: [self.content(
+                type: "toolResult",
+                text: "Skipped to process an incoming message.",
+                id: "call-1",
+                name: "read",
+                isError: true)],
+            activity: [OpenClawAgentActivityItem(
+                itemId: "tool:call-1", toolCallId: "call-1", kind: "tool", phase: "end",
+                title: "Read", name: "read", status: "skipped",
+                hideFromChannelProgress: nil, suppressChannelProgress: nil)])
+
+        let item = try #require(items.first)
+        #expect(String(localized: item.displayState.title) == "Skipped")
+        #expect(!item.isError)
+        #expect(!item.isPending)
+    }
+
     @Test func `pairs call and result by ID`() {
         let items = ChatToolActivity.items(
             calls: [self.content(type: "toolCall", id: "call-1", name: "exec")],
@@ -15,8 +56,7 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: "done",
-            isError: false,
-            isPending: false,
+            state: .finished,
             liveDiffStat: nil)])
     }
 
@@ -31,8 +71,7 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: "orphaned",
-            isError: false,
-            isPending: false,
+            state: .finished,
             liveDiffStat: nil)])
     }
 
@@ -51,7 +90,7 @@ struct ChatToolActivityTests {
         #expect(items.map(\.resultText) == ["first", "second"])
     }
 
-    @Test func `leaves call without result unexpandable`() {
+    @Test func `does not report an unanswered call as finished`() {
         let items = ChatToolActivity.items(
             calls: [self.content(type: "toolCall", name: "search")],
             results: [])
@@ -62,9 +101,16 @@ struct ChatToolActivityTests {
             arguments: nil,
             details: nil,
             resultText: nil,
-            isError: false,
-            isPending: false,
+            state: .unavailable,
             liveDiffStat: nil)])
+    }
+
+    @Test func `an empty successful result still confirms completion`() {
+        let items = ChatToolActivity.items(
+            calls: [self.content(type: "toolCall", id: "call-1", name: "exec")],
+            results: [self.content(type: "toolResult", id: "call-1", name: "exec")])
+
+        #expect(items.first?.state == .finished)
     }
 
     @Test func `threads paired result details`() {

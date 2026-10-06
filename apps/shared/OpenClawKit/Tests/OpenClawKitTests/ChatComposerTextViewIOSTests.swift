@@ -1,6 +1,7 @@
 #if os(iOS)
 import Testing
 import UIKit
+import UniformTypeIdentifiers
 @testable import OpenClawChatUI
 
 @Suite
@@ -61,6 +62,51 @@ struct ChatComposerTextViewIOSTests {
         #expect(!textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .shift))
         #expect(textView.handleHardwareKey(.keyboardUpArrow, modifierFlags: .alphaShift))
         #expect(!textView.handleHardwareKey(.keyboardReturnOrEnter, modifierFlags: []))
+    }
+
+    @Test func `pasted images become attachments and text falls through`() throws {
+        // A private pasteboard avoids the iOS paste prompt that reading the general one triggers.
+        let pasteboard = try #require(UIPasteboard.withUniqueName())
+        defer { UIPasteboard.remove(withName: pasteboard.name) }
+        let png = try #require(UIGraphicsImageRenderer(size: CGSize(width: 2, height: 2)).image { _ in }.pngData())
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        var pasted: [ChatComposerPasteSupport.ImageAttachment] = []
+        textView.onPasteImageAttachment = { pasted.append(($0, $1, $2)) }
+
+        pasteboard.setData(png, forPasteboardType: UTType.png.identifier)
+        #expect(textView.pasteImageAttachments(from: pasteboard))
+        #expect(pasted.map(\.fileName) == ["pasted-image-1.png"])
+        #expect(pasted.map(\.mimeType) == ["image/png"])
+        #expect(pasted.first?.data == png)
+
+        // Photos and screenshots may land as a UIImage rather than raw PNG bytes.
+        pasted = []
+        pasteboard.image = UIImage(data: png)
+        #expect(textView.pasteImageAttachments(from: pasteboard))
+        #expect(pasted.count == 1)
+
+        pasted = []
+        pasteboard.string = "plain text"
+        #expect(!textView.pasteImageAttachments(from: pasteboard))
+
+        // Upload transcoding cannot decode SVG, so a vector-first item uses its bitmap representation.
+        let provider = NSItemProvider()
+        for (type, data) in [(UTType.svg, Data("<svg xmlns=\"http://www.w3.org/2000/svg\"/>".utf8)), (.png, png)] {
+            provider.registerDataRepresentation(forTypeIdentifier: type.identifier, visibility: .all) { completion in
+                completion(data, nil)
+                return nil
+            }
+        }
+        pasteboard.itemProviders = [provider]
+        #expect(pasteboard.types(forItemSet: IndexSet(integer: 0))?.first?.first == UTType.svg.identifier)
+        #expect(textView.pasteImageAttachments(from: pasteboard))
+        #expect(pasted.map(\.mimeType) == ["image/png"])
+
+        pasted = []
+        pasteboard.image = UIImage(data: png)
+        textView.onPasteImageAttachment = nil
+        #expect(!textView.pasteImageAttachments(from: pasteboard))
+        #expect(pasted.isEmpty)
     }
 }
 #endif

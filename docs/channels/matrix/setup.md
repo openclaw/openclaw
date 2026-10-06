@@ -24,7 +24,7 @@ openclaw plugins install @openclaw/matrix
 
 1. Create a Matrix account on your homeserver.
 2. Configure `channels.matrix` with `homeserver` + `accessToken`, or `homeserver` + `userId` + `password`. Create the access token in your Matrix client or homeserver admin UI; password auth mints and caches one for you on first login.
-3. Restart the gateway: `openclaw gateway restart`.
+3. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload).
 4. Start a DM with the bot, or invite it to a room. Fresh invites only land when [`autoJoin`](#auto-join) allows them.
 
 ### Interactive setup
@@ -128,7 +128,7 @@ The wizard converts a friendly name into a normalized account ID (`Ops Bot` -> `
 
 ### Cached credentials
 
-Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status probes. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
+Matrix caches account credentials in the shared `state/openclaw.sqlite` plugin state. When cached credentials exist, OpenClaw treats Matrix as configured even without an `accessToken` in the config file - this covers setup, `openclaw doctor`, and channel-status checks. Upgrades import the retired `~/.openclaw/credentials/matrix/credentials*.json` files through `openclaw doctor --fix`, verify the SQLite rows, then archive the files.
 
 ### Environment variables
 

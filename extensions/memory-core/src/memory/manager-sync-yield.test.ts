@@ -77,7 +77,8 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { loadMemorySourceFileState } from "./manager-source-state.js";
+import { MemorySyncTestHarness } from "./manager-sync-ops.test-support.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -100,7 +101,7 @@ function createDb(): DatabaseSync {
   return db;
 }
 
-class SessionSyncYieldHarness extends MemoryManagerSyncOps {
+class SessionSyncYieldHarness extends MemorySyncTestHarness {
   protected readonly createProvider = (): never => {
     throw new Error("Sync yield harness does not acquire embedding providers");
   };
@@ -137,16 +138,21 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   constructor(
     db: DatabaseSync,
     private readonly onIndexFile: (count: number) => void,
+    private readonly indexConcurrency: number,
   ) {
     super();
     this.publishedDatabase = new MemoryIndexDatabase(db);
+    // Keep this scheduler fixture microtask-only; worker I/O could hide a missing yield.
+    this.publishedDatabase.readSourceState = async (query) =>
+      loadMemorySourceFileState({ db, ...query });
   }
 
-  async syncTargetArchiveFiles(files: string[]): Promise<void> {
+  async reindexArchiveFiles(files: string[]): Promise<void> {
     this.corpusFiles = files;
+    // Source-wide reindexing reads one in-memory hash snapshot. Worker round trips
+    // in targeted sync would yield on their own and hide a missing scheduler yield.
     await this.syncArchiveFiles({
-      needsFullReindex: false,
-      targetArchiveFiles: files,
+      needsFullReindex: true,
     });
   }
 
@@ -178,7 +184,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 
   protected getIndexConcurrency(): number {
-    return 1;
+    return this.indexConcurrency;
   }
 
   protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {}
@@ -187,10 +193,7 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }
@@ -217,33 +220,51 @@ describe("session sync responsiveness", () => {
     vi.clearAllMocks();
   });
 
-  it("yields to the event loop between session file batches", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
-    );
-    let immediateRan = false;
-    const immediate = new Promise<void>((resolve) => {
-      setImmediate(() => {
-        immediateRan = true;
-        resolve();
+  it.each([
+    { concurrency: 1, fileCount: 4 },
+    { concurrency: 4, fileCount: 40 },
+  ])(
+    "serves queued work during slow session indexing with $concurrency workers",
+    async ({ concurrency, fileCount }) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      const files = Array.from({ length: fileCount }, (_value, index) =>
+        path.join(sessionsDir, `session-${index}.jsonl.deleted.2026-07-11T00-00-00.000Z`),
+      );
+      let immediateRan = false;
+      const immediate = new Promise<void>((resolve) => {
+        setImmediate(() => {
+          immediateRan = true;
+          resolve();
+        });
       });
-    });
-    const observedBeforeLastFile: boolean[] = [];
-    const db = createDb();
-    const harness = new SessionSyncYieldHarness(db, (count) => {
-      if (count === 11) {
-        observedBeforeLastFile.push(immediateRan);
-      }
-    });
+      const observedBeforeNextWave: boolean[] = [];
+      const db = createDb();
+      let elapsedMs = 0;
+      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+      const harness = new SessionSyncYieldHarness(
+        db,
+        (count) => {
+          // Model expensive synchronous indexing without sleeping or a timing-sensitive assertion.
+          elapsedMs += 20;
+          if (count === concurrency + 1) {
+            observedBeforeNextWave.push(immediateRan);
+          }
+        },
+        concurrency,
+      );
 
-    try {
-      await harness.syncTargetArchiveFiles(files);
-      expect(harness.indexedPaths).toHaveLength(files.length);
-      expect(observedBeforeLastFile).toEqual([true]);
-      await immediate;
-    } finally {
-      db.close();
-    }
-  });
+      try {
+        await harness.reindexArchiveFiles(files);
+        expect(harness.indexedPaths).toEqual(
+          files.map((file) => `sessions/${path.basename(file)}`),
+        );
+        expect(observedBeforeNextWave).toEqual([true]);
+        await immediate;
+      } finally {
+        clock.mockRestore();
+        await immediate;
+        db.close();
+      }
+    },
+  );
 });

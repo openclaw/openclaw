@@ -4,19 +4,22 @@ import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 
 describe("AppSidebar outbox attention badges", () => {
-  it("shows draft pencils for active and inactive sessions with stored composer text", async () => {
+  it("shows active and inactive draft pencils while suppressing Incognito roster rows", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
     const plainKey = "agent:main:plain-thread";
+    const incognitoKey = "agent:main:private-thread";
     const gateway = createGateway({} as GatewayBrowserClient);
-    const { sidebar } = await mountSidebar(
-      gateway,
-      createSessions("main", [draftKey, activeDraftKey, plainKey]),
-    );
+    const sessions = createSessions("main", [draftKey, activeDraftKey, plainKey, incognitoKey]);
+    sessions.state.result!.sessions.find((row) => row.key === incognitoKey)!.incognito = true;
+    const { sidebar } = await mountSidebar(gateway, sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = activeDraftKey;
-    sidebar.hasSessionDraft = (sessionKey) =>
-      sessionKey === draftKey || sessionKey === activeDraftKey;
+    sidebar.storedOutboxes = {
+      total: 0,
+      attentionCountForSession: () => 0,
+      hasSessionDraft: (sessionKey) => sessionKey !== plainKey,
+    };
     await sidebar.updateComplete;
 
     const draftBadge = sidebar.querySelector<HTMLElement>(
@@ -29,6 +32,9 @@ describe("AppSidebar outbox attention badges", () => {
     expect(
       sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
     ).toBeNull();
+    const incognitoRow = sidebar.querySelector(`[data-session-key="${incognitoKey}"]`);
+    expect(incognitoRow).not.toBeNull();
+    expect(incognitoRow?.querySelector(".session-row-badge--draft")).toBeNull();
   });
 
   it("shows delivery attention and removes the badge when empty", async () => {
@@ -36,9 +42,11 @@ describe("AppSidebar outbox attention badges", () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const { sidebar } = await mountSidebar(gateway, createSessions("main", [sessionKey]));
     sidebar.connected = true;
-    sidebar.outboxAttentionCountForSession = (rowSessionKey) =>
-      rowSessionKey === sessionKey ? 3 : 0;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = {
+      total: 3,
+      attentionCountForSession: (rowSessionKey) => (rowSessionKey === sessionKey ? 3 : 0),
+      hasSessionDraft: () => false,
+    };
     await sidebar.updateComplete;
 
     const badge = sidebar.querySelector<HTMLElement>(
@@ -47,8 +55,7 @@ describe("AppSidebar outbox attention badges", () => {
     expect(badge?.textContent).toContain("3");
     expect(badge?.getAttribute("aria-label")).toBe("3 messages need attention");
 
-    sidebar.outboxAttentionCountForSession = () => 0;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = undefined;
     await sidebar.updateComplete;
     expect(
       sidebar.querySelector(`[data-session-key="${sessionKey}"] .session-row-badge--attention`),
@@ -68,9 +75,11 @@ describe("AppSidebar outbox attention badges", () => {
         agents: [{ id: "main" }],
       },
     );
-    sidebar.outboxAttentionCountForSession = () => 3;
-    sidebar.hasSessionDraft = () => true;
-    sidebar.requestUpdate();
+    sidebar.storedOutboxes = {
+      total: 3,
+      attentionCountForSession: () => 3,
+      hasSessionDraft: () => true,
+    };
     await sidebar.updateComplete;
 
     const badges = sidebar.querySelectorAll(".nav-item--home .session-row-badge--attention");

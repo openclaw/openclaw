@@ -1,17 +1,20 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
+import { clean as cleanSemver } from "semver";
+import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
+import { withInstallActivity } from "../infra/install-progress.js";
 import {
   buildNpmResolutionFields,
   formatNpmCommandFailureOutput,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -25,6 +28,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromInstalledPackageDir } from "./install-installed-package.js";
@@ -42,12 +46,8 @@ import {
   type ManagedNpmProjectQuarantine,
   type ManagedNpmRootDependencySpecPreparation,
 } from "./install-managed-npm-state.js";
-import { verifyInstalledNpmResolution } from "./install-npm-resolution.js";
 import { resolveDefaultPluginNpmDir } from "./install-paths.js";
-import {
-  preflightPluginNpmInstallPolicy,
-  type InstallSafetyOverrides,
-} from "./install-security-scan.js";
+import { preflightPluginNpmInstallPolicy } from "./install-security-scan.js";
 import {
   defaultLogger,
   ensureInstallTargetAvailableForMode,
@@ -63,8 +63,7 @@ import {
 } from "./install-transaction.js";
 import type {
   InstallPluginResult,
-  PluginInstallArtifactConsentHandler,
-  PluginInstallLogger,
+  PackageInstallCommonParams,
   PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { isOfficialCatalogLookupPluginIdReplacement } from "./official-external-install-records.js";
@@ -72,9 +71,60 @@ import {
   auditDeclaredOpenClawHostDependency,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  findMissingRequiredPluginDependencies,
+  normalizePluginDependencySpecs,
+} from "./status-dependencies-core.js";
+
+type InstalledNpmResolutionVerification =
+  | { kind: "ok" }
+  | { kind: "incomplete"; error: string }
+  | { kind: "conflict"; error: string };
+
+function verifyInstalledNpmResolution(params: {
+  packageName: string;
+  expected: NpmSpecResolution;
+  installed: ManagedNpmRootInstalledDependency | null;
+}): InstalledNpmResolutionVerification {
+  if (!params.installed) {
+    return {
+      kind: "incomplete",
+      error: `npm install did not record package-lock metadata for ${params.packageName}`,
+    };
+  }
+  if (params.expected.version && params.installed.version) {
+    if (params.installed.version !== params.expected.version) {
+      return {
+        kind: "conflict",
+        error: `npm install resolved ${params.packageName} to version ${params.installed.version}, expected ${params.expected.version}`,
+      };
+    }
+  }
+  if (params.expected.integrity && params.installed.integrity) {
+    if (params.installed.integrity !== params.expected.integrity) {
+      return {
+        kind: "conflict",
+        error: `npm install resolved ${params.packageName} with integrity ${params.installed.integrity}, expected ${params.expected.integrity}`,
+      };
+    }
+  }
+  if (
+    (params.expected.version && !params.installed.version) ||
+    (params.expected.integrity && !params.installed.integrity)
+  ) {
+    return {
+      kind: "incomplete",
+      error: `npm install recorded incomplete package-lock metadata for ${params.packageName}: ${params.expected.version && !params.installed.version ? "version" : "integrity"} missing`,
+    };
+  }
+  return { kind: "ok" };
+}
 
 export async function installPluginFromManagedNpmRoot(
-  params: InstallSafetyOverrides & {
+  params: Omit<
+    PackageInstallCommonParams,
+    "requirePluginManifest" | "allowSourceTypeScriptEntries"
+  > & {
     packageName: string;
     dependencySpec?: string;
     prepareDependencySpec?: ManagedNpmRootDependencySpecPreparation;
@@ -82,24 +132,13 @@ export async function installPluginFromManagedNpmRoot(
     installPolicyRequest: PluginInstallPolicyRequest;
     npmResolution: NpmSpecResolution;
     policyPreflightSourcePath?: string;
-    policyPreflightSourcePathKind?: "file" | "directory";
-    skipPolicyPreflight?: boolean;
-    extensionsDir?: string;
-    npmDir?: string;
-    timeoutMs?: number;
     signal?: AbortSignal;
-    logger?: PluginInstallLogger;
-    mode?: "install" | "update";
-    dryRun?: boolean;
-    expectedPluginId?: string;
     expectedReplacementPluginId?: string;
     integrityDrift?: NpmIntegrityDrift;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -126,7 +165,8 @@ export async function installPluginFromManagedNpmRoot(
     return availability;
   }
 
-  if (!params.skipPolicyPreflight) {
+  const policyPreflightSourcePath = params.policyPreflightSourcePath;
+  if (policyPreflightSourcePath) {
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
       pluginId: expectedPluginId ?? params.packageName,
@@ -142,8 +182,8 @@ export async function installPluginFromManagedNpmRoot(
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
           source: params.installPolicyRequest.source,
-          sourcePath: params.policyPreflightSourcePath ?? targetNpmRoot,
-          sourcePathKind: params.policyPreflightSourcePathKind ?? "directory",
+          sourcePath: policyPreflightSourcePath,
+          sourcePathKind: "file",
         }),
     });
     if (preflightPolicyResult) {
@@ -185,6 +225,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });
@@ -222,6 +263,7 @@ export async function installPluginFromManagedNpmRoot(
             managedOverrides,
             omitNpmAliasOverrides,
             timeoutMs,
+            workTimeoutMs,
             signal: params.signal,
           }),
         };
@@ -241,22 +283,19 @@ export async function installPluginFromManagedNpmRoot(
     });
     const initialPeerSync = await syncManagedPeerDependenciesForInstall();
     if (!initialPeerSync.ok) {
-      return { ok: false, error: initialPeerSync.error };
+      return initialPeerSync;
     }
-    const npmInstallArgs = [
-      "npm",
-      ...createSafeNpmInstallArgs({
-        omitDev: true,
+    const npmInstallArgs = resolveNpmCommand(
+      createSafeNpmInstallArgs({
         omitPeer: true,
-        loglevel: "error",
         legacyPeerDeps: true,
         noAudit: true,
         noFund: true,
       }),
-    ];
+    );
     const npmInstallOptions = {
       cwd: npmRoot,
-      timeoutMs: Math.max(timeoutMs, 300_000),
+      timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
       signal: params.signal,
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
@@ -281,10 +320,7 @@ export async function installPluginFromManagedNpmRoot(
       });
       const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
       if (!aliasRetryPeerSync.ok) {
-        return {
-          ok: false,
-          error: aliasRetryPeerSync.error,
-        };
+        return aliasRetryPeerSync;
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
@@ -312,10 +348,9 @@ export async function installPluginFromManagedNpmRoot(
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
-      const syncedPeerDependencies = peerSync.changed;
-      if (!syncedPeerDependencies) {
+      if (!peerSync.changed) {
         settledManagedPeerDependencies = true;
         break;
       }
@@ -330,7 +365,7 @@ export async function installPluginFromManagedNpmRoot(
     if (!settledManagedPeerDependencies) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
       settledManagedPeerDependencies = !peerSync.changed;
     }
@@ -354,10 +389,7 @@ export async function installPluginFromManagedNpmRoot(
         : undefined,
     );
     if (!requiredPlatformPackageNames.ok) {
-      return {
-        ok: false,
-        error: requiredPlatformPackageNames.error,
-      };
+      return requiredPlatformPackageNames;
     }
     let incompletePlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
     try {
@@ -376,20 +408,23 @@ export async function installPluginFromManagedNpmRoot(
       logger.warn?.(
         `npm left current-platform package(s) ${incompletePlatformPackageNames.join(", ")} missing or incomplete; retrying once with a fresh cache.`,
       );
-      let freshCacheDir: string | undefined;
+      let freshCache: TempWorkspace | undefined;
       try {
         await Promise.all(
           incompletePlatformPackages.map(({ packagePath }) =>
             fs.rm(packagePath, { recursive: true, force: true }),
           ),
         );
-        freshCacheDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-cache-"));
+        freshCache = await tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-npm-cache-",
+        });
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
           env: {
             ...npmInstallOptions.env,
-            NPM_CONFIG_CACHE: freshCacheDir,
-            npm_config_cache: freshCacheDir,
+            NPM_CONFIG_CACHE: freshCache.dir,
+            npm_config_cache: freshCache.dir,
           },
         });
       } catch (error) {
@@ -398,15 +433,11 @@ export async function installPluginFromManagedNpmRoot(
           error: `Failed to repair missing or incomplete current-platform package(s) ${incompletePlatformPackageNames.join(", ")}: ${String(error)}`,
         };
       } finally {
-        if (freshCacheDir) {
-          try {
-            await fs.rm(freshCacheDir, { recursive: true, force: true });
-          } catch (error) {
-            logger.warn?.(
-              `Failed to remove temporary npm cache ${freshCacheDir}: ${String(error)}`,
-            );
-          }
-        }
+        await freshCache?.cleanup().catch((error: unknown) => {
+          logger.warn?.(
+            `Failed to remove temporary npm cache ${freshCache?.dir}: ${String(error)}`,
+          );
+        });
       }
       if (install.code !== 0) {
         return {
@@ -437,6 +468,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });
@@ -502,6 +534,18 @@ export async function installPluginFromManagedNpmRoot(
       };
     }
 
+    const missingRequired = await findMissingRequiredPluginDependencies({
+      rootDir: installRoot,
+      dependencyRootDir: npmRoot,
+      ...normalizePluginDependencySpecs(packageManifestResult.manifest ?? {}),
+    });
+    if (missingRequired.length > 0) {
+      return {
+        ok: false,
+        error: `npm install reported success but left required dependencies missing for ${params.packageName}: ${missingRequired.join(", ")}`,
+      };
+    }
+
     const newRootPackageDirs = [...(await listManagedNpmRootPackageNames(npmRoot))]
       .map((packageName) => resolveManagedNpmRootPackageDir(npmRoot, packageName))
       .toSorted((left, right) => left.localeCompare(right));
@@ -539,10 +583,26 @@ export async function installPluginFromManagedNpmRoot(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       mode: policyMode,
       installPolicyRequest: params.installPolicyRequest,
-      emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
       return result;
+    }
+    if (result.manifestName !== params.packageName) {
+      return {
+        ok: false,
+        error: `npm install produced package ${result.manifestName ?? "<missing>"}, expected ${params.packageName}`,
+      };
+    }
+    const expectedVersion = params.npmResolution.version;
+    if (expectedVersion && result.version !== expectedVersion) {
+      // npm normalizes registry versions without rewriting the packed manifest.
+      const installedVersion = result.version ? cleanSemver(result.version, { loose: true }) : null;
+      if (!installedVersion || installedVersion !== cleanSemver(expectedVersion, { loose: true })) {
+        return {
+          ok: false,
+          error: `npm install produced ${params.packageName} version ${result.version ?? "<missing>"}, expected ${expectedVersion}`,
+        };
+      }
     }
     await params.onBeforePluginArtifactCommit?.({
       pluginId: result.pluginId,
@@ -578,7 +638,7 @@ export async function installPluginFromManagedNpmRoot(
         copyErrorPrefix: "Failed to publish managed npm project",
         beforePersistentApply: () => {
           params.signal?.throwIfAborted();
-          params.beforePersistentApply?.();
+          return params.beforePersistentApply?.();
         },
         hasDeps: false,
         sourceHardlinks: "package-manager",
@@ -586,7 +646,9 @@ export async function installPluginFromManagedNpmRoot(
         afterCopy: (stageDir) => copyManagedNpmProjectInputs({ npmRoot: targetNpmRoot, stageDir }),
         afterInstall: async (stageDir) => {
           try {
-            staged.result = await runManagedNpmInstall(stageDir);
+            staged.result = await withInstallActivity(logger, "dependencies", () =>
+              runManagedNpmInstall(stageDir),
+            );
             return staged.result;
           } catch (error) {
             // The directory owner cleans its stage before the original consent/policy error escapes.

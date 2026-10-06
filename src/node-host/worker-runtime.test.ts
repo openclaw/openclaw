@@ -8,16 +8,23 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
+import * as pathEnv from "../infra/path-env.js";
+import * as terminalUpload from "../infra/terminal-file-upload.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { NodeHostConfig } from "./config.js";
 import type { ExecEventPayload } from "./invoke-types.js";
+import * as pluginNodeHost from "./plugin-node-host.js";
 
 const fixture = vi.hoisted(() => ({
+  loadConfig: vi.fn<() => Promise<NodeHostConfig | null>>(),
   prepare: vi.fn(),
   start: vi.fn(),
   handleInvoke: vi.fn<typeof import("./invoke.js").handleInvoke>(),
@@ -26,14 +33,14 @@ const fixture = vi.hoisted(() => ({
     invoke: vi.fn(),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => undefined),
     updateGatewayConnection: vi.fn(),
     close: vi.fn(),
   },
 }));
 vi.mock("node:readline", () => ({ createInterface: () => fixture.input }));
-vi.mock("./startup-state-migrations.js", () => ({ runStartupMigrations: async () => {} }));
-vi.mock("./config.js", () => ({ loadNodeHostConfig: async () => ({}) }));
+vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
+vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
 vi.mock("../infra/path-env.js", () => ({ ensureOpenClawCliOnPath: vi.fn() }));
 vi.mock("../infra/terminal-file-upload.js", async (importOriginal) => ({
@@ -55,8 +62,12 @@ vi.mock("./plugin-node-host.js", () => ({
 }));
 import { runNodeHostWorker } from "./worker.js";
 
+const { prepareNodeHostRuntime } =
+  await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
+
 beforeEach(() => {
   vi.clearAllMocks();
+  fixture.loadConfig.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -71,6 +82,7 @@ function startWorkerFixture(
   workerHostingDisabledReason?: string,
   options: {
     prepared?: PreparedRuntime;
+    desktopSharingEnabled?: boolean;
     initialWorkerCapacity?: { total: number; available: number } | null;
     gatewayResponse?: (
       message: Record<string, unknown>,
@@ -124,7 +136,7 @@ function startWorkerFixture(
   const previousExitCode = process.exitCode;
   const interruptListeners = process.listeners("SIGINT");
   const terminateListeners = process.listeners("SIGTERM");
-  const running = runNodeHostWorker();
+  const running = runNodeHostWorker({ desktopSharingEnabled: options.desktopSharingEnabled });
   return {
     input,
     messages,
@@ -187,6 +199,84 @@ it("refreshes runner facts only for the current private bridge generation", asyn
   }
 });
 
+it("keeps the private app worker unrestricted by a saved headless command allowlist", async () => {
+  fixture.loadConfig.mockResolvedValue({
+    version: 1,
+    nodeId: "headless-node",
+    commands: ["openclaw.sessions.list.v1"],
+  });
+  vi.spyOn(pathEnv, "ensureOpenClawCliOnPath").mockImplementation(() => {});
+  vi.spyOn(terminalUpload, "ensureTerminalUploadCleanup").mockResolvedValue();
+  vi.spyOn(pluginNodeHost, "ensureNodeHostPluginRegistry").mockResolvedValue();
+  vi.spyOn(pluginNodeHost, "listRegisteredNodeHostCapsAndCommands").mockReturnValue({
+    commands: ["openclaw.sessions.list.v1"],
+    caps: ["sessions"],
+    nodePluginTools: [],
+  });
+  fixture.prepare.mockImplementationOnce(async (params) => ({
+    ...(await prepareNodeHostRuntime({
+      ...params,
+      config: {
+        nodeHost: { workerRuns: { enabled: true, isolation: "none" }, skills: { enabled: false } },
+      },
+      env: {},
+    })),
+    start: fixture.start,
+  }));
+  const { messages, stop } = startWorkerFixture();
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect.soft(messages).toContainEqual(
+      expect.objectContaining({
+        type: "ready",
+        manifest: expect.objectContaining({ commands: expect.arrayContaining(["system.run"]) }),
+      }),
+    );
+    const prepared = await fixture.prepare.mock.results[0]?.value;
+    expect.soft(prepared.workerHostingEnabled).toBe(true);
+    expect.soft(prepared.restrictedSurface).toBeUndefined();
+  } finally {
+    await stop();
+  }
+});
+
+it.each([
+  { desktopSharingEnabled: undefined, configured: false, enabled: false },
+  { desktopSharingEnabled: false, configured: true, enabled: false },
+  { desktopSharingEnabled: true, configured: false, enabled: true },
+])(
+  "publishes the app's desktop preference in the worker manifest: $desktopSharingEnabled",
+  async ({ desktopSharingEnabled, configured, enabled }) => {
+    fixture.prepare.mockImplementationOnce(async (params) => ({
+      ...(await prepareNodeHostRuntime({
+        ...params,
+        config: { desktop: { host: { enabled: configured } } },
+        env: {},
+        platform: "darwin",
+      })),
+      start: fixture.start,
+    }));
+    const { messages, stop } = startWorkerFixture(false, undefined, { desktopSharingEnabled });
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages).toContainEqual(
+        expect.objectContaining({
+          type: "ready",
+          manifest: expect.objectContaining({
+            commands: enabled
+              ? expect.arrayContaining(["desktop.stream"])
+              : expect.not.arrayContaining(["desktop.stream"]),
+          }),
+        }),
+      );
+    } finally {
+      await stop();
+    }
+  },
+);
+
 it("publishes hosting through the app route and retires it on disconnect", async () => {
   const { input, messages, stderr, stop } = startWorkerFixture();
   try {
@@ -194,9 +284,6 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(messages.find((message) => message.type === "ready")).toMatchObject({
       workerHostingEnabled: true,
     });
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ enableWorkerRuns: true }),
-    );
     const connection = {
       url: "wss://gateway.example.test/current",
       protocol: 4,
@@ -335,12 +422,8 @@ it.runIf(process.platform !== "win32").each([
           const { handleInvoke } =
             await vi.importActual<typeof import("./invoke.js")>("./invoke.js");
           fixture.handleInvoke.mockImplementation(handleInvoke);
-          const { prepareNodeHostRuntime } =
-            await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
           const prepared = await prepareNodeHostRuntime({
             config: { nodeHost: { skills: { enabled: false } } },
-            enableDuplexPluginCommands: true,
-            enableWorkerRuns: true,
           });
           let rejectSameGatewayRefresh = false;
           const worker = startWorkerFixture(false, undefined, {
@@ -539,6 +622,7 @@ it("publishes host stats through the native bridge only while connected", async 
         connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
       }),
     );
+    await vi.advanceTimersByTimeAsync(0);
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
       type: "node-event",

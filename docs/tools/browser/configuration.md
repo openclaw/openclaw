@@ -12,6 +12,15 @@ read_when:
 
 Browser settings live in `~/.openclaw/openclaw.json`.
 
+With Gateway hot reload enabled, changing `browser.enabled`,
+`browser.evaluateEnabled`, or `browser.ssrfPolicy` replaces only the Browser
+control service. Pending browser operations are cancelled and OpenClaw-owned
+Chrome processes close before the new policy applies. The Gateway and other
+plugins keep running. Attached and remote browser processes stay open, but
+OpenClaw disconnects its control sessions. Browser control starts again on the
+next request when enabled; managed tabs from the retired process are not kept.
+Extension relay configuration still requires a Gateway restart.
+
 ```json5
 {
   browser: {
@@ -67,12 +76,17 @@ an unmarked baseline. Existing-session snapshots omit deltas.
 
 ### Tab cleanup ownership
 
-Session tab cleanup applies only to tabs created by the OpenClaw browser tool
-with `action: "open"`. OpenClaw does not adopt tabs that were already open,
-opened by the user, or otherwise have unknown ownership. The
+Session tab cleanup applies only to tabs a session owns: tabs created by the
+OpenClaw browser tool with `action: "open"` and tabs opened from that session's
+Browser panel in the Control UI. OpenClaw does not adopt tabs that were already
+open, opened outside OpenClaw, or otherwise have unknown ownership. The
 `browser.tabCleanup` block controls periodic idle and cap sweeps for primary
 sessions. Changes apply on the next sweep without restarting the browser;
 disabling it does not disable explicit session lifecycle cleanup.
+
+Periodic cleanup belongs to the Browser plugin service and continues after the
+request that first started browser control ends. Stopping or reloading that
+service cancels future sweeps and waits for active cleanup to finish.
 
 OpenClaw-managed Chrome also applies a separate, best-effort cap of eight page
 tabs when opening a tab. This cap is independent of `browser.tabCleanup`;
@@ -187,7 +201,7 @@ main model can read the screenshot directly.
 
 - Browser navigation and open-tab requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh OpenClaw-managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Playwright routing is still not a network firewall and does not intercept redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, or every background/subresource path. Complete egress isolation requires owner-side isolation or a policy-enforcing proxy.
-- In strict SSRF mode, remote CDP endpoint discovery and `/json/version` probes (`cdpUrl`) are checked too.
+- In strict SSRF mode, remote CDP endpoint discovery and `/json/version` checks (`cdpUrl`) are checked too.
 - Guarded remote CDP connections now fail closed when the selected driver cannot
   keep the approved endpoint bound to the actual socket. Use the regular
   `openclaw` driver for Browserless, Browserbase, Notte, or other guarded
@@ -204,12 +218,11 @@ main model can read the screenshot directly.
   returned hostname is not enough; the WebSocket transport must use the endpoint
   that passed policy validation.
 - Gateway/provider `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` environment variables do not automatically proxy the OpenClaw-managed browser. Managed Chrome launches direct by default so provider proxy settings do not weaken browser SSRF checks.
-- OpenClaw-managed local CDP readiness probes and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
+- OpenClaw-managed local CDP readiness checks and DevTools WebSocket connections bypass the managed network proxy for the exact launched loopback endpoint, so `openclaw browser start` still works when an operator proxy blocks loopback egress.
 - To proxy the managed browser itself, pass explicit Chrome proxy flags through `browser.extraArgs`, such as `--proxy-server=...` or `--proxy-pac-url=...`. Strict SSRF mode blocks explicit browser proxy routing unless private-network browser access is intentionally enabled.
 - `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` is off by default; enable only when private-network browser access is intentionally trusted.
 - `browser.ssrfPolicy.allowedHostnames` grants exact hosts while the rest of the private network remains blocked.
 - `browser.ssrfPolicy.allowRfc2544BenchmarkRange` and `browser.ssrfPolicy.allowIpv6UniqueLocalRange` narrowly allow trusted fake-IP proxy ranges.
-- `browser.ssrfPolicy.allowPrivateNetwork` remains supported as a legacy alias.
 
 </Accordion>
 

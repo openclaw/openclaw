@@ -6,6 +6,21 @@ import {
 } from "./draft-session-placement.ts";
 
 describe("new-session placement target", () => {
+  it("retains a recovered classless target when the catalog now displays a machine", () => {
+    const target = { kind: "profile" as const, profileId: "aws" };
+    expect(
+      resolveDraftSessionPlacement(
+        { sessionKey: "agent:main:pending", target },
+        {
+          cloudProfileId: "aws",
+          deviceId: "",
+          autoDevice: false,
+          cloudSelection: { os: "linux", machineClass: "small" },
+        },
+      ),
+    ).toEqual(target);
+  });
+
   it.each([
     {
       place: {
@@ -26,9 +41,7 @@ describe("new-session placement target", () => {
       target: { kind: "profile", profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
     },
   ])("preserves selected placement options for $target.kind", ({ place, target }) => {
-    expect(resolveDraftSessionPlacement({ sessionKey: "", target: null }, place).target).toEqual(
-      target,
-    );
+    expect(resolveDraftSessionPlacement({ sessionKey: "", target: null }, place)).toEqual(target);
   });
 
   it("preserves automatic device selection through the draft placement target", () => {
@@ -41,7 +54,7 @@ describe("new-session placement target", () => {
           autoDevice: true,
           cloudSelection: { os: "", machineClass: "" },
         },
-      ).target,
+      ),
     ).toEqual({ kind: "auto-device" });
   });
 
@@ -63,7 +76,7 @@ describe("new-session placement target", () => {
     });
   });
 
-  it("restores draft visibility and capability choices from a creating recovery", () => {
+  it("restores the empty workspace, visibility, and capability choices from a creating recovery", () => {
     expect(
       projectDraftSessionPlacementRecovery({
         sessionKey: "agent:main:cloud",
@@ -82,10 +95,16 @@ describe("new-session placement target", () => {
           visibility: "draft",
           toolOverrides: { skills: { release: false } },
           worktree: true,
+          worktreeSource: "empty",
         },
       }),
     ).toMatchObject({
-      placement: { profileId: "aws", os: "windows/wsl2", machineClass: "tiny" },
+      placement: {
+        profileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "tiny",
+        worktreeSource: "empty",
+      },
       draft: {
         permissionMode: "guarded",
         visibility: "draft",

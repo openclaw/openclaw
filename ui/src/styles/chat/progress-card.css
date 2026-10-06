@@ -15,25 +15,6 @@
   animation: fade-in 0.2s var(--ease-out);
 }
 
-/* Docked in the conversation's right gutter, below any suggestion tray sharing
-   .chat-gutter-stack. The width is fixed rather than derived from the gutter:
-   the pane only renders this placement once it has measured a gutter wide
-   enough for this card plus the stack's insets, so the clearance is already
-   guaranteed and a stable card beats one that grows with the window.
-   Top-anchored by the stack, so appended steps extend downward instead of
-   shifting the rows already being read. */
-.session-progress-card--dock {
-  width: var(--chat-progress-dock-width);
-  max-height: min(50vh, 420px);
-  overflow-y: auto;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
-  border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--accent-subtle) 42%, var(--panel-strong));
-  box-shadow: var(--shadow-sm);
-  animation: fade-in 0.2s var(--ease-out);
-}
-
 .session-progress-card--board {
   padding: var(--space-3);
 }
@@ -81,16 +62,11 @@
   align-items: center;
   justify-content: center;
   color: var(--muted);
-  transition: transform 0.16s var(--ease-out);
 }
 
 .session-progress-card__chevron svg {
   width: 14px;
   height: 14px;
-}
-
-.session-progress-card--composer:not([open]) .session-progress-card__chevron {
-  transform: rotate(-90deg);
 }
 
 .session-progress-card__summary:focus-visible {
@@ -122,8 +98,10 @@
   stroke-linejoin: round;
 }
 
-.session-progress-card__current-marker {
-  color: var(--session-progress-neutral);
+.session-progress-card--composer .session-progress-card__step-marker {
+  height: 1lh;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .session-progress-card__current-marker > .session-run-spinner,
@@ -144,7 +122,82 @@
   white-space: nowrap;
 }
 
-.session-progress-card__dismiss {
+.session-progress-card__summary-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.session-progress-card__refresh {
+  display: inline-grid;
+  width: var(--chat-stack-trailing-control-size, 24px);
+  height: var(--chat-stack-trailing-control-size, 24px);
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  touch-action: manipulation;
+}
+
+.session-progress-card__refresh:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.session-progress-card__refresh:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.session-progress-card__refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-progress-card__refresh[data-state="pending"] svg {
+  animation: btn-spinner-spin 1.2s linear infinite;
+}
+
+.session-progress-card__refresh[data-state="updated"] {
+  color: var(--ok);
+}
+
+.session-progress-card__refresh:is([data-state="failed"], [data-state="timeout"]) {
+  color: var(--warn);
+}
+
+.session-progress-card__refresh-status {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 400;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.session-progress-card__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
+  color: var(--warn);
+}
+
+/* Keep live announcements accessible; the button carries the visible feedback. */
+.session-progress-card__refresh-status:is([data-state="pending"], [data-state="updated"]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .session-progress-card__refresh[data-state="pending"] svg {
+    animation: none;
+  }
+}
+
+.session-progress-card__dismiss,
+.session-progress-card__clear-saved {
   width: 22px;
   min-width: 22px;
   height: 22px;
@@ -224,18 +277,15 @@
   font-weight: 500;
 }
 
-.session-progress-card__step--in_progress .session-progress-card__step-marker {
-  color: var(--session-progress-neutral);
-}
-
+.session-progress-card__current-marker,
+.session-progress-card__step--in_progress .session-progress-card__step-marker,
 .session-progress-card__step--pending .session-progress-card__step-marker,
 .session-progress-card__step--paused .session-progress-card__step-marker {
   color: var(--session-progress-neutral);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .session-progress-card--composer,
-  .session-progress-card--dock {
+  .session-progress-card--composer {
     animation: none;
     transition: none;
   }

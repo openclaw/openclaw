@@ -1,3 +1,4 @@
+import { sleepWithAbort } from "@openclaw/retry";
 import type {
   SessionPlacement,
   SessionsDispatchResult,
@@ -7,6 +8,8 @@ import {
   GatewayRequestError,
   type GatewayBrowserClient,
 } from "../../api/gateway.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -16,7 +19,18 @@ import {
 } from "../../pages/chat/chat-send-ack.ts";
 import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-support.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
-import type { SessionPlacementTarget } from "./session-placement-recovery.ts";
+import type { SessionCapability } from "./session-capability.ts";
+import type {
+  SessionPlacementStartMode,
+  SessionPlacementTarget,
+} from "./session-placement-recovery.ts";
+
+registerNewSessionSetupEnglish();
+
+type SessionPlacementRequests = {
+  client: Pick<GatewayBrowserClient, "request"> | null;
+  describe: SessionCapability["describe"];
+};
 
 type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string }
@@ -37,6 +51,7 @@ type PlacementReadResult =
   | { status: "unavailable" };
 type PlacementResolution =
   | { status: "active"; placement: SessionPlacement }
+  | { status: "dispatch" }
   | { status: "cancelled" }
   | { status: "interrupted" }
   | { status: "cleanup-rejected"; error: string }
@@ -83,13 +98,11 @@ function isAmbiguousDispatchError(error: unknown): boolean {
 }
 
 async function readPlacement(
-  client: Pick<GatewayBrowserClient, "request">,
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   key: string,
 ): Promise<PlacementReadResult> {
   try {
-    const described = await client.request<{
-      session?: { placement?: SessionPlacement; sessionId?: string } | null;
-    }>("sessions.describe", { key });
+    const described = await requests.describe({ key }, { refresh: true, client: requests.client });
     if (described?.session === null) {
       return { status: "missing" };
     }
@@ -126,21 +139,47 @@ async function reclaimSessionPlacement(
   }
 }
 
-async function resolveActivePlacement(
+async function cancelSessionPlacement(
   client: Pick<GatewayBrowserClient, "request">,
+  params: { key: string; agentId: string },
+  cleanupOnCancellation: () => boolean,
+  messageId?: string,
+) {
+  if (!cleanupOnCancellation()) {
+    return { status: "interrupted" } as const;
+  }
+  const error = await reclaimSessionPlacement(client, params);
+  return error
+    ? {
+        status: "cleanup-rejected" as const,
+        error,
+        ...(messageId !== undefined ? { messageId } : {}),
+      }
+    : ({ status: "cancelled" } as const);
+}
+
+async function resolveActivePlacement(
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   params: {
     key: string;
     agentId: string;
     initial?: SessionPlacement;
+    mode: SessionPlacementStartMode;
     cleanupOnCancellation: () => boolean;
   },
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
+  const { client } = requests;
   let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
   let lookupFailures = 0;
   let emptyPlacements = 0;
+  let placementPending = false;
   for (let attempt = 0; attempt < DISPATCH_RECONCILE_ATTEMPTS; attempt += 1) {
-    const result = next ?? (await readPlacement(client, params.key));
+    const result = next ?? (await readPlacement(requests, params.key));
+    placementPending =
+      result.status === "read" &&
+      result.placement !== undefined &&
+      PENDING_PLACEMENT_STATES.has(result.placement.state);
     next = undefined;
     if (result.status === "missing") {
       return { status: "missing" };
@@ -152,16 +191,11 @@ async function resolveActivePlacement(
       // A planned Gateway interruption says nothing about the worker's health.
       lookupFailures = result.status === "awaiting-gateway" ? 0 : lookupFailures + 1;
       const submissionCancelled = !isCurrent();
-      if (submissionCancelled || lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
-        if (!params.cleanupOnCancellation() && submissionCancelled) {
-          return { status: "interrupted" };
-        }
+      if (submissionCancelled) {
+        return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
+      }
+      if (lookupFailures >= PLACEMENT_LOOKUP_FAILURE_LIMIT) {
         const cleanupError = await reclaimSessionPlacement(client, params);
-        if (submissionCancelled) {
-          return cleanupError
-            ? { status: "cleanup-rejected", error: cleanupError }
-            : { status: "cancelled" };
-        }
         const placementError = "session placement could not be verified";
         return {
           status: "cleanup-rejected",
@@ -170,9 +204,7 @@ async function resolveActivePlacement(
             : placementError,
         };
       }
-      await new Promise<void>((resolve) => {
-        globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
-      });
+      await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
       continue;
     }
     lookupFailures = 0;
@@ -190,15 +222,18 @@ async function resolveActivePlacement(
         emptyPlacements = 0;
       }
       if (!isCurrent()) {
-        if (!params.cleanupOnCancellation()) {
-          return { status: "interrupted" };
-        }
-        const cleanupError = await reclaimSessionPlacement(client, params);
-        return cleanupError
-          ? { status: "cleanup-rejected", error: cleanupError }
-          : { status: "cancelled" };
+        return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
       } else if (placement?.state === "active") {
         return { status: "active", placement };
+      } else if (
+        params.mode === "retry" &&
+        (!placement ||
+          placement.state === "local" ||
+          placement.state === "reclaimed" ||
+          placement.state === "failed")
+      ) {
+        // Explicit Retry may allocate again; the Gateway still owns failed-worker cleanup gates.
+        return { status: "dispatch" };
       } else if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
         if (placement.state === "failed") {
           const cleanupError = await reclaimSessionPlacement(client, params);
@@ -209,36 +244,40 @@ async function resolveActivePlacement(
         return { status: "rejected", placement };
       }
     }
-    await new Promise<void>((resolve) => {
-      globalThis.setTimeout(resolve, DISPATCH_RECONCILE_INTERVAL_MS);
-    });
-  }
-  if (!params.cleanupOnCancellation() && !isCurrent()) {
-    return { status: "interrupted" };
+    await sleepWithAbort(DISPATCH_RECONCILE_INTERVAL_MS);
   }
   if (!isCurrent()) {
-    const cleanupError = await reclaimSessionPlacement(client, params);
-    return cleanupError
-      ? { status: "cleanup-rejected", error: cleanupError }
-      : { status: "cancelled" };
+    return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
   }
   return {
     status: "cleanup-rejected",
-    error: isCurrent()
-      ? "session placement reconciliation timed out"
-      : "session placement cleanup timed out",
+    error: t(
+      placementPending
+        ? "newSession.placementStillStarting"
+        : "newSession.placementCompletionUnconfirmed",
+    ),
   };
 }
 
 export async function deleteSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request"> | null,
+  requests: SessionPlacementRequests,
   key: string,
   agentId: string,
 ): Promise<string | undefined> {
+  return deletePlacementDraft(requests, key, agentId, false);
+}
+
+async function deletePlacementDraft(
+  requests: SessionPlacementRequests,
+  key: string,
+  agentId: string,
+  recovered: boolean,
+): Promise<string | undefined> {
+  const { client } = requests;
   if (!client) {
     return "gateway unavailable during draft cleanup";
   }
-  const existing = await readPlacement(client, key);
+  const existing = await readPlacement({ ...requests, client }, key);
   if (existing.status === "missing") {
     return undefined;
   }
@@ -246,7 +285,15 @@ export async function deleteSessionPlacementDraft(
     return existing.error;
   }
   if (existing.status === "unavailable" || existing.status === "awaiting-gateway") {
-    return "placement draft session could not be verified";
+    return recovered
+      ? "session placement could not be verified"
+      : "placement draft session could not be verified";
+  }
+  if (recovered && existing.placement) {
+    const cleanupError = await reclaimSessionPlacement(client, { key, agentId });
+    if (cleanupError) {
+      return cleanupError;
+    }
   }
   if (!existing.sessionId) {
     return "placement draft session identity is unavailable";
@@ -301,41 +348,15 @@ async function archiveAndDeleteSessionPlacementDraft(
 }
 
 export async function deleteRecoveredSessionPlacementDraft(
-  client: Pick<GatewayBrowserClient, "request"> | null,
+  requests: SessionPlacementRequests,
   key: string,
   agentId: string,
 ): Promise<string | undefined> {
-  if (!client) {
-    return "gateway unavailable during draft cleanup";
-  }
-  const existing = await readPlacement(client, key);
-  if (existing.status === "missing") {
-    return undefined;
-  }
-  if (existing.status === "rejected") {
-    return existing.error;
-  }
-  if (existing.status === "unavailable" || existing.status === "awaiting-gateway") {
-    return "session placement could not be verified";
-  }
-  if (existing.placement) {
-    const cleanupError = await reclaimSessionPlacement(client, { key, agentId });
-    if (cleanupError) {
-      return cleanupError;
-    }
-  }
-  if (!existing.sessionId) {
-    return "placement draft session identity is unavailable";
-  }
-  return archiveAndDeleteSessionPlacementDraft(client, {
-    key,
-    agentId,
-    sessionId: existing.sessionId,
-  });
+  return deletePlacementDraft(requests, key, agentId, true);
 }
 
 export async function startSessionPlacementInitialTurn(
-  client: Pick<GatewayBrowserClient, "request">,
+  requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   params: {
     key: string;
     agentId: string;
@@ -344,52 +365,41 @@ export async function startSessionPlacementInitialTurn(
     mentions?: readonly HumanMention[];
     attachments?: unknown[];
     messageId?: string;
-    recovering?: boolean;
+    mode: SessionPlacementStartMode;
     cleanupOnCancellation?: () => boolean;
   },
   isCurrent: () => boolean,
   beforeSend: () => boolean = () => true,
 ): Promise<SessionPlacementStartOutcome> {
+  const { client } = requests;
   const message = params.message;
   const mentions = params.mentions?.map((mention) => ({ ...mention }));
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
   let resolution: PlacementResolution | undefined;
   let dispatchError = "";
-  if (params.recovering) {
-    const existing = await readPlacement(client, params.key);
-    if (existing.status === "missing") {
-      resolution = { status: "missing" };
-    } else if (existing.status === "rejected") {
-      resolution = { status: "cleanup-rejected", error: existing.error };
-    } else {
-      resolution = await resolveActivePlacement(
-        client,
-        {
-          key: params.key,
-          agentId: params.agentId,
-          initial: existing.status === "read" ? existing.placement : undefined,
-          cleanupOnCancellation,
-        },
-        isCurrent,
-      );
-    }
+  if (params.mode !== "dispatch") {
+    resolution = await resolveActivePlacement(
+      requests,
+      { key: params.key, agentId: params.agentId, mode: params.mode, cleanupOnCancellation },
+      isCurrent,
+    );
   }
-  if (!resolution) {
+  if (resolution?.status === "dispatch" && !isCurrent()) {
+    return cancelSessionPlacement(client, params, cleanupOnCancellation);
+  }
+  if (!resolution || resolution.status === "dispatch") {
     try {
       const dispatched = await client.request<SessionsDispatchResult>(
         "sessions.dispatch",
-        sessionPlacementDispatchParams({
-          key: params.key,
-          agentId: params.agentId,
-          target: params.target,
-        }),
+        sessionPlacementDispatchParams(params),
       );
       resolution = await resolveActivePlacement(
-        client,
+        requests,
         {
           key: params.key,
           agentId: params.agentId,
           initial: dispatched.placement,
+          mode: "recover",
           cleanupOnCancellation,
         },
         isCurrent,
@@ -403,8 +413,8 @@ export async function startSessionPlacementInitialTurn(
         return { status: "dispatch-rejected", error: dispatchError };
       }
       resolution = await resolveActivePlacement(
-        client,
-        { key: params.key, agentId: params.agentId, cleanupOnCancellation },
+        requests,
+        { key: params.key, agentId: params.agentId, mode: "recover", cleanupOnCancellation },
         isCurrent,
       );
     }
@@ -430,14 +440,7 @@ export async function startSessionPlacementInitialTurn(
     };
   }
   if (!isCurrent()) {
-    if (!cleanupOnCancellation()) {
-      return { status: "interrupted" };
-    }
-    const cleanupError = await reclaimSessionPlacement(client, params);
-    if (cleanupError) {
-      return { status: "cleanup-rejected", error: cleanupError };
-    }
-    return { status: "cancelled" };
+    return cancelSessionPlacement(client, params, cleanupOnCancellation);
   }
   const messageId = params.messageId ?? generateUUID();
   const rejectBeforeDelivery = async (
@@ -464,13 +467,7 @@ export async function startSessionPlacementInitialTurn(
       idempotencyKey: messageId,
     });
     if (!isCurrent()) {
-      if (!cleanupOnCancellation()) {
-        return { status: "interrupted" };
-      }
-      const cleanupError = await reclaimSessionPlacement(client, params);
-      return cleanupError
-        ? { status: "cleanup-rejected", error: cleanupError, messageId }
-        : { status: "cancelled" };
+      return await cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }
     const ack = normalizeChatSendAck(sent, messageId);
     if (isTerminalFailureChatSendAck(ack)) {
@@ -485,13 +482,7 @@ export async function startSessionPlacementInitialTurn(
     };
   } catch (error) {
     if (!isCurrent()) {
-      if (!cleanupOnCancellation()) {
-        return { status: "interrupted" };
-      }
-      const cleanupError = await reclaimSessionPlacement(client, params);
-      return cleanupError
-        ? { status: "cleanup-rejected", error: cleanupError, messageId }
-        : { status: "cancelled" };
+      return cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }
     // protocol-client rejects this exact error before socket.send; payload
     // limits likewise fail in the browser transport before any bytes are sent.

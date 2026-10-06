@@ -21,8 +21,7 @@ contributions, and transcript persistence. Part of the [Plugin hooks](/plugins/h
 - optional `event.toolKind` and `event.toolInputKind`, host-authoritative
   discriminators for tools that intentionally share names; for example, outer
   code-mode `exec` calls use `toolKind: "code_mode_exec"` and include
-  `toolInputKind: "javascript" | "typescript"` when the input language is
-  known
+  `toolInputKind: "javascript"` for accepted Code Mode input
 - optional `event.derivedPaths`, best-effort host-derived target path hints
   for well-known tool envelopes such as `apply_patch`; these paths may be
   incomplete or over-approximate what the tool will actually touch (for
@@ -52,8 +51,6 @@ type BeforeToolCallResult = {
     scope?: ApprovalScope;
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
-    /** @deprecated Unresolved approvals always deny. */
-    timeoutBehavior?: "allow" | "deny";
     allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
@@ -183,14 +180,14 @@ export default definePluginEntry({
 });
 ```
 
-Load the file directly and restart the Gateway:
+Add the file to `plugins.load.paths`; the default hybrid reload mode applies
+the change:
 
 ```json5
 {
   agents: {
     entries: {
       "maintenance-agent": {
-        default: true,
         workspace: "~/.openclaw/workspace-maintenance",
       },
     },
@@ -214,6 +211,7 @@ Load the file directly and restart the Gateway:
 `AGENT_ID` must name the agent bound to the maintenance conversation. The
 binding selects that agent for normal messages and `/fix`; the standalone file
 remains the single owner of owner-versus-maintainer tool policy.
+After editing the file itself, run `openclaw plugins reload maintenance-access`.
 
 `requireAuth: true` reuses each channel's existing sender admission. For
 Discord, a guild or channel `users`/`roles` allowlist can authorize the

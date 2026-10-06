@@ -10,6 +10,7 @@ import {
 } from "./candidate-stores.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isPersistedExternalCliAuthProfile } from "./external-cli-sync.js";
+import { isSafeToCopyOAuthRoutingScope } from "./oauth-identity.js";
 import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
 import {
   createFailedOAuthRefreshFence,
@@ -33,10 +34,6 @@ export class OAuthRefreshPeerFenceError extends Error {
     this.name = "OAuthRefreshPeerFenceError";
     this.claims = claims;
   }
-}
-
-function canonicalDatabasePath(databasePath: string): string {
-  return resolvePathViaExistingAncestorSync(databasePath);
 }
 
 function isExternalProfileOwned(
@@ -120,10 +117,32 @@ async function listPeerCandidates(params: {
   env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
 }): Promise<CandidateAuthProfileStore[]> {
-  const ownerDatabasePath = canonicalDatabasePath(params.ownerDatabasePath);
+  const ownerDatabasePath = resolvePathViaExistingAncestorSync(params.ownerDatabasePath);
   return (await listCandidateAuthProfileStores(params)).filter(
     (candidate) => candidate.databasePath !== ownerDatabasePath,
   );
+}
+
+/** All peer transitions compare the captured generation inside the candidate's write lock. */
+function updateOAuthRefreshPeer(
+  candidate: CandidateAuthProfileStore,
+  profileId: string,
+  expected: OAuthCredential,
+  update: (store: AuthProfileStore) => void,
+  preserveProfileState?: boolean,
+) {
+  return updateCandidateAuthProfileStore({
+    candidate,
+    profileId,
+    preserveProfileState,
+    updater: (store) => {
+      if (!isExactOAuthCredential(store.profiles[profileId], expected)) {
+        return false;
+      }
+      update(store);
+      return true;
+    },
+  });
 }
 
 /**
@@ -139,6 +158,8 @@ export async function fenceOAuthRefreshPeers(params: {
   generation: OAuthCredential;
   fence: OAuthCredential;
   rollbackOnFailure?: boolean;
+  /** Register before CAS; release the provisional observation if another owner wins. */
+  onFence?: (databasePath: string) => () => void;
 }): Promise<OAuthRefreshPeerClaim[]> {
   const claims: OAuthRefreshPeerClaim[] = [];
   try {
@@ -152,6 +173,7 @@ export async function fenceOAuthRefreshPeers(params: {
         continue;
       }
       if (isExactOAuthCredential(credential, params.fence)) {
+        params.onFence?.(candidate.databasePath);
         claims.push({ candidate });
         continue;
       }
@@ -172,27 +194,23 @@ export async function fenceOAuthRefreshPeers(params: {
       ) {
         continue;
       }
-      let claimed = false;
       const original = { ...credential };
-      const updated = updateCandidateAuthProfileStore({
+      const releaseUnclaimedObservation = params.onFence?.(candidate.databasePath);
+      const updated = updateOAuthRefreshPeer(
         candidate,
-        profileId: params.profileId,
-        updater: (currentStore) => {
-          const current = currentStore.profiles[params.profileId];
-          if (!isExactOAuthCredential(current?.type === "oauth" ? current : undefined, original)) {
-            return false;
-          }
+        params.profileId,
+        original,
+        (currentStore) => {
           currentStore.profiles[params.profileId] = { ...params.fence };
-          claimed = true;
-          return true;
         },
-      });
-      if (!claimed) {
+      );
+      if (!updated.changed) {
         const current = updated.store.profiles[params.profileId];
-        if (isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)) {
+        if (isExactOAuthCredential(current, params.fence)) {
           claims.push({ candidate });
           continue;
         }
+        releaseUnclaimedObservation?.();
         if (current?.type === "oauth") {
           assertCredentialAllowsClaim({
             candidate,
@@ -254,42 +272,23 @@ export function rollbackOAuthRefreshPeerClaims(params: {
     }
     let restoreError: Error | undefined;
     try {
-      let restored = false;
-      updateCandidateAuthProfileStore({
-        candidate: claim.candidate,
-        profileId: params.profileId,
-        updater: (store) => {
-          const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
-            return false;
-          }
+      const restored = updateOAuthRefreshPeer(
+        claim.candidate,
+        params.profileId,
+        params.fence,
+        (store) => {
           store.profiles[params.profileId] = { ...claim.original! };
-          restored = true;
-          return true;
         },
-      });
-      if (restored) {
+      );
+      if (restored.changed) {
         continue;
       }
     } catch (error) {
       restoreError = toErrorObject(error, "Failed to restore OAuth refresh peer");
     }
     try {
-      updateCandidateAuthProfileStore({
-        candidate: claim.candidate,
-        profileId: params.profileId,
-        updater: (store) => {
-          const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
-            return false;
-          }
-          store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
-          return true;
-        },
+      updateOAuthRefreshPeer(claim.candidate, params.profileId, params.fence, (store) => {
+        store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
       });
     } catch (error) {
       const terminalError = toErrorObject(error, "Failed to terminally fence OAuth refresh peer");
@@ -326,22 +325,17 @@ export function settleOAuthRefreshPeerClaims(params: {
   let firstError: Error | undefined;
   for (const claim of params.claims) {
     try {
-      updateCandidateAuthProfileStore({
-        candidate: claim.candidate,
-        preserveProfileState: true,
-        profileId: params.profileId,
-        updater: (store) => {
-          const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
-            return false;
-          }
+      updateOAuthRefreshPeer(
+        claim.candidate,
+        params.profileId,
+        params.fence,
+        (store) => {
           const inherited = params.authoritativeSharedCredential;
           const canInherit =
             claim.original !== undefined &&
             inherited !== undefined &&
             inherited.provider === claim.original.provider &&
+            isSafeToCopyOAuthRoutingScope(claim.original, inherited) &&
             hasUsableOAuthCredential(inherited) &&
             (hasMatchingOAuthIdentity(claim.original, inherited) ||
               (!hasOAuthIdentity(claim.original) &&
@@ -351,9 +345,9 @@ export function settleOAuthRefreshPeerClaims(params: {
           } else {
             store.profiles[params.profileId] = createFailedOAuthRefreshFence(params.fence);
           }
-          return true;
         },
-      });
+        true,
+      );
     } catch (error) {
       firstError ??= toErrorObject(error, "Failed to settle OAuth refresh peer");
     }
@@ -373,19 +367,8 @@ export function failOAuthRefreshPeerClaims(params: {
   let firstError: Error | undefined;
   for (const claim of params.claims) {
     try {
-      updateCandidateAuthProfileStore({
-        candidate: claim.candidate,
-        profileId: params.profileId,
-        updater: (store) => {
-          const current = store.profiles[params.profileId];
-          if (
-            !isExactOAuthCredential(current?.type === "oauth" ? current : undefined, params.fence)
-          ) {
-            return false;
-          }
-          store.profiles[params.profileId] = failed;
-          return true;
-        },
+      updateOAuthRefreshPeer(claim.candidate, params.profileId, params.fence, (store) => {
+        store.profiles[params.profileId] = failed;
       });
     } catch (error) {
       firstError ??= toErrorObject(error, "Failed to fail OAuth refresh peer");
@@ -396,14 +379,22 @@ export function failOAuthRefreshPeerClaims(params: {
   }
 }
 
-/** Remove one owner generation and its exact nonportable historical peers. */
-export async function removeOAuthRefreshGenerationPeers(params: {
+export type OAuthRefreshGenerationPeer = {
+  candidate: CandidateAuthProfileStore;
+  profileId: string;
+  credential: OAuthCredential;
+  generation: OAuthCredential;
+};
+
+/** Capture exact historical peers before removal updates their config references. */
+export async function listOAuthRefreshGenerationPeers(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   ownerDatabasePath: string;
   profileId: string;
   generation: OAuthCredential;
-}): Promise<void> {
+}): Promise<OAuthRefreshGenerationPeer[]> {
+  const peers: OAuthRefreshGenerationPeer[] = [];
   for (const candidate of await listPeerCandidates(params)) {
     const store = loadCandidateAuthProfileStore(candidate);
     if (!store) {
@@ -422,12 +413,27 @@ export async function removeOAuthRefreshGenerationPeers(params: {
     if (!removable) {
       continue;
     }
+    peers.push({
+      candidate,
+      profileId: params.profileId,
+      credential,
+      generation: params.generation,
+    });
+  }
+  return peers;
+}
+
+/** Remove only captured generations; a reconnect during config cleanup survives. */
+export function removeOAuthRefreshGenerationPeers(
+  peers: readonly OAuthRefreshGenerationPeer[],
+): void {
+  for (const { candidate, profileId, credential, generation } of peers) {
     updateCandidateAuthProfileStore({
       candidate,
       preserveProfileState: true,
-      profileId: params.profileId,
+      profileId,
       updater: (currentStore) => {
-        const current = currentStore.profiles[params.profileId];
+        const current = currentStore.profiles[profileId];
         if (current?.type !== "oauth") {
           return false;
         }
@@ -435,14 +441,14 @@ export async function removeOAuthRefreshGenerationPeers(params: {
           !isExactOAuthCredential(current, credential) ||
           !isRemovableOAuthRefreshPeer({
             store: currentStore,
-            profileId: params.profileId,
+            profileId,
             credential: current,
-            generation: params.generation,
+            generation,
           })
         ) {
           return false;
         }
-        delete currentStore.profiles[params.profileId];
+        delete currentStore.profiles[profileId];
         return true;
       },
     });

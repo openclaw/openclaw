@@ -162,7 +162,8 @@ describe("qa channel transport", () => {
   });
 
   it("implements the portable scenario transport actions", async () => {
-    const transport = createQaChannelTransport(createQaBusState());
+    const state = createQaBusState();
+    const transport = createQaChannelTransport(state);
     const conversation = { id: "alice", kind: "direct" as const };
 
     await transport.sendInbound({
@@ -178,6 +179,8 @@ describe("qa channel transport", () => {
     await expect(
       transport.waitForOutbound({ conversation, textIncludes: "QA-PORTABLE-OK" }),
     ).resolves.toMatchObject({ text: "QA-PORTABLE-OK" });
+    // The synthetic fixture has no channel poller; record its completed turn.
+    state.resolvePollCursor({ acknowledgedCursor: state.getSnapshot().cursor });
     await transport.reset();
     expect(transport.state.getSnapshot().messages).toEqual([]);
   });
@@ -251,7 +254,6 @@ describe("qa channel transport", () => {
   it.each([
     { command: "stop", name: "stop" },
     { command: "queue collect please help", name: "queue" },
-    { command: "think high", name: "think" },
   ])(
     "injects /$name with its complete command and token-only metadata",
     async ({ command, name }) => {

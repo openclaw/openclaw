@@ -3,8 +3,8 @@ import { z } from "zod";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareAgentDeleteDatabases } from "../../agents/agent-delete-databases.js";
 import { listAgentEntries } from "../../agents/agent-scope.js";
-import { digestClawAgentConfig } from "../../claws/agent-config-digest.js";
 import { clawCronGatewayJobMatchesRef, readClawCronRefs } from "../../claws/cron.js";
+import { digestClawValue } from "../../claws/digest.js";
 import { readAttachedCronJobs } from "../../claws/lifecycle-delete-support.js";
 import { resolveClawMonitorCleanupBinding } from "../../claws/monitor-cleanup-binding.js";
 import {
@@ -12,7 +12,8 @@ import {
   clawMonitorSnapshotSchema,
   type ClawMonitorSnapshot,
 } from "../../claws/monitor-cleanup-contract.js";
-import { readClawInstallRecord } from "../../claws/provenance.js";
+import { readClawPackageOwnership } from "../../claws/provenance-async.js";
+import type { PersistedClawInstall } from "../../claws/provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasActiveCronJobsForAgent } from "../../cron/active-jobs.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
@@ -75,7 +76,7 @@ function inspectMonitors(
   const cfg = context.getRuntimeConfig();
   const specs = [
     ...resolveHeartbeatMonitorPlan(cfg, jobs).specs,
-    ...resolveSkillCollectionReviewMonitorSpecs(cfg),
+    ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs),
   ].filter((spec) => spec.agentId === agentId);
   const storeKey = cronStoreKey(context.cronStorePath);
   return readAttachedCronJobs(agentId, {}).flatMap((row) => {
@@ -114,21 +115,34 @@ function inspectMonitors(
   });
 }
 
-function assertDeletionFence(agentId: string, operationId: string, config: OpenClawConfig) {
+function readDeletionFenceJournal(agentId: string, operationId: string) {
   const journal = readAgentDeletionJournal(agentId);
-  const install = readClawInstallRecord(agentId);
   if (!journal || journal.operationId !== operationId || journal.cleanupCompleted) {
     throw new Error("Claw removal no longer owns the serving Gateway's deletion fence.");
   }
+  return journal;
+}
+
+function assertDeletionFence(
+  agentId: string,
+  operationId: string,
+  config: OpenClawConfig,
+  install: PersistedClawInstall | undefined,
+) {
+  const journal = readDeletionFenceJournal(agentId, operationId);
   // Orphaned ownership can outlive its install row, but must never remove a configured replacement.
   const agent = listAgentEntries(config).find((entry) => entry.id === agentId);
-  if (agent && digestClawAgentConfig(agent) !== install?.agentConfigDigest) {
+  if (agent && digestClawValue(agent) !== install?.agentConfigDigest) {
     throw new Error("The serving Gateway's Claw agent configuration changed after planning.");
   }
   return journal;
 }
 
-function isDrained(context: ClawMonitorContext, agentId: string, requireConfigRemoval: boolean) {
+function isLocallyDrained(
+  context: ClawMonitorContext,
+  agentId: string,
+  requireConfigRemoval: boolean,
+) {
   return (
     (!requireConfigRemoval ||
       (context.isConfigReloadSettled() &&
@@ -136,7 +150,6 @@ function isDrained(context: ClawMonitorContext, agentId: string, requireConfigRe
     !hasActiveCronJobsForAgent(agentId) &&
     getSuspensionVisibleCronTaskRunCount({ agentId }) === 0 &&
     !hasPendingCronSessionCleanupForAgent(agentId) &&
-    !hasActiveCronRunReceiptsForAgent(agentId) &&
     (!requireConfigRemoval || readAttachedCronJobs(agentId, {}).length === 0)
   );
 }
@@ -150,8 +163,12 @@ async function waitForDrain(
   const deadline = performance.now() + 5_000;
   do {
     assertCurrent();
-    if (isDrained(context, agentId, requireConfigRemoval)) {
-      return;
+    if (isLocallyDrained(context, agentId, requireConfigRemoval)) {
+      const activeReceipts = await hasActiveCronRunReceiptsForAgent(agentId);
+      assertCurrent();
+      if (!activeReceipts && isLocallyDrained(context, agentId, requireConfigRemoval)) {
+        return;
+      }
     }
     await sleep(50);
   } while (performance.now() < deadline);
@@ -202,9 +219,16 @@ export const clawsMonitorHandlers = {
         respond(true, { monitors: inspectMonitors(context, input.agentId, jobs) }, undefined);
         return;
       }
+      readDeletionFenceJournal(input.agentId, input.operationId);
+      const { install } = await readClawPackageOwnership({ agentId: input.agentId });
       const assertCurrent = () => {
         assertBinding();
-        return assertDeletionFence(input.agentId, input.operationId, context.getRuntimeConfig());
+        return assertDeletionFence(
+          input.agentId,
+          input.operationId,
+          context.getRuntimeConfig(),
+          install,
+        );
       };
       assertCurrent();
       if (input.phase === "quiesce") {
@@ -249,13 +273,25 @@ export const clawsMonitorHandlers = {
       }
       await waitForDrain(context, input.agentId, input.phase === "drain", assertCurrent);
       const journal = assertCurrent();
-      if (!isDrained(context, input.agentId, input.phase === "drain")) {
+      if (!isLocallyDrained(context, input.agentId, input.phase === "drain")) {
         throw new Error(
-          "Gateway cleanup state changed before drainage was acknowledged; retry Claw removal.",
+          "Gateway cleanup state changed before database preparation; retry Claw removal.",
         );
       }
       if (input.phase === "quiesce") {
-        prepareAgentDeleteDatabases(context.getRuntimeConfig(), input.agentId, journal.agentDir);
+        await prepareAgentDeleteDatabases(
+          context.getRuntimeConfig(),
+          input.agentId,
+          journal.agentDir,
+        );
+        assertCurrent();
+      }
+      const activeReceipts = await hasActiveCronRunReceiptsForAgent(input.agentId);
+      assertCurrent();
+      if (activeReceipts || !isLocallyDrained(context, input.agentId, input.phase === "drain")) {
+        throw new Error(
+          "Gateway cleanup state changed before drainage was acknowledged; retry Claw removal.",
+        );
       }
       respond(true, { drained: true }, undefined);
     } catch (error) {

@@ -16,7 +16,7 @@ function runPublishWrapper(
   return spawnSync("bash", [scriptPath, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...env },
+    env: { ...process.env, GITHUB_ACTIONS: "false", WORKFLOW_SHA: "", ...env },
   });
 }
 

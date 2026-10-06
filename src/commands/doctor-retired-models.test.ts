@@ -468,6 +468,7 @@ describe("doctor retired model references", () => {
       const retiredRef =
         action === "replace" ? "openai/retired-with-successor" : "openai/retired-without-successor";
       cfg.agents!.defaults!.models = { [retiredRef]: { alias: "retired-alias" } };
+      cfg.agents!.defaults!.modelPolicy = { allow: [retiredRef, `${provider}/current-model`] };
       const storePath = path.join(state.sessionsDir(), "sessions.json");
       for (const modelOverride of models) {
         await replaceSessionEntry(
@@ -501,6 +502,29 @@ describe("doctor retired model references", () => {
       }
     },
   );
+
+  it("preserves a retired session pin when its successor is only the configured default", async () => {
+    const { cfg, state } = await fixture();
+    cfg.agents!.defaults!.modelPolicy = { allow: ["openai/retired-with-successor"] };
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const sessionKey = "agent:main:restricted-successor";
+    const entry = {
+      sessionId: "restricted-successor",
+      updatedAt: 1,
+      providerOverride: "openai",
+      modelOverride: "retired-with-successor",
+      modelOverrideSource: "user" as const,
+      authProfileOverride: "chatgpt",
+      authProfileOverrideSource: "user" as const,
+    };
+    await replaceSessionEntry({ storePath, sessionKey, env: state.env }, entry);
+    for (const shouldRepair of [false, true, true]) {
+      const result = await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair });
+      expect(result.repairedSessions).toBe(0);
+      expect(result.warnings.join("\n")).toContain('"openai/current-model" is not permitted');
+      expect(loadSessionEntry({ storePath, sessionKey, env: state.env })).toMatchObject(entry);
+    }
+  });
 
   it("repairs session choices and model-derived state while preserving Platform pins", async () => {
     const { cfg, state } = await fixture();

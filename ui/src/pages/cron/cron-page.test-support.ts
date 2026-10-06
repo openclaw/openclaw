@@ -3,8 +3,12 @@ import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { CronJob, CronJobsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  createGatewayMetadataObserver,
+  notifyGatewayObservers,
+} from "../../app/gateway-observers.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 
 type CronTestPage = HTMLElement & {
   context: ApplicationContext;
@@ -14,6 +18,7 @@ type CronTestPage = HTMLElement & {
   render: () => typeof nothing;
   cron: CronState;
   cronModelSuggestions: string[];
+  patchForm: (patch: Partial<CronState["cronForm"]>) => void;
 };
 
 export function waitForCronPage(assertion: () => void) {
@@ -27,7 +32,7 @@ type TestGateway = ApplicationContext["gateway"] & {
 
 export function createGateway(client: GatewayBrowserClient, connected: boolean): TestGateway {
   invalidateChatMetadataStore(client);
-  const snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
     offlineStable: false,
@@ -38,11 +43,14 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
     lastError: null,
     lastErrorCode: null,
   };
+  const metadataObserver = createGatewayMetadataObserver((current) => current === snapshot);
   const snapshotListeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const allEventListeners: GatewayEventListener[] = [];
   return {
-    snapshot,
+    get snapshot() {
+      return snapshot;
+    },
     connection: { gatewayUrl: "", token: "", password: "" },
     subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
       snapshotListeners.add(listener);
@@ -54,12 +62,15 @@ export function createGateway(client: GatewayBrowserClient, connected: boolean):
       return () => eventListeners.delete(listener);
     },
     emitSnapshot(patch: Partial<ApplicationGatewaySnapshot>) {
-      if (snapshot.phase === "connected" && patch.phase && patch.phase !== "connected") {
-        invalidateChatMetadataStore(client);
-      }
-      Object.assign(snapshot, patch);
-      for (const listener of snapshotListeners) {
-        listener(snapshot);
+      const previous = snapshot;
+      snapshot = { ...previous, ...patch };
+      if (metadataObserver.synchronize(previous, snapshot)) {
+        notifyGatewayObservers(
+          snapshotListeners,
+          snapshot,
+          "snapshot",
+          (current) => current === snapshot,
+        );
       }
     },
     emitRetiredEvent(event: Parameters<GatewayEventListener>[0]) {
@@ -85,12 +96,13 @@ export function operatorHello(scopes: string[]): NonNullable<ApplicationGatewayS
 }
 
 export function createContext(
-  gateway: TestGateway,
+  gateway: ApplicationContext["gateway"],
   scopeId: string | null = "main",
   selectedId: string | null = scopeId,
 ): ApplicationContext {
   const subscribe = () => () => undefined;
   let selectionState = { selectedId, scopeId };
+  let intentRevision = 0;
   const selectionListeners = new Set<(state: typeof selectionState) => void>();
   return {
     basePath: "",
@@ -116,16 +128,21 @@ export function createContext(
       subscribe,
     },
     agentSelection: {
+      get intentRevision() {
+        return intentRevision;
+      },
       get state() {
         return selectionState;
       },
       set(agentId: string | null) {
+        intentRevision += 1;
         selectionState = { selectedId: agentId, scopeId: agentId };
         for (const listener of selectionListeners) {
           listener(selectionState);
         }
       },
       setScope(agentId: string | null) {
+        intentRevision += 1;
         selectionState = { ...selectionState, scopeId: agentId };
         for (const listener of selectionListeners) {
           listener(selectionState);

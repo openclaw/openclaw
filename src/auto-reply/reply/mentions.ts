@@ -14,15 +14,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { compileConfigRegexes, type ConfigRegexRejectReason } from "../../security/config-regex.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
-import { HISTORY_CONTEXT_MARKER } from "./history.js";
+import { HISTORY_CONTEXT_MARKER, RECENT_HISTORY_CONTEXT_MARKER } from "./history.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
-
-type ResolvedMentionPatterns = {
-  patterns: string[];
-  unicode: boolean;
-};
 
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
@@ -41,13 +36,7 @@ const EMOJI_PRESENTATION_BASE = /\p{Emoji}/u;
 const NAME_IDENTITY_GRAPHEME = new RegExp(`[${NAME_IDENTITY_CHARS}]`, "u");
 const NAME_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-type DerivedNameParts = {
-  leading: string;
-  core: string;
-  trailing: string;
-};
-
-function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
+function wrapDerivedMentionPattern(parts: ReturnType<typeof deriveNameParts>): string {
   // Boundaries reach across optional edge decoration. Each branch owns its
   // spacing seam because overlapping repetitions make raw stripping quadratic.
   const leading = parts.leading ? `(?:${parts.leading}${DECORATION_SPACING}|)` : "";
@@ -78,15 +67,8 @@ function escapeJoinerTolerantLiteral(literal: string): string {
   return encodeOptionalJoiners(literal);
 }
 
-// A name reads as word runs with decoration or separators around and between
-// them. It is parsed into those units once and each unit is then encoded for
-// the position it sits in, so what decoration means is stated once: it is
-// optional, and it is taken at most one time, in the order the name spells it.
-// A separator -- any gap carrying a character that is not decoration -- stays
-// required exactly as the name spells it. Encoding the positions
-// independently is what let a member's repeated decoration count as part of
-// the mention -- and be stripped away with it -- at one position while
-// another already refused it.
+// Decoration is optional and consumed once in spelling order; separators remain
+// required. Encode positions independently so stripping cannot eat adjacent decoration.
 type NameUnit =
   | { kind: "token"; literal: string }
   | { kind: "separator"; literal: string }
@@ -154,9 +136,7 @@ function parseNameUnits(name: string): NameUnit[] {
   });
 }
 
-// A separator is typed as the name spells it. Whitespace inside it stays
-// width-flexible, as the literal derivation always read it, and the joiners
-// raw text still carries for stripping stay reachable without being required.
+// Preserve literal separators with flexible whitespace and optional raw-text joiners.
 function encodeSeparator(unit: SeparatorUnit): string {
   return unit.literal
     .split(/(\s+|[\u200C\u200D]+)/u)
@@ -179,34 +159,18 @@ function encodeEdgeDecorationLiteral(unit: NameUnit | undefined): string {
   if (!spelled) {
     // A markless edge is spelled with joiners and spacing alone. The joiners
     // are taken at the core's seam, and the whitespace is the member's own.
-    return encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    return encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
   }
   return spelled;
 }
 
-// Decoration between two word runs (emoji, flags, symbols) may be typed as
-// shown, spaced apart, replaced by whitespace, or omitted -- and, like an
-// edge, is taken at most once. A class repeating over it swallowed whatever
-// extra decoration a member typed inside the name and stripping removed that
-// too. Only code points the name itself carries are accepted, so neither path
-// ever consumes unrelated punctuation beside a mention.
+// Accept only the name's decoration, once, so stripping preserves unrelated punctuation.
 function encodeInteriorDecoration(unit: DecorationUnit): string {
   const spelled = unit.spellings.join(DECORATION_SPACING);
   if (!spelled) {
-    // Joiners vanish from normalized text while whitespace survives it. So a
-    // gap spelled with joiners alone may be omitted but never replaced by
-    // whitespace -- the spaced spelling normalizes to a different name -- and
-    // a spaced gap keeps its separator required while reaching across the
-    // joiners the raw text still carries for stripping.
-    const joiners = encodeOptionalJoiners(
-      Array.from(unit.literal)
-        .filter((character) => JOINER_ONLY.test(character))
-        .join(""),
-    );
+    // Joiners vanish during matching; whitespace survives and remains required
+    // only when the original gap carried it.
+    const joiners = encodeOptionalJoiners(unit.literal.replace(/[^\u200C\u200D]/gu, ""));
     return unit.spaced ? String.raw`${joiners}\s${DECORATION_SPACING}` : joiners;
   }
   // A gap carrying whitespace keeps a one-separator floor so the bare
@@ -214,16 +178,14 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
   return `(?:${DECORATION_SPACING}${spelled}${DECORATION_SPACING}|\\s${unit.spaced ? "+" : "*"})`;
 }
 
-function deriveNameParts(name: string): DerivedNameParts {
+function deriveNameParts(name: string) {
   const units = parseNameUnits(name);
   if (!units.some((unit) => unit.kind === "token")) {
     // No word run at all (e.g. a bare emoji or a punctuation string): match
     // the name literally.
     return { leading: "", core: escapeJoinerTolerantLiteral(name), trailing: "" };
   }
-  // Only optional decoration outside the word runs is an edge; a separator
-  // there is something a member types, so it stays in the core. The encoders
-  // read a token at either end as no decoration at all.
+  // Edge separators stay in the core; only optional decoration moves outside it.
   const start = units[0]?.kind === "decoration" ? 1 : 0;
   const end = units.at(-1)?.kind === "decoration" ? units.length - 1 : units.length;
   let core = "";
@@ -266,14 +228,7 @@ const MAX_MENTION_PATTERN_WARNING_KEYS = 512;
 const log = createSubsystemLogger("mentions");
 
 function normalizeMentionPattern(pattern: string): string {
-  if (!pattern.includes(BACKSPACE_CHAR)) {
-    return pattern;
-  }
-  return pattern.split(BACKSPACE_CHAR).join("\\b");
-}
-
-function normalizeMentionPatterns(patterns: string[]): string[] {
-  return patterns.map(normalizeMentionPattern);
+  return pattern.replaceAll(BACKSPACE_CHAR, "\\b");
 }
 
 function warnRejectedMentionPattern(
@@ -297,19 +252,6 @@ function warnRejectedMentionPattern(
   });
 }
 
-function cacheMentionRegexes(
-  cache: Map<string, RegExp[]>,
-  cacheKey: string,
-  regexes: RegExp[],
-): RegExp[] {
-  cache.set(cacheKey, regexes);
-  if (cache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
-    cache.clear();
-    cache.set(cacheKey, regexes);
-  }
-  return [...regexes];
-}
-
 function compileMentionPatternsCached(params: {
   patterns: string[];
   flags: string;
@@ -331,13 +273,15 @@ function compileMentionPatternsCached(params: {
       warnRejectedMentionPattern(rejected.pattern, rejected.flags, rejected.reason);
     }
   }
-  return cacheMentionRegexes(params.cache, cacheKey, compiled.regexes);
+  params.cache.set(cacheKey, compiled.regexes);
+  if (params.cache.size > MAX_MENTION_REGEX_COMPILE_CACHE_KEYS) {
+    params.cache.clear();
+    params.cache.set(cacheKey, compiled.regexes);
+  }
+  return [...compiled.regexes];
 }
 
-function resolveMentionPatterns(
-  cfg: OpenClawConfig | undefined,
-  agentId?: string,
-): ResolvedMentionPatterns {
+function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string) {
   if (!cfg) {
     return { patterns: [], unicode: false };
   }
@@ -364,7 +308,7 @@ export function buildMentionRegexes(
     return [];
   }
   const resolved = resolveMentionPatterns(cfg, agentId);
-  const patterns = normalizeMentionPatterns(resolved.patterns);
+  const patterns = resolved.patterns.map(normalizeMentionPattern);
   return compileMentionPatternsCached({
     patterns,
     flags: resolved.unicode ? "iu" : "i",
@@ -399,7 +343,6 @@ export function matchesMentionWithExplicit(params: {
   const cleaned = normalizeMentionText(params.text ?? "");
   const explicit = params.explicit?.isExplicitlyMentioned === true;
 
-  // Check transcript if text is empty and transcript is provided
   const transcriptCleaned = params.transcript ? normalizeMentionText(params.transcript) : "";
   const textToCheck = cleaned || transcriptCleaned;
 
@@ -413,17 +356,17 @@ export function stripStructuralPrefixes(text: string): string {
   }
   // Ignore wrapper labels, timestamps, and sender prefixes so directive-only
   // detection still works in group batches that include history/context.
-  if (text.trimStart().startsWith(HISTORY_CONTEXT_MARKER)) {
+  if (
+    text.trimStart().startsWith(HISTORY_CONTEXT_MARKER) ||
+    text.trimStart().startsWith(RECENT_HISTORY_CONTEXT_MARKER)
+  ) {
     // Flat history has no trustworthy current-message range when users can quote
     // marker text. Leave it non-command-shaped instead of guessing a boundary.
     return text.trim();
   }
-  const afterMarker = text;
-  const afterEnvelope = afterMarker.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
+  const afterEnvelope = text.replace(/^(?:[ \t]*\[[^\]\n]+\][ \t]*)+/, "");
   const senderPrefixPattern =
-    afterEnvelope === afterMarker
-      ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm
-      : /^[ \t]*[^\n:]{1,120}:\s+/gm;
+    afterEnvelope === text ? /^[ \t]*(?!\/)[^\n:]{1,120}:\s+/gm : /^[ \t]*[^\n:]{1,120}:\s+/gm;
 
   const stripped = afterEnvelope.replace(senderPrefixPattern, "").replace(/\\n/g, " ").trim();
   if (stripped.startsWith("/")) {
@@ -449,7 +392,7 @@ export function stripMentions(
     : undefined;
   const resolvedPatterns = resolveMentionPatterns(cfg, agentId);
   const configRegexes = compileMentionPatternsCached({
-    patterns: normalizeMentionPatterns(resolvedPatterns.patterns),
+    patterns: resolvedPatterns.patterns.map(normalizeMentionPattern),
     flags: resolvedPatterns.unicode ? "giu" : "gi",
     cache: mentionStripRegexCompileCache,
     warnRejected: true,
@@ -457,8 +400,8 @@ export function stripMentions(
   const providerRegexes =
     providerMentions?.stripRegexes?.({ ctx, cfg, agentId }) ??
     compileMentionPatternsCached({
-      patterns: normalizeMentionPatterns(
-        providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? [],
+      patterns: (providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []).map(
+        normalizeMentionPattern,
       ),
       flags: "gi",
       cache: mentionStripRegexCompileCache,
@@ -475,7 +418,6 @@ export function stripMentions(
       agentId,
     });
   }
-  // Generic mention patterns like @123456789 or plain digits
   result = result.replace(/@[0-9+]{5,}/g, " ");
   return result.replace(/\s+/g, " ").trim();
 }

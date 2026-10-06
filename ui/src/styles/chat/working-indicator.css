@@ -13,6 +13,7 @@
 
   position: relative;
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   color: var(--accent);
 }
@@ -21,12 +22,47 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
+  min-width: 0;
+  max-width: 100%;
   min-height: 28px;
   animation: chatWorkingIndicatorEnter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.chat-reading-indicator--neutral {
+  gap: 3px;
+}
+
+.chat-reading-indicator--neutral > span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: chatWorkingDotPulse 1.2s ease-in-out infinite;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(2) {
+  animation-delay: 150ms;
+}
+
+.chat-reading-indicator--neutral > span:nth-child(3) {
+  animation-delay: 300ms;
+}
+
+@keyframes chatWorkingDotPulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
 .chat-working-indicator__status {
   display: inline-flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: baseline;
   gap: 6px;
   color: var(--muted);
@@ -38,10 +74,59 @@
   color: var(--muted);
 }
 
+.chat-working-indicator__child {
+  overflow: hidden;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+button.chat-working-indicator__child:is(:hover, :focus-visible) {
+  text-decoration: underline;
+}
+
 .chat-working-indicator--continuation {
   gap: 6px;
   min-height: 0;
   margin-top: 4px;
+}
+
+.chat-turn-recap {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 8px;
+  margin: 4px 0 2px;
+  min-height: 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-turn-recap__claw {
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent);
+}
+
+.chat-turn-recap__claw svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  stroke: none;
+  transform: rotate(8deg);
+}
+
+/* The parked claw reports a settled turn, not an active run. */
+.chat-turn-recap__claw svg .claw-icon__jaw {
+  transform-box: view-box;
+  transform-origin: 8.6px 11px;
+  transform: rotate(-4deg);
 }
 
 .chat-turn-recap--continuation {
@@ -106,29 +191,22 @@
    46-52%. */
 @keyframes chatWorkingClawCombo {
   0%,
-  8% {
+  8%,
+  38%,
+  62%,
+  100% {
     transform: translateX(0);
   }
 
-  12% {
-    transform: translateX(-2px);
-  }
-
-  16% {
-    transform: translateX(5px);
-  }
-
+  12%,
   22%,
   26% {
     transform: translateX(-2px);
   }
 
+  16%,
   30% {
     transform: translateX(5px);
-  }
-
-  38% {
-    transform: translateX(0);
   }
 
   46% {
@@ -138,39 +216,27 @@
   52% {
     transform: translateX(8px) rotate(4deg);
   }
-
-  62%,
-  100% {
-    transform: translateX(0);
-  }
 }
 
 /* Shadowbox jaw: snaps shut in lockstep with chatWorkingClawCombo impacts. */
 @keyframes chatWorkingClawJaw {
   0%,
-  8% {
+  8%,
+  38%,
+  62%,
+  100% {
     transform: rotate(-10deg);
   }
 
-  12% {
-    transform: rotate(-16deg);
-  }
-
-  16% {
-    transform: rotate(4deg);
-  }
-
+  12%,
   22%,
   26% {
     transform: rotate(-16deg);
   }
 
+  16%,
   30% {
     transform: rotate(4deg);
-  }
-
-  38% {
-    transform: rotate(-10deg);
   }
 
   46% {
@@ -179,11 +245,6 @@
 
   52% {
     transform: rotate(6deg);
-  }
-
-  62%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -383,6 +444,7 @@
    deliberate snip on the exhale. Scale keeps it perfectly in place. */
 @keyframes chatWorkingClawZenBreath {
   0%,
+  55%,
   100% {
     transform: scale(1);
   }
@@ -390,15 +452,13 @@
   30% {
     transform: scale(1.08);
   }
-
-  55% {
-    transform: scale(1);
-  }
 }
 
 @keyframes chatWorkingClawZenSnip {
   0%,
-  60% {
+  60%,
+  86%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -409,17 +469,14 @@
   76% {
     transform: rotate(2deg);
   }
-
-  86%,
-  100% {
-    transform: rotate(-10deg);
-  }
 }
 
 /* Drummer: two-beat rock — the body tilts left then right and the jaw hits
    on each tilt peak. Rotation only, no travel. */
 @keyframes chatWorkingClawDrumRock {
   0%,
+  30%,
+  70%,
   100% {
     transform: rotate(0deg);
   }
@@ -428,47 +485,27 @@
     transform: rotate(-8deg);
   }
 
-  30% {
-    transform: rotate(0deg);
-  }
-
   55% {
     transform: rotate(8deg);
-  }
-
-  70% {
-    transform: rotate(0deg);
   }
 }
 
 @keyframes chatWorkingClawDrumHit {
   0%,
+  25%,
+  65%,
   100% {
     transform: rotate(-10deg);
   }
 
-  10% {
-    transform: rotate(-20deg);
-  }
-
-  15% {
-    transform: rotate(2deg);
-  }
-
-  25% {
-    transform: rotate(-10deg);
-  }
-
+  10%,
   50% {
     transform: rotate(-20deg);
   }
 
+  15%,
   55% {
     transform: rotate(2deg);
-  }
-
-  65% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -476,7 +513,9 @@
    then pop back up wide open. Vertical dip only — no lateral travel. */
 @keyframes chatWorkingClawPeekaboo {
   0%,
-  55% {
+  55%,
+  84%,
+  100% {
     transform: translateY(0) scale(1);
   }
 
@@ -488,16 +527,13 @@
   78% {
     transform: translateY(-1.5px) scale(1.06);
   }
-
-  84%,
-  100% {
-    transform: translateY(0) scale(1);
-  }
 }
 
 @keyframes chatWorkingClawPeekabooJaw {
   0%,
-  55% {
+  55%,
+  86%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -509,18 +545,15 @@
   78% {
     transform: rotate(-28deg);
   }
-
-  86%,
-  100% {
-    transform: rotate(-10deg);
-  }
 }
 
 /* Nodoff body: droop through 60%, jolt awake at 64%, then settle by 70%.
    Translation stays first so the sleepy dip remains vertical. */
 @keyframes chatWorkingClawNodOff {
   0%,
-  10% {
+  10%,
+  70%,
+  100% {
     transform: translateY(0) rotate(0deg);
   }
 
@@ -539,18 +572,15 @@
   64% {
     transform: translateY(-0.5px) rotate(-3deg);
   }
-
-  70%,
-  100% {
-    transform: translateY(0) rotate(0deg);
-  }
 }
 
 /* Nodoff jaw: slackens during the droop, then wakes for guilty snips at
    74% and 84%. */
 @keyframes chatWorkingClawNodOffJaw {
   0%,
-  10% {
+  10%,
+  90%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -570,21 +600,13 @@
     transform: rotate(-24deg);
   }
 
-  74% {
+  74%,
+  84% {
     transform: rotate(4deg);
   }
 
   80% {
     transform: rotate(-22deg);
-  }
-
-  84% {
-    transform: rotate(4deg);
-  }
-
-  90%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -592,7 +614,9 @@
    spring past center at 70% before settling. */
 @keyframes chatWorkingClawCurious {
   0%,
-  30% {
+  30%,
+  76%,
+  100% {
     transform: rotate(0deg);
   }
 
@@ -604,18 +628,15 @@
   70% {
     transform: rotate(4deg);
   }
-
-  76%,
-  100% {
-    transform: rotate(0deg);
-  }
 }
 
 /* Curious jaw: tuck at the 40-62% head tilt, then pop open on the 70%
    overshoot before returning to rest. */
 @keyframes chatWorkingClawCuriousJaw {
   0%,
-  30% {
+  30%,
+  76%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -627,44 +648,27 @@
   70% {
     transform: rotate(-6deg);
   }
-
-  76%,
-  100% {
-    transform: rotate(-10deg);
-  }
 }
 
 /* Om nom body: three tiny forward lunges land at 36%, 46%, and 56%,
    then the claw slides home by 64%. */
 @keyframes chatWorkingClawOmNom {
   0%,
-  30% {
+  30%,
+  64%,
+  100% {
     transform: translateX(0);
   }
 
-  36% {
-    transform: translateX(2.5px);
-  }
-
-  40% {
-    transform: translateX(1px);
-  }
-
-  46% {
-    transform: translateX(2.5px);
-  }
-
-  50% {
-    transform: translateX(1px);
-  }
-
+  36%,
+  46%,
   56% {
     transform: translateX(2.5px);
   }
 
-  64%,
-  100% {
-    transform: translateX(0);
+  40%,
+  50% {
+    transform: translateX(1px);
   }
 }
 
@@ -672,37 +676,22 @@
    chomps at 36%, 46%, and 56%. */
 @keyframes chatWorkingClawOmNomJaw {
   0%,
-  26% {
+  26%,
+  64%,
+  100% {
     transform: rotate(-10deg);
   }
 
-  30% {
-    transform: rotate(-30deg);
-  }
-
-  36% {
-    transform: rotate(8deg);
-  }
-
-  42% {
-    transform: rotate(-30deg);
-  }
-
-  46% {
-    transform: rotate(8deg);
-  }
-
+  30%,
+  42%,
   52% {
     transform: rotate(-30deg);
   }
 
+  36%,
+  46%,
   56% {
     transform: rotate(8deg);
-  }
-
-  64%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -710,38 +699,23 @@
    the triple-snip hits at 58%, 66%, and 74%. */
 @keyframes chatWorkingClawFakeOut {
   0%,
-  6% {
+  6%,
+  80%,
+  100% {
     transform: rotate(0deg);
   }
 
   10%,
-  55% {
-    transform: rotate(-4deg);
-  }
-
-  58% {
-    transform: rotate(3deg);
-  }
-
-  62% {
-    transform: rotate(-4deg);
-  }
-
-  66% {
-    transform: rotate(3deg);
-  }
-
+  55%,
+  62%,
   70% {
     transform: rotate(-4deg);
   }
 
+  58%,
+  66%,
   74% {
     transform: rotate(3deg);
-  }
-
-  80%,
-  100% {
-    transform: rotate(0deg);
   }
 }
 
@@ -749,7 +723,9 @@
    accelerated triple snip at 58%, 66%, and 74%. */
 @keyframes chatWorkingClawFakeOutJaw {
   0%,
-  6% {
+  6%,
+  80%,
+  100% {
     transform: rotate(-10deg);
   }
 
@@ -758,7 +734,9 @@
     transform: rotate(-26deg);
   }
 
-  58% {
+  58%,
+  66%,
+  74% {
     transform: rotate(4deg);
   }
 
@@ -766,21 +744,8 @@
     transform: rotate(-24deg);
   }
 
-  66% {
-    transform: rotate(4deg);
-  }
-
   70% {
     transform: rotate(-22deg);
-  }
-
-  74% {
-    transform: rotate(4deg);
-  }
-
-  80%,
-  100% {
-    transform: rotate(-10deg);
   }
 }
 
@@ -792,6 +757,7 @@
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
   .chat-reading-indicator,
+  .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,
   .chat-reading-indicator svg .claw-icon__jaw {
     animation: none;

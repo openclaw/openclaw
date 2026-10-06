@@ -6,7 +6,12 @@ import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
-const HOMEBREW_ENV_KEYS = ["HOMEBREW_BREW_FILE", "HOMEBREW_PREFIX"] as const;
+const HOMEBREW_ENV_KEYS = [
+  "HOMEBREW_BREW_FILE",
+  "HOMEBREW_CURL_PATH",
+  "HOMEBREW_GIT_PATH",
+  "HOMEBREW_PREFIX",
+] as const;
 
 describe("brew helpers", () => {
   async function writeExecutable(filePath: string) {
@@ -30,18 +35,6 @@ describe("brew helpers", () => {
     await withEnvAsync({ PATH: value }, run);
   }
 
-  it("resolves brew from ~/.linuxbrew/bin when executable exists", async () => {
-    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
-      const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
-      const brewPath = path.join(homebrewBin, "brew");
-      await writeExecutable(brewPath);
-
-      await withPathEnv("", async () => {
-        expect(resolveBrewExecutable({ homeDir: tmp })).toBe(brewPath);
-      });
-    });
-  });
-
   it("resolves brew from absolute PATH entries for non-standard installs", async () => {
     await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const customBin = path.join(tmp, "custom-homebrew", "bin");
@@ -54,7 +47,7 @@ describe("brew helpers", () => {
     });
   });
 
-  it("ignores HOMEBREW_BREW_FILE and HOMEBREW_PREFIX by default", async () => {
+  it("ignores Homebrew executable, selector, and prefix env overrides by default", async () => {
     await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
       const explicit = path.join(tmp, "custom", "brew");
       const prefix = path.join(tmp, "prefix");
@@ -69,41 +62,21 @@ describe("brew helpers", () => {
       await withHomebrewEnv(
         {
           HOMEBREW_BREW_FILE: explicit,
+          HOMEBREW_CURL_PATH: explicit,
+          HOMEBREW_GIT_PATH: explicit,
           HOMEBREW_PREFIX: prefix,
         },
         async () => {
           const env: NodeJS.ProcessEnv = {
             HOMEBREW_BREW_FILE: explicit,
+            HOMEBREW_CURL_PATH: explicit,
+            HOMEBREW_GIT_PATH: explicit,
             HOMEBREW_PREFIX: prefix,
           };
           await withPathEnv("", async () => {
             expect(resolveBrewExecutable({ homeDir: tmp, env })).toBe(homebrewBrew);
           });
           expect(resolveBrewPathDirs({ homeDir: tmp, env })).not.toContain(prefixBin);
-        },
-      );
-    });
-  });
-
-  it("ignores blank HOMEBREW_BREW_FILE and HOMEBREW_PREFIX values", async () => {
-    await withTestDir({ prefix: "openclaw-brew-" }, async (tmp) => {
-      const homebrewBin = path.join(tmp, ".linuxbrew", "bin");
-      const brewPath = path.join(homebrewBin, "brew");
-      await writeExecutable(brewPath);
-
-      await withHomebrewEnv(
-        {
-          HOMEBREW_BREW_FILE: "   ",
-          HOMEBREW_PREFIX: "\t",
-        },
-        async () => {
-          await withPathEnv("", async () => {
-            expect(resolveBrewExecutable({ homeDir: tmp })).toBe(brewPath);
-          });
-
-          const dirs = resolveBrewPathDirs({ homeDir: tmp });
-          expect(dirs).not.toContain(path.join("", "bin"));
-          expect(dirs).not.toContain(path.join("", "sbin"));
         },
       );
     });

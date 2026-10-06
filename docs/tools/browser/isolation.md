@@ -14,7 +14,10 @@ read_when:
 - **Deterministic tab control**: `tabs` returns `suggestedTargetId` first, then
   stable `tabId` handles such as `t1`, optional labels, and the raw `targetId`.
   Agents should reuse `suggestedTargetId`; raw ids remain available for
-  debugging and compatibility.
+  debugging and compatibility. Profiles configured with `driver: "extension"`
+  can also return a runtime-scoped numeric `webExtensionTabId` for Chrome
+  WebExtensions API calls. It is omitted for other drivers and must not replace
+  `suggestedTargetId` or `tabId` in OpenClaw browser actions.
 
 ## Browser selection
 
@@ -34,7 +37,8 @@ Platforms:
 - Linux: checks common Chrome/Brave/Edge/Chromium locations under `/usr/bin`,
   `/snap/bin`, `/opt/google`, `/opt/brave.com`, `/usr/lib/chromium`, and
   `/usr/lib/chromium-browser`, plus Playwright-managed Chromium under
-  `PLAYWRIGHT_BROWSERS_PATH` or `~/.cache/ms-playwright`.
+  `PLAYWRIGHT_BROWSERS_PATH` or `$XDG_CACHE_HOME/ms-playwright` (defaults to
+  `~/.cache/ms-playwright` when `XDG_CACHE_HOME` is unset or empty).
 - Windows: checks common install locations.
 
 ## Control API (optional)

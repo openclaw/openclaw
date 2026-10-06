@@ -1,33 +1,28 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
 
-export type SessionPatchCatalogResult = Result<ModelCatalogEntry[], unknown>;
+export type SessionPatchCatalogResult = Result<ModelCatalogSnapshot, unknown>;
 
 export function createSessionPatchCatalogPreparation(
-  loadCatalog: (agentId: string) => Promise<ModelCatalogEntry[]>,
+  loadCatalog: (agentId: string) => Promise<ModelCatalogSnapshot>,
   diagnostics?: SessionPatchDiagnostics,
 ) {
   const preparations = new Map<string, Promise<SessionPatchCatalogResult>>();
-  const prepare = (agentId: string) => {
-    let promise = preparations.get(agentId);
-    if (!promise) {
-      promise = (async () => {
-        const timing = diagnostics?.scope("catalog");
-        try {
-          const catalog = await loadCatalog(agentId);
-          return ok(Array.isArray(catalog) ? catalog : []);
-        } catch (error) {
-          return err(error);
-        } finally {
-          timing?.finish();
-        }
-      })();
-      preparations.set(agentId, promise);
-    }
-    return promise;
-  };
+  const prepare = (agentId: string) =>
+    getOrCreatePromise(preparations, agentId, async () => {
+      const timing = diagnostics?.scope("catalog");
+      try {
+        const catalog = await loadCatalog(agentId);
+        return ok(catalog);
+      } catch (error) {
+        return err(error);
+      } finally {
+        timing?.finish();
+      }
+    });
   const load = async (agentId: string) => {
     const catalog = await prepare(agentId);
     if (!catalog.ok) {
@@ -58,7 +53,7 @@ export function createSessionPatchCatalogPreparation(
           kind: "complete",
           result: await projectSessionsPatchEntry({
             ...params.projection,
-            loadGatewayModelCatalog: () => load(params.agentId),
+            loadGatewayModelCatalogSnapshot: () => load(params.agentId),
           }),
         };
       }

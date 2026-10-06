@@ -1,4 +1,3 @@
-// Ios Node E2E script supports OpenClaw repository automation.
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -101,14 +100,13 @@ if (!urlRaw || !token) {
 }
 
 const waitSeconds = parseWaitSeconds(getArg("--wait-seconds"));
-const { createGatewayWsClient, resolveGatewayUrl } = await import("./gateway-ws-client.ts");
+const { createGatewayWsClient, resolveGatewayUrl } = await import("../lib/gateway-ws-client.ts");
 const url = resolveGatewayUrl(urlRaw);
 
 const isoNow = () => new Date().toISOString();
 const isoMinusMs = (ms: number) => new Date(Date.now() - ms).toISOString();
 
 type TestCase = {
-  id: string;
   command: string;
   params?: unknown;
   timeoutMs?: number;
@@ -136,13 +134,11 @@ function parseWaitSeconds(raw: string | undefined): number {
   const value = raw ?? "25";
   const text = value.trim();
   if (!/^[1-9]\d*$/u.test(text)) {
-    writeStderrLine(`--wait-seconds must be a positive integer; got: ${value}`);
-    process.exit(1);
+    failCli(`--wait-seconds must be a positive integer; got: ${value}`);
   }
   const parsed = Number(text);
   if (!Number.isSafeInteger(parsed)) {
-    writeStderrLine(`--wait-seconds must be a safe positive integer; got: ${value}`);
-    process.exit(1);
+    failCli(`--wait-seconds must be a safe positive integer; got: ${value}`);
   }
   return parsed;
 }
@@ -212,7 +208,17 @@ async function main() {
   const { request, waitOpen, close } = createGatewayWsClient({ url: url.toString() });
   await waitOpen();
 
-  const connectRes = await request("connect", {
+  const requestRequired = async (method: string, exitCode: number, params?: unknown) => {
+    const response = await request(method, params);
+    if (!response.ok) {
+      writeStderrLine(`${method} failed: ${String(response.error)}`);
+      close();
+      process.exit(exitCode);
+    }
+    return response;
+  };
+
+  await requestRequired("connect", 2, {
     minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
     maxProtocol: PROTOCOL_VERSION,
     client: {
@@ -231,26 +237,8 @@ async function main() {
     auth: { token },
   });
 
-  if (!connectRes.ok) {
-    writeStderrLine(`connect failed: ${String(connectRes.error)}`);
-    close();
-    process.exit(2);
-  }
-
-  const healthRes = await request("health");
-  if (!healthRes.ok) {
-    writeStderrLine(`health failed: ${String(healthRes.error)}`);
-    close();
-    process.exit(3);
-  }
-
-  const nodesRes = await request("node.list");
-  if (!nodesRes.ok) {
-    writeStderrLine(`node.list failed: ${String(nodesRes.error)}`);
-    close();
-    process.exit(4);
-  }
-
+  await requestRequired("health", 3);
+  const nodesRes = await requestRequired("node.list", 4);
   const listPayload = (nodesRes.payload ?? {}) as NodeListPayload;
   let node = pickIosNode(listPayload, nodeHint);
   if (!node) {
@@ -273,47 +261,39 @@ async function main() {
   }
 
   const tests: TestCase[] = [
-    { id: "device.info", command: "device.info" },
-    { id: "device.status", command: "device.status" },
+    { command: "device.info" },
+    { command: "device.status" },
     {
-      id: "system.notify",
       command: "system.notify",
       params: { title: "OpenClaw E2E", body: `ios-node-e2e @ ${isoNow()}`, delivery: "system" },
     },
     {
-      id: "contacts.search",
       command: "contacts.search",
       params: { query: null, limit: 5 },
     },
     {
-      id: "calendar.events",
       command: "calendar.events",
       params: { startISO: isoMinusMs(6 * 60 * 60 * 1000), endISO: isoNow(), limit: 10 },
     },
     {
-      id: "reminders.list",
       command: "reminders.list",
       params: { status: "incomplete", limit: 10 },
     },
     {
-      id: "motion.pedometer",
       command: "motion.pedometer",
       params: { startISO: isoMinusMs(60 * 60 * 1000), endISO: isoNow() },
     },
     {
-      id: "photos.latest",
       command: "photos.latest",
       params: { limit: 1, maxWidth: 512, quality: 0.7 },
     },
     {
-      id: "camera.snap",
       command: "camera.snap",
       params: { facing: "back", maxWidth: 768, quality: 0.7, format: "jpeg" },
       dangerous: true,
       timeoutMs: 20_000,
     },
     {
-      id: "screen.record",
       command: "screen.record",
       params: { durationMs: 2_000, fps: 15, includeAudio: false },
       dangerous: true,
@@ -342,7 +322,7 @@ async function main() {
       },
       (t.timeoutMs ?? 12_000) + 2_000,
     ).catch((err: unknown) => {
-      results.push({ id: t.id, ok: false, error: formatErr(err) });
+      results.push({ id: t.command, ok: false, error: formatErr(err) });
       return null;
     });
 
@@ -351,18 +331,18 @@ async function main() {
     }
 
     if (!invokeRes.ok) {
-      results.push({ id: t.id, ok: false, error: invokeRes.error });
+      results.push({ id: t.command, ok: false, error: invokeRes.error });
       continue;
     }
 
     const commandPayload = commandPayloadFromInvokePayload(invokeRes.payload);
     const payloadError = payloadShapeError(t.command, commandPayload);
     if (payloadError) {
-      results.push({ id: t.id, ok: false, error: payloadError, payload: invokeRes.payload });
+      results.push({ id: t.command, ok: false, error: payloadError, payload: invokeRes.payload });
       continue;
     }
 
-    results.push({ id: t.id, ok: true, payload: invokeRes.payload });
+    results.push({ id: t.command, ok: true, payload: invokeRes.payload });
   }
 
   if (jsonOut) {
@@ -377,7 +357,6 @@ async function main() {
       results,
     });
   } else {
-    const pad = (s: string, n: number) => (s.length >= n ? s : s + " ".repeat(n - s.length));
     const rows = results.map((r) => ({
       cmd: r.id,
       ok: r.ok ? "ok" : "fail",
@@ -388,14 +367,13 @@ async function main() {
     writeStdoutLine(`dangerous: ${dangerous ? "on" : "off"}`);
     writeStdoutLine();
     for (const r of rows) {
-      writeStdoutLine(`${pad(r.cmd, width)}  ${pad(r.ok, 4)}  ${r.note}`);
+      writeStdoutLine(`${r.cmd.padEnd(width)}  ${r.ok.padEnd(4)}  ${r.note}`);
     }
   }
 
-  const failed = results.filter((r) => !r.ok);
   close();
 
-  if (failed.length > 0) {
+  if (results.some((r) => !r.ok)) {
     process.exit(10);
   }
 }

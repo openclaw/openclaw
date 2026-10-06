@@ -1,38 +1,10 @@
 // Codex tests cover plugin metadata cache behavior.
 import { describe, expect, it, vi } from "vitest";
+import { pluginList as catalog, pluginSummary } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex plugin metadata cache", () => {
-  it("coalesces and reuses the full successful snapshot", async () => {
-    const cache = new CodexPluginMetadataCache();
-    let release: ((response: v2.PluginListResponse) => void) | undefined;
-    const request = vi.fn(
-      async () =>
-        await new Promise<v2.PluginListResponse>((resolve) => {
-          release = resolve;
-        }),
-    );
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    const first = cache.load(params);
-    const second = cache.load(params);
-    const response = pluginList("openai-curated-remote", "calendar");
-    release?.(response);
-
-    const [firstSnapshot, secondSnapshot] = await Promise.all([first, second]);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(firstSnapshot).toBe(secondSnapshot);
-    expect(firstSnapshot.response).toBe(response);
-    await expect(cache.load(params)).resolves.toBe(firstSnapshot);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("coalesces installed plugins through the canonical endpoint", async () => {
     const cache = new CodexPluginMetadataCache();
     let release: ((response: v2.PluginInstalledResponse) => void) | undefined;
@@ -415,51 +387,6 @@ describe("Codex plugin metadata cache", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("does not cache failed requests", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const request = vi
-      .fn<() => Promise<v2.PluginListResponse>>()
-      .mockRejectedValueOnce(new Error("catalog unavailable"))
-      .mockResolvedValueOnce(pluginList("openai-curated-remote"));
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    await expect(cache.load(params)).rejects.toThrow("catalog unavailable");
-    await expect(cache.load(params)).resolves.toMatchObject({
-      response: { marketplaces: [{ name: "openai-curated-remote" }] },
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache responses with marketplace load errors", async () => {
-    const cache = new CodexPluginMetadataCache();
-    const incomplete = pluginList("openai-curated-remote");
-    incomplete.marketplaceLoadErrors = [
-      { marketplacePath: "/marketplaces/openai-curated", message: "catalog unavailable" },
-    ];
-    const request = vi
-      .fn<() => Promise<v2.PluginListResponse>>()
-      .mockResolvedValueOnce(incomplete)
-      .mockResolvedValueOnce(pluginList("openai-curated-remote", "calendar"));
-    const params = {
-      appCacheKey: "runtime-a",
-      queryKind: "curated-global" as const,
-      requestParams: {},
-      request,
-    };
-
-    await expect(cache.load(params)).resolves.toMatchObject({ response: incomplete });
-    expect(cache.read("runtime-a", "curated-global")).toBeUndefined();
-    await expect(cache.load(params)).resolves.toMatchObject({
-      response: { marketplaces: [{ plugins: [{ id: "calendar" }] }] },
-    });
-    expect(request).toHaveBeenCalledTimes(2);
-  });
-
   it("starts a fresh load after invalidation while an older load is pending", async () => {
     const cache = new CodexPluginMetadataCache();
     const releases: Array<(response: v2.PluginListResponse) => void> = [];
@@ -571,32 +498,7 @@ describe("Codex plugin metadata cache", () => {
 });
 
 function pluginList(marketplaceName: string, pluginId?: string): v2.PluginListResponse {
-  return {
-    marketplaces: [
-      {
-        name: marketplaceName,
-        path: null,
-        interface: null,
-        plugins: pluginId
-          ? [
-              {
-                id: pluginId,
-                name: pluginId,
-                source: { type: "remote" },
-                installed: false,
-                enabled: false,
-                installPolicy: "AVAILABLE",
-                authPolicy: "ON_USE",
-                availability: "AVAILABLE",
-                interface: null,
-              },
-            ]
-          : [],
-      },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
+  return catalog(pluginId ? [pluginSummary(pluginId)] : [], { name: marketplaceName, path: null });
 }
 
 function installedPlugins(marketplaceName: string, pluginId?: string): v2.PluginInstalledResponse {

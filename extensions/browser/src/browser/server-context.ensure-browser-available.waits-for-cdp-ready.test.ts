@@ -1,15 +1,21 @@
-// Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import { createProfileAvailability } from "./server-context.availability.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
-import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
+import {
+  makeBrowserProfile,
+  makeBrowserServerState,
+  mockLaunchedChrome,
+} from "./server-context.test-harness.js";
+import type { ProfileRuntimeState } from "./server-context.types.js";
 
 const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
 
@@ -27,7 +33,6 @@ function fakeRunning(pid: number): RunningChrome {
     exe: { kind: "chromium", path: "/usr/bin/chromium" },
     userDataDir: "/tmp/openclaw-test",
     cdpPort: 18800,
-    startedAt: Date.now(),
     proc: new EventEmitter() as unknown as ChildProcessWithoutNullStreams,
   };
 }
@@ -59,17 +64,12 @@ function setupEnsureBrowserAvailableHarness() {
 
 function createAttachOnlyLoopbackProfile(cdpUrl: string) {
   const state = makeBrowserServerState({
-    profile: {
+    profile: makeBrowserProfile({
       name: "manual-cdp",
       cdpUrl,
-      cdpHost: "127.0.0.1",
-      cdpIsLoopback: true,
       cdpPort: 9222,
-      color: "#00AA00",
-      driver: "openclaw",
-      headless: false,
       attachOnly: true,
-    },
+    }),
     resolvedOverrides: {
       defaultProfile: "manual-cdp",
       ssrfPolicy: {},
@@ -79,16 +79,6 @@ function createAttachOnlyLoopbackProfile(cdpUrl: string) {
   return { profile: ctx.forProfile("manual-cdp"), state };
 }
 
-function requireFirstLaunchOptions(launchOpenClawChrome: {
-  mock: { calls: unknown[][] };
-}): unknown {
-  const [call] = launchOpenClawChrome.mock.calls;
-  if (!call) {
-    throw new Error("expected Chrome launch call");
-  }
-  return call[2];
-}
-
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
@@ -96,6 +86,36 @@ afterEach(() => {
 });
 
 describe("browser server-context ensureBrowserAvailable", () => {
+  it("keeps a shared launch running when one caller cancels its wait", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
+      setupEnsureBrowserAvailableHarness();
+    const controller = new AbortController();
+    const reason = new Error("caller cancelled");
+    const entered = deferred<void>();
+    const launch = deferred<RunningChrome>();
+    const running = fakeRunning(1200);
+    launchOpenClawChrome.mockImplementationOnce(async () => {
+      entered.resolve();
+      return await launch.promise;
+    });
+    isChromeCdpReady.mockResolvedValue(true);
+
+    const first = profile.ensureBrowserAvailable({ signal: controller.signal });
+    const second = createBrowserRouteContext({ getState: () => state })
+      .forProfile()
+      .ensureBrowserAvailable();
+    await entered.promise;
+    const cancelled = expect(first).rejects.toBe(reason);
+    controller.abort(reason);
+    await cancelled;
+    launch.resolve(running);
+    await expect(second).resolves.toBeUndefined();
+
+    expect(state.profiles.get("openclaw")?.running).toBe(running);
+    expect(launchOpenClawChrome).toHaveBeenCalledOnce();
+    expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+
   it("rejects and cleans a deferred launch before stop returns, then allows restart", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
@@ -139,7 +159,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
     }
     const previousFailure = {
       consecutiveFailures: 2,
-      lastFailureAt: Date.now(),
       lastError: "earlier launch failure",
     };
     runtime.managedLaunchFailure = previousFailure;
@@ -173,24 +192,37 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(state.profiles.get("openclaw")?.managedLaunchFailure).toBeUndefined();
   });
 
-  it("waits for CDP readiness after launching to avoid follow-up PortInUseError races (#21149)", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+  it("keeps Chrome across startup and later operations when readiness responses take 750ms", async () => {
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 123);
+    isChromeCdpReady.mockImplementation(
+      async (_url, timeoutMs = 0) =>
+        await new Promise<boolean>((resolve) => {
+          setTimeout(() => resolve(timeoutMs >= 750), Math.min(750, timeoutMs));
+        }),
+    );
+    const launched = mockLaunchedChrome(launchOpenClawChrome, 124);
 
-    const promise = profile.ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(promise).resolves.toBeUndefined();
+    const ready = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(8100);
+    await ready;
+
+    vi.mocked(chromeModule.isChromeReachable).mockImplementation(async () =>
+      Boolean(state.profiles.get("openclaw")?.running),
+    );
+    const reused = expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
+    await vi.advanceTimersByTimeAsync(8100);
+    await reused;
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(isChromeCdpReady).toHaveBeenCalled();
+    expect(state.profiles.get("openclaw")?.running).toBe(launched);
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
   it("stops launched chrome when CDP readiness never arrives", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
+    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
+    state.resolved.localCdpReadyTimeoutMs = 250;
     isChromeCdpReady.mockResolvedValue(false);
     mockLaunchedChrome(launchOpenClawChrome, 321);
 
@@ -199,7 +231,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
     const diagnosticRejected = expect(promise).rejects.toThrow(
       "CDP diagnostic: websocket_health_command_timeout; mock CDP diagnostic.",
     );
-    await vi.advanceTimersByTimeAsync(8100);
+    await vi.advanceTimersByTimeAsync(300);
     await rejected;
     await diagnosticRejected;
 
@@ -228,6 +260,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
       launched.pid,
       expect.any(Number),
       undefined,
+      expect.any(AbortSignal),
     );
     expect(stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(launched);
     expect(state.profiles.get("openclaw")?.running).toBeNull();
@@ -264,89 +297,16 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).toHaveBeenCalledExactlyOnceWith(launched);
   });
 
-  it("uses configured local CDP readiness timeout after launching", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
-      setupEnsureBrowserAvailableHarness();
-    state.resolved.localCdpReadyTimeoutMs = 250;
-    isChromeCdpReady.mockResolvedValue(false);
-    mockLaunchedChrome(launchOpenClawChrome, 322);
-
-    const promise = profile.ensureBrowserAvailable();
-    const rejected = expect(promise).rejects.toThrow("not reachable after start");
-    await vi.advanceTimersByTimeAsync(300);
-    await rejected;
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
-  });
-
-  it("deduplicates concurrent lazy-start calls to prevent PortInUseError", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
-      setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 456);
-
-    const first = profile.ensureBrowserAvailable();
-    const second = profile.ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
-  it("deduplicates concurrent lazy-start calls across fresh profile contexts", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, state } =
-      setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 457);
-
-    const firstCtx = createBrowserRouteContext({ getState: () => state });
-    const secondCtx = createBrowserRouteContext({ getState: () => state });
-    const first = firstCtx.forProfile("openclaw").ensureBrowserAvailable();
-    const second = secondCtx.forProfile("openclaw").ensureBrowserAvailable();
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
-  it("passes request-local headless override to initial launch", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile } =
-      setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 654);
-
-    const promise = profile.ensureBrowserAvailable({ headless: true });
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(promise).resolves.toBeUndefined();
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual(
-      expect.objectContaining({ headlessOverride: true, signal: expect.any(AbortSignal) }),
-    );
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
   it("passes request-local headless override to the owned restart path", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    const existingProc = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
     const runtime = state.profiles.get("openclaw");
     if (!runtime) {
       throw new Error("expected openclaw runtime");
     }
-    runtime.running = {
-      pid: 111,
-      exe: { kind: "chromium", path: "/usr/bin/chromium" },
-      userDataDir: "/tmp/openclaw-test",
-      cdpPort: 18800,
-      startedAt: Date.now(),
-      proc: existingProc,
-    };
-    isChromeReachable.mockResolvedValueOnce(true).mockResolvedValue(false);
+    runtime.running = fakeRunning(111);
+    isChromeReachable.mockImplementation(async () => Boolean(runtime.running));
     isChromeCdpReady.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     mockLaunchedChrome(launchOpenClawChrome, 987);
 
@@ -354,26 +314,9 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(stopOpenClawChrome).toHaveBeenCalledTimes(1);
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(requireFirstLaunchOptions(launchOpenClawChrome)).toEqual(
+    expect(launchOpenClawChrome.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({ headlessOverride: true, signal: expect.any(AbortSignal) }),
     );
-  });
-
-  it("does not share inflight lazy-start promises across different headless overrides", async () => {
-    const { launchOpenClawChrome, isChromeCdpReady, profile } =
-      setupEnsureBrowserAvailableHarness();
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    isChromeReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-    isChromeCdpReady.mockResolvedValue(true);
-    mockLaunchedChrome(launchOpenClawChrome, 456);
-
-    const first = profile.ensureBrowserAvailable();
-    const second = profile.ensureBrowserAvailable({ headless: true });
-    await vi.advanceTimersByTimeAsync(100);
-    await expect(Promise.all([first, second])).resolves.toEqual([undefined, undefined]);
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(1);
-    expect(isChromeReachable.mock.calls.length).toBeGreaterThan(1);
   });
 
   it("clears the concurrent lazy-start guard after launch failure", async () => {
@@ -420,6 +363,11 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(launchOpenClawChrome).toHaveBeenCalledTimes(3);
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(cooledDownCtx.forProfile().ensureBrowserAvailable()).rejects.toThrow(
+      "Failed to start Chrome CDP",
+    );
+    expect(launchOpenClawChrome).toHaveBeenCalledTimes(4);
   });
 
   it("does not let no-display preflight failures block explicit headless recovery", async () => {
@@ -461,27 +409,6 @@ describe("browser server-context ensureBrowserAvailable", () => {
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
-  it("allows one managed Chrome launch attempt after the cooldown expires", async () => {
-    const { launchOpenClawChrome, isChromeCdpReady, state } = setupEnsureBrowserAvailableHarness();
-    isChromeCdpReady.mockResolvedValue(true);
-    launchOpenClawChrome.mockRejectedValue(new Error("Failed to start Chrome CDP"));
-
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const ctx = createBrowserRouteContext({ getState: () => state });
-      await expect(ctx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
-        "Failed to start Chrome CDP",
-      );
-    }
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    const retryCtx = createBrowserRouteContext({ getState: () => state });
-    await expect(retryCtx.forProfile("openclaw").ensureBrowserAvailable()).rejects.toThrow(
-      "Failed to start Chrome CDP",
-    );
-
-    expect(launchOpenClawChrome).toHaveBeenCalledTimes(4);
-  });
-
   it("reuses a pre-existing loopback browser after an initial short probe miss", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
@@ -498,12 +425,14 @@ describe("browser server-context ensureBrowserAvailable", () => {
       "http://127.0.0.1:18800",
       PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(isChromeReachable).toHaveBeenNthCalledWith(
       2,
       "http://127.0.0.1:18800",
       PROFILE_ATTACH_RETRY_TIMEOUT_MS,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -563,6 +492,7 @@ describe("browser server-context ensureBrowserAvailable", () => {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
       },
+      { signal: expect.any(AbortSignal) },
     );
     expect(isChromeCdpReady).toHaveBeenNthCalledWith(
       2,
@@ -573,49 +503,13 @@ describe("browser server-context ensureBrowserAvailable", () => {
         allowPrivateNetwork: true,
         allowedHostnames: ["browserless"],
       },
-    );
-    expect(launchOpenClawChrome).not.toHaveBeenCalled();
-    expect(stopOpenClawChrome).not.toHaveBeenCalled();
-  });
-
-  it("treats attachOnly loopback CDP as local control with remote-class probe timeouts", async () => {
-    const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
-    const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
-    const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
-
-    const { profile, state } = createAttachOnlyLoopbackProfile("http://127.0.0.1:9222");
-
-    isChromeReachable.mockResolvedValueOnce(true);
-    isChromeCdpReady.mockResolvedValueOnce(true);
-
-    await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
-
-    expect(isChromeReachable).toHaveBeenCalledWith(
-      "http://127.0.0.1:9222",
-      state.resolved.remoteCdpTimeoutMs,
-      undefined,
-    );
-    expect(isChromeCdpReady).toHaveBeenCalledWith(
-      "http://127.0.0.1:9222",
-      state.resolved.remoteCdpTimeoutMs,
-      state.resolved.remoteCdpHandshakeTimeoutMs,
-      undefined,
-      { onDiagnostic: expect.any(Function) },
+      { signal: expect.any(AbortSignal) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
   });
 
   it("resolves for attachOnly loopback profile with a bare ws:// cdpUrl when CDP is reachable (#68027)", async () => {
-    // Regression for #68027: a bare `ws://host:port` cdpUrl on a loopback
-    // attachOnly profile must not surface as
-    //   `Browser attachOnly is enabled and profile "<name>" is not running.`
-    // when the underlying CDP endpoint is actually healthy. The low-level
-    // fix lives in chrome.ts/cdp.ts (see chrome.test.ts #68027 tests); this
-    // higher-level test locks the user-facing symptom at
-    // ensureBrowserAvailable() so future refactors of the availability flow
-    // cannot silently reintroduce the bug by munging/short-circuiting bare
-    // ws:// URLs before they reach the helpers.
     const { launchOpenClawChrome, stopOpenClawChrome } = setupEnsureBrowserAvailableHarness();
     const isChromeReachable = vi.mocked(chromeModule.isChromeReachable);
     const isChromeCdpReady = vi.mocked(chromeModule.isChromeCdpReady);
@@ -627,19 +521,18 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     await expect(profile.ensureBrowserAvailable()).resolves.toBeUndefined();
 
-    // The bare ws:// URL must pass through unchanged — the helpers own the
-    // discovery-first-then-fallback strategy for bare ws roots.
     expect(isChromeReachable).toHaveBeenCalledWith(
       "ws://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       undefined,
+      expect.any(AbortSignal),
     );
     expect(isChromeCdpReady).toHaveBeenCalledWith(
       "ws://127.0.0.1:9222",
       state.resolved.remoteCdpTimeoutMs,
       state.resolved.remoteCdpHandshakeTimeoutMs,
       undefined,
-      { onDiagnostic: expect.any(Function) },
+      { signal: expect.any(AbortSignal), onDiagnostic: expect.any(Function) },
     );
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
@@ -723,5 +616,96 @@ describe("browser server-context ensureBrowserAvailable", () => {
 
     expect(launchOpenClawChrome).not.toHaveBeenCalled();
     expect(stopOpenClawChrome).not.toHaveBeenCalled();
+  });
+});
+
+function createAvailability() {
+  const profile = makeBrowserProfile({ attachOnly: true });
+  const state = makeBrowserServerState({ profile });
+  const runtime: ProfileRuntimeState = { profile, running: null };
+  state.profiles.set(profile.name, runtime);
+  const availability = createProfileAvailability({
+    opts: { getState: () => state },
+    profile,
+    state: () => state,
+    runtime,
+    configRevision: 0,
+  });
+  vi.mocked(chromeModule.isChromeCdpReady).mockImplementation(async (...args) => {
+    await args[4]?.onDiagnostic?.({
+      ok: true,
+      cdpUrl: profile.cdpUrl,
+      wsUrl: "ws://127.0.0.1:18800/devtools/browser/synthetic",
+      elapsedMs: 1,
+    });
+    return true;
+  });
+  return { availability, runtime, state };
+}
+
+describe("external browser mode availability", () => {
+  it("observes the mode again on the next request after an inconclusive inspection", async () => {
+    const { availability, runtime } = createAvailability();
+    vi.mocked(chromeModule.inspectLocalChromeHeadlessMode)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(false);
+
+    await expect(availability.isReachable()).resolves.toBe(true);
+    await expect(availability.isReachable()).resolves.toBe(true);
+    await expect(runtime.externalBrowserMode?.headless).resolves.toBe(false);
+    expect(chromeModule.inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a shared observation alive when its first caller cancels", async () => {
+    const { availability, runtime } = createAvailability();
+    const observation = deferred<boolean>();
+    const observing = deferred<AbortSignal | undefined>();
+    vi.mocked(chromeModule.inspectLocalChromeHeadlessMode).mockImplementation(({ signal }) => {
+      observing.resolve(signal);
+      return observation.promise;
+    });
+    const caller = new AbortController();
+    const first = availability.isReachable(undefined, { signal: caller.signal });
+    const rejected = expect(first).rejects.toThrow("cancel first caller");
+    const ownerSignal = await observing.promise;
+    const secondReady = vi.fn();
+    const second = availability.isReachable().then(secondReady);
+    await setImmediate();
+    expect(secondReady).not.toHaveBeenCalled();
+    caller.abort(new Error("cancel first caller"));
+    await rejected;
+    expect(ownerSignal?.aborted).toBe(false);
+
+    observation.resolve(false);
+    await second;
+    expect(secondReady).toHaveBeenCalledWith(true);
+    await expect(runtime.externalBrowserMode?.headless).resolves.toBe(false);
+    expect(chromeModule.inspectLocalChromeHeadlessMode).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the observation and clears its cache on a profile transition", async () => {
+    const { availability, runtime, state } = createAvailability();
+    const observing = deferred<void>();
+    vi.mocked(chromeModule.inspectLocalChromeHeadlessMode).mockImplementation(({ signal }) => {
+      observing.resolve();
+      return new Promise((_resolve, reject) => {
+        signal?.addEventListener(
+          "abort",
+          () => reject(new Error("mode observation aborted", { cause: signal.reason })),
+          { once: true },
+        );
+      });
+    });
+    const pending = availability.isReachable();
+    const rejected = expect(pending).rejects.toThrow("mode observation aborted");
+    await observing.promise;
+    await beginProfileTransition({
+      state,
+      runtime,
+      reason: "test transition",
+      closeSharedAdapters: false,
+    });
+    await rejected;
+    expect(runtime.externalBrowserMode).toBeUndefined();
   });
 });

@@ -1,8 +1,10 @@
 // Discord tests cover native command reply plugin behavior.
+import { setImmediate } from "node:timers/promises";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { discordComponentRegistryState } from "../components-registry-state.js";
 import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
 import { clearDiscordComponentEntriesForTest } from "../components-registry.test-support.js";
 import { parseDiscordComponentCustomId } from "../components.js";
@@ -162,6 +164,65 @@ describe("deliverDiscordInteractionReply", () => {
     },
   );
 
+  it.each([false, true])(
+    "waits for native button persistence without changing delivery on failure=%s",
+    async (fail) => {
+      const started = createDeferred<void>();
+      const registered = createDeferred<void>();
+      discordComponentRegistryState.persistentComponentStore = {
+        register: async () => {
+          started.resolve();
+          await registered.promise;
+        },
+        lookup: async () => undefined,
+        consume: async () => undefined,
+        delete: async () => false,
+      };
+      const interaction = createInteraction();
+      let completed = false;
+      const delivery = deliverDiscordInteractionReply({
+        interaction: interaction as never,
+        payload: {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Choose", action: { type: "command", command: "/help" } }],
+              },
+            ],
+          },
+        },
+        componentRoute: {
+          accountId: "default",
+          agentId: "assistant",
+          sessionKey: "agent:assistant:discord:direct:fixture",
+        },
+        textLimit: 2000,
+        preferFollowUp: false,
+        chunkMode: "length",
+      }).then((value) => {
+        completed = true;
+        return value;
+      });
+      try {
+        await started.promise;
+        await setImmediate();
+        expect(interaction.reply).toHaveBeenCalledOnce();
+        expect(completed).toBe(false);
+        if (fail) {
+          registered.reject(new Error("synthetic persistence unavailable"));
+        } else {
+          registered.resolve();
+        }
+        expect(await delivery).toBe(true);
+        expect(discordComponentRegistryState.persistentRegistryDisabled).toBe(fail);
+      } finally {
+        registered.resolve();
+        await delivery;
+      }
+    },
+  );
+
   it("sends component-only native command replies as follow-ups", async () => {
     const interaction = createInteraction();
     const components = [new Container([new TextDisplay("Pick a model")])];
@@ -215,29 +276,25 @@ describe("deliverDiscordInteractionReply", () => {
     expect(interaction.followUp).not.toHaveBeenCalled();
   });
 
-  it.each([true, false])(
-    "sends embed-only native command replies with preferFollowUp=%s",
-    async (preferFollowUp) => {
-      const interaction = createInteraction();
-      const embeds = [{ title: "Status", description: "All systems operational" }];
-      const payload = { channelData: { discord: { embeds } } };
+  it("sends embed-only native command replies through the initial reply", async () => {
+    const interaction = createInteraction();
+    const embeds = [{ title: "Status", description: "All systems operational" }];
+    const payload = { channelData: { discord: { embeds } } };
 
-      expect(hasRenderableReplyPayload(payload)).toBe(true);
-      await expect(
-        deliverDiscordInteractionReply({
-          interaction: interaction as never,
-          payload,
-          textLimit: 2000,
-          preferFollowUp,
-          responseEphemeral: true,
-          chunkMode: "length",
-        }),
-      ).resolves.toBe(true);
+    expect(hasRenderableReplyPayload(payload)).toBe(true);
+    await expect(
+      deliverDiscordInteractionReply({
+        interaction: interaction as never,
+        payload,
+        textLimit: 2000,
+        preferFollowUp: false,
+        responseEphemeral: true,
+        chunkMode: "length",
+      }),
+    ).resolves.toBe(true);
 
-      const sender = preferFollowUp ? interaction.followUp : interaction.reply;
-      expect(sender).toHaveBeenCalledWith({ embeds, ephemeral: true });
-    },
-  );
+    expect(interaction.reply).toHaveBeenCalledWith({ embeds, ephemeral: true });
+  });
 
   it.each([
     { includeMedia: false, includeEmbeds: true },
@@ -379,17 +436,14 @@ describe("settleDiscordInteractionWithoutVisibleReply", () => {
     expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["unacknowledged", "deferred-update", "replied"])(
-    "does not delete an interaction in the %s state",
-    async (responseState) => {
-      const interaction = {
-        responseState,
-        deleteReply: vi.fn().mockResolvedValue(undefined),
-      };
+  it("does not delete the existing message after a component defer", async () => {
+    const interaction = {
+      responseState: "deferred-update",
+      deleteReply: vi.fn().mockResolvedValue(undefined),
+    };
 
-      await settleDiscordInteractionWithoutVisibleReply(interaction as never);
+    await settleDiscordInteractionWithoutVisibleReply(interaction as never);
 
-      expect(interaction.deleteReply).not.toHaveBeenCalled();
-    },
-  );
+    expect(interaction.deleteReply).not.toHaveBeenCalled();
+  });
 });

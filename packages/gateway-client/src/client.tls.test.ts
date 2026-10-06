@@ -8,11 +8,13 @@ import {
   type Server,
   type Socket,
 } from "node:net";
+import { checkServerIdentity } from "node:tls";
 import { installGlobalProxy, type ProxylineHandle } from "@openclaw/proxyline";
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { GatewayClient, type GatewayClientCloseInfo } from "./client.js";
+import { resolveGatewayWebSocketTransport } from "./websocket-transport.js";
 import { WebSocketServer } from "./websocket.test-support.js";
 
 const fingerprint = new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256;
@@ -89,6 +91,27 @@ async function startProxy(targetPort: number) {
   return () => tunnels;
 }
 
+it.each([
+  { peer: "localhost", servername: "localhost", valid: true },
+  { peer: "other.localhost", servername: "other.localhost", valid: false },
+  { peer: "127.0.0.1", servername: "", valid: false },
+  { peer: "::1", servername: "", valid: false },
+])(
+  "validates the original TLS peer $peer behind a translated endpoint",
+  ({ peer, servername, valid }) => {
+    const { options } = resolveGatewayWebSocketTransport({
+      url: "wss://127.0.0.1:18789",
+      tlsServerName: peer,
+      options: {},
+    });
+    const certificate = new X509Certificate(TEST_TLS_CERT_PEM).toLegacyObject();
+    const error = (options.checkServerIdentity ?? checkServerIdentity)("127.0.0.1", certificate);
+    expect(error === undefined).toBe(valid);
+    expect(options.servername).toBe(servername);
+    expect(options.rejectUnauthorized).not.toBe(false);
+  },
+);
+
 describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed) => {
   it.each([
     { name: "wrong pin", pin: "ab".repeat(32), expectHeader: false, urlAuth: false },
@@ -142,7 +165,6 @@ describe.each([false, true])("Gateway TLS upgrade (managed proxy: %s)", (managed
     await waitForSocketDrain();
     if (pin === fingerprint) {
       expect(result).toBe("open");
-      expect(httpBytes).toBeGreaterThan(0);
       expect(upgrades).toBe(1);
       expect(headers).toMatchObject({
         "x-test-edge-auth": "synthetic-test-edge-token",

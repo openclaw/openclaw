@@ -1,10 +1,12 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:os";
-import { resolveExecutablePath } from "../infra/executable-path.js";
+import { toErrorObject } from "../infra/errors.js";
+import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
 import { decodeTerminalPtyEvent, type TerminalPtyControl } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
@@ -14,8 +16,10 @@ const CLEANUP_TIMEOUT_MS = 2_000;
 /** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
+  beforeSpawn?: () => void,
+  initiateSpawn?: SpawnInitiation,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveExecutablePath("node", { env: process.env });
+  const node = resolveNodeRuntimeExecutable();
   if (!node) {
     throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
   }
@@ -51,7 +55,6 @@ export async function spawnNodeTerminalPty(
       return;
     }
     startupError ??= error;
-    ready.reject(error);
     if (child.connected) {
       child.disconnect();
     }
@@ -108,14 +111,12 @@ export async function spawnNodeTerminalPty(
     finish();
   });
   stdout.on("error", fail);
-  stdout.once("close", () => {
+  const finishOutput = () => {
     outputEnded = true;
     finish();
-  });
-  stdout.once("end", () => {
-    outputEnded = true;
-    finish();
-  });
+  };
+  stdout.once("close", finishOutput);
+  stdout.once("end", finishOutput);
   child.once("disconnect", () => {
     ipcClosed = true;
     finish();
@@ -127,10 +128,34 @@ export async function spawnNodeTerminalPty(
       return;
     }
     if (message.type === "boot") {
-      send({ type: "start", params });
+      try {
+        beforeSpawn?.();
+        send({ type: initiateSpawn ? "prepare" : "start", params });
+      } catch (error) {
+        fail(toErrorObject(error, "PTY launch denied"));
+      }
+    } else if (message.type === "prepared") {
+      try {
+        beforeSpawn?.();
+        if (!initiateSpawn) {
+          throw new Error("Terminal launch authority is unavailable");
+        }
+        // Rejection already joins helper exit, IPC close, and output EOF in finish().
+        initiateSpawn(
+          () => send({ type: "launch" }),
+          ready.promise.then(
+            () => {},
+            () => {},
+          ),
+        );
+      } catch (error) {
+        fail(toErrorObject(error, "PTY launch denied"));
+      }
     } else if (message.type === "ready") {
       ptyPid = message.pid;
-      ready.resolve(message.pid);
+      if (!startupError) {
+        ready.resolve(message.pid);
+      }
     } else if (message.type === "error") {
       fail(new Error(message.message));
     } else {

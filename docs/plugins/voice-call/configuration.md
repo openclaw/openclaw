@@ -101,7 +101,8 @@ calls, but do not replace the plugin's startup owner.
 
 If startup reports that Voice Call has no explicit owner, list your agents with
 `openclaw agents list`, set the existing `agentId` field, and rerun
-`openclaw voicecall setup`. Restart the Gateway after updating its configuration.
+`openclaw voicecall setup`. With the default hybrid reload mode, the configuration
+change reloads the plugin automatically; see [Hot reload](/gateway/configuration/hot-reload).
 Existing legacy default-agent selection is preserved; new multi-agent setups
 should use an explicit owner. See [Agent configuration](/gateway/config-agents).
 
@@ -140,7 +141,7 @@ that Region. See
     - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
     - `skipSignatureVerification` is for local testing only.
     - On ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
-    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Local dev only.
+    - `tunnel.allowNgrokFreeTierLoopbackBypass: true` trusts forwarding headers from loopback requests when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). This reconstructs the public URL used for signing; valid Twilio signatures are still required.
     - Ngrok free-tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures fail. Production: prefer a stable domain or a Tailscale funnel.
     - Tailscale Serve and Funnel automatically expose the realtime or streaming WebSocket path when that audio mode is enabled.
     - `tailscale.port` selects the external HTTPS port for both `tailscale.mode` and unified `tunnel.provider: "tailscale-serve" | "tailscale-funnel"`. It defaults to `443`; use `8443` when another HTTPS server owns port 443. Funnel accepts only `443`, `8443`, or `10000`, while Serve accepts any valid TCP port. Non-default ports appear in the webhook and realtime stream URLs.
@@ -154,11 +155,9 @@ that Region. See
 
   </Accordion>
   <Accordion title="Legacy config migrations">
-    Run `openclaw doctor --fix` to rewrite these legacy keys to the canonical
-    shape. The Voice Call plugin owns the migration; runtime config parsing
-    accepts only the current keys. When both old and current settings exist,
-    Doctor keeps the current setting, removes the legacy key, and reports which
-    destination it retained. Legacy values fill only missing current fields:
+    Voice Call accepts the current config shape. Migrations for shapes retired
+    before July 2026 are no longer included. Update older configs manually using
+    these replacements, keeping any existing current values:
 
     - `provider: "log"` → `provider: "mock"`
     - `twilio.from` → `fromNumber`
@@ -167,7 +166,7 @@ that Region. See
     - `streaming.sttModel` → `streaming.providers.openai.model`
     - `streaming.silenceDurationMs` → `streaming.providers.openai.silenceDurationMs`
     - `streaming.vadThreshold` → `streaming.providers.openai.vadThreshold`
-    - `realtime.agentContext.includeSystemPrompt` is removed (realtime context now uses the generated agent prompt)
+    - `realtime.agentContext.includeSystemPrompt` is removed. Hosts with the shared context resolver always include agent-context guidance; `realtime.agentContext` controls optional configured identity and profile files. Supported older hosts retain their optional, bounded context capsule. See [Agent voice context](/plugins/voice-call/realtime-and-streaming#agent-voice-context).
 
   </Accordion>
 </AccordionGroup>

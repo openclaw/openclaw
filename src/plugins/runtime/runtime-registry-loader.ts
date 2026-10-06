@@ -1,5 +1,6 @@
 // Runtime registry loader assembles process-root plugin runtimes from config metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { listAgentEntries } from "../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
 import {
@@ -10,7 +11,7 @@ import { normalizePluginsConfig } from "../config-state.js";
 import { resolveEffectivePluginIds } from "../effective-plugin-ids.js";
 import { collectConfiguredMemoryEmbeddingProviderIds } from "../gateway-startup-plugin-ids.js";
 import { createInstalledPluginIndexScopeLookup } from "../installed-plugin-index-scope-lookup.js";
-import { loadOpenClawPlugins } from "../loader.js";
+import { loadAndActivateRootPluginRegistry } from "../loader.js";
 import { hasNonEmptyPluginIdScope } from "../plugin-scope.js";
 import { buildPluginRuntimeLoadOptions } from "./load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./load-context.resolve.js";
@@ -58,8 +59,7 @@ function resolveSandboxBackendPluginIds(
   const agents = context.activationSourceConfig.agents;
   const configuredBackendIds = [
     agents?.defaults?.sandbox?.backend,
-    ...Object.values(agents?.entries ?? {}).map((agent) => agent.sandbox?.backend),
-    ...(agents?.list ?? []).map((agent) => agent.sandbox?.backend),
+    ...listAgentEntries(context.activationSourceConfig).map((agent) => agent.sandbox?.backend),
     ...persistedBackendIds,
   ];
   const lookup = createInstalledPluginIndexScopeLookup(context.metadataSnapshot.index);
@@ -114,14 +114,14 @@ function resolveScopePluginIds(params: {
   });
 }
 
-export function ensurePluginRegistryLoaded(options?: {
+export async function ensurePluginRegistryLoaded(options?: {
   scope?: PluginRegistryScope;
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   persistedSandboxBackendIds?: readonly string[];
-}): void {
+}): Promise<void> {
   const scope = options?.scope ?? "all";
   const context = resolvePluginRuntimeLoadContext(options);
   const pluginIds = resolveScopePluginIds({
@@ -139,7 +139,7 @@ export function ensurePluginRegistryLoaded(options?: {
         pluginIds,
       }) ?? context.activationSourceConfig)
     : context.activationSourceConfig;
-  loadOpenClawPlugins(
+  await loadAndActivateRootPluginRegistry(
     buildPluginRuntimeLoadOptions(
       { ...context, config, activationSourceConfig },
       {

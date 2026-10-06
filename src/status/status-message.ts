@@ -1,6 +1,8 @@
-// Status message helpers read and format stored status messages.
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   type FastMode,
   normalizeLowercaseStringOrEmpty,
@@ -32,7 +34,6 @@ import type {
 } from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
-  resolveMainSessionKey,
   resolveFreshSessionTotalTokens,
   resolveProjectedSessionContextTokens,
   resolveProjectedSessionContextBudgetStatus,
@@ -41,14 +42,14 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
   hasUserPinnedModelSelection,
 } from "../config/sessions/model-override-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-readers.js";
+import { readRecentSessionUsageFromTranscript } from "../gateway/session-transcript-usage.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import type {
@@ -64,7 +65,7 @@ import type { MediaUnderstandingDecision } from "../media-understanding/types.js
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatFastModeStatusValue } from "../shared/fast-mode.js";
 import { resolveStatusTtsSnapshot } from "../tts/status-config.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import {
   estimateAggregateUsageCost,
   formatTokenCount,
@@ -74,6 +75,7 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import { formatModelEndpointUrl } from "./status-model-endpoint.js";
 
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
@@ -105,6 +107,7 @@ type StatusArgs = {
   parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
+  sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: FastMode;
@@ -113,6 +116,7 @@ type StatusArgs = {
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  selectedEndpoint?: string;
   activeModelAuth?: string;
   activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
@@ -121,7 +125,6 @@ type StatusArgs = {
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
-  taskLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
@@ -142,23 +145,10 @@ function normalizeAuthMode(value?: string): NormalizedAuthMode | undefined {
   if (!normalized) {
     return undefined;
   }
-  if (normalized === "api-key" || normalized.startsWith("api-key ")) {
-    return "api-key";
-  }
-  if (normalized === "oauth" || normalized.startsWith("oauth ")) {
-    return "oauth";
-  }
-  if (normalized === "token" || normalized.startsWith("token ")) {
-    return "token";
-  }
-  if (normalized === "aws-sdk" || normalized.startsWith("aws-sdk ")) {
-    return "aws-sdk";
-  }
-  if (normalized === "native" || normalized.startsWith("native ")) {
-    return "native";
-  }
-  if (normalized === "mixed" || normalized.startsWith("mixed ")) {
-    return "mixed";
+  for (const mode of ["api-key", "oauth", "token", "aws-sdk", "native", "mixed"] as const) {
+    if (normalized === mode || normalized.startsWith(`${mode} `)) {
+      return mode;
+    }
   }
   if (normalized === "unknown") {
     return "unknown";
@@ -188,10 +178,10 @@ function resolveConfiguredTextVerbosity(params: {
 }
 
 function resolveExecutionLabel(
-  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey" | "sessionScope">,
+  args: Pick<StatusArgs, "config" | "agent" | "agentId" | "sessionKey">,
 ): string {
   const sessionKey = args.sessionKey?.trim();
-  if (args.config && sessionKey) {
+  if (sessionKey) {
     const runtimeStatus = resolveSandboxRuntimeStatus({
       cfg: args.config,
       sessionKey,
@@ -201,40 +191,22 @@ function resolveExecutionLabel(
     if (sandboxMode === "off") {
       return "direct";
     }
-    const runtime = runtimeStatus.sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    const runtime = runtimeStatus.sandboxed ? "docker" : "direct";
     return `${runtime}/${sandboxMode}`;
   }
 
   const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-  if (sandboxMode === "off") {
-    return "direct";
-  }
-  const sandboxed = (() => {
-    if (!sessionKey) {
-      return false;
-    }
-    if (sandboxMode === "all") {
-      return true;
-    }
-    const sessionScope = args.sessionScope ?? "per-sender";
-    const mainKey = resolveMainSessionKey({
-      session: { scope: sessionScope },
-    });
-    return sessionKey !== mainKey.trim();
-  })();
-  const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-  return `${runtime}/${sandboxMode}`;
+  return sandboxMode === "off" ? "direct" : `unknown/${sandboxMode}`;
 }
 
 const formatTokens = (total: number | null | undefined, contextTokens: number | null) => {
   const ctx = contextTokens ?? null;
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   if (total == null) {
-    const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
     return `?/${ctxLabel}`;
   }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(total);
-  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
@@ -245,23 +217,13 @@ const formatEstimatedContextBudgetTokens = (
   if (!status || status.source !== "pre-prompt-estimate") {
     return null;
   }
-  const estimatedPromptTokens =
-    typeof status.estimatedPromptTokens === "number" &&
-    Number.isFinite(status.estimatedPromptTokens) &&
-    status.estimatedPromptTokens >= 0
-      ? Math.floor(status.estimatedPromptTokens)
-      : undefined;
-  if (estimatedPromptTokens === undefined) {
+  const estimate = asNonNegativeFiniteNumber(status.estimatedPromptTokens);
+  if (estimate === undefined) {
     return null;
   }
+  const estimatedPromptTokens = Math.floor(estimate);
   const ctx =
-    typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0
-      ? contextTokens
-      : typeof status.contextTokenBudget === "number" &&
-          Number.isFinite(status.contextTokenBudget) &&
-          status.contextTokenBudget > 0
-        ? status.contextTokenBudget
-        : undefined;
+    asPositiveFiniteNumber(contextTokens) ?? asPositiveFiniteNumber(status.contextTokenBudget);
   const pct = ctx ? Math.min(999, Math.round((estimatedPromptTokens / ctx) * 100)) : null;
   const totalLabel = formatTokenCount(estimatedPromptTokens);
   const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
@@ -306,19 +268,7 @@ const readUsageFromSessionLog = (
   agentId?: string,
   sessionKey?: string,
   storePath?: string,
-):
-  | {
-      input: number;
-      output: number;
-      cacheRead?: number;
-      cacheWrite?: number;
-      promptTokens: number;
-      total: number;
-      totalTokensFresh: boolean;
-      model?: string;
-    }
-  | undefined => {
-  // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
+) => {
   if (!sessionId) {
     return undefined;
   }
@@ -440,15 +390,13 @@ const formatMediaUnderstandingLine = (decisions?: ReadonlyArray<MediaUnderstandi
       if (decision.outcome === "scope-deny") {
         return `${decision.capability} denied`;
       }
-      if (decision.outcome === "skipped") {
-        const reason = findDecisionReason(decision);
+      if (decision.outcome === "skipped" || decision.outcome === "failed") {
+        const reason = findDecisionReason(
+          decision,
+          decision.outcome === "failed" ? "failed" : undefined,
+        );
         const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} skipped${shortReason ? ` (${shortReason})` : ""}`;
-      }
-      if (decision.outcome === "failed") {
-        const reason = findDecisionReason(decision, "failed");
-        const shortReason = summarizeDecisionReason(reason);
-        return `${decision.capability} failed${shortReason ? ` (${shortReason})` : ""}`;
+        return `${decision.capability} ${decision.outcome}${shortReason ? ` (${shortReason})` : ""}`;
       }
       return null;
     })
@@ -603,9 +551,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
-        );
+        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
@@ -653,7 +599,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
         allowTranscriptContextUsage &&
         candidate !== undefined &&
         candidate > 0 &&
-        (!totalTokens || totalTokens === 0 || candidate > totalTokens)
+        (!totalTokens || candidate > totalTokens)
       ) {
         totalTokens = candidate;
       }
@@ -679,10 +625,10 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
           contextLookupModel = logUsage.model;
         }
       }
-      if (!inputTokens || inputTokens === 0) {
+      if (!inputTokens) {
         inputTokens = logUsage.input;
       }
-      if (!outputTokens || outputTokens === 0) {
+      if (!outputTokens) {
         outputTokens = logUsage.output;
       }
       if (typeof cacheRead !== "number" || cacheRead <= 0) {
@@ -781,8 +727,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const fastMode = args.resolvedFast ?? args.sessionEntry?.fastMode ?? false;
   const fastModeState = resolveFastModeState({
     cfg: args.config,
-    provider: activeProvider,
-    model: activeModel,
+    provider: selectedLookupProvider,
+    model: selectedLookupModel,
     agentId: args.agentId,
     sessionEntry: args.sessionEntry,
   });
@@ -797,7 +743,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     args.agent?.elevatedDefault ??
     "on";
 
-  const execution = { label: resolveExecutionLabel(args) };
+  const execution = resolveExecutionLabel(args);
   const agentRuntimeLabel = resolveAgentRuntimeLabel({
     config: args.config,
     sessionEntry: args.sessionEntry,
@@ -806,12 +752,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   });
 
   const updatedAt = entry?.updatedAt;
-  const sessionStartedAt = resolveSessionLifecycleTimestamps({
-    entry,
-    agentId: args.agentId,
-    sessionKey: args.sessionKey,
-    storePath: args.sessionStorePath,
-  }).sessionStartedAt;
+  const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })
@@ -964,12 +905,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   // A user-driven live switch that no completed turn has applied yet: surface
   // it so /status does not imply the new selection is already running.
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
-  // Auth gets its own line below; keeping it inline here duplicated the value.
-  const modelLines = [
-    `🧠 Model: ${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`,
-  ];
+  const modelValue = `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`;
 
-  // Show configured fallback models (from agent model config)
+  const selectedEndpoint = args.selectedEndpoint
+    ? formatModelEndpointUrl(args.selectedEndpoint)
+    : undefined;
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig && Array.isArray(modelConfig.fallbacks)) {
@@ -1013,14 +953,11 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry, args.agentId);
 
-  // One fact per line: chat clients wrap long lines mid-fact, so joining
-  // several facts with separators reads as a wall rather than a summary.
-  // Grouped sections with blank lines between them: a flat list of ~15 facts
-  // reads as a wall, and chat clients give no other visual grouping.
   const text = [
     [versionLine, timeLine, uptimeLine],
     [
-      ...modelLines,
+      `🧠 Model: ${modelValue}`,
+      `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
       selectedAuthLabelValue ? `🔑 Auth: ${selectedAuthLabelValue}` : null,
       configuredFallbacksLine,
       fallbackLine,
@@ -1034,9 +971,9 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       mediaLine,
       args.usageLine,
     ],
-    [`🧵 Session: ${sessionValue}`, args.subagentsLine, args.taskLine],
+    [`🧵 Session: ${sessionValue}`, args.subagentsLine],
     [
-      `⚙️ Execution: ${execution.label}`,
+      `⚙️ Execution: ${execution}`,
       `🤖 Runtime: ${agentRuntimeLabel}`,
       modesValue ? `🎛️ Modes: ${modesValue}` : null,
       groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
@@ -1060,7 +997,8 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       statusRows.push([label, cell]);
     }
   };
-  pushStatusRow("🧠 Model", `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`);
+  pushStatusRow("🧠 Model", modelValue);
+  pushStatusRow("🌐 Endpoint", selectedEndpoint ?? "unknown");
   pushStatusRow("🔑 Auth", selectedAuthLabelValue);
   pushStatusRow("🔄 Fallbacks", configuredFallbacks?.join(", "));
   pushStatusRow("↪️ Fallback", fallbackValue);
@@ -1070,7 +1008,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   pushStatusRow("📚 Context", `${contextMeter}${contextUsageLabel}`);
   pushStatusRow("🧹 Compactions", compactionCount > 0 ? compactionCount : null);
   pushStatusRow("🧵 Session", sessionValue);
-  pushStatusRow("⚙️ Execution", execution.label);
+  pushStatusRow("⚙️ Execution", execution);
   pushStatusRow("Runtime", agentRuntimeLabel);
   pushStatusRow("🎛️ Modes", modesValue);
   pushStatusRow("👥 Activation", groupActivationValue);
@@ -1112,7 +1050,6 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
       ...contextBlock(mediaLine),
       ...contextBlock(args.usageLine),
       ...contextBlock(args.subagentsLine),
-      ...contextBlock(args.taskLine),
       ...contextBlock(args.pluginHealthLine),
       ...contextBlock(pluginStatusLine ? `🧩 ${pluginStatusLine}` : null),
       ...contextBlock(voiceLine),

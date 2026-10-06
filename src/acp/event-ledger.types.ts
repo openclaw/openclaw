@@ -80,14 +80,10 @@ export function normalizeAcpLedgerOptions(options: AcpLedgerOptions = {}) {
   };
 }
 
-export function cloneAcpLedgerValue<T>(value: T): T {
-  return structuredClone(value);
-}
-
 export function createAcpPromptUpdates(prompt: readonly ContentBlock[]): SessionUpdate[] {
   return prompt.map((content) => ({
     sessionUpdate: "user_message_chunk",
-    content: cloneAcpLedgerValue(content),
+    content: structuredClone(content),
   }));
 }
 
@@ -119,6 +115,6 @@ export function normalizeAcpLedgerEvent(raw: unknown): AcpEventLedgerEntry | und
     sessionId,
     sessionKey,
     ...(typeof runId === "string" && runId ? { runId } : {}),
-    update: cloneAcpLedgerValue(raw.update) as SessionUpdate,
+    update: structuredClone(raw.update) as SessionUpdate,
   };
 }
