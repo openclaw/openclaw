@@ -232,7 +232,67 @@ describe("createCliJsonlStreamingParser framing", () => {
     parser.push(`${line}\n${line}\n`);
 
     expect(parser.getErrorText()).toContain("JSONL output exceeded 8388608 characters");
+    expect(parser.getOutputTruncationText()).toBeNull();
+    expect(parser.getOutput()?.errorText).toContain("JSONL output exceeded 8388608 characters");
   });
+
+  it.each([
+    {
+      name: "raw-character",
+      overflow: (parser: ReturnType<typeof createCliJsonlStreamingParser>) => {
+        const line = " ".repeat(4_300_000);
+        parser.push(`${line}\n${line}\n`);
+      },
+      truncation: "JSONL output exceeded 8388608 characters",
+    },
+    {
+      name: "line-count",
+      overflow: (parser: ReturnType<typeof createCliJsonlStreamingParser>) => {
+        parser.push("\n".repeat(20_001));
+      },
+      truncation: "JSONL output exceeded 20000 lines",
+    },
+  ])(
+    "keeps a finished Claude turn that outgrew the $name budget instead of failing it",
+    ({ overflow, truncation }) => {
+      const assistantDeltas: string[] = [];
+      const parser = createCliJsonlStreamingParser({
+        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
+        providerId: "claude-cli",
+        onAssistantDelta: (delta) => assistantDeltas.push(delta.delta),
+      });
+
+      overflow(parser);
+      // Records other than the terminal result stay unassembled past the budget.
+      parser.push(
+        `${joinJsonlFrames(
+          claudeStreamEvent({
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "dropped" },
+          }),
+          {
+            type: "result",
+            subtype: "success",
+            result: "finished answer",
+            session_id: "budget-session",
+          },
+        )}\n`,
+      );
+      parser.finish();
+
+      expect(parser.getErrorText()).toBeNull();
+      expect(parser.hasTerminalResult()).toBe(true);
+      expect(assistantDeltas).toEqual([]);
+      expect(parser.getOutput()).toMatchObject({
+        text: "finished answer",
+        sessionId: "budget-session",
+      });
+      expect(parser.getOutput()?.errorText).toBeUndefined();
+      expect(parser.getOutputTruncationText()).toContain(truncation);
+      expect(parser.getOutputTruncationText()).toContain("kept watching for the terminal result");
+    },
+  );
 
   it("normalizes empty Claude image data without treating zero omitted bytes as unchanged", () => {
     const results: CliToolResultDelta[] = [];
