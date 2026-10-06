@@ -6,9 +6,7 @@ type DoctorMaintenance = NonNullable<
   Awaited<ReturnType<typeof import("./doctor-maintenance.js").beginDoctorMaintenance>>
 >;
 
-export function createDoctorMaintenanceFixture(
-  overrides: Partial<DoctorMaintenance> = {},
-): DoctorMaintenance {
+export function createDoctorMaintenanceFixture(overrides: Partial<DoctorMaintenance> = {}) {
   return {
     signal: new AbortController().signal,
     warnings: [],
@@ -23,7 +21,7 @@ export function createDoctorMaintenanceFixture(
     release: vi.fn(async () => {}),
     finish: vi.fn(async () => {}),
     ...overrides,
-  };
+  } satisfies DoctorMaintenance;
 }
 
 /** Synthetic services keep native lifecycle locks in their owned fixture root. */

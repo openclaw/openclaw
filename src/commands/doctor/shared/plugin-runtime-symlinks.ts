@@ -123,14 +123,15 @@ export async function removeStalePluginRuntimeSymlinks(
       });
       changes.push(`Removed stale plugin-runtime symlink: ${item.path}`);
     } catch (error) {
+      let cause = error;
       while (
-        error instanceof FsSafeError &&
-        error.category === "operational" &&
-        error.cause instanceof Error
+        cause instanceof FsSafeError &&
+        cause.category === "operational" &&
+        cause.cause instanceof Error
       ) {
-        error = error.cause;
+        cause = cause.cause;
       }
-      warnings.push(`Failed to remove stale plugin-runtime symlink ${item.path}: ${String(error)}`);
+      warnings.push(`Failed to remove stale plugin-runtime symlink ${item.path}: ${String(cause)}`);
     }
   }
   return { changes, warnings };

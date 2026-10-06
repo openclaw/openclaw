@@ -463,7 +463,7 @@ export function pluginRegistryIssueToHealthFinding(
         issue.packageDir,
         "Restore access to the package files, then run `openclaw doctor` again.",
       );
-    case "stale-managed-npm-install-generation":
+    default:
       return staleManagedNpmInstallGenerationToHealthFinding(issue);
   }
 }
@@ -499,7 +499,7 @@ export function pluginRegistryIssueToRepairEffect(
         "requires-registered-npm-package-readability-repair",
         issue.packageDir,
       );
-    case "stale-managed-npm-install-generation":
+    default:
       return staleManagedNpmInstallGenerationToRepairEffect(issue);
   }
 }
