@@ -1,16 +1,4 @@
-import type { AgentDatabaseOperations } from "../state/openclaw-agent-execution-contract.js";
-import type {
-  OpenClawStateWorkerCleanupOperations,
-  OpenClawStateWorkerInspectionOperations,
-  OpenClawStateWorkerOperations,
-} from "../state/openclaw-state-worker-contract.js";
-
-type Command = keyof (AgentDatabaseOperations &
-  OpenClawStateWorkerOperations &
-  OpenClawStateWorkerInspectionOperations &
-  OpenClawStateWorkerCleanupOperations);
-type Family<Name> = Name extends `${infer Prefix}.${string}` ? Prefix : never;
-
+// Keep this vocabulary below database contracts to avoid broker import cycles.
 // Keep caller-controlled SDK command names and suffixes out of metric labels.
 const operations = [
   "audit.events.list",
@@ -27,7 +15,7 @@ const operations = [
   "stateLease.release",
   "stateLease.renew",
   "stateLease.verify",
-] satisfies readonly Command[];
+] as const;
 
 const families = [
   "acp",
@@ -104,7 +92,7 @@ const families = [
   "workspace",
   "workshop",
   "worktrees",
-] satisfies readonly Family<Command>[];
+] as const;
 
 export const sqliteWorkerRequestClasses: ReadonlySet<string> = new Set([
   ...operations,
