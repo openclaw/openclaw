@@ -11,7 +11,14 @@ import type { YamlAst } from "./ast.js";
 type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
   | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
-  | { readonly kind: "map" | "seq"; readonly path: readonly string[] }
+  | {
+      readonly kind: "map";
+      readonly path: readonly string[];
+    }
+  | {
+      readonly kind: "seq";
+      readonly path: readonly string[];
+    }
   | {
       readonly kind: "pair";
       readonly key: string;

@@ -46,8 +46,9 @@ export async function sendSlackChannelMessage(params: {
   text: string;
   threadTs?: string;
 }) {
+  const postSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
   const sent = slackPostMessageSchema.parse(
-    await params.client.chat.postMessage({
+    await postSlackMessage({
       channel: params.channelId,
       text: params.text,
       thread_ts: params.threadTs,
