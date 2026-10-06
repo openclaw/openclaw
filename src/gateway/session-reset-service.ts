@@ -1017,7 +1017,7 @@ export async function performGatewaySessionReset(params: {
         if (!deleted.ok) {
           return deleted;
         }
-        handleSessionStateSessionDeleted(target.canonicalKey, agentId);
+        await handleSessionStateSessionDeleted(target.canonicalKey, agentId);
         notifyGatewaySessionReset(target.canonicalKey, target.agentId);
         emitGatewaySessionEndPluginHook({
           cfg,
@@ -1281,9 +1281,9 @@ export async function performGatewaySessionReset(params: {
                 reason: params.reason,
               });
             },
-            () => {
+            async () => {
               const resetSessionKey = target.canonicalKey;
-              handleSessionStateSessionReset(resetSessionKey);
+              await handleSessionStateSessionReset(resetSessionKey);
               notifyGatewaySessionReset(resetSessionKey, target.agentId);
               emitGatewaySessionEndPluginHook({
                 cfg,

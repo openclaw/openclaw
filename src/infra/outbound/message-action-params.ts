@@ -93,11 +93,10 @@ function hasExplicitSendMediaSource(
       const value = entry ? normalizeOptionalString(entry.value) : undefined;
       return Boolean(value && value !== SEND_BUFFER_DRY_RUN_MEDIA_URL);
     }) ||
-    readStringArrayParam(args, "mediaUrls")?.some((value) => {
-      const normalized = normalizeOptionalString(value);
-      return Boolean(normalized && normalized !== SEND_BUFFER_DRY_RUN_MEDIA_URL);
-    }) === true ||
-    collectAttachmentSources(args).some((source) => Boolean(normalizeOptionalString(source.value)))
+    readStringArrayParam(args, "mediaUrls")?.some(
+      (value) => value !== SEND_BUFFER_DRY_RUN_MEDIA_URL,
+    ) === true ||
+    collectAttachmentSources(args).length > 0
   );
 }
 
@@ -162,17 +161,7 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
     // Standard send params never need bundled action metadata discovery.
     return [];
   }
-  return resolveChannelMessageToolMediaSourceParamKeys({
-    cfg: params.cfg,
-    action: params.action,
-    channel: params.channel,
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-  });
+  return resolveChannelMessageToolMediaSourceParamKeys(params);
 }
 
 export function collectActionMediaSourceHints(
@@ -188,9 +177,7 @@ export function collectActionMediaSourceHints(
     }
   }
   for (const value of readStringArrayParam(args, "mediaUrls") ?? []) {
-    if (normalizeOptionalString(value)) {
-      sources.push(value);
-    }
+    sources.push(value);
   }
   if (options?.structuredAttachments === "all") {
     sources.push(...collectAttachmentSources(args).map((source) => source.value));
@@ -494,8 +481,8 @@ export async function hydrateAttachmentParamsForAction(params: {
   }
 
   if (allowMessageCaptionFallback) {
-    const caption = readToolStringParam(params.args, "caption", { allowEmpty: true })?.trim();
-    const message = readToolStringParam(params.args, "message", { allowEmpty: true })?.trim();
+    const caption = readToolStringParam(params.args, "caption", { allowEmpty: true });
+    const message = readToolStringParam(params.args, "message", { allowEmpty: true });
     if (!caption && message) {
       params.args.caption = message;
     }

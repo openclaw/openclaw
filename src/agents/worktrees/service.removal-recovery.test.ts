@@ -87,7 +87,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     });
     cleanupId = record.id;
     const repository = await resolveRepository(repo);
-    updateRegistryWorktree(env, record.id, {
+    await updateRegistryWorktree(env, record.id, {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     record = getRegistryWorktree(env, record.id)!;
@@ -106,7 +106,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
     );
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
     await pinSnapshot();
-    updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
+    await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
     await fs.unlink(path.join(record.path, ".git"));
   });
   const recover = () => service.recoverRemoval({ id: record.id, snapshot });

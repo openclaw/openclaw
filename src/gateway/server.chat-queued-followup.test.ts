@@ -26,6 +26,7 @@ import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
+import { createPreparedLifecycleWriteTracker } from "./session-lifecycle-state.test-support.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -50,22 +51,22 @@ function waitForFast<T>(
 
 describe("queued WebChat follow-up delivery", () => {
   let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
-  let lifecycleWrites: Promise<void>[];
+  let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
   let observedFollowupRunId: string | undefined;
   beforeEach(async () => {
     dispatchInboundMessageMock.mockReset();
     requestExecution = await observeGatewayRunExecution();
-    lifecycleWrites = [];
+    lifecycleWrites = createPreparedLifecycleWriteTracker();
     observedFollowupRunId = undefined;
-    const persistLifecycle = lifecycleState.persistGatewaySessionLifecycleEvent;
+    const prepareLifecycle = lifecycleState.prepareGatewaySessionLifecycleEvent;
     const persistenceSpy = vi
-      .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+      .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
       .mockImplementation((params) => {
-        const write = persistLifecycle(params);
-        if (params.event.runId === observedFollowupRunId) {
-          lifecycleWrites.push(write);
+        const persist = prepareLifecycle(params);
+        if (params.event.runId !== observedFollowupRunId) {
+          return persist;
         }
-        return write;
+        return lifecycleWrites.track(persist);
       });
     onTestFinished(() => {
       persistenceSpy.mockRestore();
@@ -81,7 +82,7 @@ describe("queued WebChat follow-up delivery", () => {
   const settleGatewayFixture = async () => {
     await requestExecution.waitForCompletion();
     // Synthetic events lack a request scope; join the producer before draining its writers.
-    await Promise.all(lifecycleWrites);
+    await lifecycleWrites.drain();
     await drainOpenClawAgentWriteQueuesForTest();
     await flushPendingSessionsChangedEvents();
     expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(0);

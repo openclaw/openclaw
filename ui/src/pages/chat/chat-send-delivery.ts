@@ -24,24 +24,17 @@ import {
   type QueuedChatSendResult,
 } from "./chat-outbox-drain.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
-import {
-  admitQueuedMessageForSession,
-  excludeComposerAttachments,
-  readQueuedMessageById,
-} from "./chat-queue.ts";
+import { excludeComposerAttachments, readQueuedMessageById } from "./chat-queue.ts";
 import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { cancelChatDelivery, restoreRejectedChatDelivery } from "./chat-send-composer.ts";
+import { restoreRejectedChatDelivery } from "./chat-send-composer.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import {
   captureChatConnectionOwner,
-  createPendingSendMessage,
   deliveryStateWriter,
   finishChatDeliveryAdmission,
   finishScopedChatSending,
-  reconnectSafeQueuedSendState,
   rejectOversizedQueuedChatDelivery,
   prepareQueuedChatPayload,
-  publishPendingSendMessage,
   resolveQueuedChatLeaf,
   settleDeliverySettings,
   settleQueuedChatSendFailure,
@@ -656,14 +649,6 @@ export async function deliverChatQueueItem(
   }
   if (result === "sent" && visibleSessionMatches(host, sessionKey, deliveryAgentId)) {
     resetChatInputHistoryNavigation(host);
-    if (options.restoreDraft && options.previousDraft?.trim()) {
-      host.chatMessage = options.previousDraft;
-      host.chatMentions = options.previousMentions ?? [];
-      host.chatReplyTarget = options.previousReplyTarget ?? null;
-    }
-    if (options.restoreAttachments && options.previousAttachments?.length) {
-      host.chatAttachments = options.previousAttachments;
-    }
   }
   if (
     deliveryConnectionIsCurrent() &&
@@ -683,28 +668,4 @@ export async function deliverChatQueueItem(
 
 export const chatOutboxDrainDependencies: ChatOutboxDrainDependencies = {
   sendQueuedChatMessage,
-  async sendResetSlashCommand(host, message, options) {
-    const pending = createPendingSendMessage(
-      host,
-      message,
-      undefined,
-      true,
-      undefined,
-      reconnectSafeQueuedSendState(host),
-    );
-    const item = pending ? publishPendingSendMessage(host, pending.item) : undefined;
-    if (!pending || !item || !admitQueuedMessageForSession(host, pending.admission, item)) {
-      if (item) {
-        cancelChatDelivery(host, item, { previousDraft: options.previousDraft });
-      }
-      setChatError(host, OFFLINE_QUEUE_STORAGE_ERROR);
-      return;
-    }
-    await deliverChatQueueItem(host, item, {
-      previousDraft: options.previousDraft,
-      restoreDraft: options.restoreDraft,
-      routingSessionKey: host.sessionKey,
-      target: options.target,
-    });
-  },
 };

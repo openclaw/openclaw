@@ -18,39 +18,13 @@ import {
 import {
   readRuntimeToolCoverageConfig,
   readScenarioRuntimeToolCoverageMetadata,
-  type QaRuntimeCapabilityLayer,
-  type QaRuntimeToolBucket,
-  type QaRuntimeToolExpectedLayer,
 } from "./runtime-tool-metadata.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaToolCoverageStatus = "pass" | "fail" | "skip" | "missing" | "not-run";
 type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
 
-type QaToolCoverageRow = {
-  tool: string;
-  runtimeToolName?: string;
-  codexRuntimeToolName?: string;
-  bucket: QaRuntimeToolBucket;
-  expectedLayer: QaRuntimeToolExpectedLayer;
-  capabilityLayer: QaRuntimeCapabilityLayer;
-  required: boolean;
-  fixtureCount: number;
-  scenarios: string[];
-  sourcePaths: string[];
-  openclaw: QaToolCoverageStatus;
-  codex: QaToolCoverageStatus;
-  drift: QaToolCoverageDrift;
-  openclawToolCalls: number;
-  codexToolCalls: number;
-  openclawSuccessfulToolCalls: number;
-  codexSuccessfulToolCalls: number;
-  tracking?: string;
-  codexDefaultImpact?: string;
-  qaImpact?: string;
-  action?: string;
-  details?: string;
-};
+type QaToolCoverageRow = ReturnType<typeof buildRow>;
 
 type QaToolCoverageReport = ReturnType<typeof buildQaToolCoverageReport>;
 
@@ -160,7 +134,7 @@ function summarizeRuntimeToolCalls(
 function buildRow(params: {
   group: ToolFixtureGroup;
   results: ReadonlyMap<string, RuntimeParityResult>;
-}): QaToolCoverageRow {
+}) {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
   const metadata = params.group.scenarios.map(readScenarioRuntimeToolCoverageMetadata);
@@ -184,9 +158,9 @@ function buildRow(params: {
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
     sourcePaths: params.group.scenarios.map((scenario) => scenario.sourcePath),
-    openclaw: result ? cellStatus(result.cells.openclaw) : "not-run",
-    codex: result ? cellStatus(result.cells.codex) : "not-run",
-    drift: result?.drift ?? "not-run",
+    openclaw: result ? cellStatus(result.cells.openclaw) : ("not-run" as const),
+    codex: result ? cellStatus(result.cells.codex) : ("not-run" as const),
+    drift: result?.drift ?? ("not-run" as const),
     openclawToolCalls: openclawCalls.total,
     codexToolCalls: codexCalls.total,
     openclawSuccessfulToolCalls: openclawCalls.successful,

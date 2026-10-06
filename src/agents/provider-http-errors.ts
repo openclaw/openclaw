@@ -348,17 +348,7 @@ export class ProviderHttpError extends Error {
   readonly errorBody?: string;
   readonly requestId?: string;
 
-  constructor(
-    message: string,
-    params: {
-      status: number;
-      code?: string;
-      type?: string;
-      body?: string;
-      requestId?: string;
-      retryAfterMs?: number;
-    },
-  ) {
+  constructor(message: string, params: Omit<ProviderHttpErrorInfo, "detail"> & { status: number }) {
     super(message);
     this.name = "ProviderHttpError";
     this.status = params.status;

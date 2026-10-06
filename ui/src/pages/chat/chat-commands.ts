@@ -51,16 +51,6 @@ const remoteSlashCommandCache = new WeakMap<
   Map<string, RemoteSlashCommandCacheEntry>
 >();
 
-export type ChatCommandResetOptions = {
-  previousDraft?: string;
-  restoreDraft?: boolean;
-  target?: ChatCommandTarget;
-};
-
-type ChatCommandSendOptions = ChatCommandResetOptions & {
-  sendResetMessage: (message: string, opts: ChatCommandResetOptions) => Promise<void>;
-};
-
 type ChatCommandDispatchResult = "completed" | "failed" | "uncertain" | "cancelled" | "deferred";
 
 export type ChatCommandTarget = {
@@ -174,15 +164,6 @@ export function readChatResetTargetAccess(
     requiredScope: "operator.admin",
   });
   return access.allowed ? { allowed: true } : access;
-}
-
-function requireChatResetTarget(host: ChatCommandHost, target: ChatCommandTarget): boolean {
-  const access = readChatResetTargetAccess(host, target);
-  if (access.allowed) {
-    return true;
-  }
-  setChatError(host, access.reason);
-  return false;
 }
 
 function failStaleChatCommand(host: ChatCommandHost): ChatCommandDispatchResult {
@@ -335,7 +316,6 @@ export async function dispatchChatSlashCommand(
   host: ChatCommandHost,
   name: string,
   args: string,
-  opts: ChatCommandSendOptions,
 ): Promise<ChatCommandDispatchResult> {
   switch (name) {
     case "stop":
@@ -350,25 +330,6 @@ export async function dispatchChatSlashCommand(
         return "failed";
       }
       return (await host.createChatSession()) ? "completed" : "cancelled";
-    case "reset": {
-      const target = captureChatCommandTarget(host);
-      if (!target || !requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      const confirmation = await confirmConversationResetForCurrentSession(host);
-      if (confirmation !== "confirmed") {
-        return confirmation;
-      }
-      if (!requireChatResetTarget(host, target)) {
-        return "failed";
-      }
-      await opts.sendResetMessage(args ? `/reset ${args}` : "/reset", {
-        previousDraft: opts.previousDraft,
-        restoreDraft: opts.restoreDraft,
-        target,
-      });
-      return "completed";
-    }
     case "clear": {
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";

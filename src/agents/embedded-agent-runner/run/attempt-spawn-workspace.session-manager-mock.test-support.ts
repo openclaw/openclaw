@@ -15,6 +15,7 @@ export type SessionManagerMocks = {
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;
+  getToolResultProjectionEntries: UnknownMock;
   getBoundaryCount: UnknownMock;
   branchAsync: UnknownMock;
   resetLeafAsync: UnknownMock;

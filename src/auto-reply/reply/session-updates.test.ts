@@ -67,8 +67,7 @@ vi.mock("../../config/sessions.js", () => ({
 
 // mock-isolation: Skill-refresh cases control persistence acknowledgments without opening SQLite.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: async (...args: unknown[]) => {
+  patchSessionEntryCore: async (...args: unknown[]) => {
     const entry = await updateSessionEntryMock(...args);
     loadSessionEntryMock.mockReturnValue(entry ?? undefined);
     return entry;
@@ -167,6 +166,7 @@ describe("ensureSkillSnapshot", () => {
         sessionKey,
       },
       expect.any(Function),
+      expect.any(Object),
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);

@@ -168,7 +168,10 @@ export async function recoverEmbeddedRunOverflow(
       assertActive();
       using promptState = retainEmbeddedSessionPromptState(input.getActiveSession().id);
       const projectionState = promptState.state.toolResults;
-      restoreCacheTtlToolResultProjections(projectionState, sessionManager.getBranch());
+      restoreCacheTtlToolResultProjections(
+        projectionState,
+        sessionManager.getToolResultProjectionEntries(),
+      );
       const result = await truncateOversizedToolResultsInSessionManager({
         sessionManager,
         contextWindowTokens: contextTokenBudget,

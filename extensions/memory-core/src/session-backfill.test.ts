@@ -31,11 +31,7 @@ import {
   rewindSessionBackfillIngestionState,
 } from "./session-backfill-lifecycle.js";
 import { executeSessionBackfillBatch, runSessionBackfill } from "./session-backfill.js";
-import {
-  readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
-  recordShortTermRecalls,
-} from "./short-term-promotion.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import {
   createMemoryCoreTestHarness,
   dreamingTestState,
@@ -300,10 +296,11 @@ describe("runSessionBackfill", () => {
       results: [result],
       signalType: "daily",
     });
-    await recordGroundedShortTermCandidates({
+    await recordShortTermRecalls({
       workspaceDir,
       query: "__dreaming_session_backfill__:2026-03-01",
-      items: [result],
+      signalType: "grounded",
+      results: [result],
     });
 
     expect(await readShortTermRecallEntries({ workspaceDir })).toEqual([]);

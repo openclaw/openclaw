@@ -36,10 +36,7 @@ export function resolveDiscordVoiceAccess(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
-}): {
-  admissionAllowFrom: string[];
-  ownerAllowFrom: string[];
-} {
+}) {
   const commandOwnerAllowFrom = resolveDiscordCommandOwnerAllowFrom(params.cfg);
   if (commandOwnerAllowFrom) {
     return {

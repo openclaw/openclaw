@@ -95,13 +95,6 @@ type BufferedMediaGroupEntry = MediaGroupEntry &
 
 type TelegramGroupMediaDisposition = "process" | "skip" | "silent-ingest";
 
-interface TelegramInboundMedia {
-  handleMediaGroup: (input: TelegramMediaGroupInput) => boolean;
-  resolveUnaddressedGroupMediaDisposition: (
-    authorization: MediaAuthorization & { ctx: TelegramContext; msg: Message },
-  ) => Promise<TelegramGroupMediaDisposition>;
-}
-
 export function createTelegramInboundMedia({
   params,
   message,
@@ -120,7 +113,7 @@ export function createTelegramInboundMedia({
     | "resolveGroupRequireMention"
   >;
   message: TelegramMessagePipeline;
-}): TelegramInboundMedia {
+}) {
   const {
     accountId,
     ownerAgentId,

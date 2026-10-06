@@ -16,12 +16,10 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
-  countMemoryWikiImportRunStateRows,
+  getMemoryWikiImportRunStateStore,
   MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES,
-  readMemoryWikiImportRunRecord,
   resolveMemoryWikiImportRunsDir,
   type ChatGptImportRunRecord,
-  writeMemoryWikiImportRunRecord,
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
@@ -605,7 +603,7 @@ export async function importChatGptConversations(params: {
 
     if (!params.dryRun && changedCount > 0) {
       const requiredStateRows = 1 + changedCount;
-      const existingStateRows = await countMemoryWikiImportRunStateRows();
+      const existingStateRows = await getMemoryWikiImportRunStateStore().rowCount();
       const projectedStateRows = existingStateRows + requiredStateRows;
       if (projectedStateRows > MEMORY_WIKI_IMPORT_RUN_STATE_MAX_ENTRIES) {
         throw new Error(
@@ -646,7 +644,7 @@ export async function importChatGptConversations(params: {
           record: importRunRecord,
         });
       }
-      await writeMemoryWikiImportRunRecord(params.config.vault.path, importRunRecord);
+      await getMemoryWikiImportRunStateStore().write(params.config.vault.path, importRunRecord);
       const compile = await compileMemoryWikiVault(params.config).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         throw new Error(
@@ -906,7 +904,7 @@ export async function rollbackChatGptImportRun(params: {
 }) {
   return await withMemoryWikiVaultMutation(params.config.vault.path, async () => {
     const vaultRoot = params.config.vault.path;
-    const record = await readMemoryWikiImportRunRecord(vaultRoot, params.runId);
+    const record = await getMemoryWikiImportRunStateStore().read(vaultRoot, params.runId);
     if (!record) {
       throw new Error(`Memory Wiki import run not found: ${params.runId}`);
     }
@@ -941,7 +939,7 @@ export async function rollbackChatGptImportRun(params: {
     }
     if (!record.rollbackStartedAt) {
       record.rollbackStartedAt = new Date().toISOString();
-      await writeMemoryWikiImportRunRecord(vaultRoot, record);
+      await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     }
     if (!record.rollbackTargetsFinalizedAt) {
       await initializeMemoryWikiVault(params.config);
@@ -951,7 +949,7 @@ export async function rollbackChatGptImportRun(params: {
       const runFs = await fsRoot(runDir);
       const recoverySlots = await scanRecoverySlots({ runRoot: runFs, record });
       if (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: recoverySlots })) {
-        await writeMemoryWikiImportRunRecord(vaultRoot, record);
+        await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
       }
       for (const ref of refs) {
         const { entry } = ref;
@@ -978,7 +976,7 @@ export async function rollbackChatGptImportRun(params: {
             ref,
           });
           if (slot && (await classifyRecoverySlots({ vaultRoot, runRoot: runFs, slots: [slot] }))) {
-            await writeMemoryWikiImportRunRecord(vaultRoot, record);
+            await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
           }
           if (snapshot === undefined) {
             if (slot) {
@@ -1006,7 +1004,7 @@ export async function rollbackChatGptImportRun(params: {
       // The store commits path rows before this meta fence. It does not claim
       // host power-loss ordering beyond process-restart recovery.
       record.rollbackTargetsFinalizedAt = new Date().toISOString();
-      await writeMemoryWikiImportRunRecord(vaultRoot, record);
+      await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     }
     // Finalization rebuilds derived artifacts without rewriting source pages.
     // A normal later compile may refresh machine-managed Related blocks.
@@ -1014,7 +1012,7 @@ export async function rollbackChatGptImportRun(params: {
       sourcePageWrites: "preserve",
     });
     record.rolledBackAt = new Date().toISOString();
-    await writeMemoryWikiImportRunRecord(vaultRoot, record);
+    await getMemoryWikiImportRunStateStore().write(vaultRoot, record);
     const preservedPaths = listPreservedPaths(record);
     const removedCount = record.createdPaths.length;
     const restoredCount = record.updatedPaths.filter((entry) => entry.snapshotPath).length;

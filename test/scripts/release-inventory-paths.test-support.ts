@@ -107,6 +107,7 @@ export const SOURCE_ADMISSION_PATHS = [
   "scripts/lib/local-check-runtime.mts",
   "scripts/full-release-publication-observations.mts",
   "scripts/lib/plugin-clawhub-release.ts",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/clawhub-prepared-artifact.mjs",
   "scripts/clawhub-parent-authorization.mjs",
@@ -138,6 +139,7 @@ export const SOURCE_ADMISSION_PATHS = [
 ];
 
 export const PUBLICATION_TRANSPORT_PATHS = [
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/full-release-publication-contract.mjs",
   "scripts/clawhub-prepared-artifact.mjs",

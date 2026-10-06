@@ -30,7 +30,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
@@ -52,6 +51,7 @@ import {
   type IMessageService,
 } from "../targets.js";
 import type { IMessageDmHistoryContext } from "./dm-history.js";
+import type { SentMessageCache } from "./echo-cache.js";
 import { resolveIMessageInboundMentionPolicy } from "./mention-policy.js";
 import {
   type IMessageReactionContext,
@@ -69,6 +69,10 @@ type IMessageReplyContext = {
   id?: string;
   body: string;
   sender?: string;
+};
+
+type IMessageEchoCache = {
+  has: (...args: Parameters<SentMessageCache["has"]>) => boolean | Promise<boolean>;
 };
 
 const normalizeNonEmpty = (value: string) => value.trim() || null;
@@ -214,13 +218,7 @@ export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
 }
 
 async function hasIMessageEchoMatch(params: {
-  echoCache: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean | Promise<boolean>;
-  };
+  echoCache: IMessageEchoCache;
   scope: readonly string[];
   text?: string;
   media?: MediaPlaceholderTextFact;
@@ -327,13 +325,7 @@ export async function resolveIMessageInboundDecision(params: {
   storeAllowFrom: string[];
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
-  echoCache?: {
-    has: (
-      scope: string,
-      lookup: { text?: string; media?: MediaPlaceholderTextFact; messageId?: string },
-      options?: boolean | { skipIdShortCircuit?: boolean; includePendingText?: boolean },
-    ) => boolean | Promise<boolean>;
-  };
+  echoCache?: IMessageEchoCache;
   selfChatCache?: SelfChatCache;
   reactionNotifications?: IMessageReactionNotificationMode;
   isKnownFromMeMessageId?: (
@@ -820,13 +812,7 @@ export async function buildIMessageInboundContext(params: {
   buildContext?: (
     params: BuildChannelInboundEventContextParams,
   ) => BuiltChannelInboundEventContext | Promise<BuiltChannelInboundEventContext>;
-}): Promise<{
-  ctxPayload: FinalizedMsgContext;
-  fromLabel: string;
-  chatTarget?: string;
-  imessageTo: string;
-  inboundHistory?: Array<{ sender: string; body: string; timestamp?: number }>;
-}> {
+}) {
   const envelopeOptions = params.envelopeOptions ?? resolveEnvelopeFormatOptions(params.cfg);
   const { decision } = params;
   const chatId = decision.chatId;

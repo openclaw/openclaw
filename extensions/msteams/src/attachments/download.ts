@@ -187,7 +187,6 @@ async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
   policy: MSTeamsAttachmentFetchPolicy;
@@ -197,7 +196,6 @@ async function fetchWithAuthFallback(params: {
     url: params.url,
     policy: params.policy,
     fetchFn: params.fetchFn,
-    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
     timeoutMs: resolveMSTeamsRequestTimeoutMs(params.deadline),
@@ -231,7 +229,6 @@ async function fetchWithAuthFallback(params: {
         url: params.url,
         policy: params.policy,
         fetchFn,
-        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
         requestInit: {
           ...params.requestInit,
           headers: authHeaders,
@@ -260,7 +257,6 @@ export async function downloadMSTeamsAttachments(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -389,7 +385,6 @@ export async function downloadMSTeamsAttachments(params: {
             url: resolveRequestUrl(input),
             tokenProvider: params.tokenProvider,
             fetchFn: params.fetchFn,
-            fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
             requestInit: init,
             resolveFn: params.resolveFn,
             policy,

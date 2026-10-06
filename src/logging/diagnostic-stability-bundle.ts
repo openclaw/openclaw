@@ -226,13 +226,6 @@ function resolveDiagnosticStabilityBundleDir(
   );
 }
 
-function buildBundlePath(dir: string, now: Date, reason: string): string {
-  return path.join(
-    dir,
-    `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
-  );
-}
-
 function isBundleFile(name: string): boolean {
   return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
 }
@@ -872,7 +865,10 @@ export function writeDiagnosticStabilityBundleForFailureSync(
     };
 
     const dir = resolveDiagnosticStabilityBundleDir(options);
-    const file = buildBundlePath(dir, now, normalizedReason);
+    const file = path.join(
+      dir,
+      `${BUNDLE_PREFIX}${formatDiagnosticFilenameTimestamp(now)}-${process.pid}-${normalizedReason}${BUNDLE_SUFFIX}`,
+    );
     replaceFileAtomicSync({
       filePath: file,
       content: `${JSON.stringify(bundle, null, 2)}\n`,

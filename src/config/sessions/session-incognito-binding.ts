@@ -1,13 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import { bindPreparedSessionEntryPublication } from "./session-accessor.sqlite-entry-cache-publication.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import type { SessionEntry } from "./types.js";
 
 export type IncognitoSessionBinding = Readonly<{
   actor: IncognitoSessionActor;
@@ -65,6 +69,33 @@ export function captureIncognitoSessionBinding(target?: {
     }
   }
   return binding;
+}
+
+/** Facts have already been installed under actor FIFO custody before observers run. */
+export function publishIncognitoSessionEntry(
+  actor: IncognitoSessionActor,
+  sessionKey: string,
+  previous: SessionEntry | undefined,
+  entry: SessionEntry,
+): void {
+  const change: SessionRowChange = {
+    agentId: actor.agentId,
+    storePath: actor.path,
+    sessionKey,
+    factsInvalidated: true,
+  };
+  bindPreparedSessionEntryPublication(change, {
+    kind: "source",
+    databaseIdentity: actor.identity.incarnation,
+    canonicalPath: actor.path,
+  });
+  sessionChanges.emit(change);
+  publishCommittedSessionIdentity(
+    actor.agentId,
+    actor.identity.incarnation,
+    new Map(previous ? [[sessionKey, previous]] : []),
+    new Map([[sessionKey, entry]]),
+  );
 }
 
 export function withIncognitoSessionBinding<T>(

@@ -26,7 +26,6 @@ import {
   readPositiveInteger,
   resolveCodeModeHeadlessConfig,
   toToolSearchConfig,
-  type CodeModeConfig,
   type CodeModeFailureCode,
   type CodeModeHeadlessResult,
   type CodeModeWorkerResult,
@@ -41,7 +40,6 @@ import {
   reserveActiveRunSlot,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
-  type CodeModeRunOwner,
 } from "./code-mode-state.js";
 import type { CodeModeWorkerPayload } from "./code-mode-worker-types.js";
 import { ToolSearchRuntime } from "./tool-search-runtime.js";
@@ -127,40 +125,6 @@ function remainingHeadlessMs(deadline: number): number {
     throw new CodeModeHeadlessTimeoutError();
   }
   return remaining;
-}
-
-async function runHeadlessWorkerLeg(params: {
-  input: CodeModeWorkerPayload<CodeModeExecutorContinuation>;
-  config: CodeModeConfig;
-  owner: CodeModeRunOwner;
-  runtimeConfig: ToolSearchToolContext["config"];
-  deadline: number;
-  signal: AbortSignal;
-  inlineHost?: CodeModeExecutorInlineHost;
-}): Promise<CodeModeWorkerResult> {
-  const remainingMs = remainingHeadlessMs(params.deadline);
-  const executionTimeoutMs = Math.max(1, Math.min(params.config.timeoutMs, remainingMs));
-  // Initial source preparation uses the wall-clock allowance; the guest keeps
-  // its separate CPU budget after source validation. Resumes need no preparation.
-  const timeoutMs = params.input.kind === "exec" ? remainingMs : executionTimeoutMs;
-  // Let the headless abort scope own the wall-clock deadline. Capping the host
-  // watchdog to the same deadline makes its internal timeout message race the scope.
-  const workerTimeoutMs = timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS;
-  return await params.owner.runExecution(() =>
-    runCodeModeExecutor(
-      {
-        ...(params.input.kind === "exec" ? { ...params.input, executionTimeoutMs } : params.input),
-        config: { ...params.config, timeoutMs },
-      },
-      {
-        timeoutMs: workerTimeoutMs,
-        executor: params.config.executor,
-        runtimeConfig: params.runtimeConfig,
-        signal: params.signal,
-        inlineHost: params.inlineHost,
-      },
-    ),
-  );
 }
 
 function normalizeHeadlessNamespaceValue(
@@ -372,23 +336,42 @@ export async function runCodeModeScriptHeadless(params: {
         }
       },
     };
-    let result = await runHeadlessWorkerLeg({
-      input: {
-        kind: "exec",
-        config,
-        source: params.code,
-        prelude: headlessNamespaceFreezePrelude(namespaces),
-        catalog: catalogProjection.guestBindings,
-        apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
-        namespaces,
-        swarmEnabled,
-      },
+    const runWorkerLeg = (
+      input: CodeModeWorkerPayload<CodeModeExecutorContinuation>,
+      onInputConsumed?: () => void,
+    ): Promise<CodeModeWorkerResult> => {
+      const runtimeConfig = params.ctx.runtimeConfig ?? params.ctx.config;
+      const remainingMs = remainingHeadlessMs(deadline);
+      const executionTimeoutMs = Math.max(1, Math.min(config.timeoutMs, remainingMs));
+      // Initial source preparation uses the wall-clock allowance; the guest keeps
+      // its separate CPU budget after source validation. Resumes need no preparation.
+      const timeoutMs = input.kind === "exec" ? remainingMs : executionTimeoutMs;
+      // The abort scope owns the wall deadline; the worker grace only covers cleanup.
+      return owner.runExecution(() =>
+        runCodeModeExecutor(
+          {
+            ...(input.kind === "exec" ? { ...input, executionTimeoutMs } : input),
+            config: { ...config, timeoutMs },
+          },
+          {
+            timeoutMs: timeoutMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
+            executor: config.executor,
+            runtimeConfig,
+            signal: abortScope.signal,
+            inlineHost: onInputConsumed ? { ...inlineHost, onInputConsumed } : inlineHost,
+          },
+        ),
+      );
+    };
+    let result = await runWorkerLeg({
+      kind: "exec",
       config,
-      owner,
-      runtimeConfig: params.ctx.runtimeConfig ?? params.ctx.config,
-      deadline,
-      signal: abortScope.signal,
-      inlineHost,
+      source: params.code,
+      prelude: headlessNamespaceFreezePrelude(namespaces),
+      catalog: catalogProjection.guestBindings,
+      apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
+      namespaces,
+      swarmEnabled,
     });
 
     while (true) {
@@ -433,21 +416,16 @@ export async function runCodeModeScriptHeadless(params: {
       const delivery = takeSettledBridgeRequests(pending);
       pending = pending.filter((entry) => !entry.settled);
       try {
-        result = await runHeadlessWorkerLeg({
-          input: {
+        result = await runWorkerLeg(
+          {
             kind: "resume",
             config,
             continuation: result.continuation,
             settledRequests: delivery.requests,
             pendingRequests: pending.map(({ id, method, args }) => ({ id, method, args })),
           },
-          config,
-          owner,
-          runtimeConfig: params.ctx.runtimeConfig ?? params.ctx.config,
-          deadline,
-          signal: abortScope.signal,
-          inlineHost: { ...inlineHost, onInputConsumed: delivery.release },
-        });
+          delivery.release,
+        );
       } finally {
         delivery.release();
       }

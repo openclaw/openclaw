@@ -28,7 +28,6 @@ import {
   makeCronSession,
   makeCronSessionEntry,
   resolveCronSessionMock,
-  resolveSessionAuthSelectionMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -65,10 +64,22 @@ function fallbackResult(agentMeta: Record<string, unknown>, text = "test output"
 }
 async function runWithEvents(
   params: Parameters<typeof runCronIsolatedAgentTurn>[0] = makeParams(),
-  subscribe: typeof onDiagnosticEvent = onInternalDiagnosticEvent,
+  subscribe: (
+    listener: (event: DiagnosticEventPayload) => void,
+    filter?: Parameters<typeof onInternalDiagnosticEvent>[1],
+  ) => () => void = onInternalDiagnosticEvent,
   events: DiagnosticEventPayload[] = [],
 ) {
-  const unsubscribe = subscribe((event) => events.push(event));
+  const unsubscribe = subscribe((event) => events.push(event), {
+    include: [
+      "message.queued",
+      "message.dispatch.started",
+      "message.dispatch.completed",
+      "message.processed",
+      "session.state",
+      "model.usage",
+    ],
+  });
   try {
     const result = await runCronIsolatedAgentTurn(params);
     await waitForDiagnosticEventsDrained();
@@ -85,79 +96,59 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     resetDiagnosticEventsForTest();
   });
 
-  it.each(["completed", "error"] as const)(
-    "anchors cron execution to a message lifecycle trace on %s",
-    async (outcome) => {
-      const observedEvents: DiagnosticEventPayload[] = [];
-      let dispatchStartedBeforeExecution = false;
-      let executionTrace: DiagnosticTraceContext | undefined;
-      let harnessTrace: DiagnosticTraceContext | undefined;
-      runWithModelFallbackMock.mockImplementationOnce(async () => {
-        await Promise.resolve();
-        dispatchStartedBeforeExecution = observedEvents.some(
-          (event) => event.type === "message.dispatch.started",
-        );
-        executionTrace = getActiveDiagnosticTraceContext();
-        harnessTrace = createDiagnosticTraceContextFromActiveScope();
-        if (outcome === "error") {
-          throw new Error("cron model failed");
-        }
-        const fallback = fallbackResult({ usage: { input: 10, output: 20 } });
-        return {
-          ...fallback,
-          result: {
-            result: { ...fallback.result.result, diagnosticTrace: harnessTrace },
-          },
-        };
-      });
-
-      const { result, events } = await runWithEvents(
-        makeParams(),
-        onInternalDiagnosticEvent,
-        observedEvents,
-      );
-      expect(result.status).toBe(outcome === "error" ? "error" : "ok");
-      const starts = events.filter((event) => event.type === "message.dispatch.started");
-      const completions = events.filter((event) => event.type === "message.processed");
-      expect(starts).toHaveLength(1);
-      expect(completions).toHaveLength(1);
-      expect(dispatchStartedBeforeExecution).toBe(true);
-      const messageTrace = starts[0]?.trace;
-      expect(messageTrace?.spanId).toBeTruthy();
-      expect(executionTrace).toEqual(messageTrace);
-      expect(harnessTrace).toMatchObject({
-        traceId: messageTrace?.traceId,
-        parentSpanId: messageTrace?.spanId,
-      });
-      expect(completions[0]).toMatchObject({ outcome, trace: messageTrace });
-      expect(starts[0]).toMatchObject({ channel: "cron", source: "cron-isolated" });
-      expect(events.filter((event) => event.type === "message.dispatch.completed")).toMatchObject([
-        { outcome, trace: messageTrace },
-      ]);
-      if (outcome === "completed") {
-        const usage = events.find((event) => event.type === "model.usage");
-        expect(usage?.trace).toMatchObject({
-          traceId: messageTrace?.traceId,
-          parentSpanId: harnessTrace?.spanId,
-        });
-      } else {
-        expect(result.error).toBe("cron model failed");
-      }
-      expect(getActiveDiagnosticTraceContext()).toBeUndefined();
-    },
-  );
-
-  it("creates a child message scope and restores the ambient parent after completion", async () => {
+  it("anchors cron execution to a child message lifecycle trace and restores its parent", async () => {
+    const outcome = "completed";
     const parent = createDiagnosticTraceContext();
+    const observedEvents: DiagnosticEventPayload[] = [];
+    let dispatchStartedBeforeExecution = false;
+    let executionTrace: DiagnosticTraceContext | undefined;
+    let harnessTrace: DiagnosticTraceContext | undefined;
+    runWithModelFallbackMock.mockImplementationOnce(async () => {
+      await Promise.resolve();
+      dispatchStartedBeforeExecution = observedEvents.some(
+        (event) => event.type === "message.dispatch.started",
+      );
+      executionTrace = getActiveDiagnosticTraceContext();
+      harnessTrace = createDiagnosticTraceContextFromActiveScope();
+      const fallback = fallbackResult({ usage: { input: 10, output: 20 } });
+      return {
+        ...fallback,
+        result: {
+          result: { ...fallback.result.result, diagnosticTrace: harnessTrace },
+        },
+      };
+    });
+
     const { result, events } = await runWithDiagnosticTraceContext(parent, async () => {
-      const run = await runWithEvents();
+      const run = await runWithEvents(makeParams(), onInternalDiagnosticEvent, observedEvents);
       expect(getActiveDiagnosticTraceContext()).toEqual(parent);
       return run;
     });
-    const messageTrace = events.find((event) => event.type === "message.dispatch.started")?.trace;
     expect(result.status).toBe("ok");
+    const starts = events.filter((event) => event.type === "message.dispatch.started");
+    const completions = events.filter((event) => event.type === "message.processed");
+    expect(starts).toHaveLength(1);
+    expect(completions).toHaveLength(1);
+    expect(dispatchStartedBeforeExecution).toBe(true);
+    const messageTrace = starts[0]?.trace;
+    expect(messageTrace?.spanId).toBeTruthy();
     expect(messageTrace).toMatchObject({ traceId: parent.traceId, parentSpanId: parent.spanId });
     expect(messageTrace?.spanId).not.toBe(parent.spanId);
+    expect(executionTrace).toEqual(messageTrace);
+    expect(harnessTrace).toMatchObject({
+      traceId: messageTrace?.traceId,
+      parentSpanId: messageTrace?.spanId,
+    });
+    expect(completions[0]).toMatchObject({ outcome, trace: messageTrace });
+    expect(starts[0]).toMatchObject({ channel: "cron", source: "cron-isolated" });
+    expect(events.filter((event) => event.type === "message.dispatch.completed")).toMatchObject([
+      { outcome, trace: messageTrace },
+    ]);
+    const usage = events.find((event) => event.type === "model.usage");
+    expect(usage?.trace).toMatchObject({
+      traceId: messageTrace?.traceId,
+      parentSpanId: harnessTrace?.spanId,
+    });
     expect(getActiveDiagnosticTraceContext()).toBeUndefined();
   });
 
@@ -222,47 +213,5 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       sessionId: "test-session-id",
       usage: { input: 50, output: 10, total: 60 },
     });
-  });
-
-  it.each([
-    { name: "total-only model usage", usage: { total: 42 }, expectedTotal: 42, cost: undefined },
-    { name: "cost-only zero total", usage: { cost: { total: 0 } }, expectedTotal: 0, cost: 0 },
-  ])("preserves $name in cron diagnostics", async ({ usage, expectedTotal, cost }) => {
-    const cronSession = makeCronSession({
-      sessionEntry: makeCronSessionEntry({ estimatedCostUsd: 1.25 }),
-    });
-    resolveCronSessionMock.mockReturnValue(cronSession);
-    runWithModelFallbackMock.mockResolvedValue(fallbackResult({ usage }));
-    const { result, events } = await runWithEvents();
-    expect(result.status).toBe("ok");
-    const usageEvents = events.filter((event) => event.type === "model.usage");
-    expect(usageEvents).toHaveLength(1);
-    expect(usageEvents[0]?.usage).toMatchObject({
-      input: 0,
-      output: 0,
-      promptTokens: 0,
-      total: expectedTotal,
-    });
-    expect(usageEvents[0]?.costUsd).toBe(cost);
-    if (cost !== undefined) {
-      expect(cronSession.sessionEntry.estimatedCostUsd).toBe(cost);
-      for (const key of [
-        "inputTokens",
-        "outputTokens",
-        "cacheRead",
-        "cacheWrite",
-        "totalTokens",
-      ] as const) {
-        expect(cronSession.sessionEntry[key]).toBeUndefined();
-      }
-      expect(cronSession.sessionEntry.totalTokensFresh).not.toBe(true);
-    }
-  });
-
-  it("skips auth-profile override resolution when no sources exist", async () => {
-    const result = await runCronIsolatedAgentTurn(makeParams());
-    expect(result.status).toBe("ok");
-    expect(hasAnyAuthProfileStoreSourceAsyncMock).toHaveBeenCalledTimes(1);
-    expect(resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
   });
 });

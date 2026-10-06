@@ -13,15 +13,9 @@ import { parseTimeoutMsWithFallback } from "./parse-timeout.js";
 const MAX_NATIVE_HOOK_STDIN_BYTES = 1024 * 1024;
 
 /** User-facing flags for the native hook relay command. */
-export type NativeHookRelayCliOptions = {
-  provider?: string;
-  relayId?: string;
-  stateDb?: string;
-  generation?: string;
-  event?: string;
-  preToolUseUnavailable?: string;
-  timeout?: string;
-};
+export type NativeHookRelayCliOptions = Partial<
+  Record<(typeof NATIVE_HOOK_RELAY_VALUE_FLAGS)[keyof typeof NATIVE_HOOK_RELAY_VALUE_FLAGS], string>
+>;
 
 const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
   "--provider": "provider",
@@ -31,14 +25,9 @@ const NATIVE_HOOK_RELAY_VALUE_FLAGS = {
   "--event": "event",
   "--pre-tool-use-unavailable": "preToolUseUnavailable",
   "--timeout": "timeout",
-} as const satisfies Record<string, keyof NativeHookRelayCliOptions>;
+} as const;
 
-type NativeHookRelayDeadline = {
-  expiresAtMs: number;
-  signal: AbortSignal;
-  timeoutMs: number;
-  dispose: () => void;
-};
+type NativeHookRelayDeadline = ReturnType<typeof createNativeHookRelayDeadline>;
 
 class NativeHookRelayDeadlineError extends Error {
   constructor(timeoutMs: number) {
@@ -231,7 +220,7 @@ function formatRelayCliError(prefix: string, error: unknown): string {
   return `${prefix}: ${message}\n`;
 }
 
-function createNativeHookRelayDeadline(timeoutMs: number): NativeHookRelayDeadline {
+function createNativeHookRelayDeadline(timeoutMs: number) {
   const controller = new AbortController();
   const timer = setSafeTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();

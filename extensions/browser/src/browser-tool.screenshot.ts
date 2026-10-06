@@ -1,20 +1,20 @@
 /** Browser tool screenshot capture, private vision output, and explicit sharing hints. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { textResult } from "openclaw/plugin-sdk/tool-results";
-import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import {
-  browserScreenshotAction,
-  getRuntimeConfig,
   imageResultFromFile,
   jsonResult,
   readStringParam,
-  readStringValue,
-  resolveRuntimeImageSanitization,
-  stageBrowserScreenshotForSharing,
-} from "./browser-tool.runtime.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
+import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { textResult } from "openclaw/plugin-sdk/tool-results";
+import type { BrowserProxyRequest } from "./browser-node-proxy.js";
+import { resolveRuntimeImageSanitization } from "./browser-tool.runtime.js";
+import { browserScreenshotAction } from "./browser/client-actions.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
+import { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 
 export type BrowserScreenshotOptions = {

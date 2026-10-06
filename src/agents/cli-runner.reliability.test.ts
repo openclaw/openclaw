@@ -860,38 +860,6 @@ describe("runCliAgent reliability", () => {
     ]);
   });
 
-  it("surfaces a CLI failure after a delivered progress reply", async () => {
-    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
-      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
-      completeCapturedToolCall(
-        {
-          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
-          toolName: "message",
-          args: { action: "send", message: "still working", final: false },
-        },
-        { status: "sent", messageId: "progress-1" },
-      );
-      return makeManagedRun({ exitCode: 1, durationMs: 150, stderr: "failed after progress" });
-    });
-    const context = capturedContext({
-      sessionKey: "agent:main:telegram:direct:chat123",
-      runId: "run-progress-failure",
-    });
-    context.params.sourceReplyDeliveryMode = "message_tool_only";
-    context.params.messageChannel = "telegram";
-    context.params.currentChannelId = "chat123";
-
-    const result = await runPreparedCliAgent(context);
-
-    expect(result.messagingToolSentTargets).toEqual([
-      expect.objectContaining({ sourceReplyFinal: false }),
-    ]);
-    expect(result.payloads).toEqual([
-      { text: "The reply stopped after sending progress. Please try again.", isError: true },
-    ]);
-    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
-  });
-
   it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
       const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];

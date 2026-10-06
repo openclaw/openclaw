@@ -393,10 +393,6 @@ async function sendDiscordChunks(
   return { ...primary, platformMessageIds };
 }
 
-async function sendDiscordText(params: DiscordTextSendParams) {
-  return sendDiscordChunks(params);
-}
-
 type DiscordMediaSendParams = DiscordTextSendParams &
   DiscordOutboundMediaOpts & {
     mediaUrl: string;
@@ -423,7 +419,7 @@ async function sendDiscordMedia(params: DiscordMediaSendParams) {
         throw error;
       }
       // The multipart request is all-or-nothing. Attachment-coupled presentation must not accompany text fallback.
-      return sendDiscordText({
+      return sendDiscordChunks({
         ...params,
         text: buildDiscordUploadTooLargeFallbackText(params.text),
         components: undefined,
@@ -452,5 +448,5 @@ export {
   resolveDiscordTargetChannelId,
   resolveDiscordRest,
   sendDiscordMedia,
-  sendDiscordText,
+  sendDiscordChunks as sendDiscordText,
 };

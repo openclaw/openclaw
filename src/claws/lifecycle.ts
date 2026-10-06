@@ -108,11 +108,7 @@ async function inspectWorkspaceFileAction(params: {
   targetPath: string;
   id: string;
   manifestPath: string;
-}): Promise<{
-  pending?: PendingWorkspaceFileAction;
-  action?: ClawAddPlanAction;
-  blocker?: ClawDiagnostic;
-}> {
+}): Promise<PendingWorkspaceFileAction | { action: ClawAddPlanAction; blocker: ClawDiagnostic }> {
   const requestedSource = resolve(params.source.packageRoot, params.sourcePath);
   const requestedTarget = resolve(params.workspace, params.targetPath);
   try {
@@ -134,19 +130,17 @@ async function inspectWorkspaceFileAction(params: {
       );
     }
     return {
-      pending: {
-        sourcePath: params.sourcePath,
-        manifestPath: params.manifestPath,
-        byteLength: opened.stat.size,
-        action: {
-          kind: "workspaceFile",
-          id: params.id,
-          action: "write",
-          target: requestedTarget,
-          source: opened.realPath,
-          details: { expectedState: "absent" },
-          blocked: false,
-        },
+      sourcePath: params.sourcePath,
+      manifestPath: params.manifestPath,
+      byteLength: opened.stat.size,
+      action: {
+        kind: "workspaceFile",
+        id: params.id,
+        action: "write",
+        target: requestedTarget,
+        source: opened.realPath,
+        details: { expectedState: "absent" },
+        blocked: false,
       },
     };
   } catch (error) {
@@ -317,10 +311,7 @@ export async function buildClawAddPlan(params: {
       workspace,
       ...fileParams,
     });
-    const action = result.pending?.action ?? result.action;
-    if (!action) {
-      throw new Error("Claw workspace source inspection did not produce an action");
-    }
+    const { action } = result;
     if (action.source) {
       action.source = planSourcePath(fileParams.sourcePath, action.source);
     }
@@ -329,11 +320,10 @@ export async function buildClawAddPlan(params: {
       action.reason = `Workspace ${JSON.stringify(workspace)} already exists.`;
     }
     actions.push(action);
-    if (result.pending) {
-      pendingWorkspaceFiles.push(result.pending);
-    }
-    if (result.blocker) {
+    if ("blocker" in result) {
       blockers.push(result.blocker);
+    } else {
+      pendingWorkspaceFiles.push(result);
     }
   }
 

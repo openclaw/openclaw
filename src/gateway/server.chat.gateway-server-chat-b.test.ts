@@ -16,6 +16,7 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -765,14 +766,14 @@ describe("gateway server chat", () => {
       };
       setActiveEmbeddedRun("sess-main", handle, "main");
       try {
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 2,
           stream: "tool",
@@ -784,7 +785,7 @@ describe("gateway server chat", () => {
             args: { command: "SECRET_COMMAND" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 3,
           stream: "tool",
@@ -796,7 +797,7 @@ describe("gateway server chat", () => {
             diff: "SECRET_DIFF",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 4,
           stream: "tool",
@@ -808,7 +809,7 @@ describe("gateway server chat", () => {
             partialResult: "SECRET_PARTIAL",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 5,
           stream: "tool",
@@ -820,7 +821,7 @@ describe("gateway server chat", () => {
             review: { id: "review-1", text: "SECRET_REVIEW" },
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 6,
           stream: "tool",
@@ -832,7 +833,7 @@ describe("gateway server chat", () => {
             result: "SECRET_RESULT",
           },
         });
-        handler({
+        await handler({
           runId: "run-embedded",
           seq: 7,
           stream: "plan",
@@ -1022,21 +1023,21 @@ describe("gateway server chat", () => {
         });
         const toolArgs = { path: "a" };
 
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 1,
           stream: "item",
           ts: 1_001,
           data: { kind: "preamble", itemId: "preamble-1", progressText: "Checking files" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 2,
           stream: "tool",
           ts: 1_002,
           data: { phase: "start", name: "read", toolCallId: "tool-active", args: toolArgs },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
@@ -1048,14 +1049,14 @@ describe("gateway server chat", () => {
             partialResult: "halfway",
           },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 4,
           stream: "tool",
           ts: 1_004,
           data: { phase: "start", name: "exec", toolCallId: "tool-finished", args: {} },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 5,
           stream: "tool",
@@ -1069,14 +1070,14 @@ describe("gateway server chat", () => {
         });
         // A delayed result older than the latest accepted progress event must
         // not remove the active tool from the reconnect projection.
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 3,
           stream: "tool",
           ts: 1_006,
           data: { phase: "result", name: "read", toolCallId: "tool-active", result: "stale" },
         });
-        handler({
+        await handler({
           runId: "provider-run",
           seq: 6,
           stream: "item",
@@ -1184,7 +1185,7 @@ describe("gateway server chat", () => {
           ],
         });
       } finally {
-        handler.dispose();
+        await handler.dispose();
         testState.sessionStorePath = undefined;
       }
     },
@@ -1825,8 +1826,7 @@ describe("gateway server chat", () => {
                 return authStore;
               };
               const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-              const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
-                await import("./server-methods/models-list-result.js");
+              const models = await import("./server-methods/models-list-result.js");
               const projectionByKey = new Map<
                 string,
                 Promise<{
@@ -1858,7 +1858,7 @@ describe("gateway server chat", () => {
                 if (existing) {
                   return existing;
                 }
-                const projector = createGatewayAgentModelCatalogProjector({
+                const projector = createModelCatalogDecisions({
                   cfg: initialConfig,
                   agentId,
                   snapshot: catalogSnapshot,
@@ -1871,7 +1871,7 @@ describe("gateway server chat", () => {
                 });
                 const projection = Promise.all([
                   projector.projectCatalog(),
-                  buildModelsListResult({
+                  models.buildModelsListResult({
                     source: { kind: "gateway", context },
                     agentId,
                     params: { view: "configured" },
@@ -1920,7 +1920,7 @@ describe("gateway server chat", () => {
                   };
                 }),
               });
-              const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+              const expiredPreferenceEvaluation = await createModelCatalogDecisions({
                 cfg: initialConfig,
                 agentId: "work",
                 snapshot: catalogSnapshot,
@@ -3313,7 +3313,6 @@ describe("gateway server chat", () => {
       await Promise.all([send(firstAdmission), send(secondAdmission)]);
 
       expect(firstAdmission.mock.calls.length + secondAdmission.mock.calls.length).toBe(1);
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(responses).toHaveLength(2);
       expect(responses.every((response) => response.ok)).toBe(true);
       expect(
@@ -3325,6 +3324,7 @@ describe("gateway server chat", () => {
 
       dispatchRelease.resolve(undefined);
       await getDirectChatSessionWorkRelease();
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.removeChatRun).toHaveBeenCalledTimes(1);
     } finally {
       dispatchRelease.resolve(undefined);

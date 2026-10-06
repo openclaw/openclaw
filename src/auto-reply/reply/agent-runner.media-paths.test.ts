@@ -121,19 +121,27 @@ describe("runReplyAgent media path normalization", () => {
       sessionId: "command-source",
       resetTriggered: false,
     });
-    await runReplyAgent(
-      makeRunReplyAgentParams({
-        replyOperation: source,
-        sessionKey: "main",
-        resolvedQueue: { mode: "steer" },
-        shouldSteer: true,
-        shouldFollowup: true,
-        isActive: true,
-      }),
-    );
+    enqueueFollowupRunMock.mockReturnValueOnce(true);
+    const params = makeRunReplyAgentParams({
+      replyOperation: source,
+      sessionKey: "main",
+      resolvedQueue: { mode: "steer" },
+      shouldSteer: true,
+      shouldFollowup: true,
+      isActive: true,
+    });
+    await runReplyAgent(params);
     expect(source.phase).toBe("queued");
     expect(source.abortSignal.aborted).toBe(false);
-    expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
+    expect(enqueueFollowupRunMock).toHaveBeenCalledExactlyOnceWith(
+      params.queueKey,
+      params.followupRun,
+      params.resolvedQueue,
+      "message-id",
+      expect.any(Function),
+      false,
+    );
+    expect(parkSteerCandidateMock).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).not.toHaveBeenCalled();
   });
 

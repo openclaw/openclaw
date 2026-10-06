@@ -19,6 +19,12 @@ import type {
 } from "./session-accessor.types.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import {
+  prepareSessionSourceAuthority,
+  releaseSessionSourceAuthorities,
+  type PreparedSessionSourceAuthority,
+  type SessionSourcePredicateFacts,
+} from "./session-source-authority.js";
 import { completeSessionTranscriptCommit } from "./session-transcript-commit-completion.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { prepareSessionTurnGoalMessage } from "./session-turn.kernel.js";
@@ -33,6 +39,9 @@ export async function appendSessionTurnInWorker(
   requested: ResolvedTranscriptScope,
   options: SqliteSessionTurnOptions,
   context: SessionTranscriptTurnWriteContext,
+  native: (
+    messages: SessionTranscriptTurnMessageAppend[],
+  ) => Promise<SqliteExpectedSessionTranscriptTurnResult>,
 ): Promise<SqliteExpectedSessionTranscriptTurnResult> {
   const scope = captureLifecycleDatabaseScope(requested);
   const database = { ...toDatabaseOptions(scope), path: scope.path };
@@ -41,6 +50,7 @@ export async function appendSessionTurnInWorker(
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
+  const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const assertCurrent = () => {
     execution.assertCurrent();
     options.assertCurrent?.();
@@ -132,6 +142,22 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(facts) {
+        if (isRecord(facts) && facts.kind === "session-turn-fresh") {
+          const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
+          if (!source) {
+            throw new Error("Session turn omitted its fresh-message authority");
+          }
+          source.assertCurrent();
+          if (isRecord(facts.refusedSource) && typeof facts.refusedSource.index === "number") {
+            source.checks[facts.refusedSource.index]?.refuse(
+              // SAFETY: The paired worker read these facts from the current transaction.
+              facts.refusedSource.facts as SessionSourcePredicateFacts,
+            );
+            throw new Error("Session source refusal omitted its prepared assertion");
+          }
+          freshCommitGuards.add(source.assertCurrent);
+          return true;
+        }
         if (!isRecord(facts) || facts.kind !== "session-turn-custody") {
           return false;
         }
@@ -177,39 +203,57 @@ export async function appendSessionTurnInWorker(
         if (preparation.result) {
           return preparation.result;
         }
+        // Select one adapter for the whole turn before any message preparer can have effects.
+        for (const [index, append] of accepted.entries()) {
+          const hooks = append.workerPreparation;
+          const facts = preparation.messages[index]!;
+          if (!facts.pending && !facts.existing && hooks?.beforeFreshMessageCommit) {
+            const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
+            sources[index] = source;
+            if (
+              source.nativeSource ||
+              source.checks.some((check) => check.predicate.source.path !== database.path)
+            ) {
+              assertCurrent();
+              return native(accepted.map(({ shouldAppend: _shouldAppend, ...message }) => message));
+            }
+          }
+        }
         plan.options.preparedGoalId = preparation.goalId;
-        plan.options.messages = plan.options.messages.map((append, index) => {
+        for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
           const facts = preparation.messages[index]!;
           const config = accepted[index]!.config ?? options.config;
-          const prepare = hooks?.prepareMessageAfterIdempotencyCheck;
+          const prepare =
+            hooks?.prepareMessageAfterIdempotencyCheckAsync ??
+            hooks?.prepareMessageAfterIdempotencyCheck;
           let message = prepareSessionTurnGoalMessage(
             append.message,
             sessionTurnMutation,
             preparation.goalId,
           );
           if (!facts.pending && !facts.existing && prepare) {
-            message = prepare(message);
+            if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
+              append.preparationVersion = preparation.version;
+            }
+            message = await prepare(message);
+            assertCurrent();
           }
-          if (
-            !facts.pending &&
-            !facts.existing &&
-            message !== undefined &&
-            hooks?.beforeFreshMessageCommit
-          ) {
-            freshCommitGuards.add(hooks.beforeFreshMessageCommit);
+          if (!facts.pending && message !== undefined && hooks?.beforeFreshMessageCommit) {
+            append.sources = sources[index]?.checks.map((check) => check.predicate);
+            append.freshGuard = true;
           }
           if (!facts.pending && message !== undefined && options.atomicGroup !== true) {
             message = redactTranscriptMessageForStorage(message, { config });
           }
-          return {
+          plan.options.messages[index] = {
             ...append,
             message: prepare ? append.message : message,
             ...(prepare && !facts.pending
-              ? { preparation: { expected: facts.existing, message } }
+              ? { preparation: { prepared: !facts.existing, expected: facts.existing, message } }
               : {}),
           };
-        });
+        }
         assertCurrent();
         return commit(() => worker.execute({ type: "session.turn.commit", input: plan }));
       },
@@ -250,7 +294,11 @@ export async function appendSessionTurnInWorker(
     (error: unknown) => ({ ok: false as const, error }),
   );
   try {
-    await execution.release();
+    try {
+      await releaseSessionSourceAuthorities(sources.filter((source) => source !== undefined));
+    } finally {
+      await execution.release();
+    }
   } catch (error) {
     if (outcome.ok) {
       throw error;

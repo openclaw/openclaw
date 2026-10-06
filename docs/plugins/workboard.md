@@ -175,9 +175,13 @@ column is removed, the board applies its rules again. Tile tooltips distinguish
 
 Facts update live from session changes, with automatic board rereads at most once
 every five seconds. Category-only session updates and card-only changes do not
-reload Sessions boards. Reads share a prepared placement snapshot when their
-board, authorized roster, people view, and session revision match. Each request
-still obtains its own caller-scoped roster; sharing never expands session visibility.
+reload Sessions boards. The Gateway selects the authorized roster once and reuses
+immutable facts for unchanged sessions. The board keeps one frozen snapshot per
+board and people view, replacing only rows whose facts changed. Live run state,
+background previews, and time-dependent subagent state remain current; profile,
+configuration, topology, and access changes refresh authorization. Age-window and
+unavailable-PR retry deadlines still refresh the snapshot. Tool callers obtain
+their own caller-scoped roster; sharing never expands session visibility.
 `workboard.sessionsBoard.read` returns a `revision`; repeat the same query with
 `{ sinceRevision: revision }` for `{ unchanged: true, revision }` when current.
 Reconnects and view changes request a full snapshot. The Workboard change event's
@@ -188,18 +192,21 @@ Pull-request facts come from the Gateway's shared PR owner, independently of
 which sessions appear in a Control UI sidebar. Reads use prepared Gateway facts
 without waiting for Git or pull-request requests. Missing snapshots load through
 that owner's bounded background loader and announce a board change when ready.
-If PR facts become unavailable or GitHub rate limits requests, the board retains
-the last ready PR list for its cards and column rules while updating run state
-and health. Unavailable PR reads retry per session, starting after one minute
+If PR facts become unavailable or GitHub rate limits requests, the Gateway's
+selected-facts owner retains the last ready PR list for board cards and column
+rules while updating run state and health. Unavailable PR reads retry per session, starting after one minute
 and doubling to a 15-minute maximum; a successful read resets the delay.
+Redaction changes omit retained PR titles until fresh source text is available,
+without changing known PR states or their retry schedule.
 An inline warning distinguishes stale PR facts from facts not loaded yet and
 identifies GitHub rate limiting. A failed facts read keeps the last known facts
 and placement; sessions with no known facts use the fallback column with reason
 `facts-unavailable`. A session whose available facts match no rule also uses that
 reason while its pull-request facts are unknown. Opening a board starts any needed
 background refresh. Shared snapshots reuse prepared facts until a publication,
-board age-window expiry, or a pull-request retry becomes due; failure fallback
-retains the last known facts.
+redaction change, board age-window expiry, or a pull-request retry becomes due; failure fallback
+retains the last known facts. If redaction rules change during a facts outage,
+the board discards retained text while keeping known run, health, and PR states.
 
 When the Control UI host supports a session dock, **Board agent** opens a
 conversation beside the board. Its first use creates and saves a dedicated

@@ -97,28 +97,33 @@ export function readSessionTranscriptModelContextAsync<T>(
   if (incognito) {
     const prepared = prepareIncognitoSessionHistoryRead(incognito, target, signal);
     const contextAdmission = capturedAdmission ?? prepared.target.admission;
-    return prepared.actor.sessions.withSharedState(async () => {
-      const context = await prepared.actor.sessions.history(
-        prepared.authority,
-        {
-          type: "session.history.context",
-          input: {
-            ...prepared.target,
-            admission: contextAdmission,
-            through: capturedThrough,
-            limits: capturedLimits,
+    return prepared.actor.sessions
+      .withSharedState(async () => {
+        const context = await prepared.actor.sessions.history(
+          prepared.authority,
+          {
+            type: "session.history.context",
+            input: {
+              ...prepared.target,
+              admission: contextAdmission,
+              through: capturedThrough,
+              limits: capturedLimits,
+            },
           },
-        },
-        signal,
-      );
-      return accept(
-        capturedTarget,
-        context,
-        prepared.authority.assertCurrent,
-        prepared,
-        contextAdmission,
-      );
-    });
+          signal,
+        );
+        return accept(
+          capturedTarget,
+          context,
+          prepared.authority.assertCurrent,
+          prepared,
+          contextAdmission,
+        );
+      })
+      .then((result) => {
+        prepared.authority.assertCurrent();
+        return result;
+      });
   }
   return withSessionTranscriptReadSource(
     capturedTarget,

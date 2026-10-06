@@ -1,3 +1,4 @@
+import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { loadMemoryEmbeddingCache } from "./manager-embedding-cache.js";
 import type { MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryShadowConnection, MemoryShadowFailure } from "./manager-shadow-task.js";
@@ -32,6 +33,13 @@ export type MemoryPublicationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: MemoryShadowFailure; entered: boolean; committed: boolean };
 export type MemoryPublicationOperations = {
+  "schema.admit": {
+    input: Pick<
+      Parameters<typeof ensureMemoryIndexSchema>[0],
+      "cacheEnabled" | "ftsEnabled" | "ftsTokenizer"
+    >;
+    output: MemoryPublicationResult<ReturnType<typeof ensureMemoryIndexSchema>>;
+  };
   "source.refresh": {
     input: Parameters<typeof refreshMemorySessionSourceState>[1];
     output: MemoryPublicationResult<boolean>;

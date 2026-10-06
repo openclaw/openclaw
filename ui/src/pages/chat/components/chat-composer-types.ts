@@ -57,8 +57,6 @@ type ChatQueuedEditProps = {
   onCancel: () => void;
 };
 
-export type CapabilityMenuProps = ChatComposerCapabilityMenuProps;
-
 export type ChatComposerDisabledBanner = {
   kind: "above-composer" | "composer-replacement";
   presentation?: "compact" | "hidden";
@@ -125,7 +123,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   /** The pane resolves aliases and agent ownership; absence must not reuse an unowned row. */
   selectedSession?: GatewaySessionRow;
   toolOverrides?: SessionToolOverrides;
-  capabilityMenu?: CapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuProps;
   providerUsage?: ProviderUsageDisplayProps;
   assistantName: string;
   sendShortcut?: ChatSendShortcut;

@@ -39,9 +39,11 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { settleRequesterTurnAfterSessionSpawns } from "./subagent-registry-requester-yield.js";
 import { createRequesterInitialTransferFixture } from "./subagent-registry-requester-yield.test-support.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   activateSubagentRegistry,
@@ -244,7 +246,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     } as GatewayRequestContext;
     bindGatewayContextResolver(predecessor, previousContext.resolveGatewayContext);
     await addSubagentRunForTests(predecessor);
-    const registeredPredecessor = getSubagentRunByChildSessionKey(childSessionKey)!;
+    const registeredPredecessor = (await getSubagentRunByChildSessionKey(childSessionKey))!;
     bindGatewayContextResolver(registeredPredecessor, previousContext.resolveGatewayContext);
     await activateSubagentRegistry(() => previousContext);
     previousOpen = false;
@@ -262,7 +264,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     await testing.sweepOnceForTests();
 
     expect(dispatchAgent).not.toHaveBeenCalled();
-    const successor = getSubagentRunByChildSessionKey(childSessionKey);
+    const successor = await getSubagentRunByChildSessionKey(childSessionKey);
     expect(successor).toBeDefined();
     expect(successor).toMatchObject({
       runId: predecessor.runId,
@@ -642,7 +644,9 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           },
           requesterSettleWake: { requesterYieldBatch: true },
         });
-        expect(getSubagentRunByChildSessionKey(child.childSessionKey)?.runId).toBe(child.runId);
+        expect((await getSubagentRunByChildSessionKey(child.childSessionKey))?.runId).toBe(
+          child.runId,
+        );
         const recoveredSession = loadSessionEntryReadOnly({
           agentId: "main",
           sessionKey: child.childSessionKey,

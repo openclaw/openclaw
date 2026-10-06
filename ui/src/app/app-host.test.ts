@@ -190,11 +190,6 @@ type ShellEpochState = {
   lastWorkspaceLocation: { routeId: string; search: string } | null;
   activeSessionKey: string;
   commandPaletteTarget: unknown;
-  agentsListClient: GatewayBrowserClient | null;
-  agentsListSource: ApplicationContext["agents"] | null;
-  sessionKeyClient: GatewayBrowserClient | null;
-  runtimeConfigClient: GatewayBrowserClient | null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null;
   settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   disconnectedCallback: () => void;
 };
@@ -298,18 +293,11 @@ describe("OpenClaw shell source initialization", () => {
     // the owner keeps the spy and the callee in the current module graph.
     const host = {
       activeSessionKey: "",
-      agentRosterRefreshTimer: null,
-      agentsListClient: null,
-      agentsListSource: null,
       context: undefined,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
-      previousGatewayPhase: null,
       recoverDeletedActiveSession: vi.fn(),
       routeState: {},
-      runtimeConfigClient: null,
-      runtimeConfigSource: null,
-      sessionKeyClient: null,
     } as unknown as ShellGatewayHost;
     const owner = new ShellGatewayOwner(host);
     const reconnecting = {
@@ -332,22 +320,14 @@ describe("OpenClaw shell source initialization", () => {
     retryPendingLocale.mockRestore();
   });
 
-  it("clears retained presentation and source ownership when its context epoch ends", () => {
+  it("clears retained presentation when its context epoch ends", () => {
     const shell = document.createElement("openclaw-app-shell") as unknown as ShellEpochState;
-    const client = {} as GatewayBrowserClient;
-    const agents = {} as ApplicationContext["agents"];
-    const runtimeConfig = {} as ApplicationContext["runtimeConfig"];
     const trigger = document.createElement("button");
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
     shell.lastWorkspaceLocation = { routeId: "usage", search: "?agent=old" };
     shell.activeSessionKey = "agent:old:main";
     shell.commandPaletteTarget = {};
-    shell.agentsListClient = client;
-    shell.agentsListSource = agents;
-    shell.sessionKeyClient = client;
-    shell.runtimeConfigClient = client;
-    shell.runtimeConfigSource = runtimeConfig;
     shell.settingsPreloadTimers.set(
       trigger,
       globalThis.setTimeout(() => undefined, 60_000),
@@ -360,18 +340,13 @@ describe("OpenClaw shell source initialization", () => {
     expect(shell.lastWorkspaceLocation).toBeNull();
     expect(shell.activeSessionKey).toBe("");
     expect(shell.commandPaletteTarget).toBeUndefined();
-    expect(shell.agentsListClient).toBeNull();
-    expect(shell.agentsListSource).toBeNull();
-    expect(shell.sessionKeyClient).toBeNull();
-    expect(shell.runtimeConfigClient).toBeNull();
-    expect(shell.runtimeConfigSource).toBeNull();
     expect(shell.settingsPreloadTimers.size).toBe(0);
   });
 
   it("initializes replacement capabilities even when the Gateway client is unchanged", () => {
     const shell = document.createElement(
       "openclaw-app-shell",
-    ) as unknown as ShellInitializationState;
+    ) as unknown as ShellInitializationState & Pick<ShellLifecycle, "disconnectedCallback">;
     shell.routeState = { routeId: "usage" };
     const client = {} as GatewayBrowserClient;
     const snapshot = { client, phase: "connected" } as ApplicationGatewaySnapshot;
@@ -401,6 +376,13 @@ describe("OpenClaw shell source initialization", () => {
     expect(secondAgents.ensureList).toHaveBeenCalledOnce();
     expect(firstRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledOnce();
+
+    shell.disconnectedCallback();
+    shell.ensureAgentsList(snapshot, secondAgents);
+    shell.ensureRuntimeConfig(snapshot, secondRuntimeConfig);
+
+    expect(secondAgents.ensureList).toHaveBeenCalledTimes(2);
+    expect(secondRuntimeConfig.ensureLoaded).toHaveBeenCalledTimes(2);
   });
 });
 

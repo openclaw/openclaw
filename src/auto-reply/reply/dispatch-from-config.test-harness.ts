@@ -123,6 +123,36 @@ export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+export function createActiveSlackThread(userId: string) {
+  setNoAbort();
+  const sessionKey = `agent:main:slack:direct:${userId}`;
+  const sessionId = "active-session";
+  sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+  const activeOperation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    resetTriggered: false,
+    routeThreadId: "500.000",
+  });
+  activeOperation.setPhase("running");
+  return {
+    activeOperation,
+    sessionId,
+    sessionKey,
+    createCtx: (overrides: Partial<MsgContext> = {}) =>
+      buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: `user:${userId}`,
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        ...overrides,
+      }),
+  };
+}
+
 type MockAcpRuntime = AcpRuntime & {
   ensureSession: Mock<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>;
   runTurn: Mock<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>;

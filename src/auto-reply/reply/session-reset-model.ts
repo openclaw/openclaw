@@ -57,7 +57,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const tokens = rawBody.split(/\s+/).filter(Boolean);
+  const tokens = rawBody.split(/\s+/);
   const [first, second] = tokens;
   if (!first) {
     return {};
@@ -147,7 +147,7 @@ export async function applyResetModelOverride(params: {
     return {};
   }
 
-  const cleanedBody = tokens.slice(consumed).join(" ").trim();
+  const cleanedBody = tokens.slice(consumed).join(" ");
   params.sessionCtx.commandText = cleanedBody;
   params.sessionCtx.agentText = cleanedBody;
   params.sessionCtx.BodyStripped = cleanedBody;

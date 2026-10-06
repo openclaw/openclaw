@@ -64,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -81,7 +81,7 @@ export type GatewayReachability = {
   staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };

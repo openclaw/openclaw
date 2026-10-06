@@ -191,6 +191,7 @@ export function createSessionRowPublication(owner: {
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
   lookup: (query: records.Lookup) => records.Row | undefined;
+  dirty: ReadonlySet<string>;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
   state: () => Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
@@ -201,6 +202,9 @@ export function createSessionRowModelFactsReader(params: {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
+    }
+    if (records.ready(row) && !params.dirty.has(records.identity(row))) {
+      return row.materialized.source;
     }
     const state = params.state();
     return readSessionRowModelFacts({
@@ -261,12 +265,6 @@ export function createSessionRowDescriptionReader(owner: {
     });
 }
 
-/** One synchronous refresh slice shares agent policy; each later slice starts fresh. */
-function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
-  const activitySummaryEnabledByAgent = new Map<string, boolean>();
-  return (params) => readResidentSessionRow(params, activitySummaryEnabledByAgent);
-}
-
 /** Keyed and worker-prepared refreshes share the same bounded materialization slice. */
 export function createSessionRowMaterializer(owner: {
   isActive: () => boolean;
@@ -275,7 +273,6 @@ export function createSessionRowMaterializer(owner: {
   prepare: () => records.Inputs["cfg"];
   revision: () => number;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
-  readEntry: (row: records.Row) => records.Row["storedEntry"];
   materialize: (
     row: records.Row,
     agentIds: Set<string>,
@@ -293,22 +290,26 @@ export function createSessionRowMaterializer(owner: {
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
       const configuredAgentIds = new Set(listAgentIds(cfg));
-      const readRow = createSessionRowMaterializationBatch();
+      const activitySummaryEnabledByAgent = new Map<string, boolean>();
+      const readRow: typeof readResidentSessionRow = (params) =>
+        readResidentSessionRow(params, activitySummaryEnabledByAgent);
       for (const [offset, id] of ids.entries()) {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
         }
         const current = owner.rows.get(id),
           revision = owner.revision();
-        const databaseFacts = accepted ? current?.pendingDatabaseFacts : undefined;
-        if (accepted && !databaseFacts) {
+        const databaseFacts = accepted
+          ? current?.pendingDatabaseFacts
+          : current?.retainedDatabaseFacts;
+        if (!databaseFacts) {
           continue;
         }
         if (!accepted && current?.unresolvedDatabaseFacts === "category") {
           continue;
         }
         const row =
-          current && (accepted ? current : owner.acquireEntry(current, owner.readEntry(current)));
+          current && (accepted ? current : owner.acquireEntry(current, databaseFacts.entry));
         if (row && isColdArchivedSessionRow(row) && !accepted) {
           owner.dirty.delete(id);
           owner.forgetBackfill(id);
@@ -320,6 +321,7 @@ export function createSessionRowMaterializer(owner: {
           owner.revision() === revision
         ) {
           row.pendingDatabaseFacts = undefined;
+          row.retainedDatabaseFacts = databaseFacts;
           owner.dirty.delete(id);
           // A bulk slice may finish an exact read's accepted archive row. Keep its
           // residency under the archive owner's pins and bounded cache either way.
@@ -437,8 +439,9 @@ export function readResidentSessionRow(
     storePath: row.storeTarget.storePath,
     storeAgentId: row.storeTarget.agentId,
     // Cache stored fallback facts independently of the live activity chosen at presentation.
-    active: source ? undefined : false,
-    activeModel: source ? undefined : (row.fallbackModel ?? null),
+    active: source || prepared ? undefined : false,
+    activeModel: source || prepared ? undefined : (row.fallbackModel ?? null),
+    terminalModel: prepared ? (prepared.terminalModel ?? null) : undefined,
     modelCatalog: params.modelCatalog,
     modelSource: {
       entry: row.storedEntry,
@@ -457,8 +460,12 @@ export function readResidentSessionRow(
     childLinks: source || prepared ? undefined : params.links,
   });
   if (!source) {
-    inputs.derivedTitle = deriveSessionTitle(row.entry, undefined, inputs.displayName);
-    inputs.lastMessagePreview = row.lastMessagePreview;
+    inputs.derivedTitle = deriveSessionTitle(
+      row.entry,
+      prepared?.titleFields?.firstUserMessage ?? undefined,
+      inputs.displayName,
+    );
+    inputs.lastMessagePreview = prepared?.titleFields?.lastMessagePreview ?? row.lastMessagePreview;
   }
   inputs.subagentRunInputs = params.subagentInputs;
   const materialized = materializeSessionRow(inputs);
@@ -626,28 +633,40 @@ export function findSessionRowById(
 export function lookupSessionRow(
   query: records.Lookup,
   owner: {
-    disposed: boolean;
     cfg: records.Inputs["cfg"];
-    matching: (query: records.Query) => records.Row[];
-    storePaths: Iterable<string>;
+    rows: ReadonlyMap<string, records.Row>;
+    byKey: ReadonlyMap<string, ReadonlySet<string>>;
+    scope: ReturnType<typeof prepareSessionRowScopes> | undefined;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
   },
 ) {
-  if (owner.disposed) {
-    return undefined;
-  }
-  const { agentId } = query;
-  const exact = owner.matching(query).filter((row) => row.agentId === agentId);
-  if (exact.length) {
-    return records.first(exact, owner.storePaths);
-  }
-  const key = resolveStoredSessionKeyForAgentStore({
-    cfg: owner.cfg,
-    sessionKey: query.key,
-    agentId,
-  });
-  if (isIncognitoSessionKey(key)) {
-    return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId });
-  }
-  const candidates = owner.matching({ ...query, key }).filter((row) => row.agentId === agentId);
-  return records.first(candidates, owner.storePaths);
+  const paths = query.storePath
+    ? (owner.scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+    : undefined;
+  let key = query.key;
+  do {
+    const candidates = owner.byKey.get(`key:${key}`);
+    if (candidates) {
+      for (const storePath of paths ?? owner.stores.keys()) {
+        for (const id of candidates) {
+          const row = owner.rows.get(id);
+          if (row?.agentId === query.agentId && row.storeTarget.storePath === storePath) {
+            return row;
+          }
+        }
+      }
+    }
+    if (key !== query.key) {
+      break;
+    }
+    key = resolveStoredSessionKeyForAgentStore({
+      cfg: owner.cfg,
+      sessionKey: key,
+      agentId: query.agentId,
+    });
+    if (isIncognitoSessionKey(key)) {
+      return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId: query.agentId });
+    }
+  } while (key !== query.key);
+  return undefined;
 }

@@ -11,7 +11,10 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { resolveDeferredCleanupDecision } from "./subagent-registry-cleanup.js";
+import {
+  resolveAnnounceDeliveryDeadline,
+  resolveDeferredCleanupDecision,
+} from "./subagent-registry-cleanup.js";
 import {
   ANNOUNCE_COMPLETION_HARD_EXPIRY_MS,
   ANNOUNCE_EXPIRY_MS,
@@ -176,10 +179,15 @@ export const finalizeSubagentCleanup = async (
     return;
   }
 
-  const activeDescendantRuns = await params.countPendingDescendantRuns(
-    entry.childSessionKey,
-    assertCurrent,
-  );
+  // Expiry settles delivery regardless of descendants; failed preparation must not block it.
+  const expiryMs =
+    entry.expectsCompletionMessage === true
+      ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
+      : ANNOUNCE_EXPIRY_MS;
+  const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now(), expiryMs);
+  const activeDescendantRuns = expired
+    ? 0
+    : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent);
   assertCurrent();
   const now = Date.now();
   const decision: {
@@ -254,13 +262,6 @@ export const finalizeSubagentCleanup = async (
       stateContext,
     });
   } else if (resumeDelayMs != null) {
-    scheduleResumeSubagentRun(
-      context,
-      runId,
-      entry,
-      resumeDelayMs,
-      cleanupGeneration,
-      stateContext,
-    );
+    scheduleResumeSubagentRun(context, entry, resumeDelayMs, cleanupGeneration, stateContext);
   }
 };

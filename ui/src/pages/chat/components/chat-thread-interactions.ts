@@ -39,7 +39,6 @@ import { resetChatThreadState } from "../chat-thread.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
-import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
@@ -136,7 +135,6 @@ export type ChatThreadProps = ChatSendStatusActions & {
   /** Browser-local active run identity, retained across transient disconnects. */
   runId?: string | null;
   runUsageById?: ReadonlyMap<string, RunOutputUsage>;
-  runStatus?: ChatRunUiStatus | null;
   queue: ChatQueueItem[];
   initialTurnId?: string;
   pendingInputs?: ChatPendingInputsPage["items"];

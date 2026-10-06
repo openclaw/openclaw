@@ -13,11 +13,8 @@ import {
   INDEX_REPAIR_INDEX_NAME,
   INDEX_REPAIR_SCHEMA_SQL,
   type IndexRepairJournalMode,
-  type ReliabilityReport,
 } from "./sqlite-reliability-contract.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
-
-type IndexRepairProof = ReliabilityReport["indexRepairInterruptionProof"]["rollbackJournal"];
 
 type IndexRepairState = {
   rows: number;
@@ -177,7 +174,7 @@ function recoverAndRepair(databasePath: string, expectedState: IndexRepairState)
 async function runJournalModeProof(params: {
   databasePath: string;
   journalMode: IndexRepairJournalMode;
-}): Promise<IndexRepairProof> {
+}) {
   const expectedState = prepareIndexRepairDatabase(params.databasePath, params.journalMode);
   const worker = startReliabilityCrashWorker(
     INDEX_REPAIR_WORKER_PATH,
@@ -214,9 +211,7 @@ async function runJournalModeProof(params: {
   }
 }
 
-export async function runIndexRepairInterruptionProof(
-  scratchPath: string,
-): Promise<ReliabilityReport["indexRepairInterruptionProof"]> {
+export async function runIndexRepairInterruptionProof(scratchPath: string) {
   fs.mkdirSync(scratchPath, { recursive: true, mode: 0o700 });
   return {
     rollbackJournal: await runJournalModeProof({

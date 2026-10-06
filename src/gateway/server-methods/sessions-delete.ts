@@ -323,7 +323,7 @@ export async function deleteGatewaySession({
             // generation-scoped purge and checkout cleanup still finish before
             // this fence opens, so a same-key successor cannot be mistaken for it.
             const deletedSessionKey = target.canonicalKey ?? key;
-            handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
+            await handleSessionStateSessionDeleted(deletedSessionKey, requestedAgentId);
             worktreePreserved = await removeSessionWorktree({
               id: deletedWorktreeId,
               sessionKey: deletedSessionKey,

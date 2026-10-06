@@ -289,7 +289,7 @@ describe("local sandbox workspace reconciliation", () => {
     owner.worktree.repoFingerprint = (
       await service.resolveRepositoryIdentity(owner.worktree.path)
     ).fingerprint;
-    insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
+    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
     await git(owner.worktree.repoRoot, "config", "--unset-all", "credential.helper");
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     await fs.writeFile(path.join(projection, ".gitignore"), "");
@@ -531,7 +531,7 @@ describe("local sandbox workspace reconciliation", () => {
       import("../../agents/sandbox/registry.js"),
       import("../../agents/sandbox/container-engine.js"),
     ]);
-    insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
+    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     const entry = {
       containerName: "retirement-owned",
@@ -614,7 +614,9 @@ describe("local sandbox workspace reconciliation", () => {
       owner.worktree.repoFingerprint = (
         await service.resolveRepositoryIdentity(owner.worktree.path)
       ).fingerprint;
-      insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [".env.allowed"] });
+      await insertRegistryWorktree(process.env, owner.worktree, {
+        provisionedPaths: [".env.allowed"],
+      });
       await fs.writeFile(
         path.join(owner.worktree.path, ".env.allowed"),
         "original provisioned bytes",
@@ -720,7 +722,7 @@ describe("local sandbox workspace reconciliation", () => {
           "original provisioned bytes",
         );
         expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
-        updateRegistryWorktree(process.env, owner.worktree.id, {
+        await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: undefined,
           lastActiveAt: now + 1,
           provisionedPaths: legacyState.map((entry) => entry.path),

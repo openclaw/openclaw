@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
   loadSessionEntryReadOnly,

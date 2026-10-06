@@ -36,8 +36,14 @@ import {
   readTranscriptGenerationInTransaction,
   readTranscriptContextVersionInTransaction,
 } from "./session-accessor.sqlite-transcript-state.js";
-import { rewriteSqliteTranscriptEventRowsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { assertLockedTranscriptWriteAllowed } from "./session-accessor.sqlite-transcript-write-guard.js";
+import {
+  appendTranscriptEventInTransaction,
+  rewriteSqliteTranscriptEventRowsInTransaction,
+} from "./session-accessor.sqlite-transcript-store.js";
+import {
+  assertLockedTranscriptWriteAllowed,
+  assertNonMessageTranscriptEvent,
+} from "./session-accessor.sqlite-transcript-write-guard.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
@@ -67,6 +73,10 @@ export type SessionMessageRewriteCommitted = {
 };
 
 export type SessionMessageRewriteOperations = {
+  "session.transcript.event.append": {
+    input: { scope: ResolvedTranscriptScope; eventJson: string };
+    output: ReturnType<typeof commitSessionTranscriptEvent>;
+  };
   "session.transcript.correct": {
     input: {
       scope: ResolvedTranscriptScope;
@@ -133,6 +143,8 @@ export function bindSqliteWorkerBackend(
   return {
     execute(command) {
       switch (command.type) {
+        case "session.transcript.event.append":
+          return commitSessionTranscriptEvent(command.input, context);
         case "session.transcript.correct":
           return commitSessionTranscriptCorrection(command.input, context);
         case "session.messageRewrite.prepare":
@@ -150,6 +162,38 @@ export function bindSqliteWorkerBackend(
     },
     close() {},
   };
+}
+
+export type SessionTranscriptEventCommitted = {
+  kind: "session-transcript-event";
+  projectionNeedsReconcile: boolean;
+};
+
+function commitSessionTranscriptEvent(
+  input: SessionMessageRewriteOperations["session.transcript.event.append"]["input"],
+  { writeTransaction, admit }: AgentWorkerOperationContext,
+) {
+  const event: TranscriptEvent = JSON.parse(input.eventJson);
+  assertNonMessageTranscriptEvent(event);
+  return writeTransaction("session.transcript.event-append", "Transcript event", (database) => {
+    assertSessionTranscriptHot(database.db, input.scope.sessionId);
+    const entry = readSessionEntryRow(database, input.scope.sessionKey, "list");
+    if (entry?.entry.sessionId !== input.scope.sessionId) {
+      throw new SessionTranscriptWriterClaimReboundError();
+    }
+    const candidate: SessionTranscriptEventCommitted = {
+      kind: "session-transcript-event",
+      projectionNeedsReconcile: false,
+    };
+    appendTranscriptEventInTransaction(database, input.scope, event, {
+      eventJson: input.eventJson,
+      scheduleProjectionReconcile: false,
+      onProjectionReconcileNeeded: () => {
+        candidate.projectionNeedsReconcile = true;
+      },
+    });
+    return transferSessionEntryWorkerCandidate(database, admit, candidate);
+  });
 }
 
 export type SessionTranscriptCorrectionCommitted = {

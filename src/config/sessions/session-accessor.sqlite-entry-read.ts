@@ -200,7 +200,7 @@ export function prepareSqliteSessionEntryRowDecoder(
 }
 
 /** Projects one selected row set without repeating participant reads for each entry. */
-export function parseReadableSqliteSessionEntryRows(
+function parseReadableSqliteSessionEntryRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   rows: readonly ResolvedSessionEntryRow["row"][],
   projection: SessionEntryProjection = "full",
@@ -311,6 +311,33 @@ function scanSessionEntryRows(
     }
     return { lookupKeys, rows, selected };
   });
+}
+
+/** Indexed child metadata shared by native compatibility and the incognito actor. */
+export function readSessionChildEntriesInDatabase(
+  database: OpenClawAgentDatabaseReader,
+  sessionKey: string,
+  projection: SessionEntryProjection = "full",
+): SessionEntrySummary[] {
+  const sessionKeys = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+    .selectFrom("session_nodes")
+    .select("session_key");
+  // Separate indexed lookups avoid a whole-store scan chosen for OR with ordering.
+  const childKeys = sessionKeys
+    .where("parent_session_key", "=", sessionKey)
+    .union(sessionKeys.where("spawned_by", "=", sessionKey));
+  const childRows = executeSqliteQuerySync(
+    database.db,
+    selectReadableSessionEntryRows(database, projection)
+      .where("session_key", "in", childKeys)
+      .where("session_key", "!=", sessionKey)
+      .orderBy("session_key", "asc"),
+  ).rows;
+  return parseReadableSqliteSessionEntryRows(
+    database,
+    childRows.filter((row) => !isInternalSessionEffectsKey(row.session_key)),
+    projection,
+  );
 }
 
 export function readExactSessionEntryRow(

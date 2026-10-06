@@ -4,7 +4,6 @@ import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
-import type { AgentMessage } from "../../runtime/index.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
@@ -18,11 +17,7 @@ import type {
 } from "../run-state.js";
 
 type EmbeddedAgentActiveSessionSteerTarget = {
-  agent?: {
-    cancelSteeringMessage?: (
-      predicate: (message: AgentMessage) => boolean,
-    ) => AgentMessage | undefined;
-  };
+  agent?: Partial<Pick<AgentSession["agent"], "cancelSteeringMessage">>;
   steer: AgentSession["steer"];
   subscribe(listener: (event: unknown) => void): () => void;
 };
@@ -131,9 +126,7 @@ async function steerWithTranscriptLifecycle(
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
+      clearTimeout(timer);
       unsubscribe?.();
       unsubscribePersistenceFailure?.();
       abortSignal?.removeEventListener("abort", onAbort);
@@ -179,7 +172,7 @@ async function steerWithTranscriptLifecycle(
       reportAcceptance(false);
       finish(new Error(message));
     };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
+    const timer = setTimeout(
       () => {
         const message =
           "queued steering message was not committed to the transcript before timeout";

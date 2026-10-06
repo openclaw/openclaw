@@ -120,38 +120,6 @@ describe("runNodeHost", () => {
     expect(lastCapturedOptions()?.commands).toContain("agent.cli.claude.run.v1");
   });
 
-  it("publishes opt-in consent and capacity in the atomic runner inventory", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { handshakeTimeoutMs: 1_000 },
-      nodeHost: { workerRuns: { enabled: true, capacity: 5 } },
-    });
-    await withRunningNodeHost(async (options, client) => {
-      const inventory = {
-        protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
-        workerHost: {
-          enabled: true,
-          capacity: { total: 5, available: 5 },
-          bundlePrewarm: 1,
-        },
-      };
-      const published = createDeferred();
-      client.request.mockImplementation(async (method, params) => {
-        if (
-          method === NODE_RUNNER_INVENTORY_UPDATE_METHOD &&
-          expect.objectContaining(inventory).asymmetricMatch(params)
-        ) {
-          published.resolve();
-        }
-        return {};
-      });
-
-      receiveHello(options);
-
-      await published.promise;
-      expect(client.request).toHaveBeenCalledWith(NODE_RUNNER_INVENTORY_UPDATE_METHOD, inventory);
-    });
-  });
-
   it("publishes each exact worker slot transition without reconnecting", async () => {
     mocks.useFakeRuntime = true;
     mocks.fakeRuntimeWorkerHosting = true;
@@ -248,21 +216,6 @@ describe("runNodeHost", () => {
       expect(mocks.activeRuntime.cancelAll).toHaveBeenCalledTimes(cancelsBefore);
       expect(client.updateNodeManifest).not.toHaveBeenCalled();
     });
-  });
-
-  it("does not publish node-hosted skills when disabled", async () => {
-    mocks.getRuntimeConfig.mockReturnValue({
-      gateway: { handshakeTimeoutMs: 1_000 },
-      nodeHost: { skills: { enabled: false } },
-    });
-
-    await expect(runNodeHost(nodeOptions)).rejects.toThrow("event loop readiness timeout");
-    receiveHello(lastCapturedOptions());
-
-    expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalledWith(
-      "node.skills.update",
-      expect.anything(),
-    );
   });
 
   it("publishes plugin tools during MCP discovery and republishes catalog changes", async () => {

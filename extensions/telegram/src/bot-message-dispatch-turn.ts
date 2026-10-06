@@ -271,7 +271,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             suppressToolProgressMessages: !toolProgressEnabled,
             allowProgressCallbacksWhenSourceDeliverySuppressed:
               !isRoomEvent && Boolean(turn.answerLane.stream),
-            onVerboseProgressVisibility: (isActive) => {
+            onVerboseProgressVisibilityAsync: (isActive) => {
               turn.verboseProgressActive = isActive;
             },
             commentaryProgressEnabled:
@@ -288,7 +288,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
             onItemEvent: (payload) => handleItemEvent(turn, payload),
             onPlanUpdate: (payload) => handlePlanUpdate(turn, payload),
             onApprovalEvent: async (payload) =>
-              canPushToolProgress(turn)
+              (await canPushToolProgress(turn))
                 ? await turn.progressCompositor.pushApprovalEvent(payload)
                 : false,
             onToolResult: async (payload) => {
@@ -304,7 +304,7 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               if (updatedDraft) {
                 return true;
               }
-              if (isFastModeAutoProgressPayload(payload) && !canPushToolProgress(turn)) {
+              if (isFastModeAutoProgressPayload(payload) && !(await canPushToolProgress(turn))) {
                 return (await sendPayload(turn, payload)).visibleReplySent;
               }
               return false;

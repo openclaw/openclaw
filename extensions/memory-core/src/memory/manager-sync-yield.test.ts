@@ -193,10 +193,7 @@ class SessionSyncYieldHarness extends MemorySyncTestHarness {
 
   protected assertRequiredProviderAvailable(): void {}
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    _options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, _source: MemorySource): Promise<void> {
     this.indexedPaths.push(entry.path);
     this.onIndexFile(this.indexedPaths.length);
   }

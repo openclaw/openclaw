@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { UpdateDoctorError } from "../../infra/update-doctor-result.js";
@@ -405,16 +406,7 @@ describe("update plugin lifecycle lease boundaries", () => {
         path.join(await resolveUpdateRoot(), "package.json"),
         JSON.stringify({ name: "openclaw", version: "2026.9.4" }),
       );
-      const maintenance = {
-        signal: new AbortController().signal,
-        run: <T>(operation: () => T): T => operation(),
-        finish: vi.fn(async () => {}),
-        release: vi.fn(async () => {}),
-        repairSqliteNoCow: async () => {},
-        enableSqliteReclamation: async () => {},
-        cleanupRetainedRuntimes: async () => {},
-        releaseState: vi.fn(async () => {}),
-      };
+      const maintenance = createDoctorMaintenanceFixture();
       mocks.maintenance.mockResolvedValueOnce(maintenance);
       const verification = await vi.importActual<typeof gatewayVerification>(
         "./update-command-verification.js",
@@ -750,12 +742,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       });
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
-        return {
-          signal: new AbortController().signal,
-          run: <T>(operation: () => T): T => operation(),
-          repairSqliteNoCow: async () => {},
-          enableSqliteReclamation: async () => {},
-          cleanupRetainedRuntimes: async () => {},
+        return createDoctorMaintenanceFixture({
           releaseState: async () => {
             record("release-state");
           },
@@ -763,7 +750,7 @@ describe("update plugin lifecycle lease boundaries", () => {
           release: async () => {
             record("release-custody");
           },
-        };
+        });
       });
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", "/fixture/post-core-result.json");
       const publish = async () => {
@@ -937,19 +924,14 @@ describe("update plugin lifecycle lease boundaries", () => {
           : "Optional version probe timed out; recheck after restart.";
       if (source === "restoration") {
         const warnings: string[] = [];
-        mocks.maintenance.mockResolvedValue({
-          signal: new AbortController().signal,
-          run: <T>(operation: () => T): T => operation(),
-          release: async () => {},
-          repairSqliteNoCow: async () => {},
-          enableSqliteReclamation: async () => {},
-          cleanupRetainedRuntimes: async () => {},
-          releaseState: async () => {},
-          finish: async () => {
-            warnings.push(warning);
-          },
-          warnings,
-        });
+        mocks.maintenance.mockResolvedValue(
+          createDoctorMaintenanceFixture({
+            finish: async () => {
+              warnings.push(warning);
+            },
+            warnings,
+          }),
+        );
         vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       } else {
         mocks.doctorWarnings = [warning];

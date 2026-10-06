@@ -169,6 +169,7 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | RegisteredStateReadCommand
+  | { type: "admit" }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
@@ -193,7 +194,7 @@ export type OpenClawStateReadCommand =
   | {
       type: "subagents.runs";
       scope:
-        | { kind: "all" }
+        | { kind: "page"; after?: string }
         | { kind: "maintenance" }
         | { kind: "session"; sessionKey: string }
         | { kind: "ids"; runIds: readonly string[] }
@@ -273,6 +274,7 @@ export type OpenClawStateReadCommand =
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }
+  | { type: "workers.placementEnvironmentOwner"; environmentId: string }
   | { type: "workers.placementPendingResults"; sessionId?: string }
   | {
       type: "workers.placementProjection";
@@ -286,7 +288,7 @@ export type OpenClawStateReadRequest = {
   checkFreshAdmission: boolean;
   expectedIdentity?: string;
   snapshotRoot?: string;
-  command: OpenClawStateReadCommand | { type: "admit" };
+  command: OpenClawStateReadCommand;
 };
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
@@ -422,6 +424,7 @@ export type OpenClawStateReadResult =
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
       versions?: Map<string, string | null>;
+      page?: { order: readonly (readonly [string, number])[]; nextRunId: string | null };
       descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {
@@ -548,6 +551,10 @@ export type OpenClawStateReadResult =
   | WorkspaceJournalReadResult
   | { type: "workers.placementRecoveryCandidates"; candidates: WorkerPlacementRecoveryCandidate[] }
   | { type: "workers.placementPreservation"; placements: WorkerSessionPlacementRecord[] }
+  | {
+      type: "workers.placementEnvironmentOwner";
+      placement: WorkerSessionPlacementRecord | undefined;
+    }
   | {
       type: "workers.placementPendingResults";
       pendingResults: import("../gateway/worker-environments/placement-workspace-result.types.js").WorkerWorkspacePendingResult[];

@@ -72,8 +72,8 @@ export function captureCodexSessionContextReader(
     lifecycleRevision: actor.sessions.readSharing(target.sessionKey)?.entry?.lifecycleRevision,
     admission: resolveSessionTranscriptReadFence(target),
   };
-  return (readTarget, read) =>
-    actor.sessions.withSharedState(async () => {
+  return async (readTarget, read) => {
+    const value = await actor.sessions.withSharedState(async () => {
       assertCurrent();
       const { bindIncognitoSessionComputeReader } =
         await import("../config/sessions/session-incognito-compute-read.js");
@@ -85,6 +85,10 @@ export function captureCodexSessionContextReader(
         signal,
       }).nativeContext(readTarget, read);
     });
+    assertCurrent();
+    actor.assertReadable();
+    return value;
+  };
 }
 
 function assertCodexSessionSyncAccess(target: SessionTranscriptReadScope, method: string) {

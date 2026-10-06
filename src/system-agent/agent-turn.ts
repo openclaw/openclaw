@@ -404,7 +404,7 @@ async function runSystemAgentTurnWithDeps(
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }

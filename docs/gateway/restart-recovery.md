@@ -255,7 +255,11 @@ joins final chat persistence, drains Memory's database borrows, and closes agent
 databases before exiting. It skips plugin and channel teardown that could retain
 the process until the deadline. Database admission stays fenced through lock
 release and log flushing, which have a final five-second exit window. Shutdown
-logs report the elapsed time for these steps. The supervisor deadline remains
+logs report each cleanup step that takes at least one second, including its name
+and elapsed milliseconds. Deadline exits list the currently pending cleanup steps
+and how long each has been waiting (up to eight, with a count of any others).
+These diagnostics are always enabled; `OPENCLAW_GATEWAY_RESTART_TRACE=1` adds
+begin/end timing for fast steps too. The supervisor deadline remains
 the hard upper bound. Clean database restart proof is published only after writer
 leases, checkpointing, and native connection closure settle; one database's idle
 receipt alone does not authorize process exit.
@@ -623,6 +627,10 @@ Three complementary mechanisms mark sessions whose turn did not finish:
 Agents still undergoing database startup inspection retain their recovery work.
 When admission finishes, the same startup recovery owner scans their stores with
 the original cutoff, so newly admitted turns are not mistaken for crash orphans.
+Inbound channel turns, including unacknowledged messages replayed after a crash,
+wait for their agent's writable admission before recording session metadata or
+dispatching. Other agents remain available, and stopping the channel or Gateway
+cancels the wait.
 
 A failed store scan leaves that store eligible for the scheduled retry while
 other stores continue recovery. `openclaw status` and `openclaw doctor` show
@@ -677,9 +685,11 @@ automatically without surviving authority. Missing or invalid provenance does no
 establish a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks. If their agent database is
-still undergoing startup inspection or preparation, the pending completion wake
-retries after 30 seconds without consuming delivery attempts or changing its
-replay identity. The retained wake survives another restart. A confirmed
+still undergoing startup inspection or preparation, a child result changes while
+being read, or a preparation worker refuses work at capacity, the pending completion
+wake retries after 30 seconds without consuming delivery attempts or changing its
+batch, replay identity, or retry counters. Each retry reads fresh results under
+the same ownership checks. The retained wake survives another restart. A confirmed
 inspection failure or ownership mismatch remains a failure, not permission to
 bypass database admission; cancellation still retires the wake.
 
@@ -856,6 +866,8 @@ follow-up is waiting to retry or is interrupted by restart, the saved
 obligation survives and resumes after startup. Restart admission rejection
 does not consume an attempt, and cancellation of an admitted attempt does
 not exhaust the obligation. Existing delivery retry limits still apply.
+Transient cleanup preparation failures keep required final delivery scheduled
+within its existing delivery window. Incidental cleanup retains its bounded retry limit.
 Settling a yielded turn's wake leaves its unfinished native run and final delivery
 intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
 native subagent record; it does not require a separate Tasks row.

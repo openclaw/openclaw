@@ -38,14 +38,13 @@ function normalizeSavedSetupCredential(value: unknown): SavedSetupCredential | u
   }
   const authChoice = readNonBlankString(value.authChoice);
   const pluginId = readNonBlankString(value.pluginId);
+  const agentRuntimeId = readNonBlankString(value.agentRuntimeId);
   return {
     replacement: value.replacement,
     modelRef,
     configJson,
     ...(value.apiKeyHeader === true ? { apiKeyHeader: true } : {}),
-    ...(readNonBlankString(value.agentRuntimeId)
-      ? { agentRuntimeId: readNonBlankString(value.agentRuntimeId) }
-      : {}),
+    ...(agentRuntimeId ? { agentRuntimeId } : {}),
     ...(authChoice ? { authChoice } : {}),
     ...(pluginId ? { pluginId } : {}),
   };

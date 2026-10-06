@@ -148,7 +148,10 @@ async function runMaintenanceDrift(
 ) {
   const committed = vi.fn();
   const changed = vi.fn(drift.change);
-  const stopPreserving = registerSessionMaintenancePreserveKeysProvider(drift.preserve);
+  const stopPreserving = registerSessionMaintenancePreserveKeysProvider(async () => ({
+    capture: drift.preserve,
+    dispose() {},
+  }));
   if (drift.removalOnly) {
     const authorize = reclamation.withSqliteReclamationAuthorization;
     vi.spyOn(reclamation, "withSqliteReclamationAuthorization").mockImplementation(

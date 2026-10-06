@@ -29,8 +29,7 @@ import {
   UI_APPEARANCE_DEFAULTS,
   type UiSettings,
 } from "../../app/settings.ts";
-import { startThemeTransition } from "../../app/theme-transition.ts";
-import { resolveTheme, type ThemeMode, type ThemeName } from "../../app/theme.ts";
+import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import {
   loadStoredHiddenSessionCatalogIds,
@@ -767,12 +766,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
-    startThemeTransition({
-      currentTheme: resolveTheme(this.settings.theme, this.settings.themeMode),
-      nextTheme: resolveTheme(theme, this.settings.themeMode),
-      applyTheme: () =>
-        reset ? this.resetSyncedAppearancePref("theme") : this.applySettings({}, theme),
-    });
+    if (reset) {
+      this.resetSyncedAppearancePref("theme");
+    } else {
+      this.applySettings({}, theme);
+    }
   }
 
   private setThemeMode(mode: ThemeMode) {

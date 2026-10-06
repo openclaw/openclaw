@@ -951,25 +951,6 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
   trustedSourceLinkedOfficialInstall?: boolean;
 }): Promise<InstallSecurityScanResult | undefined> {
   const requestKind = params.requestKind ?? "plugin-npm";
-  const runPolicy = () =>
-    runOperatorInstallPolicy({
-      config: params.config,
-      logger: params.logger,
-      onInstallPolicyWarning: params.onInstallPolicyWarning,
-      origin: { type: "plugin-dependency-tree" },
-      source: params.source ?? resolvePolicySource({ requestKind }),
-      sourcePath: params.dependencyScanRootDir ?? params.packageDir,
-      sourcePathKind: "directory",
-      targetName: params.pluginId,
-      targetType: "plugin",
-      requestKind,
-      requestMode: params.mode ?? "install",
-      requestedSpecifier: params.requestedSpecifier,
-      plugin: {
-        contentType: "dependency-tree",
-        pluginId: params.pluginId,
-      },
-    });
   const scanRoots = await collectInstalledPackageScanRoots({
     ...(params.additionalPackageDirs
       ? { additionalPackageDirs: params.additionalPackageDirs }
@@ -985,7 +966,24 @@ export async function scanInstalledPackageDependencyTreeRuntime(params: {
       allowManagedNpmRootPackagePeerSymlinks: params.allowManagedNpmRootPackagePeerSymlinks,
     });
   }
-  return await runPolicy();
+  return await runOperatorInstallPolicy({
+    config: params.config,
+    logger: params.logger,
+    onInstallPolicyWarning: params.onInstallPolicyWarning,
+    origin: { type: "plugin-dependency-tree" },
+    source: params.source ?? resolvePolicySource({ requestKind }),
+    sourcePath: params.dependencyScanRootDir ?? params.packageDir,
+    sourcePathKind: "directory",
+    targetName: params.pluginId,
+    targetType: "plugin",
+    requestKind,
+    requestMode: params.mode ?? "install",
+    requestedSpecifier: params.requestedSpecifier,
+    plugin: {
+      contentType: "dependency-tree",
+      pluginId: params.pluginId,
+    },
+  });
 }
 
 export async function preflightPluginNpmInstallPolicyRuntime(
