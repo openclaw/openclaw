@@ -11,14 +11,7 @@ import type { YamlAst } from "./ast.js";
 type YamlOcPathMatch =
   | { readonly kind: "root"; readonly node: YamlAst }
   | { readonly kind: "scalar"; readonly value: unknown; readonly path: readonly string[] }
-  | {
-      readonly kind: "map";
-      readonly path: readonly string[];
-    }
-  | {
-      readonly kind: "seq";
-      readonly path: readonly string[];
-    }
+  | { readonly kind: "map" | "seq"; readonly path: readonly string[] }
   | {
       readonly kind: "pair";
       readonly key: string;
@@ -33,12 +26,7 @@ export function resolveYamlOcPath(ast: YamlAst, path: OcPath): YamlOcPathMatch |
     return { kind: "root", node: ast };
   }
 
-  const root = ast.doc.contents;
-  if (root === null) {
-    return null;
-  }
-
-  return walkNode(root, segments, 0, []);
+  return walkNode(ast.doc.contents, segments, 0, []);
 }
 
 function walkNode(

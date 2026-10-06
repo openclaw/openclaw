@@ -17,11 +17,8 @@ export type ZaiEndpointId = "global" | "cn" | "coding-global" | "coding-cn";
 
 export type ZaiDetectedEndpoint = {
   endpoint: ZaiEndpointId;
-  /** Provider baseUrl to store in config. */
   baseUrl: string;
-  /** Recommended default model id for that endpoint. */
   modelId: string;
-  /** Human-readable note explaining the choice. */
   note: string;
 };
 

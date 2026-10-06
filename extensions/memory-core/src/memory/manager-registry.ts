@@ -298,9 +298,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     purpose: MemoryIndexManagerPurpose;
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
-    await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope);
-    });
+    await this.runScopeOperation(scope, () => this.closeScopeUnlocked(scope));
   }
 
   deleteIfCurrent(key: string, manager: T): void {

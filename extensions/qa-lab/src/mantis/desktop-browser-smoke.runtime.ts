@@ -215,9 +215,7 @@ export async function runMantisDesktopBrowserSmoke(
   const htmlFile = htmlFileOption
     ? resolveRepoBoundFile(repoRoot, htmlFileOption, "Mantis desktop HTML file")
     : undefined;
-  const htmlBase64 = htmlFile
-    ? Buffer.from(await fs.readFile(htmlFile)).toString("base64")
-    : undefined;
+  const htmlBase64 = htmlFile ? (await fs.readFile(htmlFile)).toString("base64") : undefined;
   const browserUrl = htmlFile
     ? pathToFileURL(htmlFile).toString()
     : (trimToValue(opts.browserUrl) ?? DEFAULT_BROWSER_URL);

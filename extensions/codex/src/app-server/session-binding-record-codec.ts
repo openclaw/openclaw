@@ -267,7 +267,6 @@ export function matchesPendingSupervisionBranch(
   );
 }
 
-/** Context-engine state persisted with a Codex app-server thread binding. */
 export type CodexAppServerContextEngineBinding = z.infer<typeof contextEngineSchema>;
 /** Context-engine projection metadata used to guard resumed native threads. */
 export type CodexAppServerContextEngineProjectionBinding = z.infer<
