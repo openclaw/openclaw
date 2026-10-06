@@ -321,6 +321,7 @@ describe("queued WebChat follow-up delivery", () => {
             });
           }
         } finally {
+          releaseDispatch.resolve();
           ws.off("message", recordFollowup);
           options?.turnAdoptionLifecycle?.onSettled?.();
         }

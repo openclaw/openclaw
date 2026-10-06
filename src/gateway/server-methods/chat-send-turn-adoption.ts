@@ -32,7 +32,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   sessionBinding: Readonly<
     Pick<ChatAbortControllerEntry, "sessionKey" | "sessionId" | "agentId" | "lifecycleGeneration">
   > &
-    Pick<ChatAbortControllerEntry, "abortDiagnosticReason">;
+    Pick<ChatAbortControllerEntry, "abortDiagnosticReason" | "abortStopReason">;
   sessionKey: string;
   agentId?: string;
   ownerConnId?: string;
@@ -113,6 +113,16 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       });
     }
   };
+  const recordQueuedAbort = (publish: boolean) =>
+    recordQueuedTerminal(
+      {
+        kind: "aborted",
+        stopReason:
+          params.sessionBinding.abortStopReason ??
+          resolveAgentRunAbortLifecycleFields(params.controller.signal).stopReason,
+      },
+      publish,
+    );
   const finalizeReply = params.suppressReplies
     ? undefined
     : createChatSendLateReplyFinalizer({
@@ -188,18 +198,11 @@ export function createChatSendTurnAdoptionLifecycle(params: {
             hold.resolve();
           };
         },
-        // Queue cancellation supersedes the source run's earlier custody acknowledgement.
+        // Active and queued custody share the acknowledged abort owner's reason.
         onAborted: (reason) => {
           params.sessionBinding.abortDiagnosticReason = reason;
           if (!adoptionStarted) {
-            recordQueuedTerminal(
-              {
-                kind: "aborted",
-                stopReason: resolveAgentRunAbortLifecycleFields(params.controller.signal)
-                  .stopReason,
-              },
-              !params.suppressReplies && !params.context.chatAbortControllers.has(params.runId),
-            );
+            recordQueuedAbort(!params.context.chatAbortControllers.has(params.runId));
           }
           params.releaseSourceWorkAdmission();
           releaseWorkAdmission?.();
@@ -247,13 +250,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
           params.controller.signal.aborted &&
           (params.suppressReplies || !params.context.chatAbortControllers.has(params.runId))
         ) {
-          recordQueuedTerminal(
-            {
-              kind: "aborted",
-              stopReason: resolveAgentRunAbortLifecycleFields(params.controller.signal).stopReason,
-            },
-            true,
-          );
+          recordQueuedAbort(true);
         }
         // Steering returns its receipt or error to the still-running source dispatch.
         if (ownsCompletion && !terminalKnown) {
