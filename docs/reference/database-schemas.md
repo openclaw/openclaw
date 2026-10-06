@@ -36,6 +36,18 @@ Session row-facts reads reuse a canonical continuation's existing transaction
 instead of nesting a savepoint. Reads without an active transaction still open
 one so entry metadata, board presence, and transcript watermarks share a snapshot.
 
+Scheduled WAL connections disable automatic checkpoints, so ordinary commits do
+not copy WAL pages into the database. The existing worker maintenance tick runs
+PASSIVE checkpoints every ten seconds, or on the next 250 ms maintenance wake
+when the WAL exceeds its 64 MiB recycling target. Ordinary WALs remain allocated
+for reuse; above 1 GiB, maintenance attempts nonwaiting truncation after a complete
+checkpoint. These are not hard limits:
+a pinned reader can prevent WAL reuse. Timer-disabled connections retain their
+inline fallback. Retirement joins maintenance and keeps its final checkpoint,
+including during updates and Doctor operations. Schema and synchronous settings
+are unchanged. Committed WAL survives a process crash; `synchronous=NORMAL` does
+not promise survival of the latest commits after power loss.
+
 Canonical main-key policy reads reuse the existing reader admission's value only within a current read operation. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, and observed foreign-commit version invalidate that value. Transactions, pinned snapshots, native mutation callbacks, and authorizer-controlled reads continue querying the policy. Continuation authority remains with canonical session admission.
 
 The Gateway does not schedule daily full-database scans. Admission-requested

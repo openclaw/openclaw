@@ -8,6 +8,7 @@ import type {
 } from "./sqlite-wal-checkpoint.js";
 
 export type SqliteWalPeriodicRequest = {
+  /** Zero requests a checkpoint only when the maintenance cadence or WAL pressure is due. */
   maxPages: number;
   /** Subsequent vacuum units keep FIFO yields without repeating once-per-pass maintenance. */
   continuation?: boolean;
@@ -32,27 +33,13 @@ const admissions = resolveGlobalSingleton(
   () => new WeakMap<DatabaseSync, MaintenanceAdmission>(),
 );
 
-/** A worker-maintained writer never checkpoints inline; its maintenance owner ticks instead. */
+/** Delegate scheduled maintenance while retaining the connection owner's checkpoint policy. */
 export function registerSqliteWalWorkerMaintenance(
   database: DatabaseSync,
   execute: NonNullable<MaintenanceAdmission["execute"]>,
   cancel?: MaintenanceAdmission["cancel"],
 ): void {
-  const previous = Number(
-    // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-    database.prepare("PRAGMA wal_autocheckpoint;").get()?.wal_autocheckpoint ?? 0,
-  );
-  database.exec("PRAGMA wal_autocheckpoint = 0;"); // sqlite-allow-raw -- Checkpoint policy belongs to the WAL owner.
-  admissions.set(database, {
-    execute,
-    cancel: () => {
-      // Without its worker the writer falls back to the bounded inline threshold.
-      if (previous > 0 && database.isOpen && !database.isTransaction) {
-        database.exec(`PRAGMA wal_autocheckpoint = ${previous};`); // sqlite-allow-raw -- Restore the connection-local threshold.
-      }
-      return cancel?.();
-    },
-  });
+  admissions.set(database, { execute, cancel });
 }
 
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {
@@ -75,10 +62,14 @@ export function createSqliteWalMaintenanceScheduler(
         let remaining = pageBudget();
         let continuation = false;
         while (true) {
-          const request = prepare(remaining);
+          const admission = admissions.get(database);
           // A delegated writer's checkpoint-only tick would round-trip through its worker
           // and race store replacement; worker connections to the same WAL tick inline.
-          if (!request || (remaining === 0 && admissions.get(database)?.execute)) {
+          if (remaining === 0 && admission?.execute) {
+            return;
+          }
+          const request = prepare(remaining);
+          if (!request) {
             return;
           }
           request.continuation = continuation;
@@ -88,7 +79,6 @@ export function createSqliteWalMaintenanceScheduler(
               result = operation(request);
             }
           };
-          const admission = admissions.get(database);
           if (admission?.execute) {
             result = await admission.execute(request);
             if (!prepare(remaining)) {
