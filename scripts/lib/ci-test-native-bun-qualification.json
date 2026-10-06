@@ -135,7 +135,6 @@
     "src/agents/sessions/http-dispatcher.test.ts": "8a9c63855bc6965314f5c43614e088db7cdf75a54a08bfe5e045c0d8b540bba6",
     "src/agents/sessions/model-registry-schema.test.ts": "11fe8a030de954f836f64aa6336ba7e9f360210886a57cd5984338dbf8a6c648",
     "src/agents/sessions/session-file-parser.test.ts": "9447e7217afae2bc5b0a786785dd78b2b604f9e59e9829ca2e367b7a9d682b0f",
-    "src/agents/sessions/tools/limits.test.ts": "4f503349cbb77d00f524f94016bb7e687cb82f1d29020be1b9addbc77abadadb",
     "src/agents/sessions/tools/truncate.test.ts": "279acda7bedd7cc20172c3455a6456aa685c1b4a7deea0759ad6697f8b736b0c",
     "src/agents/stream-message-shared.test.ts": "e6573a15ea050a6a1a6194cc9b2dde09788f0011fe72c5115b4f50e26b31918b",
     "src/agents/subagents/announce/subagent-announce-handoff.test.ts": "af7c473ed0fc16cdfd837e56dd95a1b3423500cd06616aceb4c582fcfb6942a4",

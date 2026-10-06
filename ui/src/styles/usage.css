@@ -1199,7 +1199,6 @@
   align-items: start;
 }
 
-/* Expand to two columns when the detail panel column is present */
 .usage-grid:has(.usage-grid-column:nth-child(2)) {
   grid-template-columns: minmax(0, 1.1fr) minmax(320px, 0.9fr);
 }

@@ -131,6 +131,8 @@ export const AgentActivityItemSchema = closedObject({
   meta: Type.Optional(Type.String()),
   commandBearing: Type.Optional(Type.Boolean()),
   toolCallId: Type.Optional(Type.String()),
+  // The history page has no matching result; this is not a terminal receipt.
+  unpairedCall: Type.Optional(Type.Boolean()),
   startedAt: Type.Optional(Type.Number()),
   endedAt: Type.Optional(Type.Number()),
   error: Type.Optional(Type.String()),

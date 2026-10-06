@@ -163,11 +163,14 @@ export type SidebarRecentSession = {
   ownWorkspaceConflictCount?: number;
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Unread hidden runs folded into this row; acknowledged together with it. */
+  unreadHiddenRuns?: readonly SidebarRecentSession[];
   /** Hidden run state remains visible when persistent children are expanded. */
   subagentSummary?: Pick<
     SidebarRecentSession,
     | "attention"
     | "unreadChildCount"
+    | "unreadHiddenRuns"
     | "queuedChildCount"
     | "runningChildCount"
     | "failedChildCount"
@@ -261,8 +264,8 @@ export type SidebarSessionGroupMenuState = {
   y: number;
 };
 
-export type SidebarSessionSortMode = "created" | "updated" | "people";
-export type SidebarSessionStatusFilter = "active" | "snoozed" | "archived" | "all";
+export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
   ownerId: string | null;
@@ -537,17 +540,9 @@ export const SIDEBAR_SESSION_SORT_OPTIONS = [
   { mode: "created", labelKey: "chat.sidebar.sortCreated" },
   { mode: "updated", labelKey: "chat.sidebar.sortUpdated" },
   { mode: "people", labelKey: "sessionsView.owners" },
-] as const satisfies ReadonlyArray<{
-  mode: SidebarSessionSortMode;
-  labelKey: "chat.sidebar.sortCreated" | "chat.sidebar.sortUpdated" | "sessionsView.owners";
-}>;
+] as const;
 
-export const SIDEBAR_SESSION_STATUS_OPTIONS = [
-  "active",
-  "snoozed",
-  "archived",
-  "all",
-] as const satisfies readonly SidebarSessionStatusFilter[];
+export const SIDEBAR_SESSION_STATUS_OPTIONS = ["active", "snoozed", "archived", "all"] as const;
 
 export function sessionCatalogHostKey(catalogId: string, hostId: string): string {
   return `${catalogId}\u0000${hostId}`;

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
+import { SqliteTranscriptMutationConflictError } from "../config/sessions/session-mutation-conflict-error.js";
 import { WorkerSessionAlreadyAttachedError } from "../gateway/worker-environments/session-attachment.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import {
@@ -88,6 +89,10 @@ describe("shared-state worker error transport", () => {
     {
       error: new WorkerSessionAlreadyAttachedError("session", "environment"),
       fields: { sessionId: "session", environmentId: "environment" },
+    },
+    {
+      error: new SqliteTranscriptMutationConflictError("session"),
+      fields: { sessionId: "session" },
     },
     ...[undefined, "SQLITE_IOERR"].map((code) => ({
       error: Object.assign(new Error("native open refused"), { code }),
@@ -253,6 +258,7 @@ describe("shared-state worker error transport", () => {
     const payload = encodeOpenClawStateWorkerError(original);
     assert(payload);
     const job: Job = {
+      observation: { started() {}, completed() {} },
       request: {
         type: "execute",
         id: 1,

@@ -111,7 +111,7 @@ it("prioritizes critical audit findings, caps warnings, and preserves remediatio
   expect(lines).not.toContain("  WARN Warn 5");
   expect(lines.slice(-2)).toEqual([
     "Full report: openclaw security audit",
-    "Deep probe: openclaw security audit --deep",
+    "Deep check: openclaw security audit --deep",
   ]);
 });
 

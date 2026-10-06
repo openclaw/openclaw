@@ -194,7 +194,7 @@ export function registerQueuedReservationFailureTests({
         expect(subagentRuns.get(entry.runId)?.killIntent).toBeUndefined();
         await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         expect(
-          getSubagentRunByChildSessionKey(entry.childSessionKey)?.execution.endedAt,
+          (await getSubagentRunByChildSessionKey(entry.childSessionKey))?.execution.endedAt,
         ).toBeUndefined();
       }
     } finally {

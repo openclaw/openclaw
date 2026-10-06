@@ -1,9 +1,9 @@
-import fsSync, { type BigIntStats } from "node:fs";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPluginSafetyInspectedFiles } from "../plugins/plugin-safety-inspected-files.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
-import { createFileCopyWithCloneFallback } from "./fs-safe-file-copy.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
 import {
@@ -17,12 +17,10 @@ import type {
   UpdateCandidatePluginEntry,
   UpdateCandidatePluginTreePlan,
 } from "./update-candidate-plugin-tree-schema.js";
-import { relocateRuntimeEntry } from "./update-runtime-relocation.js";
-
-// Relocation rewrites these members in place; a hard link would edit the live package.
-const isRelocatedFile = (file: string) =>
-  path.basename(file) === ".modules.yaml" ||
-  (path.basename(path.dirname(file)) === ".bin" && !file.endsWith(".exe"));
+import {
+  relocateRuntimeSymlink,
+  resolveRuntimeFileRelocator,
+} from "./update-runtime-relocation.js";
 
 const isLinkUnsupported = (error: unknown) =>
   ["EXDEV", "EPERM", "EACCES", "ENOTSUP", "EOPNOTSUPP", "EMLINK", "ENOSYS"].some((code) =>
@@ -50,19 +48,9 @@ export async function linkUpdateCandidatePluginTrees(
 ): Promise<{ linked: number; copied: number }> {
   const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
   const { privateRoot, candidateRoot, hostLinks, relocations, destinationFor } = targets;
-  // Linking bumps the source inode's change time. Later entries that share that
-  // inode (pnpm store hard links) must match the recorded post-link fingerprint.
-  const linkedInodes = new Map<string, string>();
-  const assertEntryStat = (entry: UpdateCandidatePluginEntry, current: BigIntStats) => {
-    const expected =
-      entry.kind === "file" && linkedInodes.has(`${entry.dev}:${entry.ino}`)
-        ? { ...entry, ctimeNs: linkedInodes.get(`${entry.dev}:${entry.ino}`)! }
-        : entry;
-    assertUpdateCandidatePluginEntryStat(expected, current);
-  };
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     await params.onProgress?.();
-    assertEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
+    assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
@@ -94,7 +82,6 @@ export async function linkUpdateCandidatePluginTrees(
     await preparing;
   };
   let destinationRoot: ReturnType<typeof openRoot> | undefined;
-  const copyFile = createFileCopyWithCloneFallback();
   const copyEntry = async (
     entry: Extract<UpdateCandidatePluginEntry, { kind: "file" }>,
     destination: string,
@@ -102,29 +89,30 @@ export async function linkUpdateCandidatePluginTrees(
     const root = await (destinationRoot ??= openRoot(privateRoot));
     // copyIn owns portable create-only publication; recheck the inventory before
     // its private stage is published.
-    await copyFile(root, path.relative(privateRoot, destination), entry.path, {
+    await root.copyIn(path.relative(privateRoot, destination), entry.path, {
       overwrite: false,
       // The entry loop already prepares each destination parent.
       mkdir: false,
       // Process-lifetime scratch like the unsynced hard-link path, never a recovery backup.
       durable: false,
+      clone: "auto",
       maxBytes: entry.size,
       mode: entry.mode | 0o600,
       sourceHardlinks: "allow",
       assertBeforeMutation: () => {
         params.assertCurrent();
-        assertEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
+        assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
       },
     });
     await assertEntry(entry);
-    await relocateRuntimeEntry(
-      destination,
-      entry.path,
-      destination,
-      "file",
-      relocations,
-      params.assertCurrent,
-    );
+    const copiedStat = await fs.lstat(destination, { bigint: true });
+    if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
+      throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
+    }
+    const relocate = resolveRuntimeFileRelocator(destination);
+    if (relocate) {
+      await relocate(destination, entry.path, destination, relocations, params.assertCurrent);
+    }
     if ((entry.mode & 0o600) !== 0o600) {
       params.assertCurrent();
       await fs.chmod(destination, entry.mode);
@@ -160,11 +148,10 @@ export async function linkUpdateCandidatePluginTrees(
     if (entry.kind === "symlink") {
       params.assertCurrent();
       await fs.symlink(entry.link, destination, entry.linkType);
-      await relocateRuntimeEntry(
+      await relocateRuntimeSymlink(
         destination,
         entry.path,
         destination,
-        "symlink",
         relocations,
         params.assertCurrent,
       );
@@ -178,7 +165,7 @@ export async function linkUpdateCandidatePluginTrees(
     }
     if (
       pluginFiles.has(entry.path) ||
-      isRelocatedFile(destination) ||
+      resolveRuntimeFileRelocator(destination) ||
       (await requiresCopy(entry))
     ) {
       await copyEntry(entry, destination);
@@ -209,8 +196,7 @@ export async function linkUpdateCandidatePluginTrees(
         `Retained runtime entry does not reference its inventoried file: ${entry.path}`,
       );
     }
-    assertUpdateCandidatePluginEntryStat({ ...entry, ctimeNs: linked.ctimeNs.toString() }, linked);
-    linkedInodes.set(`${entry.dev}:${entry.ino}`, linked.ctimeNs.toString());
+    assertUpdateCandidatePluginEntryStat(entry, linked);
     counts.linked += 1;
     params.onMaterialized?.();
   };

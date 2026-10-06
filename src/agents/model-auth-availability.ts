@@ -261,7 +261,7 @@ function modeAllowed(
 }
 
 function normalizeModelIdForProvider(provider: string, modelId: string): string | undefined {
-  const trimmed = splitTrailingAuthProfile(modelId).model.trim();
+  const trimmed = splitTrailingAuthProfile(modelId).model;
   if (!trimmed) {
     return undefined;
   }
@@ -516,12 +516,6 @@ export function createModelAuthAvailabilityResolver(
       profileMode(profileId),
       profilePolicyFacts(provider, profileId).authRequirement,
     );
-  const profileCredential = (
-    profileId: string,
-    credential = store.profiles[profileId],
-  ): AuthProfileCredential | undefined => {
-    return credential ? runtimeCredentialOverlay(profileId, credential) : undefined;
-  };
   const profileEligibleForReadOnlyAvailability = (
     provider: string,
     profileId: string,
@@ -605,8 +599,12 @@ export function createModelAuthAvailabilityResolver(
     if (isConfiguredAwsSdkAuthProfileForProvider({ cfg: params.cfg, provider, profileId })) {
       return modeAllowed(provider, target, "aws-sdk");
     }
-    const credential = profileCredential(profileId);
-    if (!credential || !profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
+    const storedCredential = store.profiles[profileId];
+    if (!storedCredential) {
+      return false;
+    }
+    const credential = runtimeCredentialOverlay(profileId, storedCredential);
+    if (!profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
       return false;
     }
     return resolvedProfileAvailability(provider, profileId, credential, target);
@@ -665,9 +663,8 @@ export function createModelAuthAvailabilityResolver(
     }
     const binding = target.pinnedProfileId ? { kind: "none" as const } : providerBinding(provider);
     if (binding.kind === "profile") {
-      const credential = profileCredential(binding.profileId, binding.credential);
+      const credential = runtimeCredentialOverlay(binding.profileId, binding.credential);
       const availability =
-        credential &&
         !profileInCooldown(binding.profileId, target) &&
         profileEligibleForReadOnlyAvailability(
           binding.credential.provider,
@@ -679,7 +676,7 @@ export function createModelAuthAvailabilityResolver(
       return {
         availability,
         selectedProfileId: binding.profileId,
-        selectedAuthMode: credential?.type ?? binding.credential.type,
+        selectedAuthMode: credential.type,
         evidence: "profile",
       };
     }
@@ -705,13 +702,11 @@ export function createModelAuthAvailabilityResolver(
     }
     if (binding.kind === "marker") {
       if (binding.evidence === "environment" && typeof apiKey === "string") {
-        return {
-          availability: modeAllowed(provider, target, configuredBearerMode)
-            ? hasSecret(env[apiKey.trim()])
-            : false,
-          selectedAuthMode: configuredBearerMode,
-          evidence: "environment",
-        };
+        return withMode(
+          configuredBearerMode,
+          "environment",
+          modeAllowed(provider, target, configuredBearerMode) && hasSecret(env[apiKey.trim()]),
+        );
       }
       if (!modeAllowed(provider, target, configuredBearerMode)) {
         return withMode(configuredBearerMode, binding.evidence, false);
@@ -731,11 +726,7 @@ export function createModelAuthAvailabilityResolver(
     }
     if (apiKeyRef) {
       if (!isValidSecretRef(apiKeyRef) || !modeAllowed(provider, target, configuredBearerMode)) {
-        return {
-          availability: false,
-          selectedAuthMode: configuredBearerMode,
-          evidence: "provider-config",
-        };
+        return withMode(configuredBearerMode, "provider-config", false);
       }
       const available = resolveSecretRefReadOnlyAvailability(apiKeyRef, params.cfg, env);
       const runtimeAvailable = Boolean(
@@ -1100,7 +1091,7 @@ export function createModelAuthAvailabilityResolver(
       return { availability: false, routeResolution };
     }
     if (routeResolution.kind === "indeterminate") {
-      const rejection = automaticSourceRejection(provider, ref, prepareAuthTarget(provider, ref));
+      const rejection = automaticSourceRejection(provider, ref, baseTarget);
       return { ...(rejection ?? { availability: undefined }), routeResolution };
     }
     if (!modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile-incompatible") {
@@ -1378,12 +1369,7 @@ export function createModelAuthAvailabilityResolver(
     const syntheticSubscriptionRoute = routeResolution.routes.find(
       (route) => route.authRequirement === "subscription",
     );
-    if (
-      syntheticCodexOwnsAuth &&
-      evaluation.availability !== true &&
-      synthetic.has("codex") &&
-      syntheticSubscriptionRoute
-    ) {
+    if (syntheticCodexOwnsAuth && evaluation.availability !== true && syntheticSubscriptionRoute) {
       return {
         availability: undefined,
         routeResolution,

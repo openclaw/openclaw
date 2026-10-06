@@ -250,21 +250,14 @@ object WearProtocolCodec {
   }
 
   private fun hasValidPayloadDepth(message: WearMessage): Boolean {
-    val payloads =
+    val payload =
       when (message) {
-        is WearMessage.Request -> listOf(message.params)
-        is WearMessage.Response -> listOfNotNull(message.result)
-        is WearMessage.Event -> listOfNotNull(message.payload)
+        is WearMessage.Request -> message.params
+        is WearMessage.Response -> message.result
+        is WearMessage.Event -> message.payload
       }
-    return payloads.all { element -> hasValidElementDepth(element, parentDepth = 1) }
-  }
-
-  private fun hasValidElementDepth(
-    element: JsonElement,
-    parentDepth: Int,
-  ): Boolean {
     val pending = ArrayDeque<Pair<JsonElement, Int>>()
-    pending.addLast(element to parentDepth)
+    pending.addLast((payload ?: return true) to 1)
     while (pending.isNotEmpty()) {
       val (current, parent) = pending.removeLast()
       val children =

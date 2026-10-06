@@ -86,26 +86,8 @@ actor GatewayEndpointStore {
         let sourceSnapshot: @Sendable () async throws -> SourceSnapshot
 
         static let live = Deps(
-            token: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .token,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
-            password: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .password,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
+            token: { GatewayEndpointStore.resolveGatewayCredential(.token) },
+            password: { GatewayEndpointStore.resolveGatewayCredential(.password) },
             localPort: { GatewayEnvironment.gatewayPort() },
             localUnavailableReason: { GatewayEnvironment.profileGatewayPortConflict() },
             remoteRouteIfRunning: { await RemoteTunnelManager.shared.controlTunnelRouteIfRunning() },
@@ -136,6 +118,16 @@ actor GatewayEndpointStore {
         self.primaryAppLaunchAdmitted.withValue { $0 = true }
     }
 
+    private static func resolveGatewayCredential(_ kind: Credential) -> String? {
+        let root = OpenClawConfigFile.loadDict()
+        return self.resolveGatewayCredential(
+            kind,
+            isRemote: ConnectionModeResolver.resolve(root: root).mode == .remote,
+            root: root,
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
+    }
+
     static func resolveGatewayCredential(
         _ kind: Credential,
         isRemote: Bool,
@@ -160,7 +152,7 @@ actor GatewayEndpointStore {
         }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
-            if let configured, !configured.isEmpty, kind == .password || configured != override {
+            if let configured, kind == .password || configured != override {
                 self.warnEnvOverrideOnce(
                     kind: kind,
                     envVar: envVar,
@@ -168,7 +160,7 @@ actor GatewayEndpointStore {
             }
             return override
         }
-        if let configured, !configured.isEmpty {
+        if let configured {
             return configured
         }
         guard !isRemote else { return nil }
@@ -185,14 +177,8 @@ actor GatewayEndpointStore {
         guard let envName = envSecretRefName(trimmed) else {
             return trimmed
         }
-        // Finder-launched apps cannot see gateway-service-only env values. Resolve
-        // local refs from app env first, then the gateway LaunchAgent snapshot.
-        for source in [env, serviceEnv] {
-            if let value = source[envName]?.nonEmpty {
-                return value
-            }
-        }
-        return nil
+        // Finder-launched apps cannot see gateway-service-only env values.
+        return env[envName]?.nonEmpty ?? serviceEnv[envName]?.nonEmpty
     }
 
     private static func envSecretRefName(_ value: String) -> String? {
@@ -493,10 +479,7 @@ actor GatewayEndpointStore {
                     userInfo: [NSLocalizedDescriptionKey: "Gateway endpoint changed while resolving"])
             }
             return resolvedEndpoint
-        case let .connecting(mode, _, _):
-            guard mode == .remote else {
-                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
-            }
+        case .connecting:
             return try await self.ensureRemoteEndpoint(
                 source: context.source,
                 generation: context.generation)

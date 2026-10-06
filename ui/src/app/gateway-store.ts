@@ -288,8 +288,8 @@ export function createApplicationGateway(
   };
 
   const connect = (overrides: ApplicationGatewayConnectOptions = {}) => {
-    const requestedGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
-    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(requestedGatewayUrl)) {
+    const nextGatewayUrl = overrides.gatewayUrl ?? connection.gatewayUrl;
+    if (configuredUiDevGateway() && !isConfiguredUiDevGateway(nextGatewayUrl)) {
       gateway.stop();
       setSnapshot({
         phase: "offline",
@@ -301,7 +301,6 @@ export function createApplicationGateway(
     setUnavailableDeadline("suspensionPhase");
     stopped = false;
     const { sessionKey: requestedSessionKey, ...connectionOverrides } = overrides;
-    const nextGatewayUrl = connectionOverrides.gatewayUrl ?? connection.gatewayUrl;
     const logicalGatewayChanged =
       gatewayCredentialScope(nextGatewayUrl) !== gatewayCredentialScope(connection.gatewayUrl);
     const scopedCredentials = resolveGatewayCredentialsForUrlEdit(

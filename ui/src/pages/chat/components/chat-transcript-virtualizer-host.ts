@@ -36,7 +36,6 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   isTranscriptMaintenanceScroll,
-  isTranscriptManualScroll,
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
@@ -85,7 +84,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.endAnchor.recordLayoutCorrection(before, after),
   );
   private readonly followEnd = () => this.scrollToEnd({ source: "auto", behavior: "auto" });
-  private pendingScrollFrame: number | null = null;
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal();
   // Lit calls refs before newly rendered nodes are connected. Resolve the
@@ -220,16 +218,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           instance,
           callback,
         ),
-      measureElement: (element, entry, instance) => {
-        const size = measureTranscriptRow(element, entry, instance);
-        if (
-          element.dataset.virtualRowKey === "presence:typing" &&
-          instance.itemSizeCache.get("presence:typing") !== size
-        ) {
-          this.endAnchor.clear();
-        }
-        return size;
-      },
+      measureElement: measureTranscriptRow,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
@@ -272,10 +261,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
       isContentReady: () => this.contentReady,
       getRowCount: () => this.rowKeys.length,
       isConnected: () => this.connected,
-      getPendingScrollFrame: () => this.pendingScrollFrame,
-      setPendingScrollFrame: (frame) => {
-        this.pendingScrollFrame = frame;
-      },
+      pendingScrollFrame: null,
       onReaderScroll: () => this.callbacks.onReaderScroll?.(),
     };
     if (initialOffset !== null) {
@@ -395,9 +381,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.offsetState.touchScrolling = false;
     this.renderPreviousRows = null;
     this.messageReveal.clear();
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     this.threadInnerElement = null;
     if (!this.connected) {
@@ -577,10 +563,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
-  get isManualScroll(): boolean {
-    return isTranscriptManualScroll(this.offsetState, this.scrollElement);
-  }
-
   private canAutoFollow(): boolean {
     const command = this.offsetState.scrollCommand;
     return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
@@ -620,9 +602,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     }
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
-    if (this.pendingScrollFrame !== null) {
-      cancelAnimationFrame(this.pendingScrollFrame);
-      this.pendingScrollFrame = null;
+    if (this.scrollRestoreHost.pendingScrollFrame !== null) {
+      cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
+      this.scrollRestoreHost.pendingScrollFrame = null;
     }
     const element = this.scrollElement;
     if (element) {
@@ -733,12 +715,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   private syncRows(nextKeys: readonly string[]): void {
     const virtualizer = this.virtualizer;
-    const typingAdded =
-      !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
-    // Remote typing is presence, not a local request to move the viewport.
-    if (typingAdded) {
-      this.endAnchor.clear();
-    }
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;

@@ -16,7 +16,7 @@ type FollowupQueueState = {
   items: FollowupRun[];
   draining: boolean;
   /** Exact operational drain generation; recovery may retire only this owner. */
-  drainOwner?: object;
+  drainOwner?: { rescheduleRequested: boolean };
   /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
   inFlight: Set<FollowupRun>;
   lastEnqueuedAt: number;
@@ -31,6 +31,7 @@ type FollowupQueueState = {
   /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
+    /** Storage grouping only; delivery rechecks mutable tool policy for every source. */
     contextKey: string;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];

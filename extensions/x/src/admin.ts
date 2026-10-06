@@ -1,5 +1,7 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listXAccountIds, resolveDefaultXAccountId, resolveXAccount } from "./accounts.js";
 import {
   mergeXAllowlist,
@@ -8,6 +10,8 @@ import {
   type XEffectiveAllowlistEntry,
 } from "./allowlist.js";
 import { getXApi } from "./client.js";
+import { getXGuestStatus } from "./guests.js";
+import { openXSpend, XBudgetExceededError, type XSpendStatus } from "./spend.js";
 
 type Request = Parameters<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>[0];
 
@@ -15,6 +19,8 @@ export type XAllowlistSnapshot = {
   accountId: string;
   accounts: Array<{ accountId: string; username: string }>;
   entries: XEffectiveAllowlistEntry[];
+  guests: Awaited<ReturnType<typeof getXGuestStatus>>;
+  spend: XSpendStatus;
 };
 
 class XAdminError extends Error {
@@ -33,7 +39,7 @@ function assertAdmin(request: Request) {
     !request.client?.connect.scopes?.includes("operator.admin") ||
     request.hasCurrentClientAuthority?.() === false
   ) {
-    throw new XAdminError("FORBIDDEN", "X allowlist management requires an active administrator.");
+    throw new XAdminError("FORBIDDEN", "X replies management requires an active administrator.");
   }
   request.sessionMutationAuthorization?.assertCurrent();
   request.sessionAccessAuthority?.assertCurrent();
@@ -55,6 +61,7 @@ function callerIdentity(request: Request): string {
 export function registerXAllowlistMethods(
   api: Pick<OpenClawPluginApi, "registerGatewayMethod" | "logger"> & {
     runtime: {
+      capabilities?: OpenClawPluginApi["runtime"]["capabilities"];
       state: Pick<OpenClawPluginApi["runtime"]["state"], "openKeyedStore" | "resolveStateDir">;
     };
   },
@@ -62,21 +69,35 @@ export function registerXAllowlistMethods(
   // Open on first use: plugin discovery and registration must not open state databases.
   let allowlist: ReturnType<typeof openXAllowlist> | undefined;
   const getAllowlist = () => (allowlist ??= openXAllowlist(api.runtime));
-  const accountFor = (request: Request) => {
+  const accountFor = (request: Request, cfg = request.context.getRuntimeConfig()) => {
     const raw = request.params.accountId;
     if (raw !== undefined && (typeof raw !== "string" || !raw.trim())) {
       throw new XAdminError("INVALID_REQUEST", "accountId must be a nonempty string.");
     }
-    const cfg = request.context.getRuntimeConfig();
     const accountId = normalizeAccountId(raw ?? resolveDefaultXAccountId(cfg));
     if (!listXAccountIds(cfg).includes(accountId)) {
       throw new XAdminError("INVALID_REQUEST", "The X account is not configured.");
     }
     return { cfg, account: resolveXAccount(cfg, accountId) };
   };
-  const snapshot = async (request: Request): Promise<XAllowlistSnapshot> => {
-    const { cfg, account } = accountFor(request);
-    const entries = await getAllowlist().list(account.accountId);
+  const snapshot = async (
+    request: Request,
+    cfg: OpenClawConfig = request.context.getRuntimeConfig(),
+    selectedAccountId?: string,
+  ): Promise<XAllowlistSnapshot> => {
+    const account = selectedAccountId
+      ? resolveXAccount(cfg, selectedAccountId)
+      : accountFor(request, cfg).account;
+    const readConfig = createRuntimeConfigReader(cfg);
+    const [entries, guests, spend] = await Promise.all([
+      getAllowlist().list(account.accountId),
+      getXGuestStatus(api.runtime, account, cfg),
+      openXSpend(
+        api.runtime,
+        account.accountId,
+        () => resolveXAccount(readConfig(), account.accountId).costLimits,
+      ).status(),
+    ]);
     assertAdmin(request);
     return {
       accountId: account.accountId,
@@ -85,10 +106,34 @@ export function registerXAllowlistMethods(
         username: resolveXAccount(cfg, accountId).username,
       })),
       entries: mergeXAllowlist(account.config.allowFrom ?? [], entries),
+      guests,
+      spend,
     };
   };
   const handlers: Record<string, (request: Request) => Promise<unknown>> = {
     "x.allowlist.list": snapshot,
+    async "x.guests.set"(request) {
+      const enabled = request.params.enabled;
+      if (typeof enabled !== "boolean") {
+        throw new XAdminError("INVALID_REQUEST", "enabled must be a boolean.");
+      }
+      const { account } = accountFor(request);
+      const { mutateConfigFile } = await import("openclaw/plugin-sdk/config-mutation");
+      const committed = await mutateConfigFile({
+        afterWrite: { mode: "auto" },
+        writeOptions: { assertCurrent: () => assertAdmin(request) },
+        mutate: (draft) => {
+          assertAdmin(request);
+          const channel = draft.channels?.x;
+          if (!channel || !listXAccountIds(draft).includes(account.accountId)) {
+            throw new XAdminError("INVALID_REQUEST", "The X account is no longer configured.");
+          }
+          const target = channel.accounts?.[account.accountId] ?? channel;
+          target.guests = { ...target.guests, enabled };
+        },
+      });
+      return await snapshot(request, committed.nextConfig, account.accountId);
+    },
     async "x.allowlist.add"(request) {
       const raw = request.params.username;
       const username = typeof raw === "string" ? raw.trim().replace(/^@/, "") : "";
@@ -139,13 +184,15 @@ export function registerXAllowlistMethods(
         } catch (error) {
           if (error instanceof XAdminError) {
             request.respond(false, undefined, { code: error.code, message: error.message });
+          } else if (error instanceof XBudgetExceededError) {
+            request.respond(false, undefined, { code: "UNAVAILABLE", message: error.message });
           } else {
             api.logger.error(
-              `X allowlist operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,
+              `X replies operation failed (${method}): ${error instanceof Error ? error.message : String(error)}`,
             );
             request.respond(false, undefined, {
               code: "UNAVAILABLE",
-              message: "X allowlist operation failed. Check the account credentials and try again.",
+              message: "X replies operation failed. Check the Gateway logs and try again.",
             });
           }
         }

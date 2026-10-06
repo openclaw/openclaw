@@ -726,7 +726,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover that aborted its claim writes retained/failed outcomes with
       // the live-row condition (recordOutcome); against a finalized row it must be
       // a no-op instead of replacing the winner's removed-lossless fact.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -759,7 +759,7 @@ describe("ManagedWorktreeService", () => {
       // A stale remover from the pre-restore lifecycle writes with the activity
       // stamp it observed (recordOutcome's condition); against the revived row it
       // must be a no-op instead of stamping a prior-lifecycle outcome.
-      updateRegistryWorktree(
+      await updateRegistryWorktree(
         env,
         created.id,
         { runEndCleanup: { outcome: "retained-dirty", at: now + 1 } },
@@ -870,6 +870,9 @@ describe("ManagedWorktreeService", () => {
       outcome: "completed",
       issues: [],
       issueCount: 0,
+      eligibleCount: 0,
+      deferredCount: 0,
+      failedCount: 0,
       protectedCount: 0,
       protectionReasons: {},
       orphansRetired: 0,
@@ -889,7 +892,7 @@ describe("ManagedWorktreeService", () => {
         repoRoot: identity.repoRoot,
         repoFingerprint: identity.fingerprint,
       };
-      updateRegistryWorktree(env, created.id, { repositoryIdentity });
+      await updateRegistryWorktree(env, created.id, { repositoryIdentity });
       return { ...created, ...repositoryIdentity };
     }
 
@@ -957,7 +960,7 @@ describe("ManagedWorktreeService", () => {
       const liveIdentity = await service.resolveRepositoryIdentity(clone);
       const staleIdentity = await service.resolveRepositoryIdentity(repo);
       const created = await fixture("rebound", liveIdentity.repoRoot);
-      updateRegistryWorktree(env, created.id, {
+      await updateRegistryWorktree(env, created.id, {
         repositoryIdentity: {
           repoRoot: staleIdentity.repoRoot,
           repoFingerprint: staleIdentity.fingerprint,

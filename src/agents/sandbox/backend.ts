@@ -211,15 +211,18 @@ export async function createSandboxBackend(
   }
   for (let attempt = 0; ; attempt++) {
     params.assertRuntimeCurrent?.();
-    const reservation = reserveSandboxRegistryEntry({
-      containerName: reserveRuntimeId(params),
-      backendId: params.cfg.backend,
-      sessionKey: params.scopeKey,
-      createdAtMs: Date.now(),
-      lastUsedAtMs: Date.now(),
-      image: params.cfg.docker.image,
-      workspaceDir: params.workspaceDir,
-    });
+    const reservation = await reserveSandboxRegistryEntry(
+      {
+        containerName: reserveRuntimeId(params),
+        backendId: params.cfg.backend,
+        sessionKey: params.scopeKey,
+        createdAtMs: Date.now(),
+        lastUsedAtMs: Date.now(),
+        image: params.cfg.docker.image,
+        workspaceDir: params.workspaceDir,
+      },
+      { ...guard, beforeLegacyApply: params.assertRuntimeCurrent },
+    );
     try {
       return await withSandboxRegistryEntryLock(reservation, async () => {
         const assertCurrent = () => {

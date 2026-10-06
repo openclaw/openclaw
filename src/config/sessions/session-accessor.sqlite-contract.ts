@@ -21,13 +21,6 @@ export type {
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
 
-export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
-
-export type SessionEntryStatusSelection = {
-  statuses: readonly SessionEntryStatus[];
-  presenceOnly?: boolean;
-};
-
 export type TranscriptWriteSnapshot<T> = {
   result: T;
   lifecycleRevision?: string;
@@ -45,6 +38,11 @@ export type TranscriptEventAppendResult =
   | { appended: false }
   | { appended: true; effectiveParentId?: string | null };
 
+export type CacheTtlProjectionPrefix = {
+  anchorIds: string[];
+  entries: Record<string, unknown>[];
+};
+
 export type SessionTranscriptBoundedActiveContext = {
   activeLeafEntryId: string | null;
   version: SessionTranscriptContextVersion;
@@ -54,6 +52,7 @@ export type SessionTranscriptBoundedActiveContext = {
   persistedSuffixStartSeq: number;
   boundaryCount: number;
   events: TranscriptEvent[];
+  cacheTtlProjectionPrefixes?: CacheTtlProjectionPrefix[];
   serializedBytes: number;
   totalEvents: number;
   transcriptMutationAt: number | null;

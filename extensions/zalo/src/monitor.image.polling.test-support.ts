@@ -60,16 +60,20 @@ describe("Zalo polling image handling", () => {
   });
 
   it("downloads inbound image media from photo_url and preserves display_name", async () => {
+    const processed = Promise.withResolvers<void>();
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
         result: createImageUpdate({ date: 1774084566880 }),
       })
-      .mockImplementation(() => new Promise(() => {}));
+      .mockImplementation(() => {
+        processed.resolve();
+        return new Promise(() => {});
+      });
 
     const { abort, run } = await startImageMonitor({ allowFrom: [" zl:user-123 "] });
 
-    await settleAsyncWork();
+    await processed.promise;
     expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
@@ -116,7 +120,7 @@ describe("Zalo polling image handling", () => {
           });
           expect(first.status).toBe(200);
           expect(replay.status).toBe(200);
-          await settleAsyncWork();
+          await monitor.waitForIdle();
         },
       );
 
@@ -174,7 +178,9 @@ describe("Zalo polling image handling", () => {
 
     const { abort, run } = await startImageMonitor();
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         RawBody: "/reset",
@@ -196,7 +202,9 @@ describe("Zalo polling image handling", () => {
 
     const { abort, run } = await startImageMonitor({}, "zalo-image-media-only-failure");
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         RawBody: "",
@@ -274,7 +282,9 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     const elapsedMs = Date.now() - started;
     expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
     expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);

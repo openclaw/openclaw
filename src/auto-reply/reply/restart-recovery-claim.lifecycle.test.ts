@@ -1,10 +1,25 @@
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, vi } from "vitest";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { transitionMainSessionRecovery } from "../../agents/main-session-recovery/main-session-recovery-state.js";
+import {
+  loadSessionEntry,
+  markSessionAbortTarget,
+  replaceSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { createAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  createAgentRunStaleLifecycleError,
+  isAgentRunStaleLifecycleError,
+} from "../../infra/agent-lifecycle-error.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
@@ -14,6 +29,8 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { handleReplyAgentRunError } from "./agent-runner-core.js";
 import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 async function withTrackedReply(
   test: (fixture: {
@@ -33,7 +50,7 @@ async function withTrackedReply(
     let entry: InternalSessionEntry = {
       sessionId: "old-session",
       updatedAt: 1,
-      status: "running",
+      status: undefined,
       restartRecoveryDeliveryRunId: "old-recovery",
     };
     await replaceSessionEntry(scope, entry);
@@ -70,7 +87,7 @@ async function withTrackedReply(
           entry = {
             sessionId: "successor-session",
             updatedAt: 2,
-            status: "running",
+            status: undefined,
             abortedLastRun: true,
             restartRecoveryDeliveryRunId: "successor-recovery",
           };
@@ -157,7 +174,7 @@ it.each([
               });
             }
           }
-          const settled = await handleReplyAgentRunError(new Error("Backend stopped"), {
+          const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
             resolveVisibleReplyDelivery: async () => false,
             isHeartbeat: false,
             replyExpectation: "required",
@@ -169,12 +186,8 @@ it.each([
               return value;
             },
             sessionCtx: {},
-          }).then(
-            (reply) => ({ reply, error: undefined }),
-            (error: unknown) => ({ reply: undefined, error }),
-          );
-          expect(settled.error).toBeUndefined();
-          expect(settled.reply?.text).toBe(
+          });
+          expect(reply?.text).toBe(
             confirmed
               ? SILENT_REPLY_TOKEN
               : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
@@ -220,3 +233,271 @@ it.each(["active-storage", "retired-storage", "retired-cleanup"] as const)(
     });
   },
 );
+
+describe("restart recovery claim settlement", () => {
+  it.each([
+    { receiptState: undefined, expectedStatus: "done" },
+    { receiptState: "terminal-pending" as const, expectedStatus: "failed" },
+  ])(
+    "clears lifecycle ownership when claim cleanup settles $expectedStatus",
+    async ({ receiptState, expectedStatus }) => {
+      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
+      const storePath = path.join(root, "sessions.json");
+      const sessionKey = "agent:main:main";
+      const sessionId = "session";
+      let entry: InternalSessionEntry = {
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-run",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        sessionId,
+        startedAt: 1,
+        status: undefined,
+        updatedAt: 1,
+      };
+      await replaceSessionEntry({ storePath, sessionKey }, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => sessionId,
+        isRestartAbort: () => false,
+        resolveDeliveryContext: () => undefined,
+        sessionKey,
+        setEntry: (next) => {
+          entry = next;
+        },
+        storePath,
+      });
+
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+      if (receiptState) {
+        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
+          restartRecoveryDeliveryReceiptState: receiptState,
+        }))) as InternalSessionEntry;
+      } else {
+        await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
+        await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      }
+      await controller.clear();
+
+      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
+      expect(persisted.status).toBe(expectedStatus);
+      expect(persisted.lifecycleRunId).toBeUndefined();
+    },
+  );
+
+  it("preserves lifecycle ownership when cleanup observes a restart abort", async () => {
+    const root = tempDirs.make("openclaw-reply-claim-restart-abort-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:main";
+    const sessionId = "session";
+    let restartAborted = false;
+    let entry: InternalSessionEntry = {
+      abortedLastRun: false,
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryRunId: "recovery-run",
+      sessionId,
+      startedAt: 1,
+      status: undefined,
+      updatedAt: 1,
+    };
+    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      admissionRunId: "recovery-run",
+      getEntry: () => entry,
+      getSessionId: () => sessionId,
+      isRestartAbort: () => restartAborted,
+      resolveDeliveryContext: () => undefined,
+      sessionKey,
+      setEntry: (next) => {
+        entry = next;
+      },
+      storePath,
+    });
+
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    restartAborted = true;
+    await controller.clear();
+
+    const persisted = loadSessionEntry({ storePath, sessionKey });
+    expect(persisted).toMatchObject({
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryRunId: "recovery-run",
+    });
+    expect(persisted?.status).toBeUndefined();
+  });
+
+  it.each([
+    "restart-handoff",
+    "restart-abort",
+    "successor-generation",
+    "missing-generation",
+    "commit-rotation",
+    "commit-abort",
+  ] as const)(
+    "preserves the delivery claim when queued cleanup loses ownership through %s",
+    async (interruption) => {
+      const root = tempDirs.make("openclaw-reply-claim-queued-cleanup-");
+      const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
+      let restartAborted = false;
+      let interruptBeforeCommit = false;
+      let entry: InternalSessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        status: undefined,
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "source-turn",
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoverySourceIngress: "channel",
+      };
+      await replaceSessionEntry(scope, entry);
+      const controller = createReplyRestartRecoveryClaimController({
+        agentId: "main",
+        lifecycleGeneration:
+          interruption === "missing-generation" ? undefined : lifecycleGeneration,
+        admissionRunId: "recovery-run",
+        getEntry: () => entry,
+        getSessionId: () => {
+          if (interruptBeforeCommit) {
+            interruptBeforeCommit = false;
+            // The store awaits the prepared patch before entering its write transaction.
+            queueMicrotask(() => {
+              if (interruption === "commit-rotation") {
+                rotateAgentEventLifecycleGeneration();
+              } else {
+                restartAborted = true;
+              }
+            });
+          }
+          return "session";
+        },
+        isRestartAbort: () => restartAborted,
+        resolveDeliveryContext: () => deliveryContext,
+        setEntry: (next) => {
+          entry = next;
+        },
+        ...scope,
+      });
+      await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+
+      const writerEntered = createDeferred();
+      const releaseWriter = createDeferred();
+      let successorGeneration: string | undefined;
+      const handoff = updateSessionEntry(scope, async (current) => {
+        writerEntered.resolve();
+        await releaseWriter.promise;
+        if (interruption === "restart-handoff" || interruption === "successor-generation") {
+          transitionMainSessionRecovery(current, {
+            kind: "mark_interrupted",
+            cycleId: "restart-cycle",
+            now: 2,
+            runs: [{ runId: "original-run", lifecycleGeneration }],
+          });
+          if (successorGeneration) {
+            const recovery = current.mainRestartRecovery!;
+            transitionMainSessionRecovery(current, {
+              kind: "prepare_attempt",
+              attempt: 1,
+              lifecycleGeneration: successorGeneration,
+              now: 3,
+              observation: {
+                sessionId: current.sessionId,
+                cycleId: recovery.cycleId,
+                revision: recovery.revision,
+              },
+              runId: "recovery-run",
+              executionIdentity: { state: "disabled" },
+            });
+            transitionMainSessionRecovery(current, {
+              kind: "admit_recovery",
+              lifecycleGeneration: successorGeneration,
+              now: 4,
+              runId: "recovery-run",
+              sessionId: current.sessionId,
+            });
+          }
+        }
+        return current;
+      });
+      await writerEntered.promise;
+      interruptBeforeCommit = interruption === "commit-rotation" || interruption === "commit-abort";
+      // The old cleanup enters before shutdown; its actual write waits behind the handoff.
+      const clearing = controller.clear().catch((error: unknown) => {
+        expect(isAgentRunStaleLifecycleError(error)).toBe(true);
+      });
+      try {
+        if (interruption === "restart-abort") {
+          restartAborted = true;
+        } else if (interruption === "successor-generation") {
+          successorGeneration = rotateAgentEventLifecycleGeneration();
+        }
+      } finally {
+        releaseWriter.resolve();
+      }
+      await Promise.all([handoff, clearing]);
+
+      const persisted = loadSessionEntry(scope);
+      expect(persisted).toMatchObject({
+        abortedLastRun: interruption === "restart-handoff",
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryDeliverySourceRunId: "source-turn",
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoverySourceIngress: "channel",
+      });
+      expect(persisted?.status).toBe(
+        interruption === "restart-handoff" ? "interrupted" : undefined,
+      );
+      expect(persisted?.restartRecoveryTerminalRunIds).toBeUndefined();
+      if (successorGeneration) {
+        expect(persisted?.restartRecoveryRuns).toContainEqual({
+          runId: "recovery-run",
+          lifecycleGeneration: successorGeneration,
+        });
+      }
+    },
+  );
+
+  it("retires the source claim after an ordinary user abort", async () => {
+    const root = tempDirs.make("openclaw-reply-claim-user-abort-");
+    const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
+    let entry: InternalSessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      status: undefined,
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryDeliverySourceRunId: "source-turn",
+      restartRecoveryDeliveryContext: { channel: "telegram", to: "chat" },
+      restartRecoverySourceIngress: "channel",
+    };
+    await replaceSessionEntry(scope, entry);
+    const controller = createReplyRestartRecoveryClaimController({
+      agentId: "main",
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      admissionRunId: "recovery-run",
+      getEntry: () => entry,
+      getSessionId: () => "session",
+      isRestartAbort: () => false,
+      resolveDeliveryContext: () => undefined,
+      setEntry: (next) => {
+        entry = next;
+      },
+      ...scope,
+    });
+    await expect(controller.admitUserTurn()).resolves.toBe("admitted");
+    await markSessionAbortTarget({ scope });
+    await controller.clear();
+
+    const persisted = loadSessionEntry(scope);
+    expect(persisted?.abortedLastRun).toBe(true);
+    expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliveryContext).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryTerminalRunIds).toContain("source-turn");
+  });
+});

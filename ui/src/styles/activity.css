@@ -1007,8 +1007,6 @@ a.activity-current-work__row:hover {
   outline-offset: 2px;
 }
 
-/* ── Stream (escape hatch inside the settings group) ── */
-
 .activity-stream {
   min-height: 260px;
   max-height: calc(100vh - 310px);

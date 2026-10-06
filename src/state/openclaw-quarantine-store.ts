@@ -18,9 +18,16 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
-import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import {
+  hasRevokedOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
@@ -54,6 +61,33 @@ export type OpenClawAgentIntegrityVerification = {
   clean_close: number;
 };
 type IntegrityDatabase = { agent_integrity_verifications: OpenClawAgentIntegrityVerification };
+
+export function resolveAgentDatabaseIntegrityGateReason(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  proof: {
+    verification?: OpenClawAgentIntegrityVerification;
+    validation?: OpenClawAgentDatabaseValidation;
+    integrityRevoked: boolean;
+    reuseIntegrity: boolean;
+  },
+): SqliteIntegrityDiagnostics["integrityGateReason"] {
+  const { verification, validation, integrityRevoked, reuseIntegrity } = proof;
+  if (integrityRevoked) {
+    return "stale-lease-full";
+  }
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.path, validation)) {
+    return "revoked";
+  }
+  if (!reuseIntegrity) {
+    return "lease-class";
+  }
+  return verification?.clean_close === 0 &&
+    verification.app_version === VERSION &&
+    `${verification.dev}:${verification.ino}` ===
+      readOpenClawAgentDatabaseIdentity(database).identity
+    ? "dirty-receipt"
+    : "no-proof";
+}
 
 /** The lease owner consumes this receipt under the shared writer admission. */
 export function readOpenClawAgentIntegrityVerification(
@@ -145,10 +179,10 @@ export function recordOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): boolean {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return false;
   }
   const dev = String(current.dev);
   const ino = String(current.ino);
@@ -177,6 +211,7 @@ export function recordOpenClawAgentIntegrityVerification(
         ),
     );
   });
+  return true;
 }
 
 /** Unclean disposal removes the proof that any surviving last closer could certify. */

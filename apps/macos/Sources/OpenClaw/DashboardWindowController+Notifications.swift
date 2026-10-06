@@ -126,9 +126,8 @@ extension DashboardWindowController {
         let snapshot = DashboardNotificationsSnapshot(
             permission: self.notificationPermission,
             test: self.notificationTestOutcome)
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        let json = String(bytes: data, encoding: .utf8)!
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
         _ = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
             """

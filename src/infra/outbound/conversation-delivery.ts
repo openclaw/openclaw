@@ -1,5 +1,7 @@
 /** Durable external-conversation delivery independent from local model sessions. */
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   beginConversationDeliveryOperation,
@@ -48,10 +50,9 @@ function buildConversationDeliveryIntentId(agentId: string, operationId: string)
   return `convq_${digest}`;
 }
 
-function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
-  if (result.kind !== "send") {
-    return undefined;
-  }
+function readMessageIdFromActionResult(
+  result: Extract<MessageActionResult, { kind: "send" }>,
+): string | undefined {
   const sendResult = result.sendResult?.result;
   if (sendResult && "receipt" in sendResult && sendResult.receipt) {
     const receiptId = resolveMessageReceiptPrimaryId(sendResult.receipt);
@@ -62,12 +63,7 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   if (sendResult && "messageId" in sendResult && typeof sendResult.messageId === "string") {
     return sendResult.messageId.trim() || undefined;
   }
-  const payload = result.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const messageId = (payload as { messageId?: unknown }).messageId;
-    return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
-  }
-  return undefined;
+  return normalizeOptionalString(asOptionalRecord(result.payload)?.messageId);
 }
 
 export function resultFromExistingOperation(

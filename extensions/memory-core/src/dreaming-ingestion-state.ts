@@ -91,9 +91,7 @@ export async function readDailyIngestionState(workspaceDir: string): Promise<Dai
     workspaceDir,
   });
   const files: Record<string, DailyIngestionFileState> = {};
-  for (const [key, value] of Object.entries(
-    Object.fromEntries(entries.map((entry) => [entry.key, entry.value])),
-  )) {
+  for (const { key, value } of entries) {
     const file = asNullableRecord(value);
     if (!file || key.trim().length === 0) {
       continue;
@@ -145,9 +143,7 @@ export async function readSessionIngestionState(
     seenMessages[value.scope] = [...(seenMessages[value.scope] ?? []), ...value.hashes];
   }
   const normalizedFiles: Record<string, SessionIngestionFileState> = {};
-  for (const [key, value] of Object.entries(
-    Object.fromEntries(files.map((entry) => [entry.key, entry.value])),
-  )) {
+  for (const { key, value } of files) {
     const file = asNullableRecord(value);
     if (!file || key.trim().length === 0) {
       continue;

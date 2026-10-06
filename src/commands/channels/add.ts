@@ -20,7 +20,6 @@ import {
   formatUnsupportedChannelActionMessage,
 } from "../../cli/error-format.js";
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
@@ -42,19 +41,6 @@ export type ChannelsAddOptions = {
 } & Record<string, unknown>;
 
 const CHANNEL_ADD_CONTROL_OPTION_KEYS = new Set(["agent", "channel", "account"]);
-
-async function resolveCatalogChannelEntry(
-  raw: string,
-  cfg: OpenClawConfig,
-  resolveWorkspaceDir: () => string,
-) {
-  const trimmed = normalizeOptionalLowercaseString(raw);
-  if (!trimmed) {
-    return undefined;
-  }
-  const { resolveTrustedChannelCatalogInput } = await import("../channel-setup/trusted-catalog.js");
-  return resolveTrustedChannelCatalogInput(trimmed, { cfg, workspaceDir: resolveWorkspaceDir() });
-}
 
 function buildChannelSetupInput(opts: ChannelsAddOptions): ChannelSetupInput {
   const input: Record<string, unknown> = {};
@@ -173,7 +159,13 @@ async function configureChannelAccount(
   let preparedWorkspaceDir: string | undefined;
   const resolveWorkspaceDir = () =>
     (preparedWorkspaceDir ??= resolveChannelSetupOwner(cfg, opts.agent).workspaceDir);
-  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig, resolveWorkspaceDir);
+  const catalogChannel = normalizeOptionalLowercaseString(rawChannel);
+  let catalogEntry = catalogChannel
+    ? (await import("../channel-setup/trusted-catalog.js")).resolveTrustedChannelCatalogInput(
+        catalogChannel,
+        { cfg: nextConfig, workspaceDir: resolveWorkspaceDir() },
+      )
+    : undefined;
   // May load a scoped plugin when the channel is not already registered.
   const loadScopedPlugin = async (
     channelId: ChannelId,

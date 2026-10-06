@@ -97,7 +97,6 @@ export function createSlackProgressRuntime(runtimeParams: {
       slackStreaming.mode !== "progress",
       slackStreaming.mode,
     );
-  let shouldYieldDraftProgress: () => boolean = () => false;
   const suppressDefaultToolProgressMessages =
     quietProgress ||
     resolveChannelStreamingSuppressDefaultToolProgressMessages(account.config, {
@@ -764,9 +763,5 @@ export function createSlackProgressRuntime(runtimeParams: {
     pushPlanProgress,
     pushReasoningProgress,
     updateDraftFromPartial,
-    setShouldYieldDraftProgress: (value: () => boolean) => {
-      shouldYieldDraftProgress = value;
-    },
-    shouldYieldDraftProgress: () => shouldYieldDraftProgress(),
   };
 }

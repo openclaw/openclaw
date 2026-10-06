@@ -255,10 +255,6 @@ fn sync_visibility(window: &NSWindow) {
     }
 }
 
-pub fn install_window(window: &Window) -> tauri::Result<()> {
-    set_unified(window, false)
-}
-
 pub fn set_unified(window: &Window, unified: bool) -> tauri::Result<()> {
     with_window(window, move |window, mtm| {
         if unified {

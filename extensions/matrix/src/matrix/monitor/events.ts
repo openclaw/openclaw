@@ -42,10 +42,9 @@ function formatMatrixPostHealthySyncDecryptionHint(accountId: string): string {
 function isFreshPostHealthySyncDecryptFailure(params: {
   event: MatrixRawEvent;
   healthySyncSinceMs?: number;
-  graceMs?: number;
   nowMs: number;
 }): boolean {
-  const { event, healthySyncSinceMs, graceMs = 0, nowMs } = params;
+  const { event, healthySyncSinceMs, nowMs } = params;
   if (typeof healthySyncSinceMs !== "number" || !Number.isFinite(healthySyncSinceMs)) {
     return false;
   }
@@ -53,7 +52,7 @@ function isFreshPostHealthySyncDecryptFailure(params: {
   if (!Number.isFinite(eventTs) || eventTs <= 0) {
     return false;
   }
-  if (eventTs < healthySyncSinceMs + graceMs) {
+  if (eventTs < healthySyncSinceMs) {
     return false;
   }
   if (eventTs > nowMs + 60_000) {
@@ -64,7 +63,6 @@ function isFreshPostHealthySyncDecryptFailure(params: {
 
 function createMatrixPostHealthySyncDecryptFailureTracker(params: {
   getHealthySyncSinceMs?: () => number | undefined;
-  startupGraceMs?: number;
 }) {
   let observations: MatrixPostHealthySyncDecryptFailureObservation[] = [];
   let warningEmitted = false;
@@ -96,7 +94,6 @@ function createMatrixPostHealthySyncDecryptFailureTracker(params: {
         !isFreshPostHealthySyncDecryptFailure({
           event,
           healthySyncSinceMs,
-          graceMs: params.startupGraceMs,
           nowMs,
         })
       ) {
@@ -194,7 +191,6 @@ export function registerMatrixMonitorEvents(params: {
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
   logger: RuntimeLogger;
-  startupGraceMs?: number;
   getHealthySyncSinceMs?: () => number | undefined;
   formatNativeDependencyHint: PluginRuntime["system"]["formatNativeDependencyHint"];
   onRoomMessage: (roomId: string, event: MatrixRawEvent) => void | Promise<void>;
@@ -215,7 +211,6 @@ export function registerMatrixMonitorEvents(params: {
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
     logger,
-    startupGraceMs,
     getHealthySyncSinceMs,
     formatNativeDependencyHint,
     onRoomMessage,
@@ -224,7 +219,6 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
   const postHealthySyncDecryptFailureTracker = createMatrixPostHealthySyncDecryptFailureTracker({
     getHealthySyncSinceMs,
-    startupGraceMs,
   });
   const { routeVerificationEvent, routeVerificationSummary } = createMatrixVerificationEventRouter({
     client,

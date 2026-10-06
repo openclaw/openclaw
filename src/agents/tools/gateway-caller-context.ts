@@ -200,16 +200,40 @@ function composeReceiptAuthority(
           }
           return active;
         },
-        composeSessionSourceAssertion(checks.map(assertReceiptAuthority)),
+        composeSessionSourceAssertion(
+          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
+        ),
       );
 }
 
-function assertReceiptAuthority(receipt: ReceiptAuthority): SessionSourceAssertion {
-  return Object.assign(() => {
-    if (receipt() === false) {
-      throw new Error("agent tool caller authority is no longer active");
+/** Preserve boolean refusal across the receipt owner's prepared assertion. */
+export function captureGatewayToolReceiptAssertion(
+  receipt: ReceiptAuthority,
+  message = "agent tool caller authority is no longer active",
+): SessionSourceAssertion {
+  const assertAllowed = (result: boolean | void) => {
+    if (result === false) {
+      throw new Error(message);
     }
-  }, receipt);
+  };
+  const prepare = receipt.prepareSessionSource?.bind(receipt);
+  return Object.assign(() => assertAllowed(receipt()), {
+    nativeSource: receipt.nativeSource,
+    ...(prepare
+      ? {
+          async prepareSessionSource() {
+            const prepared = await prepare();
+            const release = prepared.release?.bind(prepared);
+            return {
+              nativeSource: prepared.nativeSource,
+              checks: prepared.checks,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              ...(release ? { release } : {}),
+            };
+          },
+        }
+      : {}),
+  });
 }
 
 /** Builds host-owned Gateway authority from the exact admitted execution. */
@@ -392,7 +416,7 @@ export function captureGatewayToolCallerAssertion(
       selection?.assertCurrent,
       caller.operatorAuthority?.assertCurrent,
       composeSessionSourceAssertion(
-        isCurrent ? [assertReceiptAuthority(isCurrent)] : [],
+        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
         (assertReceipt) => {
           try {
             if (!isCurrent || signals.some((signal) => signal.aborted)) {

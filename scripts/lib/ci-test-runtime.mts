@@ -81,6 +81,16 @@ const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-ha
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
 const bunCompatibleScopedOwners = new Map([
   [
+    "test/vitest/vitest.extension-database-workers.config.ts",
+    {
+      dir: "extensions",
+      files: [
+        "extensions/codex/src/session-catalog-native-performance.test.ts",
+        "extensions/team-reports/src/render/theme.test.ts",
+      ],
+    },
+  ],
+  [
     "test/vitest/vitest.extension-whatsapp.config.ts",
     {
       dir: "extensions",
@@ -120,6 +130,7 @@ const bunCompatibleScopedOwners = new Map([
       dir: "src/plugins",
       files: [
         "src/plugins/plugin-module-generation.interop.test.ts",
+        "src/plugins/provider-discovery.capture-lifetime.test.ts",
         "src/plugins/sdk-alias.test.ts",
       ],
     },
@@ -140,6 +151,7 @@ const bunCompatibleScopedOwners = new Map([
         "test/scripts/pr-worktree-state.test.ts",
         "test/scripts/pr-wrappers.test.ts",
         "test/scripts/test-projects-empty-native.test.ts",
+        "test/scripts/test-projects.test.ts",
         "test/scripts/upgrade-survivor-timeout-diagnostics.test.ts",
         "test/scripts/watch-pr-ci-dependencies.test.ts",
         "test/scripts/watch-pr-ci.test.ts",
@@ -162,7 +174,38 @@ const bunCompatibleScopedOwners = new Map([
     "test/vitest/vitest.infra.config.ts",
     {
       dir: "",
-      files: ["src/infra/update-managed-service-handoff-reclamation.test.ts"],
+      files: [
+        "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/infra/update-managed-service-handoff-reclamation.test.ts",
+        "src/infra/worker-cpu.test.ts",
+      ],
+    },
+  ],
+  [
+    "test/vitest/vitest.gateway-database-workers.config.ts",
+    {
+      dir: ".",
+      files: ["src/gateway/server-methods/session-catalog.performance.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.logging.config.ts",
+    {
+      dir: "src",
+      files: ["src/logging/diagnostic-memory.test.ts"],
+    },
+  ],
+  [
+    "test/vitest/vitest.ui-e2e.config.ts",
+    {
+      dir: "",
+      files: [
+        "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
+        "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
+        "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+        "ui/src/e2e/phone-stale-build-recovery.e2e.test.ts",
+        "ui/src/e2e/service-worker-update.e2e.test.ts",
+      ],
     },
   ],
   [
@@ -222,6 +265,7 @@ const bunCompatibleScopedOwners = new Map([
 ]);
 const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 const bunCompatibleUnitFiles = new Set([
+  "packages/normalization-core/src/grapheme.test.ts",
   "src/library.test.ts",
   "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
   "src/worker/worker-connection-closing-window.test.ts",
@@ -258,12 +302,7 @@ const runtimePartitions = new Map<
     {
       files: (_cwd, includePatterns) => unitFastFiles(includePatterns),
       nodeRequired: new Set([
-        // The pinned WebKit still misidentifies UTF-16 surrogate-pair segment boundaries.
-        "packages/markdown-core/src/render-aware-chunking.test.ts",
         "src/cli/cli-process-diagnostics.test.ts",
-        // Asserts V8 used_heap_size deltas, cachedDataVersionTag stability, explicit GC,
-        // and Worker resourceLimits.maxOldGenerationSizeMb propagation.
-        "src/infra/worker-task-pool.memory.test.ts",
         "src/process/spawn-broker/callback-context.test.ts",
         "src/process/spawn-broker/cleanup.test.ts",
         "src/process/spawn-broker/handoff.test.ts",

@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
@@ -11,6 +12,7 @@ import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-e
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   openOpenClawAgentDatabase,
+  getOpenClawAgentDatabaseIfOpen,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -23,6 +25,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
   readPendingInputMutationReceipt,
@@ -54,6 +57,7 @@ export async function preparePendingInputStore(
 ) {
   const captured = {
     ...scope,
+    incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const incognito = isIncognitoSessionKey(captured.sessionKey);
@@ -183,6 +187,7 @@ export async function preparePendingInputStore(
       return actor ? actor.sessions.withSharedState(run) : run();
     },
     sessionKey: resolved.sessionKey,
+    databaseAgentId: options.agentId ?? resolved.agentId,
     path: options.path,
     workerDatabasePath: identity?.canonicalPath ?? options.path,
     bindCustody(revoke: () => void) {
@@ -250,12 +255,16 @@ export async function preparePendingInputStore(
     mutate(
       input: PendingInputMutation,
       guard: (stage: "transaction" | "commit", facts?: PendingInputCustodyGrant) => void,
-      publish?: () => void,
+      publish?: (
+        facts: PendingInputCustodyGrant | undefined,
+        assertSourceCurrent: () => void,
+      ) => void,
     ) {
       return track(
         (async () => {
           assertOpen();
           if (actor && binding) {
+            let committedFacts: PendingInputCustodyGrant | undefined;
             return actor.sessions.mutatePendingInput(
               {
                 assertCurrent: () => {
@@ -265,13 +274,20 @@ export async function preparePendingInputStore(
                 authorize: (stage, facts) => binding.authority.authorize?.(stage, facts),
               },
               input,
-              guard,
-              publish,
+              (stage, facts) => {
+                committedFacts = facts;
+                guard(stage, facts);
+              },
+              publish ? () => publish(committedFacts, assertOpen) : undefined,
             );
           }
           if (incognito) {
-            const result = nativeMutation(input, guard);
-            publish?.();
+            let committedFacts: PendingInputCustodyGrant | undefined;
+            const result = nativeMutation(input, (stage, facts) => {
+              committedFacts = facts;
+              guard(stage, facts);
+            });
+            publish?.(committedFacts, assertOpen);
             return result;
           }
           let admitted:
@@ -281,6 +297,7 @@ export async function preparePendingInputStore(
               }
             | undefined;
           const readReceipt = (facts: unknown) => readPendingInputMutationReceipt(facts, input);
+          let committedFacts: PendingInputCustodyGrant | undefined;
           const checkGrant = (stage: "transaction" | "commit", facts: unknown) => {
             if (
               !isRecord(facts) ||
@@ -290,14 +307,29 @@ export async function preparePendingInputStore(
               return;
             }
             // SAFETY: The paired kernel sends bounded row facts, never host authority.
-            guard(stage, facts.publication as PendingInputCustodyGrant);
+            committedFacts = facts.publication as PendingInputCustodyGrant;
+            guard(stage, committedFacts);
           };
           return withSessionEntryWorker(
             options,
             identity?.key.slice(5),
             assertOpen,
-            async (execution, source) => {
+            async (execution, source, context) => {
               const result = await execution.runExisting(source, async (worker) => {
+                const native = getOpenClawAgentDatabaseIfOpen(options);
+                const revision = native && readSqliteNativeMutationRevision(native.db);
+                const assertPublicationCurrent = () => {
+                  context.assertCurrent();
+                  if (
+                    getOpenClawAgentDatabaseIfOpen(options) !== native ||
+                    (native &&
+                      (native.db.isTransaction ||
+                        revision === undefined ||
+                        readSqliteNativeMutationRevision(native.db) !== revision))
+                  ) {
+                    throw new Error("Pending input authority changed before publication");
+                  }
+                };
                 const outcome = await worker
                   .execute({ type: "session.pendingInputs.mutate", input })
                   .then(
@@ -311,7 +343,10 @@ export async function preparePendingInputStore(
                     if (publish) {
                       assertOpen();
                     }
-                    publish?.();
+                    if (publish) {
+                      assertPublicationCurrent();
+                      publish(committedFacts, assertPublicationCurrent);
+                    }
                     return receipt;
                   }
                   if (admitted.admission.settlement?.kind !== "completed") {

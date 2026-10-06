@@ -5415,7 +5415,7 @@ class ChatComposerLayoutTest {
         </details>Do not ship: tests are failing on Linux
         """.trimIndent(),
     )
-    composeRule.onNodeWithContentDescription(nativeString("Expand progress card")).performClick()
+    composeRule.onNodeWithContentDescription(nativeString("Expand progress card"), useUnmergedTree = true).performClick()
 
     composeRule.onNodeWithText("Do not ship: tests are failing on Linux").assertIsDisplayed()
     composeRule.onNode(hasAnyAncestor(hasTestTag("chat-progress-card")) and SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo)).assertIsDisplayed()
@@ -5640,11 +5640,30 @@ class ChatComposerLayoutTest {
         """{"sessionKey":"${controller.sessionKey.value}","revision":1}""",
       )
     }
-    composeRule.waitUntil {
+    // The controller publishes from IO, outside Compose's automatic synchronization.
+    val progressCardRefresh =
+      object : IdlingResource {
+        override val isIdleNow: Boolean
+          get() =
+            controller.progressCard.value
+              ?.steps
+              ?.size == steps.size
+
+        override fun getDiagnosticMessageIfBusy(): String = "Progress card steps=${controller.progressCard.value?.steps?.size} expected=${steps.size}"
+      }
+    composeRule.registerIdlingResource(progressCardRefresh)
+    try {
+      composeRule.waitForIdle()
+    } finally {
+      composeRule.unregisterIdlingResource(progressCardRefresh)
+    }
+    assertEquals(
+      "The progress card must publish all fixture steps",
+      steps.size,
       controller.progressCard.value
         ?.steps
-        ?.size == steps.size
-    }
+        ?.size,
+    )
   }
 
   private fun assertPhysicalEnterDuringActiveRun(

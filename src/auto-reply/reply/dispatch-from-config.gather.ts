@@ -14,6 +14,10 @@ import {
   toPluginInboundClaimPair,
 } from "../../hooks/message-hook-mappers.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import {
@@ -70,6 +74,7 @@ export async function gatherDispatchRequest(
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
 ) {
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
@@ -349,6 +354,7 @@ export async function gatherDispatchRequest(
       ? {
           sessionKey: sessionStoreEntry.sessionKey,
           sessionId: sessionStoreEntry.entry.sessionId,
+          lifecycleRevision: sessionStoreEntry.entry.lifecycleRevision,
           storePath: sessionStoreEntry.storePath,
         }
       : undefined;
@@ -357,6 +363,7 @@ export async function gatherDispatchRequest(
       ? {
           sessionKey: operationSessionStoreEntry.sessionKey,
           sessionId: operationSessionStoreEntry.entry.sessionId,
+          lifecycleRevision: operationSessionStoreEntry.entry.lifecycleRevision,
           storePath: operationSessionStoreEntry.storePath,
         }
       : undefined;
@@ -392,11 +399,18 @@ export async function gatherDispatchRequest(
     fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const assertProgressCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
+    assertRequestCurrent();
+  };
   const verboseProgress = createShouldEmitVerboseProgress({
     agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
+    assertCurrent: assertProgressCurrent,
     fallbackLevel:
       normalizeVerboseLevel(
         sessionStoreEntry.entry?.verboseLevel ??
@@ -407,6 +421,8 @@ export async function gatherDispatchRequest(
   });
   const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
   const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
+  const shouldEmitVerboseProgressAsync = verboseProgress.shouldEmitAsync;
+  const shouldEmitFullVerboseProgressAsync = verboseProgress.shouldEmitFullAsync;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -583,8 +599,11 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey,
     operationSessionStoreEntry,
     noteRunVerbosity: verboseProgress.noteRunVerbosity,
+    assertProgressCurrent,
     shouldEmitVerboseProgress,
     shouldEmitFullVerboseProgress,
+    shouldEmitVerboseProgressAsync,
+    shouldEmitFullVerboseProgressAsync,
     replyRoute,
     routeReplyThreadId,
     inboundAudio,

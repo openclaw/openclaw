@@ -37,6 +37,7 @@ import {
   registerRecoveryTests,
   writeRecoveryConfig,
 } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { registerPackageRootRollbackTests } from "./update-command-service-rollback.test-support.js";
 import {
   preservedActivationCases,
@@ -46,7 +47,6 @@ import {
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 const mocks = vi.hoisted(() => ({

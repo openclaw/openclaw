@@ -159,7 +159,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   // +1: owner-approved synchronous agent-end compatibility during async migration.
   "agent-harness-runtime": 12,
   // +4: deprecated media projection type, builder, and turn aliases.
-  "channel-inbound": 18,
+  "channel-inbound": 21,
+  "inbound-envelope": 3,
   // +2: Slack progress-draft render bridge (function + mode type).
   "channel-outbound": 2,
   // +2: WhatsApp ack-policy bridge (function + mode type).
@@ -170,6 +171,8 @@ const defaultPublicDeprecatedExportsByEntrypointBudget = Object.freeze({
   "channel-send-result": 1,
   "reply-runtime": 1,
   "security-runtime": 1,
+  // +2: approved released upstream-link writes retained during worker migration.
+  "session-catalog": 2,
   "session-store-runtime": 4,
   // +2: shipped Slack and Discord setup helpers retained through their package migration window.
   "setup-runtime": 2,
@@ -196,7 +199,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +4: executor controller, binding, context, and resolver.
       // +1: required session cleanup failure preserves native ownership before host reset.
-      3652,
+      // +2: approved async upstream-link writes with released sync compatibility.
+      3650,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -209,12 +213,15 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: owner-approved async agent-end preparation with retained sync compatibility.
       // +1: owner-approved async coding-tool construction with retained sync compatibility.
       // +1: resolve the controller from the current invocation registry.
-      2113,
+      // +2: approved async upstream-link writes with released sync compatibility.
+      2112,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
-      137,
+      // Remove deprecated sync channel envelope helpers and their compat records at the next Plugin SDK major.
+      // +2: approved synchronous upstream-link write compatibility until the next Plugin SDK major.
+      147,
       env,
     ),
     publicWildcardReexports: readPluginSdkSurfaceBudgetEnv(

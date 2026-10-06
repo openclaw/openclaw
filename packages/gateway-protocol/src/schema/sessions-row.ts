@@ -144,6 +144,8 @@ export const SessionRowSchema = Type.Object(
     peerKind: Type.Optional(SessionPeerKindSchema),
     isMain: Type.Optional(Type.Boolean()),
     isBackground: Type.Optional(Type.Boolean()),
+    /** Conversation owned by a plugin dock rather than ordinary session discovery. */
+    isDock: Type.Optional(Type.Boolean()),
     chatType: Type.Optional(
       Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
     ),
@@ -232,6 +234,8 @@ export const SessionRowSchema = Type.Object(
         Type.Literal("internal"),
       ]),
     ),
+    /** Immutable presentation surface; independent of creation provenance. */
+    createdSurface: Type.Optional(Type.Literal("plugin-dock")),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
     participants: Type.Optional(

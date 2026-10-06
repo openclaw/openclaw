@@ -10,7 +10,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   connectUserModelAccount,
@@ -748,6 +751,7 @@ describe("createOAuthManager", () => {
         canRefreshCredential: async () => true,
         refreshCredential: vi.fn(async () => {
           clearRuntimeAuthProfileStoreSnapshots();
+          await closeOpenClawAgentDatabasesAsync(tempRoot);
           closeOpenClawAgentDatabasesForTest(tempRoot);
           await fs.writeFile(resolveAuthProfileDatabasePath(agentDir), "not a sqlite database");
           throw initiatingError;

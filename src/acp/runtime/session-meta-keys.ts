@@ -1,12 +1,17 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadOperationRevision,
+  type SqliteReadOperationRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import type {
@@ -17,6 +22,12 @@ import type {
 } from "./session-meta-read.types.js";
 
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
+
+const MAX_RETAINED_ACP_SESSION_ROWS = 128;
+const metadataRows = new WeakMap<
+  DatabaseSync,
+  SqliteReadOperationRevision & { rows: Map<string, AcpSessionRow | undefined> }
+>();
 
 export function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
@@ -47,14 +58,58 @@ export function selectAcpSessionRow(
 }
 
 export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly string[]) {
+  const revision =
+    keys.length <= MAX_RETAINED_ACP_SESSION_ROWS ? getSqliteReadOperationRevision(db) : undefined;
+  let cached = metadataRows.get(db);
+  if (revision) {
+    if (!cached) {
+      cached = { ...revision, rows: new Map() };
+      metadataRows.set(db, cached);
+      registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
+    } else if (
+      cached.schema !== revision.schema ||
+      cached.dataVersion !== revision.dataVersion ||
+      cached.mutationRevision !== revision.mutationRevision
+    ) {
+      Object.assign(cached, revision);
+      cached.rows.clear();
+    }
+    const retainedRows = cached.rows;
+    if (keys.every((key) => retainedRows.has(key))) {
+      const rows: AcpSessionRow[] = [];
+      for (const key of new Set(keys)) {
+        const row = retainedRows.get(key);
+        if (row) {
+          rows.push({ ...row });
+        }
+      }
+      yield* rows;
+      return;
+    }
+  }
+  // Read the whole cohort on a miss: mixing retained and new rows would give
+  // callers a different view if a foreign commit occurs during this request.
   for (let index = 0; index < keys.length; index += 500) {
-    yield* executeSqliteQuerySync(
+    const cohort = keys.slice(index, index + 500);
+    const rows = executeSqliteQuerySync(
       db,
       getAcpSessionKysely(db)
         .selectFrom("acp_sessions")
         .selectAll()
-        .where("session_key", "in", sqliteStringSet(keys.slice(index, index + 500))),
+        .where("session_key", "in", sqliteStringSet(cohort)),
     ).rows;
+    if (revision && cached) {
+      if (cached.rows.size + cohort.length > MAX_RETAINED_ACP_SESSION_ROWS) {
+        cached.rows.clear();
+      }
+      for (const key of cohort) {
+        cached.rows.set(key, undefined);
+      }
+      for (const row of rows) {
+        cached.rows.set(row.session_key, { ...row });
+      }
+    }
+    yield* rows;
   }
 }
 
@@ -100,7 +155,7 @@ export function parseAcpDatabaseSessionKey(sessionKey: string):
 }
 
 export function acpSessionRowMatchesEntry(
-  row: AcpSessionRow,
+  row: Pick<AcpSessionRow, "session_id" | "updated_at">,
   entry: AcpSessionEntryBinding | undefined,
 ): boolean {
   return (

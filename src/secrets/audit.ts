@@ -72,24 +72,7 @@ type SecretsAuditFinding = {
 type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
 /** Structured report returned by the secrets audit command. */
-type SecretsAuditReport = {
-  version: 1;
-  status: SecretsAuditStatus;
-  resolution: {
-    refsChecked: number;
-    skippedExecRefs: number;
-    resolvabilityComplete: boolean;
-  };
-  filesScanned: string[];
-  summary: {
-    plaintextCount: number;
-    unresolvedRefCount: number;
-    shadowedRefCount: number;
-    storeResidueCount: number;
-    legacyResidueCount: number;
-  };
-  findings: SecretsAuditFinding[];
-};
+type SecretsAuditReport = Awaited<ReturnType<typeof runSecretsAudit>>;
 
 type RefAssignment = {
   file: string;
@@ -99,7 +82,7 @@ type RefAssignment = {
   provider?: string;
 };
 
-type SecretDefaults = { env?: string; file?: string; exec?: string };
+type SecretDefaults = Parameters<typeof coerceSecretRef>[1];
 
 type AuditCollector = {
   findings: SecretsAuditFinding[];
@@ -112,10 +95,6 @@ type AuditCollector = {
 
 const REF_RESOLVE_FALLBACK_CONCURRENCY = 8;
 const MAX_AUDIT_MODELS_JSON_BYTES = 5 * 1024 * 1024;
-function addFinding(collector: AuditCollector, finding: SecretsAuditFinding): void {
-  collector.findings.push(finding);
-}
-
 function collectProviderRefPath(
   collector: AuditCollector,
   providerId: string,
@@ -175,7 +154,7 @@ function collectConfigSecrets(params: {
     if (!plaintext) {
       continue;
     }
-    addFinding(params.collector, {
+    params.collector.findings.push({
       code: "PLAINTEXT_FOUND",
       severity: "warn",
       file: params.configPath,
@@ -225,7 +204,7 @@ function collectAuthStoreSecrets(
         continue;
       }
       if (isNonEmptyString(entry.value)) {
-        addFinding(collector, {
+        collector.findings.push({
           code: "PLAINTEXT_FOUND",
           severity: "warn",
           file: authStorePath,
@@ -242,7 +221,7 @@ function collectAuthStoreSecrets(
       continue;
     }
     if (entry.hasAccess || entry.hasRefresh) {
-      addFinding(collector, {
+      collector.findings.push({
         code: "LEGACY_RESIDUE",
         severity: "info",
         file: authStorePath,
@@ -275,7 +254,7 @@ function collectModelsJsonSecrets(params: {
     // JSON parser causes can quote credential bytes from models.json.
     const detail =
       error instanceof JsonFileReadError && error.reason === "parse" ? error.message : error;
-    addFinding(params.collector, {
+    params.collector.findings.push({
       code: "REF_UNRESOLVED",
       severity: "error",
       file: params.modelsJsonPath,
@@ -294,7 +273,7 @@ function collectModelsJsonSecrets(params: {
     }
     const apiKey = providerValue.apiKey;
     if (coerceSecretRef(apiKey)) {
-      addFinding(params.collector, {
+      params.collector.findings.push({
         code: "REF_UNRESOLVED",
         severity: "error",
         file: params.modelsJsonPath,
@@ -303,7 +282,7 @@ function collectModelsJsonSecrets(params: {
         provider: providerId,
       });
     } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
-      addFinding(params.collector, {
+      params.collector.findings.push({
         code: "PLAINTEXT_FOUND",
         severity: "warn",
         file: params.modelsJsonPath,
@@ -320,7 +299,7 @@ function collectModelsJsonSecrets(params: {
     for (const [headerKey, headerValue] of Object.entries(headers)) {
       const headerPath = `providers.${providerId}.headers.${headerKey}`;
       if (coerceSecretRef(headerValue)) {
-        addFinding(params.collector, {
+        params.collector.findings.push({
           code: "REF_UNRESOLVED",
           severity: "error",
           file: params.modelsJsonPath,
@@ -340,7 +319,7 @@ function collectModelsJsonSecrets(params: {
       if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
         continue;
       }
-      addFinding(params.collector, {
+      params.collector.findings.push({
         code: "PLAINTEXT_FOUND",
         severity: "warn",
         file: params.modelsJsonPath,
@@ -367,7 +346,7 @@ function collectLegacyAuthSourceFindings(params: {
         continue;
       }
       seen.add(source.path);
-      addFinding(params.collector, {
+      params.collector.findings.push({
         code: "LEGACY_RESIDUE",
         severity: source.kind === "auth-state" ? "info" : "warn",
         file: source.path,
@@ -387,7 +366,7 @@ function collectLegacyAuthSourceFindings(params: {
       continue;
     }
     seen.add(archive.path);
-    addFinding(params.collector, {
+    params.collector.findings.push({
       code: "LEGACY_RESIDUE",
       severity: "warn",
       file: archive.path,
@@ -520,7 +499,7 @@ async function collectUnresolvedRefFindings(params: {
     } else {
       continue;
     }
-    addFinding(params.collector, {
+    params.collector.findings.push({
       code,
       severity: "error",
       file: assignment.file,
@@ -543,7 +522,7 @@ function collectShadowingFindings(collector: AuditCollector): void {
     }
     const modeText = [...modes].join("/");
     for (const configPath of paths) {
-      addFinding(collector, {
+      collector.findings.push({
         code: "REF_SHADOWED",
         severity: "warn",
         file: "openclaw.json",
@@ -555,7 +534,7 @@ function collectShadowingFindings(collector: AuditCollector): void {
   }
 }
 
-function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport["summary"] {
+function summarizeFindings(findings: SecretsAuditFinding[]) {
   return {
     plaintextCount: findings.filter((entry) => entry.code === "PLAINTEXT_FOUND").length,
     unresolvedRefCount: findings.filter(
@@ -573,7 +552,7 @@ export async function runSecretsAudit(
     env?: NodeJS.ProcessEnv;
     allowExec?: boolean;
   } = {},
-): Promise<SecretsAuditReport> {
+) {
   const env = params.env ?? process.env;
   const snapshot = await createSecretsConfigIO({ env }).readConfigFileSnapshot();
   const configPath = resolveUserPath(snapshot.path);
@@ -632,7 +611,7 @@ export async function runSecretsAudit(
       })),
     );
   } else {
-    addFinding(collector, {
+    collector.findings.push({
       code: "REF_UNRESOLVED",
       severity: "error",
       file: configPath,
@@ -668,7 +647,7 @@ export async function runSecretsAudit(
         : "clean";
 
   return {
-    version: 1,
+    version: 1 as const,
     status,
     resolution,
     filesScanned: [...collector.filesScanned].toSorted(),

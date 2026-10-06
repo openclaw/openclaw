@@ -1,5 +1,6 @@
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import type { SystemdServiceStartRefusal } from "../../daemon/service-inspection-error.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import {
@@ -198,7 +199,12 @@ export async function verifyUpdatedGateway(
     onVerified?: (verifiedAtMs: number) => void;
     purpose?: "recovery";
   },
-): Promise<UpdateRepairValidation & { pluginWarnings?: PluginUpdateWarning[] }> {
+): Promise<
+  UpdateRepairValidation & {
+    pluginWarnings?: PluginUpdateWarning[];
+    serviceDefinitionRefusal?: SystemdServiceStartRefusal;
+  }
+> {
   const startedAtMs = Date.now();
   const { proofOptions, assertCurrent } = captureUpdateGatewayReadinessOwner(params);
   const { health, readyz, http, launchAgentRecovery } = await observeUpdateGatewayReadiness({
@@ -220,6 +226,15 @@ export async function verifyUpdatedGateway(
       updateGatewayHealthFacts(health, params.gatewayPort, readyz),
       { env: proofOptions.run.env },
     );
+  }
+  const serviceDefinitionRefusal = health.runtime?.systemd?.startRefusal;
+  if (serviceDefinitionRefusal && (!health.healthy || !serviceRunning || !readyz)) {
+    return {
+      ok: false,
+      score: 0,
+      summary: serviceDefinitionRefusal.message,
+      serviceDefinitionRefusal,
+    };
   }
   const recordVerificationStep = (
     failureFacts?: UpdateFailureFact[],
@@ -325,7 +340,7 @@ export async function verifyUpdatedGateway(
   const httpFailed = http !== undefined && !readyz;
   const diagnosticLines: [string, ...string[]] = [
     params.purpose === "recovery"
-      ? "Gateway recovery probe did not verify serving health."
+      ? "Gateway recovery check did not verify serving health."
       : "Gateway did not become healthy after restart.",
     ...(httpFailed ? ["Gateway /readyz did not return HTTP 200."] : []),
     ...(health.healthy && params.requireRunningService

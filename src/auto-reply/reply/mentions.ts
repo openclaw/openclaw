@@ -1,4 +1,3 @@
-/** Mention matching, stripping, and explicit mention handling for group triggers. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -19,11 +18,6 @@ import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentio
 export type { BuildMentionRegexesOptions } from "./mentions.types.js";
 export { CURRENT_MESSAGE_MARKER } from "./history.js";
 
-type ResolvedMentionPatterns = {
-  patterns: string[];
-  unicode: boolean;
-};
-
 const NAME_IDENTITY_CHARS = String.raw`\p{L}\p{N}\p{Pc}`;
 const NAME_TOKEN_CHARS = String.raw`${NAME_IDENTITY_CHARS}\p{M}`;
 const JOINER_CHARS = String.raw`\u200C\u200D`;
@@ -41,13 +35,7 @@ const EMOJI_PRESENTATION_BASE = /\p{Emoji}/u;
 const NAME_IDENTITY_GRAPHEME = new RegExp(`[${NAME_IDENTITY_CHARS}]`, "u");
 const NAME_GRAPHEME_SEGMENTER = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-type DerivedNameParts = {
-  leading: string;
-  core: string;
-  trailing: string;
-};
-
-function wrapDerivedMentionPattern(parts: DerivedNameParts): string {
+function wrapDerivedMentionPattern(parts: ReturnType<typeof deriveNameParts>): string {
   // Boundaries reach across optional edge decoration. Each branch owns its
   // spacing seam because overlapping repetitions make raw stripping quadratic.
   const leading = parts.leading ? `(?:${parts.leading}${DECORATION_SPACING}|)` : "";
@@ -189,7 +177,7 @@ function encodeInteriorDecoration(unit: DecorationUnit): string {
   return `(?:${DECORATION_SPACING}${spelled}${DECORATION_SPACING}|\\s${unit.spaced ? "+" : "*"})`;
 }
 
-function deriveNameParts(name: string): DerivedNameParts {
+function deriveNameParts(name: string) {
   const units = parseNameUnits(name);
   if (!units.some((unit) => unit.kind === "token")) {
     // No word run at all (e.g. a bare emoji or a punctuation string): match
@@ -292,10 +280,7 @@ function compileMentionPatternsCached(params: {
   return [...compiled.regexes];
 }
 
-function resolveMentionPatterns(
-  cfg: OpenClawConfig | undefined,
-  agentId?: string,
-): ResolvedMentionPatterns {
+function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string) {
   if (!cfg) {
     return { patterns: [], unicode: false };
   }
@@ -312,7 +297,6 @@ function resolveMentionPatterns(
   return { patterns: derived, unicode: derived.length > 0 };
 }
 
-/** Builds mention regexes from config, agent identity, and channel policy. */
 export function buildMentionRegexes(
   cfg: OpenClawConfig | undefined,
   agentId?: string,
@@ -331,14 +315,12 @@ export function buildMentionRegexes(
   });
 }
 
-/** Normalizes text before mention matching. */
 export function normalizeMentionText(text: string): string {
   return normalizeLowercaseStringOrEmpty(
     (text ?? "").replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, ""),
   );
 }
 
-/** Returns true when text matches one of the configured mention patterns. */
 export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): boolean {
   if (mentionRegexes.length === 0) {
     return false;
@@ -347,7 +329,6 @@ export function matchesMentionPatterns(text: string, mentionRegexes: RegExp[]): 
   return mentionRegexes.some((re) => re.test(cleaned));
 }
 
-/** Combines regex mention matching with provider-native explicit mention metadata. */
 export function matchesMentionWithExplicit(params: {
   text: string;
   mentionRegexes: RegExp[];
@@ -363,7 +344,6 @@ export function matchesMentionWithExplicit(params: {
   return explicit || params.mentionRegexes.some((re) => re.test(textToCheck));
 }
 
-/** Removes structural prompt prefixes before mention stripping. */
 export function stripStructuralPrefixes(text: string): string {
   if (!text) {
     return "";
@@ -389,7 +369,6 @@ export function stripStructuralPrefixes(text: string): string {
   return stripped.replace(/\s+/g, " ");
 }
 
-/** Removes bot mentions from command text before command normalization. */
 export function stripMentions(
   text: string,
   ctx: MsgContext,

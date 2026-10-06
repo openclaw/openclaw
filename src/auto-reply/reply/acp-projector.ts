@@ -12,16 +12,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prefixSystemMessage } from "../../infra/system-message.js";
 import { truncateUtf16WithEllipsis as truncateText } from "../../shared/text-truncate.js";
 import type { ReplyPayload } from "../types.js";
-import {
-  isAcpTagVisible,
-  resolveAcpProjectionSettings,
-  resolveAcpStreamingConfig,
-} from "./acp-stream-settings.js";
+import { isAcpTagVisible, resolveAcpProjectionSettings } from "./acp-stream-settings.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import type { AcpDispatchDeliveryMeta } from "./dispatch-acp-delivery.types.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
 const ACP_BLOCK_REPLY_TIMEOUT_MS = 15_000;
+const ACP_MAX_OUTPUT_CHARS = 24_000;
+const ACP_MAX_SESSION_UPDATE_CHARS = 320;
 const ACP_LIVE_IDLE_FLUSH_FLOOR_MS = 750;
 const ACP_LIVE_IDLE_MIN_CHARS = 80;
 const ACP_LIVE_SOFT_FLUSH_CHARS = 220;
@@ -99,9 +98,8 @@ function renderToolSummaryText(
 
 export function createAcpReplyProjector(params: {
   cfg: OpenClawConfig;
-  shouldSendToolSummaries: boolean;
-  shouldSendToolSummariesNow?: () => boolean;
-  shouldSendFullToolDetails: boolean;
+  shouldSendToolSummaries: () => Promise<boolean>;
+  shouldSendFullToolDetails: () => Promise<boolean>;
   deliver: (
     kind: ReplyDispatchKind,
     payload: ReplyPayload,
@@ -113,12 +111,13 @@ export function createAcpReplyProjector(params: {
   accountId?: string;
 }) {
   const settings = resolveAcpProjectionSettings(params.cfg);
-  const hiddenBoundarySeparator = settings.hiddenBoundarySeparator === "space" ? " " : "\n\n";
-  const streaming = resolveAcpStreamingConfig({
+  const hiddenBoundarySeparator = settings.deliveryMode === "live" ? " " : "\n\n";
+  const streaming = resolveEffectiveBlockStreamingConfig({
     cfg: params.cfg,
     provider: params.provider,
     accountId: params.accountId,
-    deliveryMode: settings.deliveryMode,
+    maxChunkChars: 1800,
+    coalesceIdleMs: 350,
   });
   const blockReplyPipeline = createBlockReplyPipeline({
     onBlockReply: async (payload) => {
@@ -127,7 +126,9 @@ export function createAcpReplyProjector(params: {
     timeoutMs: ACP_BLOCK_REPLY_TIMEOUT_MS,
     coalescing: settings.deliveryMode === "live" ? undefined : streaming.coalescing,
   });
-  const chunker = new EmbeddedBlockChunker(streaming.chunking);
+  const chunker = new EmbeddedBlockChunker(
+    settings.deliveryMode === "live" ? { ...streaming.chunking, minChars: 1 } : streaming.chunking,
+  );
   const filterConversationContext = createVerifiedConversationContextStreamFilter(
     params.getConversationContext,
   );
@@ -145,9 +146,6 @@ export function createAcpReplyProjector(params: {
   let liveIdleTimer: NodeJS.Timeout | undefined;
   const pendingToolDeliveries: BufferedToolDelivery[] = [];
   const toolLifecycleById = new Map<string, ToolLifecycleState>();
-
-  const shouldSendToolSummaries = () =>
-    params.shouldSendToolSummariesNow?.() ?? params.shouldSendToolSummaries;
 
   const clearLiveIdleTimer = () => {
     if (!liveIdleTimer) {
@@ -198,7 +196,7 @@ export function createAcpReplyProjector(params: {
       flushLiveBuffer();
     }
     if (settings.deliveryMode === "final_only") {
-      if (shouldSendToolSummaries()) {
+      if (await params.shouldSendToolSummaries()) {
         for (const entry of pendingToolDeliveries.splice(0)) {
           await params.deliver("tool", entry.payload, entry.meta);
         }
@@ -217,10 +215,10 @@ export function createAcpReplyProjector(params: {
   };
 
   const emitSystemStatus = async (text: string, opts?: { dedupe?: boolean }) => {
-    if (!shouldSendToolSummaries()) {
+    if (!(await params.shouldSendToolSummaries())) {
       return;
     }
-    const bounded = truncateText(text.trim(), settings.maxSessionUpdateChars);
+    const bounded = truncateText(text.trim(), ACP_MAX_SESSION_UPDATE_CHARS);
     if (!bounded) {
       return;
     }
@@ -250,12 +248,15 @@ export function createAcpReplyProjector(params: {
   };
 
   const emitToolSummary = async (event: Extract<AcpRuntimeEvent, { type: "tool_call" }>) => {
-    if (!shouldSendToolSummaries()) {
+    if (!(await params.shouldSendToolSummaries())) {
       markHiddenToolBoundary(event);
       return;
     }
-    const renderedToolSummary = renderToolSummaryText(event, params.shouldSendFullToolDetails);
-    const toolSummary = truncateText(renderedToolSummary, settings.maxSessionUpdateChars);
+    const renderedToolSummary = renderToolSummaryText(
+      event,
+      await params.shouldSendFullToolDetails(),
+    );
+    const toolSummary = truncateText(renderedToolSummary, ACP_MAX_SESSION_UPDATE_CHARS);
     const hash = renderedToolSummary.trim();
     const toolCallId = normalizeOptionalString(event.toolCallId);
     const status = normalizeOptionalLowercaseString(event.status);
@@ -334,11 +335,11 @@ export function createAcpReplyProjector(params: {
         text = `${hiddenBoundarySeparator}${text}`;
       }
       pendingHiddenBoundary = false;
-      if (emittedOutputChars >= settings.maxOutputChars) {
+      if (emittedOutputChars >= ACP_MAX_OUTPUT_CHARS) {
         await emitTruncationNotice();
         return;
       }
-      const remaining = settings.maxOutputChars - emittedOutputChars;
+      const remaining = ACP_MAX_OUTPUT_CHARS - emittedOutputChars;
       const accepted = remaining < text.length ? truncateUtf16Safe(text, remaining) : text;
       if (accepted.length > 0) {
         emittedOutputChars += accepted.length;
@@ -359,7 +360,7 @@ export function createAcpReplyProjector(params: {
       if (accepted.length < text.length) {
         // A split code point can leave the accepted prefix shorter than the remaining budget.
         // Exhaust it after any drop so later deltas cannot skip past omitted text.
-        emittedOutputChars = settings.maxOutputChars;
+        emittedOutputChars = ACP_MAX_OUTPUT_CHARS;
         await emitTruncationNotice();
       }
       return;

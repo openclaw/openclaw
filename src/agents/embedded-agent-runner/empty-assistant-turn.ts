@@ -1,6 +1,3 @@
-/**
- * Detects provider stop turns that contain no assistant-visible content.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 

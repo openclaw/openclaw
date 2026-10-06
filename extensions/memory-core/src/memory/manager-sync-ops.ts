@@ -507,7 +507,11 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // status keep the published handle and its vector/FTS/metadata state.
       const rebuilt = await this.withReindexDatabase(shadow, async () => {
         try {
-          await this.withDatabaseWrite(() => this.ensureSchema());
+          await shadow.admitSchema({
+            cacheEnabled: this.cache.enabled,
+            ftsEnabled: shadow.fts.enabled,
+            ftsTokenizer: this.settings.store.fts.tokenizer,
+          });
 
           const shouldSyncMemory = shouldRetryMemoryOnFailure;
           const shouldSyncSessions = shouldRetrySessionsOnFailure;

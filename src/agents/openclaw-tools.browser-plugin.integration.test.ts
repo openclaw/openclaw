@@ -388,15 +388,6 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(firstResolvePluginToolsParams().context.delivery).toBeUndefined();
   });
 
-  it("forwards the lifecycle registry to workspace-scoped plugin tools", () => {
-    const pluginRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(pluginRegistry, "gateway", "gateway-bindable", "/gateway-workspace");
-    expect(
-      resolveTools({ config: { plugins: { enabled: true } }, workspaceDir: "/session-workspace" })
-        .runtimeRegistry,
-    ).toBe(pluginRegistry);
-  });
-
   it("forwards lifecycle-prepared plugin facts to plugin resolution", () => {
     const config: OpenClawConfig = { plugins: { enabled: true } };
     const pluginRegistry = createEmptyPluginRegistry();
@@ -479,19 +470,6 @@ describe("createOpenClawTools browser plugin integration", () => {
     expect(params.hasAuthForProvider?.("acme")).toBe(true);
     expect(params.context.hasAuthForProvider?.("acme")).toBe(true);
     await expect(params.context.resolveApiKeyForProvider?.("acme")).resolves.toBe("profile-key");
-  });
-
-  it("keeps explicit plugin tool config isolated from a source-less runtime", () => {
-    const explicitConfig: OpenClawConfig = {
-      plugins: { allow: ["browser"] },
-      tools: { updatePlan: true },
-    };
-    setRuntimeConfigSnapshot({ plugins: { allow: ["old-plugin"] } });
-    const { runtimeConfig, getRuntimeConfig } = resolveTools({ config: explicitConfig }).context;
-    expect(runtimeConfig).toBe(explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
-    setRuntimeConfigSnapshot({ ...explicitConfig, tools: { updatePlan: false } }, explicitConfig);
-    expect(getRuntimeConfig?.()).toBe(explicitConfig);
   });
 
   it("keeps the plugin tool getter live across authored source reloads", () => {

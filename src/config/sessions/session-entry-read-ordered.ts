@@ -1,7 +1,10 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { getOpenClawAgentDatabaseIfOpen } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
 import type {
   PreparedSessionEntryWorkerRead,
@@ -21,11 +24,34 @@ type ReadSessionStore = <T>(
   }) => Promise<T>,
 ) => Promise<T>;
 
+/** Capture under writer FIFO custody; validation grants no access to a released reader. */
+export function captureSessionEntryNativeMutationWitness(
+  databases: readonly PreparedSessionEntryWorkerRead["database"][],
+) {
+  const sources = databases.map((database) => {
+    const native = getOpenClawAgentDatabaseIfOpen(database);
+    return { database, native, revision: native && readSqliteNativeMutationRevision(native.db) };
+  });
+  return () => {
+    for (const { database, native, revision } of sources) {
+      if (
+        getOpenClawAgentDatabaseIfOpen(database) !== native ||
+        (native &&
+          (native.db.isTransaction ||
+            revision === undefined ||
+            readSqliteNativeMutationRevision(native.db) !== revision))
+      ) {
+        throw new SessionEntryChangedDuringReadError();
+      }
+    }
+  };
+}
+
 /** Native effects retain existing writer FIFO order through their synchronous consumer. */
 export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
-  readStore: ReadSessionStore,
+  { readStore, onReadAdmitted }: { readStore: ReadSessionStore; onReadAdmitted?: () => void },
 ): Promise<T> {
   const selected: Array<{
     input: SessionEntryWorkerRead;
@@ -49,6 +75,10 @@ export async function withOrderedSessionEntriesInWorker<T>(
     return runOpenClawAgentWriteAdmissions(
       selected.map(({ database }) => database),
       async () => {
+        // Synchronous SDK writers bypass the FIFO and may not publish row changes.
+        const assertNativeCurrent = captureSessionEntryNativeMutationWitness(
+          selected.map(({ database }) => database),
+        );
         let changed = false;
         const unsubscribe = sessionChanges.subscribeFacts((change) => {
           const scope = "all" in change ? change.scope : change;
@@ -96,11 +126,14 @@ export async function withOrderedSessionEntriesInWorker<T>(
           for (const read of selected) {
             read.assertCurrent();
           }
+          assertNativeCurrent();
           if (changed) {
-            throw new Error("Session entry changed during read");
+            throw new SessionEntryChangedDuringReadError();
           }
         };
         try {
+          assertCurrent();
+          onReadAdmitted?.();
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();
@@ -123,6 +156,7 @@ export async function withOrderedSessionEntriesInWorker<T>(
           unsubscribe();
         }
       },
+      true,
     );
   };
   return enter(0);

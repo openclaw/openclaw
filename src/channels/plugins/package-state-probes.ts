@@ -30,9 +30,6 @@ type ChannelPackageStateMetadata = {
   };
 };
 
-/**
- * Metadata keys that can declare a lightweight package-state checker.
- */
 const CHANNEL_PACKAGE_STATE_METADATA_KEYS = ["configuredState", "persistedAuthState"] as const;
 type ChannelPackageStateMetadataKey = (typeof CHANNEL_PACKAGE_STATE_METADATA_KEYS)[number];
 
@@ -221,9 +218,6 @@ function resolveChannelPackageStateChecker(params: {
   return null;
 }
 
-/**
- * Lists bundled channel ids that declare the requested package-state metadata.
- */
 export function listBundledChannelIdsForPackageState(
   metadataKey: ChannelPackageStateMetadataKey,
   discovery?: PluginDiscoveryResult,
@@ -234,7 +228,6 @@ export function listBundledChannelIdsForPackageState(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-/** Reports declared bundled channel package-state modules that cannot load. */
 export function collectBundledChannelPackageStateLoadFailures(
   discovery?: PluginDiscoveryResult,
 ): ChannelPackageStateLoadFailure[] {
@@ -252,9 +245,6 @@ export function collectBundledChannelPackageStateLoadFailures(
   return failures;
 }
 
-/**
- * Returns whether a bundled channel reports configured/auth package state.
- */
 export function hasBundledChannelPackageState(params: {
   metadataKey: ChannelPackageStateMetadataKey;
   channelId: string;

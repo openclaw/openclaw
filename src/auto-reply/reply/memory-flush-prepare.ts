@@ -27,10 +27,10 @@ const log = createSubsystemLogger("auto-reply/memory-flush");
 // A flush-specific model is exact: it never inherits the source fallback chain.
 function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
-  model?: string,
-  configOverride: FollowupRun["run"]["config"] = run.config,
+  model: string | undefined,
+  config: FollowupRun["run"]["config"],
 ) {
-  const options = resolveModelFallbackOptions(run, configOverride);
+  const options = resolveModelFallbackOptions(run, config);
   const override = normalizeOptionalString(model);
   if (!override) {
     return options;
@@ -57,7 +57,6 @@ function resolveMemoryFlushModelFallbackOptions(
   };
 }
 
-/** Prepare one detached flush, source delegation, and persistence target before model fallback. */
 export async function prepareMemoryFlushAttempt(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;

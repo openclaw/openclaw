@@ -201,20 +201,22 @@ export class CodexCatalogIndex {
     }
     const oldest = retainCodexCatalogRow(this.rows, row);
     this.overflow ||= this.rows.size >= CODEX_CATALOG_MAX_ROWS;
-    this.ordering.invalidate();
     if (oldest?.threadId === row.threadId) {
       return;
     }
     if (oldest) {
-      this.evict(oldest.threadId);
+      this.evict(oldest.threadId, oldest);
     }
+    this.ordering.put(row, previous);
     this.persistence.put(row);
   }
 
-  private evict(threadId: string): void {
+  private evict(threadId: string, row = this.rows.get(threadId)): void {
     // Retention does not withdraw observations supported by an open native connection.
     this.rows.delete(threadId);
-    this.ordering.invalidate();
+    if (row) {
+      this.ordering.remove(row);
+    }
     this.persistence.remove(threadId);
   }
 
@@ -304,9 +306,13 @@ export class CodexCatalogIndex {
             if (patched !== restored) {
               this.persistence.put(patched);
             }
+            const previous = this.rows.get(patched.threadId);
             const evicted = retainCodexCatalogRow(this.rows, patched);
             if (evicted) {
-              this.evict(evicted.threadId);
+              this.evict(evicted.threadId, evicted);
+            }
+            if (evicted !== patched) {
+              this.ordering.put(patched, previous);
             }
             this.ordering.restore(row);
           }
@@ -637,7 +643,7 @@ export class CodexCatalogIndex {
       this.scheduleHydration();
       for (;;) {
         this.assertCurrent();
-        const ordered = this.ordering.read(this.rows);
+        const ordered = this.ordering.read();
         const page = query?.(ordered, this.liveStatus, this.liveSettings, this.availability);
         if (
           cursor.kind === "native" ||
@@ -680,6 +686,6 @@ export class CodexCatalogIndex {
     ]);
     this.rows.clear();
     this.observedFiles.clear();
-    this.ordering.invalidate();
+    this.ordering.clear();
   }
 }

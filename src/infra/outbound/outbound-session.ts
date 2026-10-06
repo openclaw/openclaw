@@ -42,7 +42,6 @@ import {
 } from "./channel-target-prefix.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -59,7 +58,6 @@ export type OutboundSessionRoute = {
   displayName?: string;
 };
 
-/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -205,7 +203,6 @@ function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRoutePa
   return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
 }
 
-/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {

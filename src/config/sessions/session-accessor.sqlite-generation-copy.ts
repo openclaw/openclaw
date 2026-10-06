@@ -186,11 +186,11 @@ export function rehomeSqliteSessionGenerationWindow(
     session_key: canonicalKey,
     parent_session_key:
       window.parent_session_key &&
-      sourceKeys.has(normalizeStoreSessionKey(window.parent_session_key.trim()))
+      sourceKeys.has(normalizeStoreSessionKey(window.parent_session_key))
         ? canonicalKey
         : window.parent_session_key,
     spawned_by:
-      window.spawned_by && sourceKeys.has(normalizeStoreSessionKey(window.spawned_by.trim()))
+      window.spawned_by && sourceKeys.has(normalizeStoreSessionKey(window.spawned_by))
         ? canonicalKey
         : window.spawned_by,
   };

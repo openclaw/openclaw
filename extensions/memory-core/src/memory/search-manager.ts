@@ -25,7 +25,7 @@ type MemorySearchManagerParams = {
 type MemorySearchManagerResult = {
   manager: MemorySearchManager | null;
   error?: string;
-  debug?: {
+  debug: {
     backend: "builtin";
     purpose: MemorySearchManagerPurpose;
     managerMs: number;

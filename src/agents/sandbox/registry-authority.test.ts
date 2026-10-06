@@ -45,7 +45,7 @@ it("retains local-workspace authority through browser transaction and commit gra
     createdAt: 1,
     lastActiveAt: 1,
   };
-  insertRegistryWorktree(process.env, worktree);
+  await insertRegistryWorktree(process.env, worktree);
   const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath },

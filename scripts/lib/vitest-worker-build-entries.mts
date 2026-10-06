@@ -26,7 +26,6 @@ import {
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
 import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
-import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-output-spill-entrypoints.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
@@ -96,6 +95,7 @@ import { tempDirEntrypoint } from "../../src/test-helpers/temp-dir-runtime.test-
 import { transcriptLibraryTimezoneEntrypoint } from "../../src/transcripts/library-timezone-runtime.test-support.ts";
 import { tuiPtyRuntimeEntrypoints } from "../../src/tui/tui-pty-runtime-test-support.ts";
 import { clackPrompterProcessEntrypoint } from "../../src/wizard/clack-prompter-process-runtime.test-support.ts";
+import { nativeWorkerTestEntrypoint } from "../../src/worker/native-worker-entrypoints.test-support.ts";
 import { workerBackgroundExecEntrypoints } from "../../src/worker/worker-runtime-background-exec-entrypoints.test-support.ts";
 import { qaOtelSmokeEntrypoint } from "../../test/e2e/qa-lab/runtime/qa-otel-smoke-entrypoint.test-support.ts";
 import { channelIngressGatewayRestartEntrypoint } from "../../test/fixtures/channel-ingress-gateway-restart-entrypoint.ts";
@@ -303,6 +303,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(realtimeAudioTestEntrypoints),
     quickJsWorkerTestEntrypoint,
     codexCatalogPageWorkerEntrypoint,
+    nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
     memoryForgetFaultEntrypoint,
@@ -333,7 +334,6 @@ export const vitestWorkerBuildEntries = {
     codeModeRetentionEntrypoint,
     codeModeDescriptionRetentionEntrypoint,
     ...cliCompactionBackendEntrypoints,
-    ...Object.values(bashOutputSpillEntrypoints),
     managedWorktreeGcEntrypoint,
     ...publishedSdkBridgeEntrypoints,
     mcpProviderCatalogEntrypoint,

@@ -46,6 +46,7 @@ export function commitSessionEntryPatch(
         options: {
           consumePendingReset: input.consumePendingReset,
           providerReviewMutation: input.providerReviewMutation,
+          workerGuard: { cliHistory: input.cliHistory },
           assertCommitAllowed: () => {
             const refusedSource = readRefusedSessionSource(database, input.sources);
             if (refusedSource) {
@@ -74,12 +75,13 @@ export function commitSessionEntryPatch(
   });
 }
 
-function readRefusedSessionSource(
+export function readRefusedSessionSource(
   database: OpenClawAgentDatabase,
   sources: SessionEntryPatchCommit["sources"],
+  identity = readOpenClawAgentDatabaseIdentity(database).identity,
 ): SessionEntryPatchCommitted["refusedSource"] {
   for (const [index, source] of (sources ?? []).entries()) {
-    if (readOpenClawAgentDatabaseIdentity(database).identity !== source.source.databaseIdentity) {
+    if (identity !== source.source.databaseIdentity) {
       return { index, facts: { entry: undefined } };
     }
     const entry = readExactSessionEntryRowValidated(database, source.sessionKey)?.entry;

@@ -9,23 +9,13 @@ import {
   resolveCodexSessionBinding,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
-  type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
 import { assertCodexHostOwnerCurrent } from "./command-authorization.js";
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import type { CodexControlRequestOptions } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
-type CodexConversationControlTarget = {
-  identity: CodexAppServerBindingIdentity;
-  agentId: string;
-  agentDir: string;
-  requestedAuthProfileId?: string;
-};
-
-export async function resolveControlTarget(
-  ctx: PluginCommandContext,
-): Promise<CodexConversationControlTarget | undefined> {
+export async function resolveControlTarget(ctx: PluginCommandContext) {
   const binding = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(binding);
   const scope = resolveCodexConversationControlScope(ctx);
@@ -56,23 +46,10 @@ type CommandAppServerScope = Pick<
   "assertCurrent" | "authProfileId" | "sessionId" | "sessionKey" | "startOptions" | "storePath"
 > & { agentId: string; agentDir: string };
 
-export type PreparedCodexCommandAuthority = {
-  target: CodexConversationControlTarget | undefined;
-  binding: CodexAppServerThreadBinding | undefined;
-  currentSessionBinding: CodexAppServerThreadBinding | undefined;
-  sessionId: string | undefined;
-  sessionKey: string | undefined;
-  storePath: string | undefined;
-  assertHostCurrent: () => void;
-  assertCurrent: () => void;
-  assertMutationCurrent: () => void;
-  assertHostMutationCurrent: () => void;
-};
-
 export async function resolvePreparedCodexCommandAuthority(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
-): Promise<PreparedCodexCommandAuthority> {
+) {
   const target = await resolveControlTarget(ctx);
   const fallback = resolveCodexConversationControlScope(ctx);
   const sessionId = ctx.sessionId;

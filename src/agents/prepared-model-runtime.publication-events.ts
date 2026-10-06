@@ -17,6 +17,7 @@ type PreparedModelRuntimePublicationEvent =
   | { phase: "published"; modelFactsChanged?: false }
   | { phase: "failed"; error: Error }
   | { phase: "catalog-status"; modelFactsChanged: false }
+  | { phase: "catalog-observation"; modelFactsChanged: false; agentId: string }
   // Publication owners alone can prove that model facts stayed unchanged.
   | {
       phase: "catalog-published";
@@ -202,8 +203,4 @@ export function notifyPreparedModelRuntimePublication(
   notifyListeners(publicationListeners, event, (error) => {
     log.warn(`prepared model runtime publication listener failed: ${String(error)}`);
   });
-}
-
-export function resetPreparedModelRuntimePublicationListenersForTest(): void {
-  publicationListeners.clear();
 }

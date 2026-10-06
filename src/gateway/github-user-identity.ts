@@ -145,8 +145,9 @@ async function resolveCloudflareAccessIdentity(
   };
 }
 
-async function resolveGitHubUserIdentityByLogin(
+export async function resolveGitHubUserIdentityByLogin(
   username: string,
+  options?: { signal?: AbortSignal; allowAnonymousRetry?: boolean },
 ): Promise<ResolvedGitHubUserIdentity> {
   const requestedLogin = normalizeGitHubLogin(username);
   if (!requestedLogin) {
@@ -155,13 +156,24 @@ async function resolveGitHubUserIdentityByLogin(
   const token = githubApiToken(process.env, undefined, "github.com");
   let payload: unknown;
   try {
-    payload = await gitHubPublicApi.fetchGitHubJson(
-      `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
-      fetch,
-      token,
-      undefined,
-      gitHubPublicApi.GITHUB_API_ORIGIN,
-    );
+    const request = async (requestToken: string | undefined) => {
+      const response = await gitHubPublicApi.fetchGitHubApi(
+        `${gitHubPublicApi.GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
+        fetch,
+        requestToken,
+        undefined,
+        undefined,
+        undefined,
+        options?.signal,
+        undefined,
+        gitHubPublicApi.GITHUB_API_ORIGIN,
+      );
+      return await gitHubPublicApi.readGitHubJsonResponse(response);
+    };
+    payload =
+      options?.allowAnonymousRetry === false
+        ? await request(token)
+        : await gitHubPublicApi.withOptionalGitHubAuth(token, request);
   } catch (error) {
     if (error instanceof gitHubPublicApi.ControlUiGitHubError) {
       throw error;

@@ -108,7 +108,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
+  return Object.keys(schema).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {
@@ -303,18 +303,35 @@ export function renderFieldRow(params: {
   `;
 }
 
-export function renderCollectionDefaultDescription(
-  params: ConfigNodeRenderParams,
-  effectiveValue: unknown,
-): TemplateResult | typeof nothing {
-  const redacted = getSensitiveRenderState({
-    path: params.path,
-    value: effectiveValue,
-    hints: params.hints,
-    revealSensitive: params.revealSensitive ?? false,
-    isSensitivePathRevealed: params.isSensitivePathRevealed,
-  }).isRedacted;
-  return redacted ? nothing : renderSchemaDefaultDescription(params.schema, params.value);
+/**
+ * Removes a collection row and keeps keyboard focus in its collection when the
+ * focused Remove control is retired: next surviving row, previous row, then Add.
+ */
+export function removeCollectionRow(event: Event, remove: () => boolean) {
+  const control = event.currentTarget;
+  if (!(control instanceof HTMLButtonElement) || control !== document.activeElement) {
+    remove();
+    return;
+  }
+  const collection = control.closest(".cfg-array, .cfg-map");
+  const own = (selector: string) =>
+    Array.from(collection?.querySelectorAll<HTMLButtonElement>(selector) ?? []).filter(
+      (button) => button.closest(".cfg-array, .cfg-map") === collection,
+    );
+  const label = control.getAttribute("aria-label");
+  const rows = own("button").filter((button) => button.getAttribute("aria-label") === label);
+  const index = rows.indexOf(control);
+  const destinations = [rows[index + 1], rows[index - 1], own("button[aria-controls]")[0]];
+  if (!remove()) {
+    return;
+  }
+  // The owner rerenders before this microtask. Positional rows can keep the
+  // focused control for the next entry, so only a lost focus moves.
+  queueMicrotask(() => {
+    if (document.activeElement === document.body) {
+      destinations.find((button) => button?.isConnected && !button.disabled)?.focus();
+    }
+  });
 }
 
 export function renderSchemaDefaultDescription(

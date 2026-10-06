@@ -25,6 +25,12 @@ import {
   type SessionTranscriptRawDeltaResult,
   type SessionTranscriptVisibleMessageDeltaLimits,
 } from "../config/sessions/session-accessor.js";
+import type { LockedTranscriptMessageAppendOptions } from "../config/sessions/session-accessor.types.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import {
   resolveMirroredTranscriptText,
   type SessionTranscriptDeliveryMirror,
@@ -85,6 +91,14 @@ export type {
   SessionTranscriptMemoryHitKeyParams,
   SessionTranscriptReadParams,
 };
+
+/** Compose prepared owner assertions; unprepared SDK callbacks retain native transaction visibility. */
+export function composeSessionTranscriptWriteAssertion(
+  sources: readonly (SessionSourceAssertion | undefined)[],
+  check?: (assertSources: () => void) => void,
+): SessionSourceAssertion {
+  return composeSessionSourceAssertion(sources.map(captureExternalSessionCommitGuard), check);
+}
 
 export type SessionTranscriptEvent = unknown;
 
@@ -208,7 +222,7 @@ export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
 
 export type SessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
-    options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
+    options: Omit<LockedTranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
@@ -461,6 +475,10 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
   params: SessionTranscriptAppendMessageParams<TMessage> & {
     runId?: string;
     updateMode?: SessionTranscriptUpdateMode;
+    /** @deprecated Use prepareMessageAfterIdempotencyCheckAsync for preparation outside the transaction. */
+    prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
+    /** Awaited after duplicate detection; undefined suppresses a fresh append. */
+    prepareMessageAfterIdempotencyCheckAsync?: (message: TMessage) => Promise<TMessage | undefined>;
   },
 ): Promise<SessionTranscriptStrictMessageAppendResult<TMessage>> {
   const expectedSessionId = params.sessionId?.trim();
@@ -485,6 +503,22 @@ export async function appendSessionTranscriptMessageByIdentityStrict<TMessage>(
           ? {
               prepareMessageAfterIdempotencyCheck: (message: unknown) =>
                 params.prepareMessageAfterIdempotencyCheck?.(message as TMessage),
+            }
+          : {}),
+        ...(params.prepareMessageAfterIdempotencyCheckAsync || params.beforeFreshMessageCommit
+          ? {
+              workerPreparation: {
+                ...(params.prepareMessageAfterIdempotencyCheckAsync
+                  ? {
+                      prepareMessageAfterIdempotencyCheckAsync: (message: unknown) =>
+                        // SAFETY: Preparation receives this caller's supplied message.
+                        params.prepareMessageAfterIdempotencyCheckAsync!(message as TMessage),
+                    }
+                  : {}),
+                beforeFreshMessageCommit: captureExternalSessionCommitGuard(
+                  params.beforeFreshMessageCommit,
+                ),
+              },
             }
           : {}),
         ...(params.useRawWhenLinear !== undefined

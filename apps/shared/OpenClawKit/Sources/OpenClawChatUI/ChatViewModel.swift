@@ -642,7 +642,8 @@ public final class OpenClawChatViewModel {
         startBootstrap()
     }
 
-    public func resumeFromForeground() {
+    @discardableResult
+    public func resumeFromForeground() -> Task<Void, Never> {
         Task { await self.refreshRunStateAfterForeground() }
     }
 
@@ -1621,7 +1622,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
-                self.recordAuthoritativeInheritedThinkingPreference(thinkingLevel)
+                self.confirmedThinkingPreference = PreferenceState(level: thinkingLevel, isExplicit: false)
             }
         }
         if let patchResult {

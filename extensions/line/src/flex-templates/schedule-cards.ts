@@ -37,12 +37,11 @@ function buildCardHeaderSections(headerContents: FlexComponent[]): FlexComponent
 
 export function createReceiptCard(params: {
   title: string;
-  subtitle?: string;
-  items: Array<{ name: string; value: string; highlight?: boolean }>;
+  items: Array<{ name: string; value: string }>;
   total?: { label: string; value: string };
   footer?: string;
 }): FlexBubble {
-  const { title, subtitle, items, total, footer } = params;
+  const { title, items, total, footer } = params;
 
   const itemRows: FlexComponent[] = items.slice(0, 12).map(
     (item, index) =>
@@ -54,8 +53,8 @@ export function createReceiptCard(params: {
             type: "text",
             text: item.name,
             size: "sm",
-            color: item.highlight ? "#111111" : "#666666",
-            weight: item.highlight ? "bold" : "regular",
+            color: "#666666",
+            weight: "regular",
             flex: 3,
             wrap: true,
           } as FlexText,
@@ -65,8 +64,8 @@ export function createReceiptCard(params: {
                   type: "text",
                   text: item.value,
                   size: "sm",
-                  color: item.highlight ? "#06C755" : "#333333",
-                  weight: item.highlight ? "bold" : "regular",
+                  color: "#333333",
+                  weight: "regular",
                   flex: 2,
                   align: "end",
                   wrap: true,
@@ -78,10 +77,8 @@ export function createReceiptCard(params: {
         backgroundColor: index % 2 === 0 ? "#FFFFFF" : "#FAFAFA",
       }) as FlexBox,
   );
-  const headerContents = buildTitleSubtitleHeader({ title, subtitle });
-
   const bodyContents: FlexComponent[] = [
-    ...buildCardHeaderSections(headerContents),
+    ...buildCardHeaderSections([createCardTitle(title)]),
     {
       type: "box",
       layout: "vertical",

@@ -258,6 +258,42 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
+    `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
+    selects immutable facts through the same session-list filtering owner,
+    without pagination. Selection supports agent, archive, automation, activity,
+    and person filters, including the people facet. Unchanged session facts retain
+    object identity across reads; `revision` changes with the selected content or
+    its activity or retry deadline. Eligible human readers receive a stable opaque
+    `scope` for their query and current viewer, profile, access, configuration,
+    and redaction facts. Other callers receive `undefined`. The scope is not authority:
+    the host rechecks the caller after the callback settles, including awaited
+    plugin work. Consume reused results only inside this callback.
+
+    Selected rows include `isMain`. Failed acquisition batches retain authorized
+    roster fields with an `unavailable` reason; plugins can show their previous
+    facts for the same session identity and `redactionRevision`. When that revision
+    changes, discard retained text prepared under the old policy. Missing or no-longer-visible sessions are
+    omitted; `missingSessionKeys` identifies selected roster entries whose current
+    facts were omitted, so consumers can retire their fallback facts. Selected PR
+    facts retry from 60 seconds up to 15 minutes, retain a
+    last-confirmed list with `pullRequestsStale: true`, and reset on lifecycle
+    replacement or a successful read. When redaction rules change, the host omits
+    retained PR titles until fresh source text is available, while preserving
+    confirmed states and retry deadlines.
+    `activityExpiresAt` and `retryAt` describe the next relevant deadlines; no polling timer is created. Remove these
+    selection-only fields when adapting facts to another public response contract.
+
+    `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
+    public GitHub login to `{ accountId, login }` using the Gateway's configured
+    GitHub API credential, with no anonymous retry. Bundled and trusted official
+    plugins use the existing `users.list` / `operator.read` permission; the caller,
+    plugin, and Gateway must stay active. Lookup failures return `{ error }` with
+    the existing GitHub `statusCode` (404 not found, 429 rate limited, 502 upstream
+    or network failure), a safe `message`, optional absolute `retryAtMs`, and
+    `credentialConfigured`. Cancellation and authority failures reject. The
+    optional capability is absent on older hosts; require an update rather than
+    implementing a private lookup. The transport owns timeout and identity validation.
+
     `await api.runtime.gateway.withUserProfileIdentity({ profileId, emails, githubAccountIds }, run)`
     prepares the canonical profile's original binding lifetimes for up to 500
     selected email aliases under the existing `users.list` / `operator.read`

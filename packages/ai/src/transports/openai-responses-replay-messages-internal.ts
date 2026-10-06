@@ -44,10 +44,7 @@ import {
   providerReplayContextMatches,
   type ProviderReplayContext,
 } from "./provider-replay-context.js";
-import {
-  sanitizeNonEmptyTransportPayloadText,
-  sanitizeTransportPayloadText,
-} from "./transport-stream-shared.js";
+import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function resolveResponsesInstructionRole(model: Model): "developer" | "system" {
   const supportsDeveloperRole =
@@ -540,8 +537,7 @@ function convertResponsesMessagesWithStyle(
       }
     } else if (msg.role === "toolResult") {
       const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
-      const hasText = sanitizedTextResult.trim().length > 0;
+      const hasText = textResult.trim().length > 0;
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
@@ -554,7 +550,7 @@ function convertResponsesMessagesWithStyle(
           hasImages && model.input.includes("image")
             ? ([
                 ...(hasText
-                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  ? [{ type: "input_text", text: textResult }]
                   : mediaPlaceholder === "(see attached media)"
                     ? [{ type: "input_text", text: mediaPlaceholder }]
                     : []),
@@ -564,7 +560,9 @@ function convertResponsesMessagesWithStyle(
                   image_url: `data:${item.mimeType};base64,${item.data}`,
                 })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
+            : hasText
+              ? textResult
+              : (mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;

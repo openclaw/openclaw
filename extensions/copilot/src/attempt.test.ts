@@ -193,20 +193,12 @@ function createStubToolBridge(
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 
+type TranscriptAppendParams = Parameters<
+  typeof import("openclaw/plugin-sdk/session-transcript-runtime").appendSessionTranscriptMessageByIdentityStrict
+>[0];
+
 const transcriptRuntimeMock = vi.hoisted(() => ({
-  append: vi.fn(async (params: Record<string, unknown>) => {
-    const prepare = params.prepareMessageAfterIdempotencyCheck as
-      | ((message: unknown) => unknown)
-      | undefined;
-    const message = prepare ? prepare(params.message) : params.message;
-    return message
-      ? {
-          appended: true,
-          message,
-          messageId: (params.eventId as string | undefined) ?? "transcript-message",
-        }
-      : undefined;
-  }),
+  append: vi.fn(appendPreparedTranscriptMessage),
   appendBatch: vi.fn(async (params: { messages: Array<Record<string, unknown>> }) =>
     params.messages.map((message) => ({
       appended: true,
@@ -215,7 +207,7 @@ const transcriptRuntimeMock = vi.hoisted(() => ({
     })),
   ),
   publish: vi.fn(async () => undefined),
-  appendStrict: vi.fn(async (params: Record<string, unknown>) => {
+  appendStrict: vi.fn(async (params: TranscriptAppendParams) => {
     const result = await transcriptRuntimeMock.append(params);
     return result ? { kind: "result" as const, result } : { kind: "suppressed" as const };
   }),
@@ -234,27 +226,22 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   };
 });
 
-async function appendPreparedTranscriptMessage(params: Record<string, unknown>) {
-  const prepare = params.prepareMessageAfterIdempotencyCheck as
-    | ((message: unknown) => unknown)
-    | undefined;
-  const message = prepare ? prepare(params.message) : params.message;
+async function appendPreparedTranscriptMessage(params: TranscriptAppendParams) {
+  const prepare =
+    params.prepareMessageAfterIdempotencyCheckAsync ?? params.prepareMessageAfterIdempotencyCheck;
+  const message = prepare ? await prepare(params.message) : params.message;
   return message
     ? {
         appended: true,
         message,
-        messageId: (params.eventId as string | undefined) ?? "transcript-message",
+        messageId: params.eventId ?? "transcript-message",
       }
     : undefined;
 }
 
 // The real bootstrap loader is covered in workspace-bootstrap.test.ts.
 const workspaceBootstrapMock = vi.hoisted(() => ({
-  resolveCopilotWorkspaceBootstrapContext: vi.fn().mockResolvedValue({
-    bootstrapFiles: [],
-    contextFiles: [],
-    instructions: undefined,
-  }),
+  loadCopilotWorkspaceInstructions: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("./workspace-bootstrap.js", () => workspaceBootstrapMock);
 
@@ -280,7 +267,7 @@ function requireResumeSessionConfig(sdk: FakeSdk): Record<string, unknown> {
 function flushAsync() {
   // Pump enough microtasks for the attempt to settle past every
   // pre-createSession `await` in attempt.ts (resolvePoolAcquire,
-  // BYOK proxy setup, resolveCopilotWorkspaceBootstrapContext,
+  // BYOK proxy setup, loadCopilotWorkspaceInstructions,
   // createSession, etc.).
   // Each chained `then` is one tick; tests rely on this to observe
   // `sdk.sessions[0]` being populated before they emit deltas.
@@ -980,68 +967,74 @@ describe("runCopilotAttempt", () => {
     }
   });
 
-  it.each(["resume", "invalid replay", "missing session", "network failure"] as const)(
-    "handles replay session selection: %s",
-    async (mode) => {
-      const sdk = makeFakeSdk({
-        onResumeSession: (session) => {
-          if (mode === "missing session") {
-            throw Object.assign(new Error("session not found"), { status: 404 });
-          }
-          if (mode === "network failure") {
-            throw new Error("ECONNRESET network failure");
-          }
-          session.sendAndWait.mockImplementationOnce(async () => {
-            session.emit("user.message", { content: "hello" });
-            return makeAssistantMessageEvent("resumed");
-          });
-        },
-        onCreateSession: (session) => {
-          if (mode === "missing session") {
-            session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("fresh"));
-          }
-        },
-      });
-      const result = await runCopilotAttempt(
-        makeParams({
-          initialReplayState: {
-            sdkSessionId: "resume-1",
-            hadPotentialSideEffects: false,
-            replayInvalid: mode === "invalid replay",
-            ...(mode === "resume" ? { journalValidated: true } : {}),
-          },
-        }),
-        { pool: makeFakePool(sdk) },
-      );
-      expect(sdk.resumeSession).toHaveBeenCalledTimes(mode === "invalid replay" ? 0 : 1);
-      expect(sdk.createSession).toHaveBeenCalledTimes(
-        mode === "invalid replay" || mode === "missing session" ? 1 : 0,
-      );
-      if (mode === "resume") {
-        expect(sdk.resumeSession.mock.calls[0]?.[0]).toBe("resume-1");
-        expect(requireResumeSessionConfig(sdk).continuePendingWork).toBe(false);
-        expect(requireResumeSessionConfig(sdk)).not.toHaveProperty("suppressResumeEvent");
-        expect(result.replayMetadata.replaySafe).toBe(true);
-        expect(
-          (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
-        ).toBe(true);
-      } else if (mode === "network failure") {
-        expect(
-          (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)
-            ?.message,
-        ).toContain("ECONNRESET");
-      } else {
-        expect(result.replayMetadata).toEqual({
-          hadPotentialSideEffects: false,
-          replaySafe: false,
-        });
+  it.each([
+    "resume",
+    "empty session",
+    "invalid replay",
+    "missing session",
+    "network failure",
+  ] as const)("handles replay session selection: %s", async (mode) => {
+    const sdk = makeFakeSdk({
+      onResumeSession: (session) => {
         if (mode === "missing session") {
-          expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
-          expect(getSdkSessionId(result)).not.toBe("resume-1");
+          throw Object.assign(new Error("session not found"), { status: 404 });
         }
+        if (mode === "network failure") {
+          throw new Error("ECONNRESET network failure");
+        }
+        session.sendAndWait.mockImplementationOnce(async () => {
+          session.emit("user.message", { content: "hello" });
+          return makeAssistantMessageEvent("resumed");
+        });
+      },
+      onCreateSession: (session) => {
+        if (mode === "missing session") {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("fresh"));
+        }
+      },
+    });
+    const result = await runCopilotAttempt(
+      makeParams({
+        initialReplayState: {
+          sdkSessionId: mode === "empty session" ? " \t " : " resume-1 ",
+          hadPotentialSideEffects: false,
+          replayInvalid: mode === "invalid replay",
+          ...(mode === "resume" ? { journalValidated: true } : {}),
+        },
+      }),
+      { pool: makeFakePool(sdk) },
+    );
+    expect(sdk.resumeSession).toHaveBeenCalledTimes(
+      mode === "invalid replay" || mode === "empty session" ? 0 : 1,
+    );
+    expect(sdk.createSession).toHaveBeenCalledTimes(
+      mode === "invalid replay" || mode === "missing session" || mode === "empty session" ? 1 : 0,
+    );
+    if (mode === "resume") {
+      expect(sdk.resumeSession.mock.calls[0]?.[0]).toBe("resume-1");
+      expect(requireResumeSessionConfig(sdk).continuePendingWork).toBe(false);
+      expect(requireResumeSessionConfig(sdk)).not.toHaveProperty("suppressResumeEvent");
+      expect(result.replayMetadata.replaySafe).toBe(true);
+      expect(
+        (result as AgentHarnessAttemptResult & { journalValidated?: boolean }).journalValidated,
+      ).toBe(true);
+    } else if (mode === "empty session") {
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+    } else if (mode === "network failure") {
+      expect(
+        (projectAgentRunAttemptTerminal(result.terminal).promptError as Error | undefined)?.message,
+      ).toContain("ECONNRESET");
+    } else {
+      expect(result.replayMetadata).toEqual({
+        hadPotentialSideEffects: false,
+        replaySafe: false,
+      });
+      if (mode === "missing session") {
+        expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+        expect(getSdkSessionId(result)).not.toBe("resume-1");
       }
-    },
-  );
+    }
+  });
 
   it("replay-shim: consolidated mutating tool metadata makes the attempt replay-unsafe", async () => {
     const sdk = makeFakeSdk((session) => {
@@ -1652,21 +1645,13 @@ describe("runCopilotAttempt", () => {
 
   describe("workspace bootstrap (systemMessage)", () => {
     beforeEach(() => {
-      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockReset();
-      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockResolvedValue({
-        bootstrapFiles: [],
-        contextFiles: [],
-        instructions: undefined,
-      });
+      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockReset();
+      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValue(undefined);
     });
 
     it("sends the final appended developer instructions to the SDK and llm_input", async () => {
       const rendered = "# Project Context\nSoul voice goes here.";
-      workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mockResolvedValueOnce({
-        bootstrapFiles: [],
-        contextFiles: [],
-        instructions: rendered,
-      });
+      workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mockResolvedValueOnce(rendered);
       const sdk = makeFakeSdk();
       const llmInput = vi.fn();
       installHooks([{ hookName: "llm_input", handler: llmInput }]);
@@ -2296,7 +2281,7 @@ describe("runCopilotAttempt", () => {
             expect(bridgeArgs.spawnWorkspaceDir).toBe(mode === "ro" ? workspaceDir : undefined);
             if (mode === "ro") {
               expect(
-                workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext,
+                workspaceBootstrapMock.loadCopilotWorkspaceInstructions,
               ).toHaveBeenLastCalledWith(
                 expect.objectContaining({
                   effectiveWorkspaceDir: sandboxDir,
@@ -2529,7 +2514,7 @@ describe("runCopilotAttempt", () => {
       } satisfies SdkTool;
       const createToolBridge = vi.fn(async () => createStubToolBridge([sdkTool]));
       const workspaceBootstrapCalls =
-        workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls.length;
+        workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mock.calls.length;
 
       const result = await runCopilotAttempt(
         makeFinalizationParams({
@@ -2619,7 +2604,7 @@ describe("runCopilotAttempt", () => {
         }),
       );
       expect(createToolBridge).not.toHaveBeenCalled();
-      expect(workspaceBootstrapMock.resolveCopilotWorkspaceBootstrapContext.mock.calls.length).toBe(
+      expect(workspaceBootstrapMock.loadCopilotWorkspaceInstructions.mock.calls.length).toBe(
         workspaceBootstrapCalls,
       );
       const permissionHandler = cfg.onPermissionRequest as (

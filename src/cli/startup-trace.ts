@@ -129,19 +129,7 @@ function hasDiagnosticsTimelinePath(env: NodeJS.ProcessEnv): boolean {
 export function createGatewayDispatchStartupTrace(
   argv: string[],
   source: GatewayStartupTraceSource,
-): {
-  enabled: boolean;
-  consoleEnabled: boolean;
-  requiresDiagnosticsConfig(): Promise<boolean>;
-  configureDiagnosticsTimeline(config: OpenClawConfig): Promise<void>;
-  setLineFormatter(formatter: GatewayStartupTraceLineFormatter): void;
-  mark(name: string): void;
-  measure<T>(
-    name: string,
-    run: () => T | PromiseLike<T>,
-    options?: StartupTraceMeasureOptions,
-  ): Promise<T>;
-} {
+) {
   const gatewayInvocation = argv.slice(2).includes("gateway");
   const enabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE) && gatewayInvocation;
   const progressEnabled = isForegroundGatewayRunArgv(argv);
@@ -293,13 +281,13 @@ export function createGatewayDispatchStartupTrace(
       await flushPendingTimelineEvents();
       return timelineActivation === "unknown";
     },
-    async configureDiagnosticsTimeline(config) {
+    async configureDiagnosticsTimeline(config: OpenClawConfig) {
       timelineConfig = config;
       timelineConfigResolved = true;
       await flushPendingTimelineEvents();
       await pendingTimelineWrites;
     },
-    setLineFormatter(formatter) {
+    setLineFormatter(formatter: GatewayStartupTraceLineFormatter) {
       lineFormatter = formatter;
       process.off("exit", flushPendingPlainOnExit);
       flushPending(formatter);

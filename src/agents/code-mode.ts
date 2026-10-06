@@ -1,7 +1,3 @@
-/**
- * Host-side Code Mode controller for selectable JavaScript execution with bridged
- * tool search/call/yield support.
- */
 import { Type } from "typebox";
 import { getAgentToolAssistantTurnId } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

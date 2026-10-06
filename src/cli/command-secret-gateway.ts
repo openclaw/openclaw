@@ -148,8 +148,7 @@ function classifyConfiguredTargetRefs(params: {
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
 }): {
-  hasActiveConfiguredRef: boolean;
-  hasUnknownConfiguredRef: boolean;
+  needsResolution: boolean;
   diagnostics: string[];
 } {
   const context = createResolverContext({
@@ -172,29 +171,24 @@ function classifyConfiguredTargetRefs(params: {
   }
 
   const diagnostics = new Set<string>();
-  let hasActiveConfiguredRef = false;
-  let hasUnknownConfiguredRef = false;
+  let needsResolution = false;
 
   for (const path of params.configuredTargetRefPaths) {
-    if (
-      activePaths.has(path) ||
-      params.forcedActivePaths?.has(path) ||
-      params.optionalActivePaths?.has(path)
-    ) {
-      hasActiveConfiguredRef = true;
-      continue;
-    }
-    const inactiveWarning = inactiveWarningsByPath.get(path);
+    const inactiveWarning =
+      !activePaths.has(path) &&
+      !params.forcedActivePaths?.has(path) &&
+      !params.optionalActivePaths?.has(path)
+        ? inactiveWarningsByPath.get(path)
+        : undefined;
     if (inactiveWarning) {
       diagnostics.add(inactiveWarning);
-      continue;
+    } else {
+      needsResolution = true;
     }
-    hasUnknownConfiguredRef = true;
   }
 
   return {
-    hasActiveConfiguredRef,
-    hasUnknownConfiguredRef,
+    needsResolution,
     diagnostics: [...diagnostics],
   };
 }
@@ -610,7 +604,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
     forcedActivePaths: params.forcedActivePaths,
     optionalActivePaths: params.optionalActivePaths,
   });
-  if (!preflight.hasActiveConfiguredRef && !preflight.hasUnknownConfiguredRef) {
+  if (!preflight.needsResolution) {
     return {
       resolvedConfig: params.config,
       diagnostics: preflight.diagnostics,

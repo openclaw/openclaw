@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { splitNullBuffer } from "../agents/worktrees/git-path-inventory.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -10,8 +11,6 @@ import { runCommandBuffered } from "../process/exec.js";
 import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import {
-  githubPublicationBaseFetchArgs,
-  githubPublicationBaseLookupArgs,
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
@@ -125,7 +124,18 @@ export async function readGitHubPublicationBaseSha(
   host: string,
   env: NodeJS.ProcessEnv,
 ) {
-  const result = await run(githubPublicationBaseLookupArgs(repository, branch, host), { env });
+  const result = await run(
+    [
+      "gh",
+      "api",
+      "--hostname",
+      host,
+      `repos/${repository}/git/ref/heads/${branch}`,
+      "--jq",
+      "{ref: .ref, sha: .object.sha}",
+    ],
+    { env },
+  );
   if (result.code !== 0) {
     throw new Error("GitHub publication workspace base branch could not be verified.");
   }
@@ -141,7 +151,28 @@ export async function requireGitHubPublicationCommit(
   env: NodeJS.ProcessEnv,
   failure: string,
 ) {
-  const result = await run(githubPublicationBaseFetchArgs(repository, sha, host), { cwd, env });
+  const result = await run(
+    [
+      ...GITHUB_CREDENTIAL_ARGS,
+      "-c",
+      `core.hooksPath=${os.devNull}`,
+      "-c",
+      "core.fsmonitor=false",
+      "-c",
+      "maintenance.auto=false",
+      "-c",
+      "gc.auto=0",
+      "fetch",
+      "--no-auto-maintenance",
+      "--no-tags",
+      "--no-write-fetch-head",
+      "--recurse-submodules=no",
+      "--",
+      githubRepositoryUrl(repository, host),
+      sha,
+    ],
+    { cwd, env },
+  );
   if (result.code !== 0) {
     throw new Error(failure);
   }
@@ -366,7 +397,7 @@ export async function captureGitHubPublicationWorkspaceSnapshot(params: {
   const { withSettledLocalWorkspacePath } =
     await import("./worker-environments/local-workspace-projection.js");
   return await withSettledLocalWorkspacePath(params, async (custody) => {
-    const admittedPaths = await custody?.canonicalPaths();
+    const admittedPaths = await custody?.canonicalPaths?.();
     const bound = {
       ...params,
       assertCurrent: () => {

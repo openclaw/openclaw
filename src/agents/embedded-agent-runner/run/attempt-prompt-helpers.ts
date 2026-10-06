@@ -14,7 +14,10 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
+import {
+  normalizeInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -198,6 +201,9 @@ export function shouldWarnOnOrphanedUserRepair(
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
+  "[Earlier unanswered user message. Address this request alongside the current input; " +
+  "follow the latest user instruction if they conflict.]";
+const QUEUED_INTER_SESSION_MESSAGE_MARKER =
   "[Queued user message from a previous active turn; preserved as context only. " +
   "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
@@ -377,10 +383,9 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt.
  *
- * External user leaves are eligible to remain canonical (`removeLeaf: false`).
- * Session repair preserves them only for producer-tagged main-session restart
- * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
- * internal leaves are always detached.
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`);
+ * the session boundary owns whether the prompt replaces their transcript leaf.
+ * Empty or stale internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
@@ -401,8 +406,13 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     return { prompt: params.prompt, merged: false, removeLeaf: false };
   }
 
+  const provenance = normalizeInputProvenance(params.leafMessage.provenance);
+  const marker =
+    !provenance || provenance.kind === "external_user"
+      ? QUEUED_USER_MESSAGE_MARKER
+      : QUEUED_INTER_SESSION_MESSAGE_MARKER;
   return {
-    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
+    prompt: [marker, orphanText, "", params.prompt].join("\n"),
     merged: true,
     removeLeaf: false,
   };

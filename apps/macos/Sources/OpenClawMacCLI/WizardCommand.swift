@@ -149,7 +149,7 @@ actor GatewayWizardClient {
         socket.maximumMessageSize = 16 * 1024 * 1024
         socket.resume()
         self.task = socket
-        try await self.sendConnect()
+        try await self.sendConnect(task: socket)
     }
 
     func close() {
@@ -201,21 +201,17 @@ actor GatewayWizardClient {
     }
 
     private func decodeFrame(_ message: URLSessionWebSocketTask.Message) throws -> GatewayFrame {
-        let data: Data? = switch message {
-        case let .data(data): data
-        case let .string(text): text.data(using: .utf8)
-        @unknown default: nil
-        }
-        guard let data else {
+        let data: Data
+        switch message {
+        case let .data(value): data = value
+        case let .string(text): data = Data(text.utf8)
+        @unknown default:
             throw WizardCliError.decodeError("empty gateway response")
         }
         return try self.decoder.decode(GatewayFrame.self, from: data)
     }
 
-    private func sendConnect() async throws {
-        guard let task = self.task else {
-            throw WizardCliError.gatewayError("gateway not connected")
-        }
+    private func sendConnect(task: URLSessionWebSocketTask) async throws {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let clientId = "openclaw-macos"
@@ -248,7 +244,7 @@ actor GatewayWizardClient {
         } else if let password = self.password {
             params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
-        let connectChallenge = try await self.waitForConnectChallenge()
+        let connectChallenge = try await self.waitForConnectChallenge(task: task)
         let connectNonce = connectChallenge.nonce
         guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else {
             throw NSError(
@@ -280,9 +276,8 @@ actor GatewayWizardClient {
         _ = try self.decodePayload(response, as: HelloOk.self)
     }
 
-    private func waitForConnectChallenge() async throws -> GatewayConnectChallenge {
-        guard let task = self.task else { throw ConnectChallengeError.timeout }
-        return try await AsyncTimeout.withTimeout(
+    private func waitForConnectChallenge(task: URLSessionWebSocketTask) async throws -> GatewayConnectChallenge {
+        try await AsyncTimeout.withTimeout(
             seconds: self.connectChallengeTimeoutSeconds,
             onTimeout: { ConnectChallengeError.timeout },
             operation: {

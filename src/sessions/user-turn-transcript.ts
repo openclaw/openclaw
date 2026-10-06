@@ -146,7 +146,7 @@ async function persistUserTurnTranscript(
     assertCurrent();
     appended = anchor ? { ...appended, anchor } : appended;
   }
-  if (!appended.anchor || appended.message.role !== "user") {
+  if (!appended.anchor) {
     return undefined;
   }
   if (committedWithoutAnchor && appended.appended) {
@@ -423,18 +423,13 @@ export function createUserTurnTranscriptRecorder(
     await admissionWrite;
   };
 
-  const persistPrepared = async (options: {
-    waitForRuntime: boolean;
-    skipWhenBlocked: boolean;
-    message?: PersistedUserTurnMessage;
-    target?: UserTurnTranscriptTargetResolver;
-    updateMode?: UserTurnTranscriptUpdateMode;
-    cwd?: string;
-    expectedSessionId?: string;
-    expectedSessionState?: SessionTranscriptTurnPersistOptions["expectedSessionState"];
-    sessionLifecyclePatch?: SessionTranscriptTurnPersistOptions["sessionLifecyclePatch"];
-    retryIfUnpersisted?: boolean;
-  }): Promise<UserTurnTranscriptPersistResult | undefined> => {
+  const persistPrepared = async (
+    options: NonNullable<Parameters<UserTurnTranscriptRecorder["persistApproved"]>[0]> & {
+      waitForRuntime: boolean;
+      skipWhenBlocked: boolean;
+      message?: PersistedUserTurnMessage;
+    },
+  ): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (options.skipWhenBlocked && blocked) {
       return undefined;
     }

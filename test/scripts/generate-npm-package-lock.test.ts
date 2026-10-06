@@ -9,6 +9,8 @@ import {
   applyPackageExtensionPeerMetadata,
   collectOverrideViolations,
   collectPnpmLockViolations,
+  collectPnpmLockPlatformViolations,
+  collectNpmPlatformOptionalDependencies,
   createNpmPackageLockInstallStrategyArgs,
   createNpmLockExecOptions,
   disableDependencyShrinkwrapOverrideConflictSources,
@@ -659,6 +661,52 @@ describe("generate-npm-package-lock", () => {
         overrides,
       ),
     ).toEqual([]);
+  });
+
+  it("selects only top-level optional runtime platform dependencies", () => {
+    const native = { version: "1.2.3", optional: true, os: ["linux"] };
+    expect(
+      collectNpmPlatformOptionalDependencies({
+        packages: {
+          "": { ...native, name: "root" },
+          "node_modules/runtime": native,
+          "node_modules/dev": { ...native, dev: true },
+          "node_modules/dev-and-optional": { ...native, devOptional: true },
+          "node_modules/required": { ...native, optional: false },
+          "node_modules/parent/node_modules/nested": native,
+          "node_modules/trailing/path": native,
+          "node_modules/linked": { ...native, link: true },
+          "node_modules/range": { ...native, version: "^1.2.3" },
+          "node_modules/portable": { version: "1.2.3", optional: true },
+          "node_modules/empty-platform": { ...native, os: [] },
+          "node_modules/malformed-platform": { ...native, os: [false] },
+        },
+      }),
+    ).toEqual({ "dev-and-optional": "1.2.3", runtime: "1.2.3" });
+  });
+
+  it("keeps exact alias identity and CPU or libc-only optional constraints", () => {
+    expect(
+      collectNpmPlatformOptionalDependencies({
+        packages: {
+          "node_modules/native-alias": {
+            name: "@fixture/native",
+            version: "1.2.3-beta.4",
+            optional: true,
+            cpu: ["arm64"],
+          },
+          "node_modules/@fixture/libc": {
+            name: "@fixture/libc",
+            version: "2.0.0",
+            optional: true,
+            libc: ["musl"],
+          },
+        },
+      }),
+    ).toEqual({
+      "@fixture/libc": "2.0.0",
+      "native-alias": "npm:@fixture/native@1.2.3-beta.4",
+    });
   });
 
   it.each(
@@ -1502,7 +1550,100 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
     },
   );
 
-  it("normalizes npm patch-version metadata drift", () => {
+  it.each(
+    (["os", "cpu", "libc"] as const).flatMap((field) =>
+      [undefined, [], ["wrong-platform"], "linux"].map((actualConstraint) => ({
+        field,
+        actualConstraint,
+      })),
+    ),
+  )(
+    "rejects missing or altered optional platform $field: $actualConstraint",
+    ({ field, actualConstraint }) => {
+      const constraints = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
+      expect(
+        collectPnpmLockPlatformViolations(
+          {
+            packages: {
+              "node_modules/@fixture/native": {
+                version: "1.0.0",
+                optional: true,
+                ...constraints,
+                [field]: actualConstraint,
+              },
+            },
+          },
+          { packages: { "@fixture/native@1.0.0": constraints } },
+        ),
+      ).toEqual([
+        {
+          actualConstraint,
+          expectedConstraint: constraints[field],
+          field,
+          packageKey: "@fixture/native@1.0.0",
+          path: "node_modules/@fixture/native",
+        },
+      ]);
+    },
+  );
+
+  it("validates platform constraints for aliases and nested versions without changing optionality", () => {
+    const linux = { os: ["linux"], cpu: ["x64"], libc: ["glibc"] };
+    const darwin = { os: ["darwin"], cpu: ["arm64"] };
+    const lockfile = {
+      packages: {
+        "": { name: "@fixture/native", version: "1.0.0" },
+        "node_modules/required-native": { name: "@fixture/native", version: "1.0.0", ...linux },
+        "node_modules/parent/node_modules/native-alias": {
+          name: "@fixture/native",
+          version: "2.0.0",
+          optional: true,
+          ...darwin,
+        },
+        "node_modules/parent/node_modules/@fixture/native": {
+          version: "1.0.0",
+          optional: true,
+          ...linux,
+        },
+        "node_modules/linked-native": { name: "@fixture/native", version: "1.0.0", link: true },
+      },
+    };
+    const pnpmLock = {
+      packages: {
+        "@fixture/native@1.0.0(patch_hash=fixture)": linux,
+        "@fixture/native@https://example.test/native.tgz": { version: "2.0.0", ...darwin },
+      },
+    };
+    expect(collectPnpmLockPlatformViolations(lockfile, pnpmLock)).toEqual([]);
+    expect(lockfile.packages["node_modules/required-native"]).not.toHaveProperty("optional");
+
+    lockfile.packages["node_modules/parent/node_modules/native-alias"].os = ["linux"];
+    expect(collectPnpmLockPlatformViolations(lockfile, pnpmLock)).toEqual([
+      {
+        actualConstraint: ["linux"],
+        expectedConstraint: ["darwin"],
+        field: "os",
+        packageKey: "@fixture/native@2.0.0",
+        path: "node_modules/parent/node_modules/native-alias",
+      },
+    ]);
+  });
+
+  it("accepts equivalent platform constraint order and unconstrained packages", () => {
+    expect(
+      collectPnpmLockPlatformViolations(
+        {
+          packages: {
+            "node_modules/native": { version: "1.0.0", os: ["!win32", "linux"] },
+            "node_modules/portable": { version: "1.0.0" },
+          },
+        },
+        { packages: { "native@1.0.0": { os: ["linux", "!win32"] }, "portable@1.0.0": {} } },
+      ),
+    ).toEqual([]);
+  });
+
+  it("normalizes npm metadata drift without losing optional platform constraints", () => {
     expect(
       normalizeNpmVersionDrift({
         packages: {
@@ -1529,6 +1670,7 @@ process.on("SIGTERM", () => server.close(() => process.exit(0)));
         "node_modules/@rollup/rollup-linux-x64-gnu": {
           version: "4.53.5",
           cpu: ["x64"],
+          libc: ["glibc"],
           optional: true,
           os: ["linux"],
         },

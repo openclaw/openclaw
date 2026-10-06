@@ -235,6 +235,7 @@ export async function sendControlUiHtmlBody(
   req: IncomingMessage,
   res: ServerResponse,
   body: string,
+  isCurrent?: () => boolean,
 ) {
   const encoding = resolveControlUiHtmlEncoding(req);
   if (encoding === "not-acceptable") {
@@ -242,5 +243,12 @@ export async function sendControlUiHtmlBody(
     return;
   }
   setControlUiEncodingHeaders(res, ".html", encoding);
-  res.end(encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding));
+  const encoded =
+    encoding === "identity" ? body : await cachedCompressedControlUiHtml(body, encoding);
+  if (isCurrent && !isCurrent()) {
+    res.removeHeader("Content-Encoding");
+    respondPlainText(res, 403, "Session access changed. Reload the conversation.");
+    return;
+  }
+  res.end(encoded);
 }

@@ -442,8 +442,8 @@ registerGatewayUpdateHistoryTests(() => port, readonlyPreparation);
 describe("gateway update.run", () => {
   test("persists the accepted handoff before parking and restarting its foreground owner", async () => {
     await withoutSupervisorHints(async () => {
-      const [installSurface, gatewayOwner, handoff, restart] = await Promise.all([
-        import("../infra/update-runner-install-surface.js"),
+      const [installStatus, gatewayOwner, handoff, restart] = await Promise.all([
+        import("../infra/update-install-status.js"),
         import("../infra/gateway-owner-lease.js"),
         import("../infra/update-managed-service-handoff.js"),
         import("../infra/restart.js"),
@@ -454,12 +454,13 @@ describe("gateway update.run", () => {
       }
       const root = updateDirs.make("openclaw-update-role-");
       const entrypoint = path.join(root, "dist", "index.js");
-      const surface = vi.spyOn(installSurface, "resolveUpdateInstallSurface").mockResolvedValue({
-        kind: "git",
-        mode: "git",
-        root,
-        packageRoot: root,
-      });
+      const installation = vi
+        .spyOn(installStatus, "resolveStartupInstallStatus")
+        .mockResolvedValue({
+          root,
+          status: { root, installKind: "git", packageManager: "pnpm" },
+          installReceipt: null,
+        });
       // The shared server starts below the CLI run loop that publishes its owner.
       const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
         owner: "role-update-owner",
@@ -562,7 +563,7 @@ describe("gateway update.run", () => {
         transfer.mockRestore();
         start.mockRestore();
         readOwner.mockRestore();
-        surface.mockRestore();
+        installation.mockRestore();
       }
     });
   });

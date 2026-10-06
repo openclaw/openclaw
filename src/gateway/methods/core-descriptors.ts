@@ -1,10 +1,5 @@
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
-import {
-  chatMetadataShareKey,
-  cronListShareKey,
-  modelsListShareKey,
-  sessionsListShareKey,
-} from "./read-share-keys.js";
+import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
 
 // Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
@@ -231,7 +226,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "<=2026.7",
     {
       startup: true,
-      shareKey: sessionsListShareKey,
+      shareKey: operatorReadShareKey,
       shareMaxAgeMs: 1_000,
       shareInvalidationEvents: ["sessions.changed", "chat.metadata.changed"],
     },
@@ -328,7 +323,17 @@ export const CORE_GATEWAY_METHOD_SPECS = [
       shareInvalidationEvents: ["cron", "sessions.changed"],
     },
   ],
-  ["cron.status", "cron", "operator.read", "<=2026.7"],
+  [
+    "cron.status",
+    "cron",
+    "operator.read",
+    "<=2026.7",
+    {
+      shareKey: operatorReadShareKey,
+      shareMaxAgeMs: 1_000,
+      shareInvalidationEvents: ["cron"],
+    },
+  ],
   ["cron.scratch.get", "cron", "operator.admin", "2026.7"],
   ["cron.scratch.set", "cron", "operator.admin", "2026.7"],
   ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
@@ -367,7 +372,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "<=2026.7",
     {
       startup: true,
-      shareKey: chatMetadataShareKey,
+      shareKey: operatorReadShareKey,
       shareMaxAgeMs: 1_000,
       shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
     },
@@ -704,4 +709,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["sessions.processes.list", "session-processes", "operator.read", "2026.9", OBSERVATION],
   ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
+  ["catalog.browse", "plugins", "operator.read", "2026.9"],
+  ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

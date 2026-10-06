@@ -69,7 +69,7 @@ private object SystemPhotosDataSource : PhotosDataSource {
       try {
         // Enforce both per-photo and total payload budgets before returning
         // base64 data through the gateway invoke response.
-        val encoded = encodeJpegUnderBudget(bitmap, request.quality, MAX_PER_PHOTO_BASE64_CHARS)
+        val encoded = encodeJpegUnderBudget(bitmap, request.quality)
         if (encoded == null) continue
         if (encoded.base64.length > remainingBudget) break
         remainingBudget -= encoded.base64.length
@@ -184,18 +184,17 @@ private object SystemPhotosDataSource : PhotosDataSource {
   private fun encodeJpegUnderBudget(
     bitmap: Bitmap,
     quality: Double,
-    maxBase64Chars: Int,
   ): EncodedPhotoPayload? {
     var working = bitmap
     try {
-      var jpegQuality = (quality.coerceIn(0.1, 1.0) * 100.0).roundToInt().coerceIn(10, 100)
+      var jpegQuality = (quality * 100.0).roundToInt()
       repeat(10) {
         val out = ByteArrayOutputStream()
         val ok = working.compress(Bitmap.CompressFormat.JPEG, jpegQuality, out)
         if (!ok) return null
         val bytes = out.toByteArray()
         val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-        if (base64.length <= maxBase64Chars) {
+        if (base64.length <= MAX_PER_PHOTO_BASE64_CHARS) {
           return EncodedPhotoPayload(
             format = "jpeg",
             base64 = base64,

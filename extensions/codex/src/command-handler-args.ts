@@ -19,7 +19,6 @@ type ParsedBindArgs = {
 type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
@@ -299,7 +298,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
-    hasOverrides: false,
     persistentIdentity: {},
   };
   let sawAction = false;
@@ -333,7 +331,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
         continue;
       }
       parsed.overrides[option] = value.trim();
-      parsed.hasOverrides = true;
       index += 1;
       continue;
     }

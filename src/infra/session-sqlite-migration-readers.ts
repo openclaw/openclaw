@@ -244,13 +244,10 @@ type TranscriptImportPlan = {
 
 class TranscriptImportLimitError extends Error {}
 
-export type TranscriptFileFingerprint = {
-  ctimeNs: bigint;
-  dev: bigint;
-  ino: bigint;
-  mtimeNs: bigint;
-  size: bigint;
-};
+export type TranscriptFileFingerprint = Pick<
+  fs.BigIntStats,
+  "ctimeNs" | "dev" | "ino" | "mtimeNs" | "size"
+>;
 
 export function readTranscriptFingerprint(transcriptPath: string): TranscriptFileFingerprint {
   const stat = fs.statSync(transcriptPath, { bigint: true });

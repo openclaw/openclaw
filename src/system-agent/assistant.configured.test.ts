@@ -6,7 +6,7 @@ import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
-import { planSystemAgentCommand } from "./assistant.js";
+import { planSystemAgentCommand } from "./assistant.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";

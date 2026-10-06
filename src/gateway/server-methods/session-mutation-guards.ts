@@ -1,9 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { PreparedQuestionCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
@@ -12,6 +15,7 @@ import {
   readGatewayDeviceRevocationGuard,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -33,6 +37,7 @@ type RequestMutationOptions = Pick<
 type RequestMutationAuthorityBase = {
   /** Preparation checks cannot consume an opaque SDK commit callback. */
   assertPreparationCurrent: () => void;
+  questionCallerRead?: PreparedQuestionCallerRead;
   assertCurrent: () => void;
   /** Original transport/SDK lifetime; prepared-profile methods check selection separately. */
   assertLifetimeCurrent: () => void;
@@ -135,8 +140,42 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
   options: T,
   assertSourceCurrent: (() => void) | undefined,
   assertPreparationCurrent: (() => void) | undefined,
+  questionCallerRead?: PreparedQuestionCallerRead,
 ): T {
-  if (!assertSourceCurrent && !assertPreparationCurrent) {
+  if (
+    isGatewayNativeApprovalMethod(options.req.method) &&
+    isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)
+  ) {
+    const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
+      options;
+    const assertWorkerCurrent = () => {
+      if (
+        options.req !== req ||
+        options.client !== client ||
+        options.context !== context ||
+        options.signal !== signal ||
+        options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
+        options.sessionMutationCommitGuard !== sessionMutationCommitGuard
+      ) {
+        throw new Error("Gateway requester authority changed");
+      }
+      assertRequestAuthorityCurrent({
+        req,
+        client,
+        signal,
+        hasCurrentClientAuthority,
+        sessionMutationCommitGuard,
+      });
+    };
+    bindRequestMutationAuthority(options, {
+      family: "worker",
+      assertPreparationCurrent: assertWorkerCurrent,
+      assertCurrent: assertWorkerCurrent,
+      assertLifetimeCurrent: assertWorkerCurrent,
+      assertWorkerCurrent,
+    });
+  }
+  if (!assertSourceCurrent && !assertPreparationCurrent && !questionCallerRead) {
     return options;
   }
   const source = readGatewayRequestMutationAuthority(options);
@@ -144,6 +183,7 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     options;
   bindRequestMutationAuthority(options, {
     ...source,
+    questionCallerRead,
     assertPreparationCurrent: () => {
       source.assertPreparationCurrent();
       assertPreparationCurrent?.();
@@ -287,6 +327,7 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
       assertHandlerCurrent();
       source.assertPreparationCurrent();
     },
+    questionCallerRead: source.questionCallerRead,
     assertCurrent,
     assertLifetimeCurrent,
     expectedProfileBinding: retainedProfileBinding,
@@ -320,8 +361,17 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
     };
     const authorization = handler.sessionMutationAuthorization;
     if (authorization) {
+      const admitted = authorization.admittedInputAuthority;
       handler.sessionMutationAuthorization = {
         ...authorization,
+        ...(admitted
+          ? {
+              admittedInputAuthority: withSessionPendingInputAuthorityGuard(
+                admitted,
+                assertTransferredHandlerCurrent,
+              ),
+            }
+          : {}),
         assertAdmittedInputCurrent: () => {
           assertTransferredHandlerCurrent();
           (authorization.assertAdmittedInputCurrent ?? authorization.assertCurrent)();
@@ -391,9 +441,17 @@ export function withSessionMutationCommitGuard(
     assertAdmittedSourceCurrent ?? assertCommitAllowed,
     authorization?.assertCurrent,
   ]);
+  const admitted = authorization?.admittedInputAuthority;
   return {
     ...authorization,
     assertAdmittedInputCurrent,
+    ...(admitted
+      ? {
+          admittedInputAuthority: withSessionPendingInputAuthorityGuard(admitted, () =>
+            (assertAdmittedSourceCurrent ?? assertCommitAllowed)?.(),
+          ),
+        }
+      : {}),
     ...(authorization?.withCurrent
       ? {
           withCurrent: <T>(consume: () => T) =>

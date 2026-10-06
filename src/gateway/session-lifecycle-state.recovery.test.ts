@@ -18,13 +18,16 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
   throw new Error("Session lifecycle presentation imported plugin runtime ownership");
 });
 
+// mock-isolation: Exercise recovery reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: persistenceMocks.loadSessionEntry,
+// mock-isolation: Controlled entries isolate recovery projection from database admission.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (...args: unknown[]) =>
+    persistenceMocks.loadSessionEntry(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -79,7 +82,7 @@ const cases: RecoveryCase[] = [
       },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
       mainRestartRecovery: recovery,
@@ -120,7 +123,7 @@ const cases: RecoveryCase[] = [
       event: { data: { phase: "end", endedAt: 1_800 } },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
       mainRestartRecovery: recovery,
@@ -192,7 +195,7 @@ const cases: RecoveryCase[] = [
       },
     }),
     expected: {
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       lifecycleRunId: "foreground-run",
       restartRecoveryRuns: [interrupted],
@@ -205,7 +208,7 @@ it.each(cases)("$name", async ({ input, expected, clearsRecovery, clearsOwner, w
   const { entry, event } = input(getAgentEventLifecycleGeneration());
   loggerMocks.warn.mockClear();
   const persisted = await persistLifecycle(
-    { status: "running", abortedLastRun: true, mainRestartRecovery: recovery, ...entry },
+    { status: "interrupted", abortedLastRun: true, mainRestartRecovery: recovery, ...entry },
     event,
   );
   expect(persisted).toMatchObject(expected);

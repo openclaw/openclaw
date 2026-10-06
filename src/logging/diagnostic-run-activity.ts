@@ -443,18 +443,15 @@ export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
   workKey?: string;
-  clearRunActivity?: boolean;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
   embeddedRunIndex.remove(activity, params.workKey ?? params.sessionId);
-  if (params.clearRunActivity !== false) {
-    activity.activeTools.clear();
-    activity.activeModelCalls.clear();
-    activity.activeCoreModelCalls.clear();
-  }
+  activity.activeTools.clear();
+  activity.activeModelCalls.clear();
+  activity.activeCoreModelCalls.clear();
   if (activity.activeEmbeddedRuns.size === 0) {
     clearArgumentChurnActivity(activity);
     clearArgumentChurnPolicyWaits(activity);

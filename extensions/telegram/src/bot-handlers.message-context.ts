@@ -7,7 +7,6 @@ import {
   getSessionEntry,
   readAmbientTranscriptWatermark,
   resolveAmbientTranscriptWatermarkKey,
-  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { asFiniteNumber } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultModelForAgent } from "./bot-handlers.agent.runtime.js";
@@ -53,15 +52,6 @@ import {
 import { resolveCompleteTelegramPromptContextProjectionIds } from "./prompt-context-projection.js";
 
 export type TelegramPromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
-
-export type TelegramSessionState = {
-  agentId: string;
-  bindingMode: Awaited<ReturnType<typeof resolveTelegramConversationRoute>>["bindingMode"];
-  sessionEntry: SessionEntry | undefined;
-  sessionKey: string;
-  storePath: string;
-  model: string | undefined;
-};
 
 export type ResolveTelegramSessionStateParams = {
   chatId: number | string;
@@ -169,9 +159,7 @@ export function createTelegramMessageSessionRuntime({
   "accountId" | "resolveTelegramGroupConfig" | "telegramDeps"
 >) {
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
-  const resolveTelegramSessionState = async (
-    params: ResolveTelegramSessionStateParams,
-  ): Promise<TelegramSessionState> => {
+  const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
     const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(

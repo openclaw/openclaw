@@ -9,6 +9,7 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
@@ -34,6 +35,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
+  PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",
@@ -419,7 +421,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
-    diagnostics: ["hook runner contract probe"],
+    diagnostics: ["hook runner contract check"],
     tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
@@ -429,7 +431,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["llm_input", "llm_output", "agent_end", "allowConversationAccess"],
-    diagnostics: ["conversation access hook contract probe"],
+    diagnostics: ["conversation access hook contract check"],
     tests: ["src/agents/cli-runner.reliability.test.ts", "src/config/schema.help.quality.test.ts"],
   },
   {
@@ -443,7 +445,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "capturePluginRegistration",
       "OpenClawPluginApi",
     ],
-    diagnostics: ["runtime registration capture contract probe"],
+    diagnostics: ["runtime registration capture contract check"],
     tests: ["src/plugins/captured-registration.test.ts"],
   },
   {
@@ -453,7 +455,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/sdk-channel-plugins",
     surfaces: ["api.registerChannel", "channel setup metadata", "channel message envelope"],
-    diagnostics: ["channel runtime contract probe"],
+    diagnostics: ["channel runtime contract check"],
     tests: [
       "src/plugin-sdk/channel-entry-contract.test.ts",
       "src/plugins/captured-registration.test.ts",

@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Dedicated sidebar for the full-page settings takeover (see app-host.ts).
 import { html, nothing } from "lit";
 import type { AgentsListResult } from "../api/types.ts";
 import {

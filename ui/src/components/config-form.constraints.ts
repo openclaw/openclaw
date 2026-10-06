@@ -89,21 +89,7 @@ type NumericInputConstraints = {
   step: number | "any";
 };
 
-type ArrayInputConstraints = {
-  minItems: number;
-  maxItems?: number;
-  uniqueItems: boolean;
-};
-
-type EffectiveNumericBound = {
-  value?: number;
-  exclusive: boolean;
-};
-
-function effectiveNumericBound(
-  schemas: JsonSchema[],
-  direction: "lower" | "upper",
-): EffectiveNumericBound {
+function effectiveNumericBound(schemas: JsonSchema[], direction: "lower" | "upper") {
   let value: number | undefined;
   let exclusive = false;
   for (const schema of schemas) {
@@ -160,7 +146,7 @@ function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
   return Number.isFinite(combined) && combined > 0 ? combined : undefined;
 }
 
-export function arrayInputConstraints(schema: JsonSchema): ArrayInputConstraints {
+export function arrayInputConstraints(schema: JsonSchema) {
   const schemas = collectAllOfSchemas(schema);
   let minItems = 0;
   let maxItems: number | undefined;

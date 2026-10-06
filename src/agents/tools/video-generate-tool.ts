@@ -1,4 +1,3 @@
-/** Runs capability-aware video generation and persistence. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type, type TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

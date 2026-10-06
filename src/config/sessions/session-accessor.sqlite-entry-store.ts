@@ -72,7 +72,6 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 export {
   parseReadableSqliteSessionEntryRow,
-  parseReadableSqliteSessionEntryRows,
   readExactSessionEntryRow,
   readExactSessionEntryRowValidated,
   readSessionEntryRow,

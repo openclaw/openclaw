@@ -64,19 +64,6 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   return opts;
 }
 
-function resolveExportTrajectoryOptions(
-  opts: ExportTrajectoryCommandOptions,
-): ExportTrajectoryCommandOptions {
-  const encoded = opts.requestJsonBase64;
-  if (encoded === undefined || encoded.length === 0) {
-    return opts;
-  }
-  return {
-    ...opts,
-    ...decodeExportTrajectoryRequest(encoded),
-  };
-}
-
 function throwTrajectoryExportError(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
@@ -88,7 +75,9 @@ export async function exportTrajectoryCommand(
 ): Promise<void> {
   let resolvedOpts: ExportTrajectoryCommandOptions;
   try {
-    resolvedOpts = resolveExportTrajectoryOptions(opts);
+    resolvedOpts = opts.requestJsonBase64
+      ? { ...opts, ...decodeExportTrajectoryRequest(opts.requestJsonBase64) }
+      : opts;
   } catch (error) {
     throwTrajectoryExportError(
       `Failed to decode trajectory export request: ${formatErrorMessage(error)}`,

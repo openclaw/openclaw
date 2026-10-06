@@ -64,9 +64,9 @@ describe("publication SQLite materialization", () => {
     }
   });
 
-  it("observes no current publication after worktree GC retires the session checkout", () => {
+  it("observes no current publication after worktree GC retires the session checkout", async () => {
     insertSharedWorktreeReceipt("latest");
-    updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
+    await updateRegistryWorktree(process.env, "worktree-1", { removedAt: 2 });
     expect(
       readSharedGitHubPublicationRequestInDatabase(
         openOpenClawStateDatabase().db,

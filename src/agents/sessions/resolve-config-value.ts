@@ -89,9 +89,6 @@ function executeCommandUncached(commandConfig: string): string | undefined {
   return executeWithDefaultShell(command);
 }
 
-/**
- * Resolve all header values using the same resolution logic as API keys.
- */
 export function resolveConfigValueUncached(config: string): string | undefined {
   if (config.startsWith("!")) {
     return executeCommandUncached(config);

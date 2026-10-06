@@ -4,10 +4,14 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  createSubsystemLogger,
   resolveStateDir,
   resolveUserPath,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { stopMemorySqliteWalMaintenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_INDEX_FTS_TABLE,
+  stopMemorySqliteWalMaintenance,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
   borrowOpenClawAgentDatabase,
@@ -21,12 +25,17 @@ import {
   type StoreWriterQueue,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
+import { runMemorySourceState } from "./manager-cpu-worker-runtime.js";
+import {
+  memoryDatabaseTableExists,
+  MemoryIndexRevisionConflictError,
+} from "./manager-db-kernel.js";
 import {
   closeMemoryDatabase,
   openMemoryDatabaseAtPath,
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
+import { withMemoryIndexMutationGeneration } from "./manager-index-generation-lease.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
@@ -44,10 +53,12 @@ import {
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
 import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
+import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
+const log = createSubsystemLogger("memory");
 type PublicationWorker = {
-  store: OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>;
+  store: Pick<OpenClawAgentSqliteWorkerStore<MemoryPublicationOperations>, "run" | "close">;
   busyTimeoutMs: number;
 };
 
@@ -74,6 +85,7 @@ export class MemoryIndexDatabase {
   private nativeWriterActive = false;
   private publicationWorker?: Promise<PublicationWorker>;
   private publicationGenerationActive = false;
+  private schemaAdmission?: Promise<void>;
   private shadow?: {
     path: string;
     identity: MemoryShadowConnection["fileIdentity"];
@@ -83,30 +95,59 @@ export class MemoryIndexDatabase {
   private releaseInProgress = false;
   shadowReleased = false;
 
-  static openPublished(params: {
+  static async openPublished(params: {
     agentId: string;
     writeOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0] & { path: string };
     readOnly: boolean;
     allowExtension: boolean;
     maintenanceSource?: MemoryIndexDatabase;
-  }): MemoryIndexDatabase {
+    schema: MemoryPublicationOperations["schema.admit"]["input"];
+  }): Promise<MemoryIndexDatabase> {
     const connection = params.readOnly
       ? openMemoryDatabaseReadOnlyAtPath(
           params.writeOptions.path,
           params.allowExtension,
           params.agentId,
         )
-      : borrowOpenClawAgentDatabase(params.writeOptions);
+      : await withOpenClawAgentDatabaseWrite(
+          params.writeOptions,
+          () => ({ ...borrowOpenClawAgentDatabase(params.writeOptions), hasIndex: true }),
+          params.maintenanceSource?.db,
+        );
     if (params.maintenanceSource && connection.db !== params.maintenanceSource.db) {
       connection.release();
       throw new Error("Memory maintenance source connection changed");
     }
-    return new MemoryIndexDatabase(
+    const database = new MemoryIndexDatabase(
       connection.db,
       connection.release,
       params.readOnly,
       params.writeOptions,
+      connection.hasIndex,
     );
+    try {
+      database.fts.enabled = params.schema.ftsEnabled;
+      if (
+        params.maintenanceSource &&
+        (!database.fts.enabled || params.maintenanceSource.fts.available)
+      ) {
+        Object.assign(database.fts, params.maintenanceSource.fts);
+      } else if (params.readOnly) {
+        database.fts.available =
+          database.hasIndex &&
+          database.fts.enabled &&
+          memoryDatabaseTableExists(database.db, "main", MEMORY_INDEX_FTS_TABLE);
+      } else {
+        await database.admitSchema(params.schema);
+        // Sync must acquire its own retained executor for accepted shutdown work.
+        await database.closePublicationWorker();
+      }
+      return database;
+    } catch (error) {
+      // Failed worker cleanup retains its own borrow with the agent lifecycle.
+      database.release();
+      throw error;
+    }
   }
 
   static openShadow(filename: string, allowExtension: boolean): MemoryIndexDatabase {
@@ -161,6 +202,7 @@ export class MemoryIndexDatabase {
     readonly release: () => void = () => closeMemoryDatabase(db),
     readonly readOnly = false,
     readonly writeOptions?: Parameters<typeof withOpenClawAgentDatabaseWrite>[0],
+    readonly hasIndex = true,
   ) {}
 
   get isShadow(): boolean {
@@ -355,11 +397,64 @@ export class MemoryIndexDatabase {
     return undefined;
   }
 
-  read<Key extends "source.hash" | "cache.read">(
+  read<Key extends "source.hash" | "cache.read" | "session.current">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
     return this.runPublication((scope) => scope.execute(command), assertCurrent);
+  }
+
+  admitSchema(input: MemoryPublicationOperations["schema.admit"]["input"]): Promise<void> {
+    this.schemaAdmission ??= this.runPublication(
+      (scope) => this.retryPublication(() => scope.execute({ type: "schema.admit", input })),
+      () => {
+        if (this.closed || !this.db.isOpen) {
+          throw new Error("Memory database owner closed before schema admission");
+        }
+      },
+    ).then((result) => {
+      if (!result) {
+        throw new Error("Memory schema admission did not complete");
+      }
+      this.fts.enabled = input.ftsEnabled;
+      this.fts.available = result.ftsAvailable;
+      this.fts.loadError = result.ftsError;
+      if (input.ftsEnabled && result.ftsError) {
+        log.warn(`fts unavailable: ${result.ftsError}`);
+      }
+    });
+    return this.schemaAdmission;
+  }
+
+  async readSourceState(query: Omit<Parameters<typeof loadMemorySourceFileState>[0], "db">) {
+    const assertCurrent = () => {
+      if (this.closed || !this.db.isOpen) {
+        throw new Error("Memory source owner closed during source preparation");
+      }
+      this.assertShadowPath();
+    };
+    assertCurrent();
+    if (!this.hasIndex) {
+      return [];
+    }
+    let rows;
+    if (this.readOnly) {
+      const target = this.writeOptions;
+      if (!target?.agentId || !target.path) {
+        throw new Error("Memory source inspection requires its captured database target");
+      }
+      rows = await runMemorySourceState(
+        { agentId: target.agentId, databasePath: target.path },
+        query,
+      );
+    } else {
+      rows = await this.runPublication(
+        (scope) => scope.execute({ type: "source.state", input: query }),
+        assertCurrent,
+      );
+    }
+    assertCurrent();
+    return rows;
   }
 
   async pruneEmbeddingCache(maxEntries: number, assertCurrent: () => void): Promise<boolean> {
@@ -438,53 +533,75 @@ export class MemoryIndexDatabase {
     assertCurrent: () => void,
     prepare: () => Promise<boolean>,
   ) {
-    return this.runPublication(async (scope) => {
-      const operation = randomUUID();
-      const { chunks, embeddings: _embeddings, ...header } = replacement;
-      await scope.execute({
-        type: "stage.start",
-        input: { operation, header, rows: chunks.length },
-      });
-      let needsDiscard = true;
-      for (const fragments of memoryPublicationBatches(replacement)) {
-        await scope.execute({ type: "stage.append", input: { operation, fragments } });
-      }
-      const result = await this.retryPublication(async () => {
-        const outcome = await scope.execute({
-          type: "source.replace",
-          input: { operation, state: this.publicationState() },
+    const run = () =>
+      this.runPublication(async (scope) => {
+        const operation = randomUUID();
+        const { chunks, embeddings: _embeddings, ...header } = replacement;
+        await scope.execute({
+          type: "stage.start",
+          input: { operation, header, rows: chunks.length },
         });
-        if (outcome.ok || outcome.entered) {
-          needsDiscard = false;
+        let needsDiscard = true;
+        for (const fragments of memoryPublicationBatches(replacement)) {
+          await scope.execute({ type: "stage.append", input: { operation, fragments } });
         }
-        return outcome;
-      }, prepare);
-      if (this.isShadow) {
-        assertCurrent();
-      }
-      // Thrown failures close the Worker through runPublication. A further
-      // command on that failed scope could hide the original write outcome.
-      if (needsDiscard) {
-        await scope.execute({ type: "stage.discard", input: { operation } });
-      }
-      return result;
-    }, assertCurrent);
+        const result = await this.retryPublication(async () => {
+          const outcome = await scope.execute({
+            type: "source.replace",
+            input: { operation, state: this.publicationState() },
+          });
+          if (outcome.ok || outcome.entered) {
+            needsDiscard = false;
+          }
+          return outcome;
+        }, prepare);
+        if (this.isShadow) {
+          assertCurrent();
+        }
+        // Thrown failures close the Worker through runPublication. A further
+        // command on that failed scope could hide the original write outcome.
+        if (needsDiscard) {
+          await scope.execute({ type: "stage.discard", input: { operation } });
+        }
+        return result;
+      }, assertCurrent);
+    return this.withSourceMutation(run);
   }
 
   async deleteSource(
     input: Omit<MemoryPublicationOperations["source.delete"]["input"], "state">,
     assertCurrent: () => void,
   ) {
-    return this.runPublication(
-      (scope) =>
-        this.retryPublication(() =>
-          scope.execute({
-            type: "source.delete",
-            input: { ...input, state: this.publicationState() },
-          }),
-        ),
-      assertCurrent,
+    const run = () =>
+      this.runPublication(
+        (scope) =>
+          this.retryPublication(() =>
+            scope.execute({
+              type: "source.delete",
+              input: { ...input, state: this.publicationState() },
+            }),
+          ),
+        assertCurrent,
+      );
+    return this.withSourceMutation(run);
+  }
+
+  refreshSourceState(
+    input: MemoryPublicationOperations["source.refresh"]["input"],
+    assertCurrent: () => void,
+  ) {
+    return this.withSourceMutation(() =>
+      this.runPublication(
+        (scope) => this.retryPublication(() => scope.execute({ type: "source.refresh", input })),
+        assertCurrent,
+      ),
     );
+  }
+
+  private withSourceMutation<T>(run: () => Promise<T>): Promise<T> {
+    return this.writeOptions?.path
+      ? withMemoryIndexMutationGeneration(this.writeOptions.path, run)
+      : run();
   }
 
   async publishShadow(

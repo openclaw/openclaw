@@ -26,12 +26,7 @@ import {
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
 import { runMessageAction } from "./message-action-runner.js";
-import {
-  registerReplyPlugin,
-  runReplyAction,
-  workspaceConfig,
-  workspaceTestPlugin,
-} from "./message-action-runner.test-support.js";
+import { workspaceConfig, workspaceTestPlugin } from "./message-action-runner.test-support.js";
 import type { OutboundGatewayRequest } from "./message-gateway-options.js";
 
 const channel = "broadcast-test";
@@ -460,23 +455,6 @@ describe("broadcast send outcomes through native actions", () => {
       expect.objectContaining({
         text: "caption-only text",
         mediaUrl: "https://example.com/cat.png",
-      }),
-    );
-  });
-  it("strips citation markers before reply dispatch", async () => {
-    const handleAction = registerReplyPlugin();
-
-    await runReplyAction({
-      actionParams: {
-        message: "Ayutthaya Thai is my pick. citeturn2search9turn2search6",
-        messageId: "1783",
-      },
-      currentMessageId: "1783",
-    });
-
-    expect(handleAction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({ message: "Ayutthaya Thai is my pick." }),
       }),
     );
   });

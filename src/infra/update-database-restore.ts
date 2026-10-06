@@ -75,20 +75,14 @@ async function withDatabaseExclusion<T>(
   };
   // Process custody survives replacement; native exclusions and local seals
   // remain held until the complete database family, including the ledger, is restored.
-  const acquire = async (index: number): Promise<T> => {
-    const databasePath = paths[index];
-    if (databasePath === undefined) {
-      return operation(assertOwned);
-    }
-    const exclusion = await prepareOpenClawStateDatabaseRemoval(databasePath, assertCurrent);
-    exclusions.push(exclusion);
-    assertOwned();
-    return acquire(index + 1);
-  };
   const drain = async (index: number): Promise<T> => {
     const pathname = sourcePaths[index];
     if (pathname === undefined) {
-      return acquire(0);
+      for (const databasePath of paths) {
+        exclusions.push(await prepareOpenClawStateDatabaseRemoval(databasePath, assertCurrent));
+        assertOwned();
+      }
+      return operation(assertOwned);
     }
     // Local handles retain lexical ownership even when discovery canonicalizes a directory link.
     return drainAgentDatabaseResources({ path: pathname }, async () => {

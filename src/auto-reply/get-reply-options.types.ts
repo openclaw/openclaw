@@ -16,7 +16,12 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 /** An accepted visible work session and its canonical Control UI link. */
-export type VisibleWorkSession = { sessionKey: string; url: string; label?: string };
+export type VisibleWorkSession = {
+  sessionKey: string;
+  url: string;
+  label?: string;
+  publicRead?: boolean;
+};
 
 /** A successful runtime append, independent of optional active-path projection anchors. */
 export type ReplyDispatchAssistantTranscript = Pick<
@@ -250,8 +255,11 @@ export type GetReplyOptions = {
    * commentary progress inside an ephemeral streaming draft should yield those
    * draft lines while the getter returns true, so progress is not rendered in
    * both lanes at once.
+   * @deprecated Use onVerboseProgressVisibilityAsync; retained until the next Plugin SDK major.
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
+  /** Registers awaited visibility before dispatch; preferred over the deprecated callback. */
+  onVerboseProgressVisibilityAsync?: (isActive: () => Promise<boolean>) => Promise<void> | void;
   /** Preserve source-event callback start order for stateful channel progress renderers. */
   preserveProgressCallbackStartOrder?: boolean;
   onPartialReply?: (

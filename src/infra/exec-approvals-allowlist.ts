@@ -1,4 +1,3 @@
-// Evaluates exec approval allowlists and safe-bin usage.
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -738,20 +737,16 @@ function evaluateAuthorizationCandidate(params: {
 }
 
 function evaluateAuthorizationPlan(params: {
-  plan: ExecAuthorizationPlan;
+  plan: Extract<ExecAuthorizationPlan, { ok: true }>;
   context: ExecAllowlistContext;
 }): ExecAllowlistAnalysis {
   const result: ExecAllowlistAnalysis = {
     ...emptyExecAllowlistEvaluation(),
-    analysisOk: params.plan.ok,
-    allowlistSatisfied: params.plan.ok,
+    analysisOk: true,
+    allowlistSatisfied: true,
     segments: [],
     authorizationPlan: params.plan,
   };
-  if (!params.plan.ok) {
-    return result;
-  }
-
   const skillBins = params.context.skillBins ?? [];
   const allowSkills = params.context.autoAllowSkills === true && skillBins.length > 0;
   const skillBinTrust = buildSkillBinTrustIndex(skillBins);
@@ -1236,38 +1231,6 @@ export function resolveAllowAlwaysPatternEntries(params: {
   return patterns;
 }
 
-/**
- * Evaluates allowlist for shell commands (including &&, ||, ;) and returns analysis metadata.
- */
-function evaluateShellAllowlist(
-  params: {
-    command: string;
-    env?: NodeJS.ProcessEnv;
-  } & ExecAllowlistContext,
-): ExecAllowlistAnalysis {
-  const analysisFailure = (): ExecAllowlistAnalysis => ({
-    analysisOk: false,
-    ...emptyExecAllowlistEvaluation(),
-    segments: [],
-  });
-
-  // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
-  // and can rewrite token boundaries at runtime.
-  if (hasShellLineContinuation(params.command) || !isWindowsPlatform(params.platform)) {
-    return analysisFailure();
-  }
-
-  const analysis = analyzeWindowsShellCommand(params);
-  if (!analysis.ok) {
-    return analysisFailure();
-  }
-  return {
-    analysisOk: true,
-    ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
-    segments: analysis.segments,
-  };
-}
-
 export async function evaluateShellAllowlistWithAuthorization(
   params: {
     command: string;
@@ -1275,7 +1238,18 @@ export async function evaluateShellAllowlistWithAuthorization(
   } & ExecAllowlistContext,
 ): Promise<ExecAllowlistAnalysis> {
   if (isWindowsPlatform(params.platform)) {
-    return evaluateShellAllowlist(params);
+    // Shell line continuations can rewrite token boundaries at runtime.
+    const analysis = hasShellLineContinuation(params.command)
+      ? undefined
+      : analyzeWindowsShellCommand(params);
+    if (!analysis?.ok) {
+      return { analysisOk: false, ...emptyExecAllowlistEvaluation(), segments: [] };
+    }
+    return {
+      analysisOk: true,
+      ...evaluateExecAllowlist({ ...params, analysis, allowShellBuiltins: true }),
+      segments: analysis.segments,
+    };
   }
   const allowlistContext = { ...params, allowShellBuiltins: true };
   const authorizationPlan = await planShellAuthorization({ ...params });

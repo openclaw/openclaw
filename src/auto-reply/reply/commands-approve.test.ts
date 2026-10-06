@@ -13,7 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleApproveCommand } from "./commands-approve.js";
+import { handleApproveCommandFromContext as handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());

@@ -547,7 +547,6 @@ function reconcileRewrittenTranscriptIndex(
   }
 }
 
-// Payload-only transcript repair preserves row identity and creation time.
 // Preserves seq, created_at, session_key, and session activity recency; rotates the transcript
 // generation and rebuilds bounded projections immediately or defers large projections.
 export function updateSqliteTranscriptEventJsonInTransaction(

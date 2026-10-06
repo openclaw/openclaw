@@ -65,7 +65,7 @@ function resolveGatewayProbeWarning(error: unknown): string | undefined {
   if (!isGatewaySecretRefUnavailableError(error)) {
     throw error;
   }
-  return `${error.path} SecretRef is unresolved in this command path; probing without configured auth credentials.`;
+  return `${error.path} SecretRef is unresolved in this command path; checking without configured auth credentials.`;
 }
 
 /** Resolves synchronous probe auth, throwing when configured secrets cannot be read. */
@@ -135,13 +135,6 @@ async function resolveGatewayProbeAuthResolutionWithSecretInputs(
     remoteTokenFallback: "remote-only",
   });
   return { auth };
-}
-
-/** Resolves probe auth with async SecretRef support. */
-export async function resolveGatewayProbeAuthWithSecretInputs(
-  params: GatewayProbeCredentialParams,
-): Promise<{ token?: string; password?: string }> {
-  return (await resolveGatewayProbeAuthResolutionWithSecretInputs(params)).auth;
 }
 
 /** Resolves probe auth without throwing for unavailable SecretRefs, returning a warning. */

@@ -121,7 +121,7 @@ alias, startup logs the conflict and keeps serving the configured path. Update
 Azure Bot to the configured path.
 
 The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
-`/startupz` for probes, including URLs with query strings. If your former Teams
+`/startupz` for checks, including URLs with query strings. If your former Teams
 callback uses one of these paths, set `webhook.path` to `/api/messages` and update
 Azure Bot or the proxy upstream to match. Doctor reports this conflict. The
 compatibility listener keeps the old endpoint working; startup refuses the

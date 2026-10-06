@@ -27,6 +27,7 @@ import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-attempt.js";
 import { completeCleanupBookkeeping } from "./subagent-registry-lifecycle-bookkeeping.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
@@ -113,7 +114,7 @@ function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
 
 export class SubagentLifecycleController {
   readonly pendingRequesterSettleWakeCommits = new Map<object, PendingRequesterSettleWakeCommit>();
-  readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  readonly scheduledResumeTimers = new Map<object, ReturnType<typeof setTimeout>>();
   pendingRequesterSettleWakeRearms = new Set<object>();
   readonly cancelledRequesterSettleWakeRuns = new Set<object>();
   readonly scheduledRequesterSettleWakeRuns = new Set<object>();
@@ -325,8 +326,14 @@ export class SubagentLifecycleController {
     }
   }
 
+  scheduleResume = (
+    entry: SubagentRunRecord,
+    delayMs: number,
+    stateContext?: OpenClawStateWorkerContext,
+  ) => scheduleResumeSubagentRun(this, entry, delayMs, undefined, stateContext);
+
   clearScheduledResumeTimers = () => {
-    for (const timer of this.scheduledResumeTimers) {
+    for (const timer of this.scheduledResumeTimers.values()) {
       clearTimeout(timer);
     }
     this.scheduledResumeTimers.clear();

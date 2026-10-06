@@ -21,6 +21,7 @@ import {
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -285,7 +286,13 @@ for (const globallyEnabled of [false, true]) {
             url.hash = fragment;
             await runQaGatewayFixture(
               async () => {
-                expect((await page.goto(url.toString()))?.status()).toBe(200);
+                const sessionDocument = url.pathname.startsWith("/chat/");
+                expect((await page.goto(url.toString()))?.status()).toBe(
+                  sessionDocument ? 404 : 200,
+                );
+                if (sessionDocument) {
+                  await enterControlUiSession(page);
+                }
                 await waitForControlUiGatewayReady(page);
                 observed.assets = await verifyServedBundle(page, suite.server.baseUrl);
                 await run(page, traffic);
@@ -471,6 +478,7 @@ for (const globallyEnabled of [false, true]) {
             await chat.goto(
               controlUiSessionUrl(suite.server.baseUrl, "agent:main:websearch-omitted", "chat"),
             );
+            await enterControlUiSession(chat);
             await waitForControlUiGatewayReady(chat);
             const chatMenu = await openMenu(chat);
             await expect.poll(() => checked(chatMenu.webSearch)).toBe(true);

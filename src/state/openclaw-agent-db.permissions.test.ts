@@ -32,8 +32,7 @@ vi.mock("node:fs", async (importOriginal) => {
     }
     return (actual.chmodSync as (...args: unknown[]) => unknown)(target, mode);
   }) as typeof actual.chmodSync;
-  const statSync = vi.fn(actual.statSync);
-  return { ...actual, chmodSync, statSync, default: { ...actual, chmodSync, statSync } };
+  return { ...actual, chmodSync, default: { ...actual, chmodSync } };
 });
 
 const {
@@ -45,7 +44,6 @@ const { openExistingSqliteWorkerBackend } = await import("./openclaw-agent-execu
 const { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } =
   await import("./openclaw-state-db.js");
 const fs = await vi.importActual<typeof import("node:fs")>("node:fs");
-const mockedFs = await import("node:fs");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const backends = new Set<ReturnType<typeof openExistingSqliteWorkerBackend>>();
 
@@ -54,7 +52,6 @@ describe("agent database permission repair", () => {
     chmodFailHook.error = undefined;
     chmodFailHook.calls = [];
     chmodFailHook.removeTarget = undefined;
-    vi.mocked(mockedFs.statSync).mockReset().mockImplementation(fs.statSync);
     workerAdmission.mockReset();
     await Promise.all([...backends].map((backend) => Promise.resolve(backend.close())));
     backends.clear();
@@ -240,27 +237,6 @@ describe("agent database permission repair", () => {
       expect(chmodFailHook.calls.filter((target) => targets.has(String(target)))).toEqual([]);
     },
   );
-
-  it.runIf(process.platform !== "win32")("rolls back when the fresh mode cannot be read", () => {
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-agent-stat-") },
-    };
-    const database = openOpenClawAgentDatabase(options);
-    const read = () => database.db.prepare("SELECT updated_at FROM schema_meta").get();
-    const before = read();
-    const error = Object.assign(new Error("EACCES: stat failed"), { code: "EACCES" });
-
-    expect(() =>
-      runOpenClawAgentWriteTransaction(({ db }) => {
-        db.prepare("UPDATE schema_meta SET updated_at = updated_at + 1").run();
-        vi.mocked(mockedFs.statSync).mockImplementationOnce(() => {
-          throw error;
-        });
-      }, options),
-    ).toThrow(error);
-    expect(read()).toEqual(before);
-  });
 
   it("commits when a transient sidecar disappears during permission repair", () => {
     const options = {

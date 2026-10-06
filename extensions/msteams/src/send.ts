@@ -131,13 +131,10 @@ function createMSTeamsSendReceipt(params: {
 function createMSTeamsSendResult(params: {
   conversationId: string;
   messageId: string;
-  platformMessageIds?: readonly string[];
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
+  const platformMessageIds = [params.messageId]
     .map((messageId) => messageId.trim())
     .filter((messageId) => messageId && messageId !== "unknown");
   return {
@@ -162,16 +159,7 @@ type SendMSTeamsPollParams = {
   maxSelections?: number;
 } & MSTeamsSendHandoff;
 
-type SendMSTeamsPollResult = {
-  pollId: string;
-  messageId: string;
-  conversationId: string;
-};
-
-type SendMSTeamsCardParams = {
-  cfg: OpenClawConfig;
-  /** Conversation ID or user ID to send to */
-  to: string;
+type SendMSTeamsCardParams = Pick<SendMSTeamsMessageParams, "cfg" | "to"> & {
   card: Record<string, unknown>;
 } & MSTeamsSendOptions;
 
@@ -452,9 +440,7 @@ async function sendProactiveActivity(params: ProactiveActivityParams): Promise<s
   }
 }
 
-export async function sendPollMSTeams(
-  params: SendMSTeamsPollParams,
-): Promise<SendMSTeamsPollResult> {
+export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
   assertMSTeamsSendHandoff(params);
   const { cfg, to, question, options, maxSelections } = params;
   const ctx = await resolveMSTeamsSendContext({
@@ -541,13 +527,7 @@ type MSTeamsMessageMutationParams = {
   activityId: string;
 };
 
-type MSTeamsMessageMutationResult = {
-  conversationId: string;
-};
-
-export async function editMessageMSTeams(
-  params: MSTeamsMessageMutationParams & { text: string },
-): Promise<MSTeamsMessageMutationResult> {
+export async function editMessageMSTeams(params: MSTeamsMessageMutationParams & { text: string }) {
   return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
@@ -564,7 +544,7 @@ export async function editMessageMSTeams(
 
 export async function editAdaptiveCardMSTeams(
   params: MSTeamsMessageMutationParams & { card: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
+) {
   return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
@@ -574,15 +554,13 @@ export async function editAdaptiveCardMSTeams(
   });
 }
 
-export async function deleteMessageMSTeams(
-  params: MSTeamsMessageMutationParams,
-): Promise<MSTeamsMessageMutationResult> {
+export async function deleteMessageMSTeams(params: MSTeamsMessageMutationParams) {
   return mutateMSTeamsMessageActivity(params);
 }
 
 async function mutateMSTeamsMessageActivity(
   params: MSTeamsMessageMutationParams & { activity?: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
+) {
   const { cfg, to, activityId, activity } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,

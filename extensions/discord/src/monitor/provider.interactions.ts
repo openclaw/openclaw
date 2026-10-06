@@ -59,11 +59,7 @@ export function createDiscordProviderInteractionSurface(params: {
   channelRuntime?: PluginRuntime["channel"];
   abortSignal?: AbortSignal;
   createNativeCommand?: typeof createDiscordNativeCommand;
-}): {
-  commands: DiscordCommand[];
-  components: BaseMessageInteractiveComponent[];
-  modals: Modal[];
-} {
+}) {
   const createNativeCommand = params.createNativeCommand ?? createDiscordNativeCommand;
   const commandContext: DiscordCommandArgContext = {
     readPolicy: params.readPolicy,

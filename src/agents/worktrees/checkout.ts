@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsRoot } from "../../infra/fs-safe.js";
 import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease-error.js";
@@ -18,6 +18,7 @@ import {
   WORKTREE_CHECKOUT_TIMEOUT_MS,
   type GitResult,
 } from "./git.js";
+import { timeWorktreePreparationPhase } from "./preparation-timing.js";
 import { prepareWorktreeTemplate } from "./template-cache.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -444,7 +445,10 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       destinationRemoved = true;
       materializationStarted = true;
       await options.requireSpace(cloneBytes);
-      await template.backend.cloneTemplate(template.record.path, options.destination, options);
+      const { backend, record } = template;
+      await timeWorktreePreparationPhase("templateApply", () =>
+        backend.cloneTemplate(record.path, options.destination, options),
+      );
       const cloneCompletedAtMs = Date.now();
       await assertRegistration();
       assertOwned(options);
@@ -468,7 +472,25 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       }
       if (!copied) {
         assertOwned(options);
-        await fs.copyFile(template.sourceIndex, destinationIndex, constants.COPYFILE_FICLONE);
+        const sourceIndex = await fs.realpath(template.sourceIndex);
+        const [sourceRoot, destinationRoot] = await Promise.all([
+          fsRoot(path.dirname(sourceIndex)),
+          fsRoot(path.dirname(destinationIndex)),
+        ]);
+        await destinationRoot.copyIn(
+          path.basename(destinationIndex),
+          { root: sourceRoot, relativePath: `./${path.basename(sourceIndex)}` },
+          {
+            clone: "auto",
+            durable: false,
+            mkdir: false,
+            overwrite: true,
+            preserveSourceMode: true,
+            sourceHardlinks: "allow",
+            signal: options.signal,
+            assertBeforeMutation: () => assertOwned(options),
+          },
+        );
       }
       await requireGit(options.destination, ["update-index", "--refresh"], {
         ...gitOptions(options),

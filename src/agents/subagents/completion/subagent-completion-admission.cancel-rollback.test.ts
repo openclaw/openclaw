@@ -15,7 +15,7 @@ import {
   SubagentRegistryWriteError,
   mutateSubagentRuns,
 } from "../registry/subagent-registry-persistence.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   advanceRequesterWakeTime,
   armRequesterWake,

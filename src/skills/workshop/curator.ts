@@ -24,14 +24,6 @@ const log = createSubsystemLogger("skills/curator");
 export const SKILL_LIFECYCLE_CURATION_RETIRED_MESSAGE =
   "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.";
 
-function canonicalSkillKey(name: string): string {
-  const key = normalizeSkillIndexName(name);
-  if (!key) {
-    throw new Error(`Invalid skill name: ${name}`);
-  }
-  return key;
-}
-
 export async function getSkillCuratorStatus(
   options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & { config: OpenClawConfig },
 ): Promise<SkillsCuratorLiveStatusResult> {
@@ -115,7 +107,10 @@ async function recordSkillUsage(
     return;
   }
   const skillFile = canonicalizePath(path.resolve(rawSkillFile));
-  const skillKey = canonicalSkillKey(event.skillName);
+  const skillKey = normalizeSkillIndexName(event.skillName);
+  if (!skillKey) {
+    throw new Error(`Invalid skill name: ${event.skillName}`);
+  }
   const { executeOpenClawStateWorker } = await import("../../state/openclaw-state-worker-store.js");
   await executeOpenClawStateWorker(context, {
     type: "skills.usage.record",

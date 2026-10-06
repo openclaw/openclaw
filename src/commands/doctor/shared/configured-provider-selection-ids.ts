@@ -1,4 +1,3 @@
-// Reads provider ids selected by auth, model, channel, and media configuration.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString as normalizeId } from "@openclaw/normalization-core/string-coerce";

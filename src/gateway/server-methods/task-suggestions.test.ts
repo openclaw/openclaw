@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -412,7 +416,7 @@ describe("task suggestion gateway methods", () => {
     expect(createSession).toHaveBeenCalledTimes(100);
   });
 
-  it("coalesces concurrent acceptance requests", async () => {
+  it("coalesces concurrent acceptance requests", async ({ signal }) => {
     const created = await call("taskSuggestions.create", {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
@@ -422,21 +426,41 @@ describe("task suggestion gateway methods", () => {
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
     const { promise: gate, resolve: release } = createDeferred();
+    const entered = createDeferred();
     const createSession = vi
       .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
+        entered.resolve();
         await gate;
         respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
       });
 
-    const first = call("taskSuggestions.accept", { taskId });
-    await vi.waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
-    const second = call("taskSuggestions.accept", { taskId });
-    release?.();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
+    const first = call("taskSuggestions.accept", { taskId }).then((result) => {
+      expect(result.response?.[2]).toBeUndefined();
+      requirePayload(result);
+      return result;
+    });
+    let second: ReturnType<typeof call> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          first,
+          "acceptance settled before entering sessions.create",
+        ),
+        signal,
+      );
+      expect(createSession).toHaveBeenCalledTimes(1);
+      second = call("taskSuggestions.accept", { taskId });
+      release();
+      const [firstResult, secondResult] = await withinTest(Promise.all([first, second]), signal);
 
-    expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
-    expect(createSession).toHaveBeenCalledTimes(1);
+      expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it("rolls back a local session when its initial task does not start", async () => {

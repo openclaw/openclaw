@@ -69,7 +69,7 @@ function assertValidGatewayStartupConfigSnapshot(
       : "Unknown validation issue.";
   if (isConfigReadFailure(snapshot)) {
     throw createConfigReadError(
-      snapshot.path,
+      snapshot,
       `${issues}\nResolve the read error shown above, then retry.`,
     );
   }
@@ -282,11 +282,13 @@ export async function prepareGatewayStartupConfig(params: {
       return await params.activateRuntimeSecrets.activatePreparedSnapshot(preflightPrepared, {
         reason: "startup",
         activate: true,
+        runtimeSourceConfig: params.configSnapshot.sourceConfig,
       });
     }
     return await params.activateRuntimeSecrets(config, {
       reason: "startup",
       activate: true,
+      runtimeSourceConfig: params.configSnapshot.sourceConfig,
     });
   };
   const preflightAuthOverride = await measure("config.auth.preflight-override", () => {

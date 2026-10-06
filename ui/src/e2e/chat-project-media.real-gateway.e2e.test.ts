@@ -17,6 +17,7 @@ import {
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -163,7 +164,8 @@ suite.define(() => {
           }
         };
         const open = async () => {
-          expect((await page.goto(url.toString()))?.status()).toBe(200);
+          expect((await page.goto(url.toString()))?.status()).toBe(404);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           await page
             .getByText(
@@ -269,6 +271,7 @@ suite.define(() => {
           },
         );
         await page.reload();
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const fileCard = page
           .locator(".chat-assistant-attachment-card")

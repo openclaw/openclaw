@@ -1,9 +1,9 @@
+import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
-/** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 /** Shared semantic boundary for treating the transcript as settled at its end. */
 export const CHAT_TRANSCRIPT_END_THRESHOLD_PX = 8;
@@ -26,13 +26,7 @@ function getPaneScrollTops(paneId: string): Map<string, ChatSessionScrollPositio
   }
   const created = new Map<string, ChatSessionScrollPosition>();
   transcriptScrollTopByPane.set(paneId, created);
-  while (transcriptScrollTopByPane.size > MAX_CACHED_TRANSCRIPT_SCROLL_PANES) {
-    const oldest = transcriptScrollTopByPane.keys().next().value;
-    if (typeof oldest !== "string") {
-      break;
-    }
-    transcriptScrollTopByPane.delete(oldest);
-  }
+  pruneMapToMaxSize(transcriptScrollTopByPane, MAX_CACHED_TRANSCRIPT_SCROLL_PANES);
   return created;
 }
 
@@ -96,7 +90,6 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
-  chatIsManualScroll?: () => boolean;
   chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
@@ -287,17 +280,7 @@ export function handleChatScrollTakeover(host: ChatScrollHost, towardEnd = false
 }
 
 /** Reader-controlled UI can take over even when the transcript is at its end. */
-export function lockChatScroll(
-  host: ChatScrollHost,
-  source: "reader" | "remote-input" = "reader",
-): void {
-  // Remote activity cannot cancel a queued or already-issued reader command.
-  if (
-    source === "remote-input" &&
-    (pendingChatScrolls.get(host)?.manual || host.chatIsManualScroll?.())
-  ) {
-    return;
-  }
+export function lockChatScroll(host: ChatScrollHost): void {
   const changed = !host.chatFollowLocked || host.chatUserNearBottom;
   cancelChatScroll(host);
   host.chatHasAutoScrolled = true;

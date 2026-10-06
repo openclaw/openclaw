@@ -6,6 +6,7 @@ import {
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
 import {
@@ -118,10 +119,10 @@ async function callSubagentGatewayWithDispatchMode(
     const dispatch = async (workerIdentity?: WorkerTurnExecutionIdentity) => {
       // Cleanup can lose its worker claim while awaiting a session lifecycle drain.
       const assertDispatchCurrent = workerIdentity
-        ? () => {
-            request.assertDispatchCurrent?.();
-            workerIdentity.receiptAuthority();
-          }
+        ? composeSessionSourceAssertion([
+            request.assertDispatchCurrent,
+            workerIdentity.receiptAuthority,
+          ])
         : request.assertDispatchCurrent;
       assertDispatchCurrent?.();
       const operationalRunInstance = gatewayCaller?.workerTurnClaim

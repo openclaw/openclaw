@@ -66,7 +66,6 @@ type SlashCommandContext = {
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
-  modelCatalog?: ModelCatalogEntry[];
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -127,22 +126,22 @@ export async function executeSlashCommand(
     case "help":
       return executeHelp();
     case "compact":
-      return await executeCompact(sessionKey, context);
+      return executeCompact(sessionKey, context);
     case "model":
-      return await executeModel(client, sessionKey, args, context);
+      return executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args, context);
+      return executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(sessionKey, args, context);
+      return executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(sessionKey, args, context);
+      return executeVerbose(sessionKey, args, context);
     case "usage":
-      return await executeUsage(sessionKey, context);
+      return executeUsage(sessionKey, context);
     case "agents":
-      return await executeAgents(client);
+      return executeAgents(client);
     case "steer":
     case "redirect":
-      return await executeRunCommand(client, sessionKey, args, context, commandName);
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
@@ -303,7 +302,7 @@ async function executeThink(
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
@@ -560,7 +559,7 @@ async function loadModelCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [state, models] = await Promise.all([
     loadCurrentSessionState(context, sessionKey),

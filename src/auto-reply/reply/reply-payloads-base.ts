@@ -76,7 +76,6 @@ type ReplyThreadingParams = {
   replyThreading?: ReplyThreadingPolicy;
 };
 
-/** Resolves reply targets and filters empty payloads before channel delivery. */
 export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): ReplyPayload[] {
   const { payloads, replyToMode, currentMessageId, replyThreading } = params;
   const implicitReplyToId = normalizeOptionalString(currentMessageId);
@@ -93,7 +92,6 @@ export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): Rep
     .filter(isRenderablePayload);
 }
 
-/** Applies threading policy and filters empty payloads before channel delivery. */
 export function applyReplyThreading(params: ReplyThreadingParams): ReplyPayload[] {
   const applyReplyToMode = createReplyToModeFilterForChannel(
     params.replyToMode,

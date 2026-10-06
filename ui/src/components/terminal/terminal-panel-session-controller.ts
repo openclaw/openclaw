@@ -301,8 +301,7 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
         this.persistSessions();
       }
     } catch {
-      // terminal.list failed (older gateway, surface flapping): fall through
-      // to a fresh session below.
+      // A failed restore falls through to a fresh session below.
     } finally {
       if (this.isTerminalOperationCurrent(operation, restore)) {
         this.pendingRestore = null;
@@ -329,8 +328,8 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     return this.isTerminalOperationCurrent(operation) ? sessions : null;
   }
 
-  async attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
-    await this.intentQueue.queue({ kind: "attach", sessionId, agentOwned });
+  attachSessionById(sessionId: string, agentOwned = false): Promise<void> {
+    return this.intentQueue.queue({ kind: "attach", sessionId, agentOwned });
   }
 
   private async attachSessionNow(
@@ -361,7 +360,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
   }
 
-  /** Boots a tab with a libterminal controller, ready for an open or attach RPC. */
   private async bootTab(
     operation: TerminalOperation,
     options: {
@@ -391,7 +389,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     return boot;
   }
 
-  /** Binds a freshly opened or attached gateway session to its tab. */
   private adoptSession(
     tab: TerminalPanelSessionTab,
     result: TerminalOpenResult,
@@ -512,7 +509,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     }
   }
 
-  /** Reattaches one session and reports whether adoption succeeded. */
   private async attachSession(
     sessionId: string,
     operation: TerminalOperation,
@@ -562,15 +558,14 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       if (!this.isTerminalOperationCurrent(operation, restore, createdTab)) {
         return false;
       }
-      const sessionGone =
-        restore && createdConnection
-          ? await this.confirmRestoredSessionGone(createdConnection, sessionId, restore)
-          : false;
+      // Failed reads cannot turn transport or authorization errors into authoritative exits.
+      const sessions =
+        restore && createdConnection ? await createdConnection.list().catch(() => null) : null;
       if (!this.isTerminalOperationCurrent(operation, restore, createdTab)) {
         return false;
       }
       if (createdTab && !createdTab.gatewaySessionId && this.tabs.includes(createdTab)) {
-        if (sessionGone) {
+        if (sessions && !sessions.some((session) => session.sessionId === sessionId)) {
           this.markRestoredSessionExited(createdTab, sessionId);
         } else {
           this.removeTab(createdTab);
@@ -581,21 +576,6 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
       }
       return false;
     }
-  }
-
-  private async confirmRestoredSessionGone(
-    connection: TerminalConnection,
-    sessionId: string,
-    restore: TerminalRestoreBatch,
-  ): Promise<boolean> {
-    // A failed confirmation cannot turn a transport or authorization error
-    // into an authoritative terminal exit.
-    const sessions = await connection.list().catch(() => null);
-    return (
-      sessions !== null &&
-      this.isTerminalOperationCurrent(restore.operation, restore) &&
-      !sessions.some((session) => session.sessionId === sessionId)
-    );
   }
 
   /** Keeps a dead persisted session visible without replaying bytes from a missing PTY. */
@@ -629,13 +609,25 @@ export class TerminalPanelSessionController implements TerminalPanelSessionContr
     if (!tab) {
       return;
     }
-    this.retireRestoredTab(tab);
-    this.readiness.stop(tab);
-    delete tab.pendingOpen;
     tab.status = "exited";
     tab.exitReason = info.reason;
     tab.exitCode = info.exitCode;
     tab.exitSignal = info.signal;
+    // A clean PTY exit (logout, exit, or EOF) uses the same teardown as the tab
+    // close action. Keep abnormal exits and panel errors available for inspection.
+    if (
+      info.reason === "process_exit" &&
+      info.exitCode === 0 &&
+      !info.signal &&
+      !info.error?.trim() &&
+      !this.error
+    ) {
+      this.closeTab(tabId);
+      return;
+    }
+    this.retireRestoredTab(tab);
+    this.readiness.stop(tab);
+    delete tab.pendingOpen;
     if (info.error?.trim()) {
       this.setError(formatUiExternalText(info.error));
     }

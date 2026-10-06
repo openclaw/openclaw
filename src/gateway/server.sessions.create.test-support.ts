@@ -116,7 +116,7 @@ function installSessionCreateTestMocks() {
 /** Ordinary main-session lifecycle cases can reset rows without reopening their store. */
 export function setupPersistentSessionCreateTestHarness() {
   let dir: string | undefined;
-  setupSessionCreateTestHarness(async (makeTempDir) => {
+  const { openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
     dir = await fs.realpath(makeTempDir("openclaw-session-create-persistent-"));
   });
   afterEach(async () => {
@@ -126,6 +126,7 @@ export function setupPersistentSessionCreateTestHarness() {
     await resetPersistentGatewaySessionStore(dir);
   });
   return {
+    openClient,
     createSessionStoreDir: async () => {
       if (!dir) {
         throw new Error("Persistent session fixture was not created");

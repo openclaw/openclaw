@@ -10,7 +10,7 @@
     "./worker-api.js": "./worker-api.ts"
   },
   "dependencies": {
-    "@openclaw/fs-safe": "0.23.0",
+    "@openclaw/fs-safe": "0.24.1",
     "json5": "2.2.3",
     "p-limit": "7.3.3",
     "typebox": "1.3.34"

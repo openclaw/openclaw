@@ -1,19 +1,16 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorEmptyAllowlistAccountContext,
+} from "../../../channels/plugins/types.adapters.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
-import { shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning } from "./channel-doctor.js";
 
-type CollectEmptyAllowlistPolicyWarningsParams = {
-  account: DoctorAccountRecord;
-  channelName?: string;
-  cfg?: OpenClawConfig;
-  doctorFixCommand: string;
-  parent?: DoctorAccountRecord;
-  prefix: string;
-  shouldSkipDefaultEmptyGroupAllowlistWarning?: typeof shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning;
-};
+type CollectEmptyAllowlistPolicyWarningsParams = ChannelDoctorEmptyAllowlistAccountContext &
+  Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">> & {
+    doctorFixCommand: string;
+  };
 
 export function resolveDoctorAccountDmAccess(
   account: DoctorAccountRecord,
@@ -42,10 +39,7 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
   params: CollectEmptyAllowlistPolicyWarningsParams,
 ): string[] {
   const warnings: string[] = [];
-  const { dmPolicy, effectiveAllowFrom } = resolveDoctorAccountDmAccess(
-    params.account,
-    params.parent,
-  );
+  const { dmPolicy, effectiveAllowFrom } = params;
 
   if (dmPolicy === "allowlist" && !hasAllowFromEntries(effectiveAllowFrom)) {
     warnings.push(
@@ -67,13 +61,9 @@ export function collectEmptyAllowlistPolicyWarningsForAccount(
 
   if (
     params.channelName &&
-    (
-      params.shouldSkipDefaultEmptyGroupAllowlistWarning ??
-      shouldSkipChannelDoctorDefaultEmptyGroupAllowlistWarning
-    )({
+    params.shouldSkipDefaultEmptyGroupAllowlistWarning({
       account: params.account,
       channelName: params.channelName,
-      cfg: params.cfg,
       dmPolicy,
       effectiveAllowFrom,
       parent: params.parent,

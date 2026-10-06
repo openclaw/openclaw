@@ -29,7 +29,7 @@ import {
   resolveMemorySessionStartupState,
   type MemorySessionStartupFileState,
 } from "./manager-session-sync-state.js";
-import { inspectMemorySourceState, loadMemorySourceFileState } from "./manager-source-state.js";
+import { inspectMemorySourceState } from "./manager-source-state.js";
 import { memorySessionSyncTargetKey } from "./manager-sync-control.js";
 import { MemoryManagerWatchOps } from "./manager-watch-ops.js";
 
@@ -44,9 +44,10 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
   protected async inspectDiagnosticSourceState(): Promise<void> {
     if (this.sources.has("memory")) {
       try {
+        const database = this.database;
         const inspection = await inspectMemorySourceState({
           files: this.memoryFiles,
-          db: this.db,
+          readIndexedRows: () => database.readSourceState({ source: "memory" }),
           workspaceDir: this.workspaceDir,
           settings: this.settings,
           concurrency: this.getIndexConcurrency(),
@@ -183,8 +184,7 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
     if (this.closed) {
       return [];
     }
-    const existingRows = loadMemorySourceFileState({
-      db: this.db,
+    const existingRows = await this.database.readSourceState({
       source: "sessions",
     });
     const indexedPaths = new Set(existingRows.map((row) => row.path));

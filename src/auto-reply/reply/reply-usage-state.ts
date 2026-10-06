@@ -18,32 +18,25 @@ function projectHookUsage(usage?: NormalizedUsage): PluginHookReplyUsageState["u
   return { input, output, cacheRead, cacheWrite, total };
 }
 
-export function buildReplyUsageState(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  provider?: string;
-  model?: string;
-  fallbackExhausted?: boolean;
-  winnerProvider?: string;
-  winnerModel?: string;
-  reasoningEffort?: string;
-  fastMode?: boolean;
-  fallbackUsed?: boolean;
-  agentId: string;
-  sessionId: string;
-  chatType?: string;
-  authMode?: string;
-  overrideSource?: string;
-  requestedProvider?: string;
-  requestedModel?: string;
-  compactionCount?: number;
-  contextTokenBudget?: number;
-  contextUsedTokens?: number;
-  promptTokens?: number;
-  usage?: NormalizedUsage;
-  lastCallUsage?: NormalizedUsage;
-  durationMs?: number;
-}): PluginHookReplyUsageState {
+export function buildReplyUsageState(
+  params: Omit<
+    PluginHookReplyUsageState,
+    "resolvedRef" | "requested" | "turnUsd" | "identity" | "usage" | "lastUsage"
+  > & {
+    config: OpenClawConfig;
+    agentDir: string;
+    agentId: string;
+    sessionId: string;
+    fallbackExhausted?: boolean;
+    winnerProvider?: string;
+    winnerModel?: string;
+    requestedProvider?: string;
+    requestedModel?: string;
+    promptTokens?: number;
+    usage?: NormalizedUsage;
+    lastCallUsage?: NormalizedUsage;
+  },
+): PluginHookReplyUsageState {
   const resolvedProvider = params.fallbackExhausted ? undefined : params.winnerProvider;
   const resolvedModel = params.fallbackExhausted ? undefined : params.winnerModel;
   return {

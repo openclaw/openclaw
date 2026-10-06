@@ -63,17 +63,7 @@ type ExaContentsArgs = {
   summary?: ExaSummaryContentsOption;
 };
 
-type ExaSearchResult = {
-  title?: unknown;
-  url?: unknown;
-  publishedDate?: unknown;
-  highlights?: unknown;
-  highlightScores?: unknown;
-  summary?: unknown;
-  text?: unknown;
-};
-
-async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+async function readExaSearchResults(response: Response) {
   const bytes = await readResponseWithLimit(response, EXA_SEARCH_JSON_MAX_BYTES, {
     onOverflow: ({ maxBytes: maxBytesLocal }) =>
       new Error(`Exa API response exceeds ${maxBytesLocal} bytes`),

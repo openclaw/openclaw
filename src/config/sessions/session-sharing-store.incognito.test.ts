@@ -15,6 +15,7 @@ import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
+import { withIncognitoSessionActor } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 import {
@@ -75,110 +76,234 @@ async function fixture(name: string, source = authority) {
 }
 
 it("composes suggestion FIFO, claims, release and resolution without caller SQL", async () => {
-  const { scope, entry } = await fixture("suggestions");
+  const { scope: explicitScope, entry } = await fixture("suggestions");
+  const scope = { ...explicitScope, incognito: undefined };
   const sql = observeHostDataSql();
   try {
-    const added = addSessionSuggestionInWorker(scope, {
-      id: "first",
-      authorId: "alice",
-      text: "Private suggestion",
-      createdAt: 1,
-      expectedSessionId: entry.sessionId,
+    await withIncognitoSessionActor(actor, async () => {
+      const added = addSessionSuggestionInWorker(scope, {
+        id: "first",
+        authorId: "alice",
+        text: "Private suggestion",
+        createdAt: 1,
+        expectedSessionId: entry.sessionId,
+      });
+      const listed = listSessionSuggestions(scope, { pendingOnly: true });
+      expect(await listed).toEqual([await added]);
+      const claims = await Promise.all([
+        claimSessionSuggestionDispatchInWorker(scope, { id: "first", resolution: "send" }),
+        claimSessionSuggestionDispatchInWorker(scope, { id: "first", resolution: "send" }),
+      ]);
+      const claim = claims[0];
+      assert(claim?.kind === "claimed");
+      expect(claims[1]).toEqual({ kind: "busy" });
+      expect(
+        await releaseSessionSuggestionDispatchInWorker(scope, {
+          id: "first",
+          token: "foreign",
+        }),
+      ).toBe(false);
+      expect(
+        await releaseSessionSuggestionDispatchInWorker(scope, {
+          id: "first",
+          token: claim.token,
+        }),
+      ).toBe(true);
+      const next = await claimSessionSuggestionDispatchInWorker(scope, {
+        id: "first",
+        resolution: "dismiss",
+      });
+      assert(next?.kind === "claimed");
+      expect(
+        await finalizeSessionSuggestionClaimInWorker(scope, {
+          id: "first",
+          token: claim.token,
+          state: "accepted",
+        }),
+      ).toBeNull();
+      expect(
+        await finalizeSessionSuggestionClaimInWorker(scope, {
+          id: "first",
+          token: next.token,
+          state: "dismissed",
+        }),
+      ).toMatchObject({ id: "first", state: "dismissed" });
+      expect(await listSessionSuggestions(scope, { pendingOnly: true })).toEqual([]);
+      expect(await listSessionSuggestions(scope, { authorId: "alice" })).toMatchObject([
+        { id: "first", state: "dismissed" },
+      ]);
+      expect(sql.queries).toEqual([]);
+      expect(existsSync(actor.path)).toBe(false);
     });
-    const listed = listSessionSuggestions(scope, { pendingOnly: true });
-    expect(await listed).toEqual([await added]);
-    const claims = await Promise.all([
-      claimSessionSuggestionDispatchInWorker(scope, { id: "first", resolution: "send" }),
-      claimSessionSuggestionDispatchInWorker(scope, { id: "first", resolution: "send" }),
-    ]);
-    const claim = claims[0];
-    assert(claim?.kind === "claimed");
-    expect(claims[1]).toEqual({ kind: "busy" });
-    expect(
-      await releaseSessionSuggestionDispatchInWorker(scope, {
-        id: "first",
-        token: "foreign",
-      }),
-    ).toBe(false);
-    expect(
-      await releaseSessionSuggestionDispatchInWorker(scope, {
-        id: "first",
-        token: claim.token,
-      }),
-    ).toBe(true);
-    const next = await claimSessionSuggestionDispatchInWorker(scope, {
-      id: "first",
-      resolution: "dismiss",
-    });
-    assert(next?.kind === "claimed");
-    expect(
-      await finalizeSessionSuggestionClaimInWorker(scope, {
-        id: "first",
-        token: claim.token,
-        state: "accepted",
-      }),
-    ).toBeNull();
-    expect(
-      await finalizeSessionSuggestionClaimInWorker(scope, {
-        id: "first",
-        token: next.token,
-        state: "dismissed",
-      }),
-    ).toMatchObject({ id: "first", state: "dismissed" });
-    expect(await listSessionSuggestions(scope, { pendingOnly: true })).toEqual([]);
-    expect(await listSessionSuggestions(scope, { authorId: "alice" })).toMatchObject([
-      { id: "first", state: "dismissed" },
-    ]);
-    expect(sql.queries).toEqual([]);
-    expect(existsSync(actor.path)).toBe(false);
   } finally {
     sql.restore();
   }
 });
 
+it.each(["members", "suggestions"] as const)(
+  "refuses %s disclosure after its borrowed actor releases inside an accepted composition",
+  async (kind) => {
+    const { scope } = await fixture(`released-${kind}`);
+    await addSessionMember(scope, {
+      identityId: "alice",
+      addedBy: "private-creator",
+      addedAt: 1,
+    });
+    await addSessionSuggestionInWorker(scope, {
+      id: `private-suggestion-${kind}`,
+      authorId: "alice",
+      text: "Private suggestion",
+    });
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    let releasing: Promise<void> | undefined;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          releasing ??= borrowed.release();
+        }
+      },
+    };
+    const captured = { ...scope, incognito: { actor: borrowed, authority: current } };
+    const disclosed = vi.fn();
+    try {
+      await expect(
+        borrowed.sessions.withSharedState(async () => {
+          const value =
+            kind === "members"
+              ? await listSessionMembersInWorker(captured)
+              : await listSessionSuggestions(captured);
+          disclosed(value);
+        }),
+      ).rejects.toThrow("reference is released");
+      await releasing;
+      expect(disclosed).not.toHaveBeenCalled();
+    } finally {
+      await borrowed.release();
+    }
+  },
+);
+
+it.each(["release", "finalize"] as const)(
+  "retains a committed suggestion claim token through %s after borrower release",
+  async (settlement) => {
+    const { scope } = await fixture(`retained-${settlement}`);
+    const id = `accepted-suggestion-${settlement}`;
+    await addSessionSuggestionInWorker(scope, {
+      id,
+      authorId: "alice",
+      text: "Accepted private suggestion",
+    });
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    let releasing: Promise<void> | undefined;
+    const current: IncognitoSessionAuthority = {
+      assertCurrent() {},
+      authorize(stage) {
+        if (stage === "commit") {
+          releasing ??= borrowed.release();
+        }
+      },
+    };
+    const captured = { ...scope, incognito: { actor: borrowed, authority: current } };
+    try {
+      await expect(
+        borrowed.sessions.withSharedState(async () => {
+          const claim = await claimSessionSuggestionDispatchInWorker(captured, {
+            id,
+            resolution: "dismiss",
+          });
+          assert(claim?.kind === "claimed");
+          const params = { id: claim.suggestion.id, token: claim.token };
+          if (settlement === "release") {
+            expect(await releaseSessionSuggestionDispatchInWorker(captured, params)).toBe(true);
+          } else {
+            expect(
+              await finalizeSessionSuggestionClaimInWorker(captured, {
+                ...params,
+                state: "dismissed",
+              }),
+            ).toMatchObject({ id: params.id, state: "dismissed" });
+          }
+        }),
+      ).rejects.toThrow("reference is released");
+      await releasing;
+      expect(await listSessionSuggestions(scope)).toMatchObject([
+        { state: settlement === "release" ? "pending" : "dismissed" },
+      ]);
+      if (settlement === "release") {
+        const next = await claimSessionSuggestionDispatchInWorker(scope, {
+          id,
+          resolution: "dismiss",
+        });
+        assert(next?.kind === "claimed");
+        await releaseSessionSuggestionDispatchInWorker(scope, { id, token: next.token });
+      }
+    } finally {
+      await borrowed.release();
+    }
+  },
+);
+
 it("publishes actor membership, owner, participant and category changes through their owners", async () => {
-  const { scope, entry } = await fixture("sharing");
+  const { scope: explicitScope, entry } = await fixture("sharing");
+  const scope = { ...explicitScope, incognito: undefined };
   const changes: SessionRowChange[] = [];
   const stop = sessionChanges.subscribeFacts((change) => changes.push(change));
   const sql = observeHostDataSql();
   try {
-    await addSessionMember(scope, { identityId: "alice", addedBy: "creator", addedAt: 1 });
-    expect(await listSessionMembersInWorker(scope)).toEqual([
-      { identityId: "alice", addedBy: "creator", addedAt: 1 },
-    ]);
-    await assignSessionOwnerInWorker(scope, {
-      owner: { type: "human", id: "alice" },
-      assignedBy: { type: "human", id: "creator" },
-      assignedAt: 2,
-      expectedSessionId: entry.sessionId,
-    });
-    expect(
-      await recordSessionParticipantInWorker(scope, {
-        identity: { type: "agent", id: "helper" },
-        promptedAt: 3,
-      }),
-    ).toBe("inserted");
-    expect(await updateSessionGroupCategoriesInWorker({ scope, from: entry.category })).toBe(1);
-    await removeSessionMember(scope, "alice");
-    expect(await listSessionMembersInWorker(scope)).toEqual([]);
-    const current = await actor.sessions.read(authority, { sessionKey: scope.sessionKey });
-    expect(current.entry).toMatchObject({ owner: { actor: { type: "human", id: "alice" } } });
-    expect(current.entry?.category).toBeUndefined();
-    expect(
-      await updateSessionProfileInvolvementAsync(scope, {
+    await withIncognitoSessionActor(actor, async () => {
+      await addSessionMember(scope, { identityId: "alice", addedBy: "creator", addedAt: 1 });
+      expect(await listSessionMembersInWorker(scope)).toEqual([
+        { identityId: "alice", addedBy: "creator", addedAt: 1 },
+      ]);
+      await assignSessionOwnerInWorker(scope, {
+        owner: { type: "human", id: "alice" },
+        assignedBy: { type: "human", id: "creator" },
+        assignedAt: 2,
         expectedSessionId: entry.sessionId,
-        profileIds: ["alice"],
-        change: { kind: "visibility", hidden: true },
-      }),
-    ).toBe(false);
-    expect(changes.flatMap((change) => ("facts" in change ? [change.facts?.kind] : []))).toEqual([
-      "member",
-      "owner",
-      "participants",
-      "category",
-      "member",
-    ]);
-    expect(sql.queries).toEqual([]);
+      });
+      expect(
+        await recordSessionParticipantInWorker(scope, {
+          identity: { type: "agent", id: "helper" },
+          promptedAt: 3,
+        }),
+      ).toBe("inserted");
+      expect(await updateSessionGroupCategoriesInWorker({ scope, from: entry.category })).toBe(1);
+      await removeSessionMember(scope, "alice");
+      expect(await listSessionMembersInWorker(scope)).toEqual([]);
+      const current = await actor.sessions.read(authority, { sessionKey: scope.sessionKey });
+      expect(current.entry).toMatchObject({ owner: { actor: { type: "human", id: "alice" } } });
+      expect(current.entry?.category).toBeUndefined();
+      expect(
+        await updateSessionProfileInvolvementAsync(scope, {
+          expectedSessionId: entry.sessionId,
+          profileIds: ["alice"],
+          change: { kind: "visibility", hidden: true },
+        }),
+      ).toBe(false);
+      expect(changes.flatMap((change) => ("facts" in change ? [change.facts?.kind] : []))).toEqual([
+        "member",
+        "owner",
+        "participants",
+        "category",
+        "member",
+      ]);
+      expect(sql.queries).toEqual([]);
+    });
   } finally {
     sql.restore();
     stop();

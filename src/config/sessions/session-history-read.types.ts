@@ -25,8 +25,13 @@ export type SessionTranscriptWatermark = {
   maxSeq: number | null;
 };
 
+export type SessionBranchSummarySnapshot = SessionTranscriptWatermark & {
+  branches: SessionBranchSummary[];
+  appendSafe?: boolean;
+};
+
 export type SessionBranchSummaryReadResult =
-  | ({ status: "ok"; branches: SessionBranchSummary[] } & SessionTranscriptWatermark)
+  | ({ status: "ok" } & SessionBranchSummarySnapshot)
   | { status: "missing-session" | "failed" };
 
 export type SessionModelContextLimits = {
@@ -43,6 +48,7 @@ export type SessionTranscriptModelContext = {
 
 export type SessionTranscriptReadSnapshot = {
   events: TranscriptEvent[];
+  eventJson?: string[];
   version: SessionTranscriptContextVersion;
 };
 

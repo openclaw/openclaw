@@ -1,4 +1,3 @@
-// Pairing CLI for listing and approving channel DM pairing requests.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,

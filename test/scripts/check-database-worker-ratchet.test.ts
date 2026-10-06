@@ -101,20 +101,20 @@ function anotherRecorder() {
   const rows = inventory(root);
   expect(rows.map(({ tier, calls }) => [tier, calls.length])).toEqual([
     ["T1", 2],
-    ["T1", 4],
+    ["T1", 1],
     ["T2", 1],
     ["W", 1],
-    ["W", 1],
+    ["W", 4],
   ]);
   expect(rows.find(({ tier }) => tier === "W")?.calls[0].operation).toBe(
     "createPlacementTurnClaimOps.releaseTurn",
   );
+  expect(rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls).toEqual(
+    Array(4).fill(expect.objectContaining({ operation: "recordSessionStateEventInDatabase" })),
+  );
   expect(
-    rows.find((row) => row.file === eventRelative && row.tier === "W")?.calls[0],
-  ).toMatchObject({
-    operation: "recordSessionStateEventInDatabase",
-    binding: "registeredWatcherKeys",
-  });
+    rows.find((row) => row.file === eventRelative && row.tier === "T1")?.calls[0],
+  ).toMatchObject({ operation: "anotherRecorder", binding: "registeredWatcherKeys" });
   const errors = vi.spyOn(console, "error").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
   fs.writeFileSync(file, "\n\n" + source);

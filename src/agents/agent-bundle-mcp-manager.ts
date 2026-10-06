@@ -1,6 +1,5 @@
-/** Session MCP runtime manager: acquisition and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
@@ -416,7 +415,6 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
     },
     totalActiveLeasesForSession: lifecycle.totalActiveLeasesForSessionId,
   };
-  // Test-only bookkeeping snapshot for drain assertions.
   Object.assign(manager, {
     bookkeepingSizesForTest: () => ({
       runtimes: store.runtimesBySessionId.size,

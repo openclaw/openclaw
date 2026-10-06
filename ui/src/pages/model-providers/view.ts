@@ -32,6 +32,7 @@ import type {
   ProviderOption,
 } from "./data.ts";
 import { renderDefaultModels, type DefaultModelsViewProps } from "./default-models-view.ts";
+import { MODEL_PROVIDERS_COST_DAYS } from "./load.ts";
 import {
   apiKeySource,
   renderProviderProfiles,
@@ -56,12 +57,10 @@ type ModelProvidersViewProps = Omit<DefaultModelsViewProps, "models" | "selectio
     providerUsageFailed: boolean;
     supplementalLoading: boolean;
     updatedAt: number | null;
-    costDays: number;
     credentialAgentLabel: string;
     cards: ModelProviderCard[];
     configuredModels: ModelPickerEntry[];
     defaultModels: DefaultModelSelection;
-    /** True while picker-triggered catalog discovery is in flight. */
     catalogDiscovering: boolean;
     /** Retryable error from a picker-triggered catalog discovery. */
     catalogDiscoveryError: string | null;
@@ -118,7 +117,7 @@ function modelsText(card: ModelProviderCard): string | null {
       : t("modelProviders.models", { count: String(card.modelCount) });
 }
 
-function renderLocalCost(card: ModelProviderCard, costDays: number) {
+function renderLocalCost(card: ModelProviderCard) {
   const cost = card.localCost;
   if (!cost || (cost.totalTokens === 0 && cost.totalCost === 0)) {
     return nothing;
@@ -126,7 +125,7 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   return html`
     <div class="model-providers__local-cost">
       <div class="provider-usage-billing-row">
-        <span>${t("modelProviders.localCost", { days: String(costDays) })}</span>
+        <span>${t("modelProviders.localCost", { days: String(MODEL_PROVIDERS_COST_DAYS) })}</span>
         <strong>${formatCost(cost.totalCost)}</strong>
       </div>
       <div class="model-providers__local-cost-detail">
@@ -373,7 +372,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
                 ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
               </div>`
         }
-        ${renderLocalCost(card, props.costDays)}
+        ${renderLocalCost(card)}
       </div>
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
       ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}

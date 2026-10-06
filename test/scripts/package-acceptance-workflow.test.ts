@@ -92,6 +92,7 @@ const PUBLICATION_CONTRACT_FILES = [
   "scripts/lib/actions-artifact-archive.mjs",
   "scripts/lib/arg-utils.runtime.mjs",
   "scripts/lib/bounded-response.mjs",
+  "scripts/lib/clawhub-package-family.mjs",
   "scripts/lib/clawhub-publication-state.mjs",
   "scripts/lib/canonical-json.mjs",
   "scripts/lib/npm-core-release-packages.json",
@@ -6666,9 +6667,13 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       expect(events).toContain(`wait:plugin-clawhub-release.yml:terminal:${approval}`);
       expect(events).toContain(`wait:plugin-clawhub-new.yml:terminal:${approval}`);
       const verification = `verify:1:bootstrap=${bootstrapCompleted}:workflow=refs/heads/main`;
-      expect(events.indexOf(verification)).toBeGreaterThan(
-        events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
-      );
+      if (approvesClawHub) {
+        expect(events.indexOf(verification)).toBeGreaterThan(
+          events.lastIndexOf("finished:openclaw-npm-release.yml:0"),
+        );
+      } else {
+        expect(events).not.toContain(verification);
+      }
       expect(events).toContain("release-evidence");
       expect(events).not.toContain("windows");
       expect(fixture.summary()).toContain("evidence updated; a required publish child failed");
@@ -6697,7 +6702,8 @@ render_github_release_notes() { cp "$2" "$1"; printf '%s\\n' '{"verificationIncl
       if (failedPublisher === "plugin") {
         expect(fixture.outputs().plugin_npm_completed).toBeUndefined();
         expect(fixture.events().some((event) => event.startsWith("dispatch:"))).toBe(false);
-        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(2);
+        expect(fixture.events().filter((event) => event.startsWith("cancel:"))).toHaveLength(0);
+        expect(start.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
       } else {
         expect(fixture.outputs()).toMatchObject({
           plugin_npm_completed: "true",
@@ -15426,7 +15432,7 @@ promote_windows_release_assets
       "approve_plugins_clawhub_release",
     ]);
     expect(clawHubPublish.uses).toBe(
-      "openclaw/clawhub/.github/workflows/package-publish.yml@7e2aa3cec5d35c91bb6163aa6676541d795876c5",
+      "openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c",
     );
     expect(clawHubPublish.permissions).toMatchObject({
       actions: "read",
@@ -15775,9 +15781,9 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ]),
     ) as Record<(typeof profiles)[number], number[]>;
     expect(releasePackagePaths).toEqual({
-      beta: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      stable: [30, 15, 60, 10, 30, 60, 90, 5, 5],
-      full: [30, 15, 60, 10, 30, 90, 90, 5, 5],
+      beta: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      stable: [30, 35, 60, 10, 30, 60, 90, 5, 5],
+      full: [30, 35, 60, 10, 30, 90, 90, 5, 5],
     });
     const releaseChecksParent = workflowJob(
       FULL_RELEASE_VALIDATION_WORKFLOW,
@@ -15817,7 +15823,7 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
       ),
       timeoutForProfile(releaseChecks.jobs?.summary?.["timeout-minutes"], "stable"),
     ];
-    expect(releaseCrossOsPath).toEqual([30, 15, 90, 180, 5]);
+    expect(releaseCrossOsPath).toEqual([30, 35, 90, 180, 5]);
 
     const releaseInstall = workflowJob(RELEASE_CHECKS_WORKFLOW, "install_smoke_release_checks");
     expect(jobNeeds(releaseInstall)).toEqual(["resolve_target"]);

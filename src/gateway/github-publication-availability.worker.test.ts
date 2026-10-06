@@ -66,7 +66,7 @@ const worktree: ManagedWorktreeRecord = {
   lastActiveAt: 1,
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("publication-worktree-read-"));
   mocks.session.mockReset().mockReturnValue({
     canonicalKey: session.sessionKey,
@@ -79,7 +79,7 @@ beforeEach(() => {
   });
   mocks.sessionRead.mockReset().mockImplementation(async () => mocks.session());
   mocks.identity.mockReset().mockResolvedValue({ source: "system-configured" });
-  insertRegistryWorktree(process.env, worktree);
+  await insertRegistryWorktree(process.env, worktree);
 });
 
 afterEach(async () => {
@@ -92,7 +92,7 @@ it.each([true, false])(
   "prepares publication availability without caller-thread worktree SQL (present: %s)",
   async (present) => {
     if (!present) {
-      updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
     }
     const sql = observeMainThreadSql();
     sql.calibrate();
@@ -103,7 +103,7 @@ it.each([true, false])(
 
 it("rejects a worktree retired while publication identity is prepared", async () => {
   mocks.identity.mockImplementationOnce(async () => {
-    updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+    await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
     return { source: "system-configured" };
   });
   expect(await prepareGitHubPublicationAvailability(session)).toBe(false);

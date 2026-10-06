@@ -1,4 +1,3 @@
-/** Source-reply visibility and suppression policy for auto-reply delivery. */
 import {
   isSyntheticSourceReplyTurn,
   type ReplyExpectation,
@@ -15,7 +14,6 @@ import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
 
-/** Minimal inbound context needed for source-reply delivery decisions. */
 export type SourceReplyDeliveryModeContext = Pick<
   MsgContext,
   | "ChatType"
@@ -33,7 +31,6 @@ export type SourceReplyDeliveryModeContext = Pick<
   | "InputProvenance"
 >;
 
-/** Returns true for text slash commands that lack authorization metadata. */
 export function isUnauthorizedTextSlashCommand(ctx: SourceReplyDeliveryModeContext): boolean {
   const commandTurn = resolveCommandTurnContext(ctx);
   return (
@@ -55,7 +52,6 @@ export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext
   );
 }
 
-/** Resolves whether normal final text should auto-deliver or require the message tool. */
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -138,7 +134,6 @@ export function resolveSourceReplyExpectation(params: {
   return "required";
 }
 
-/** Resolves source delivery, hooks, lifecycle, and typing suppression flags. */
 export function resolveSourceReplyVisibilityPolicy(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;

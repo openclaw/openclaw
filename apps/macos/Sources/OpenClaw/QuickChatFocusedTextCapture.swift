@@ -85,10 +85,6 @@ enum QuickChatFocusedTextCollector {
                 ownTexts.append(candidate)
                 let piece = rendered.isEmpty ? candidate : "\n\(candidate)"
                 let remaining = maximumCharacters + 1 - rendered.count
-                guard remaining > 0 else {
-                    wasTextTruncated = true
-                    break traversal
-                }
                 rendered.append(contentsOf: piece.prefix(remaining))
                 textEntryCount += 1
                 if piece.count >= remaining {
@@ -228,14 +224,14 @@ enum QuickChatFocusedTextCaptureService {
             // to the detached worker so cooperative traversal also stops.
             let (title, collection) = try await AsyncTimeout.withTimeout(
                 seconds: 4,
-                onTimeout: { URLError(.timedOut) })
-            {
-                await withTaskCancellationHandler {
-                    await walk.value
-                } onCancel: {
-                    walk.cancel()
-                }
-            }
+                onTimeout: { URLError(.timedOut) },
+                operation: {
+                    await withTaskCancellationHandler {
+                        await walk.value
+                    } onCancel: {
+                        walk.cancel()
+                    }
+                })
             guard collection.textEntryCount > 0 else {
                 return .failed(String(format: String(localized: "No readable text was found in %@."), appName))
             }
@@ -311,7 +307,6 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
             kAXRowsAttribute,
             kAXContentsAttribute,
         ]
-        let resolvedLimit = max(1, limit)
         var nodes: [any QuickChatTextTreeNode] = []
         var seen = Set<UInt64>()
         var wasTruncated = false
@@ -324,7 +319,7 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
                 &count) == .success,
                 count > 0
             else { continue }
-            let remaining = resolvedLimit - nodes.count
+            let remaining = limit - nodes.count
             guard remaining > 0 else {
                 wasTruncated = true
                 break

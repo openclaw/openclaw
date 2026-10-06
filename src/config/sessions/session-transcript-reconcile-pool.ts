@@ -443,8 +443,11 @@ async function startReconcileWorkerTask(
           owner.context.admission.databasePath.length +
           owner.context.environment.OPENCLAW_STATE_DIR.length)
       : 0) +
+    (input.mode === "release"
+      ? 0
+      : input.sessionIds.reduce((bytes, id) => bytes + 2 * id.length, 0)) +
     (input.mode === "memory"
-      ? input.sessionIds.reduce((bytes, id) => bytes + 2 * id.length, 0)
+      ? 0
       : 2 * (input.stateDir.length + input.leaseId.length + input.path.length) +
         (input.mode === "disk" ? 2 * input.agentId.length : 0));
   let poolCompletion: Promise<void> | undefined;

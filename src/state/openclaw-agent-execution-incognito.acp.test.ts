@@ -5,10 +5,16 @@ import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
-import { readAcpSessionEntryAsync } from "../acp/runtime/session-meta-read.js";
+import {
+  prepareAcpSessionEntryRead,
+  readAcpSessionEntryAsync,
+  withAcpSessionEntryRead,
+} from "../acp/runtime/session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
+import { readAcpSessionEntry, readAcpSessionMeta } from "../acp/runtime/session-meta.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
@@ -85,17 +91,68 @@ it("normalizes an ACP session key while retaining a missing-entry result", async
   ).resolves.toMatchObject({ sessionKey, storeSessionKey: sessionKey, entry: undefined });
 });
 
+it.each(["read", "upsert"] as const)(
+  "rechecks ACP caller after %s composition settles",
+  async (operation) => {
+    const sessionKey = key(`settled-${operation}`);
+    await actor.sessions.create(authority, { sessionKey, entry: entry(`settled-${operation}`) });
+    await actor.acp.upsertMeta({ authority, cfg, env, sessionKey, mutate: () => meta });
+    let current = true;
+    const source: IncognitoSessionAuthority = {
+      assertCurrent() {
+        if (!current) {
+          throw new Error("ACP caller retired after settlement");
+        }
+      },
+    };
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    let first = true;
+    const completed = vi
+      .spyOn(actor.sessions, "withSharedState")
+      .mockImplementation(<T>(work: () => Promise<T>) => {
+        const revoke = first;
+        first = false;
+        return retain(work).then((result) => {
+          if (revoke) {
+            current = false;
+          }
+          return result;
+        });
+      });
+    try {
+      const target = { authority: source, cfg, env, sessionKey };
+      await expect(
+        operation === "read"
+          ? actor.acp.readEntry(target)
+          : actor.acp.upsertMeta({ ...target, mutate: () => ({ ...meta, lastActivityAt: 200 }) }),
+      ).rejects.toThrow("ACP caller retired after settlement");
+      actor.assertReadable();
+      expect((await actor.acp.readEntry({ authority, cfg, env, sessionKey }))?.acp).toMatchObject({
+        lastActivityAt: operation === "read" ? 100 : 200,
+      });
+    } finally {
+      completed.mockRestore();
+    }
+  },
+);
+
 it("orders set, link and clear through both owners with zero caller-thread SQL", async () => {
   const readComposed = async ({
     authority: boundAuthority,
     ...input
   }: Parameters<IncognitoAcpSessionAccess["readEntry"]>[0]) =>
-    (await readAcpSessionEntryAsync(input, { actor, authority: boundAuthority }))?.entry;
+    (
+      await withIncognitoSessionActor(actor, () =>
+        readAcpSessionEntryAsync({ ...input, assertCurrent: () => boundAuthority.assertCurrent() }),
+      )
+    )?.entry;
   const upsertComposed = ({
     authority: boundAuthority,
     ...input
   }: Parameters<IncognitoAcpSessionAccess["upsertMeta"]>[0]) =>
-    upsertAcpSessionMeta(input, { actor, authority: boundAuthority });
+    withIncognitoSessionActor(actor, () =>
+      upsertAcpSessionMeta({ ...input, assertCommitAllowed: () => boundAuthority.assertCurrent() }),
+    );
   const sessionKey = key("sequence");
   const target = { authority, cfg, env, sessionKey };
   await actor.sessions.create(authority, {
@@ -260,9 +317,13 @@ it("fences binding cleanup when ACP metadata commits after its actor entry", asy
       "ACP mutation skipped shared commit",
     );
     const request = { cfg, env: { ...env }, sessionKey, authority };
-    const preparing = actor.acp.prepareEntryRead(request);
-    request.sessionKey = key("wrong-binding");
-    request.env.OPENCLAW_STATE_DIR = tempDirs.make("incognito-acp-cleanup-redirect-");
+    const preparing = withIncognitoSessionActor(actor, async () => {
+      const preparation = prepareAcpSessionEntryRead(request);
+      assert(preparation);
+      request.sessionKey = key("wrong-binding");
+      request.env.OPENCLAW_STATE_DIR = tempDirs.make("incognito-acp-cleanup-redirect-");
+      return preparation;
+    });
     prepared = await preparing;
     expect(prepared.session?.sessionKey).toBe(sessionKey);
     expect(prepared.session?.acp).toBeUndefined();
@@ -401,6 +462,70 @@ it("rechecks policy before disclosing the joined shared metadata", async () => {
     intercepted.mockRestore();
   }
 });
+
+it.each(["revision", "consume-release", "prepared-release"] as const)(
+  "retains bound ACP read custody and refuses %s disclosure",
+  async (change) => {
+    const sessionKey = key(`bound-consumer-${change}`);
+    await actor.sessions.create(authority, {
+      sessionKey,
+      entry: entry(`bound-consumer-${change}`),
+    });
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      env,
+      authority,
+      existingOnly: true,
+    });
+    assert(borrowed);
+    const input = { cfg, env, sessionKey };
+    const observe = observeHostDataSql();
+    let retiring: Promise<void> | undefined;
+    let disclosed = false;
+    try {
+      await expect(
+        withIncognitoSessionActor(borrowed, async () => {
+          expect(() => readAcpSessionEntry(input)).toThrow("Await readAcpSessionEntryAsync");
+          expect(() => readAcpSessionMeta(input)).toThrow("Await readAcpSessionMetaAsync");
+          if (change === "prepared-release") {
+            const preparation = prepareAcpSessionEntryRead(input);
+            assert(preparation);
+            const prepared = await preparation;
+            try {
+              retiring = borrowed.release();
+              prepared.assertCurrent();
+              disclosed = true;
+            } finally {
+              prepared.release();
+            }
+          } else {
+            await withAcpSessionEntryRead(input, async (read) => {
+              expect(read?.entry?.sessionId).toBe(`bound-consumer-${change}`);
+              if (change === "revision") {
+                await upsertAcpSessionMeta({ ...input, mutate: () => meta });
+              } else {
+                retiring = borrowed.release();
+                await Promise.resolve();
+              }
+            });
+            disclosed = true;
+          }
+        }),
+      ).rejects.toThrow(
+        change === "revision"
+          ? /snapshot changed|Prepared ACP session changed/
+          : "reference is released",
+      );
+      expect(disclosed).toBe(false);
+      expect(observe.queries).toEqual([]);
+    } finally {
+      observe.restore();
+      await retiring;
+      await borrowed.release();
+    }
+  },
+);
 
 it("keeps shared ACP metadata after the volatile actor ends", async () => {
   const sessionKey = key("retention");

@@ -6,8 +6,7 @@ enum ToolResultTextFormatter {
         guard !trimmed.isEmpty else { return "" }
 
         guard trimmed.first == "{" || trimmed.first == "[",
-              let data = trimmed.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data)
+              let json = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8))
         else {
             return trimmed
         }

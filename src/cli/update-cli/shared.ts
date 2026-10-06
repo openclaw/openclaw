@@ -181,12 +181,6 @@ export function normalizeTag(value?: string | null): string | null {
   return normalizePackageTagInput(value, [DEFAULT_PACKAGE_NAME]);
 }
 
-function normalizeVersionTag(tag: string): string | null {
-  const trimmed = tag.trim();
-  const cleaned = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
-  return parseSemver(cleaned) ? cleaned : null;
-}
-
 export { readPackageName, readPackageVersion };
 
 export async function resolveTargetVersion(
@@ -197,8 +191,9 @@ export async function resolveTargetVersion(
   if (!canResolveRegistryVersionForPackageTarget(tag)) {
     return { version: null };
   }
-  const direct = normalizeVersionTag(tag);
-  if (direct) {
+  const trimmed = tag.trim();
+  const direct = trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
+  if (parseSemver(direct)) {
     return { version: direct };
   }
   return await fetchNpmTagVersion({

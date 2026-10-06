@@ -33,7 +33,6 @@ export const MAX_HEADLESS_WALL_CLOCK_MS = 900_000;
 export const DEFAULT_HEADLESS_TOOL_CALLS = 5;
 export const MAX_HEADLESS_TOOL_CALLS = 200;
 
-/** Resolved Code Mode runtime limits. */
 export type CodeModeConfig = Omit<AgentToolSurfacePresentation["codeMode"], "enabled"> & {
   /** Effective activation policy; "auto" follows the model catalog flag. */
   enabled: boolean | "auto";
@@ -114,7 +113,6 @@ export function readPositiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-/** Resolves Code Mode runtime limits from config. */
 export function resolveCodeModeConfig(
   config?: OpenClawConfig,
   agentId?: string,

@@ -67,9 +67,9 @@ describe("transcript turn physical identity", () => {
     return { selected: selected.promise, resume: resume.resolve };
   }
 
-  it.runIf(process.platform !== "win32").each([undefined, "agent-qualified"] as const)(
-    "rejects a replaced database before returning a runtime target (%s)",
-    async (keyFormat) => {
+  it.runIf(process.platform !== "win32")(
+    "rejects a replaced database before returning a runtime target",
+    async () => {
       replaceSessionEntrySync(scope(), { sessionId, updatedAt: 1 });
       const original = database();
       const replacement = openOpenClawAgentDatabase({
@@ -95,7 +95,9 @@ describe("transcript turn physical identity", () => {
         return reply;
       });
       await expect(
-        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, { keyFormat }),
+        transcriptTargets.resolveSessionTranscriptRuntimeTarget(scope(), undefined, {
+          keyFormat: "agent-qualified",
+        }),
       ).rejects.toThrow(/identity/i);
       expect(replaced).toBe(true);
     },

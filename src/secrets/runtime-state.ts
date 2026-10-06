@@ -154,27 +154,7 @@ let activeSnapshotLineageStartRevision = 0;
 // Capture auth truth at candidate publication; descendant credential refreshes keep this base so
 // rollback can distinguish pre-activation auth writes from candidate-owned resolved values.
 let activeSnapshotLineageAuthStores: PreparedSecretsRuntimeSnapshot["authStores"] = [];
-let activeSnapshotLineageAuthMutations: Record<
-  string,
-  {
-    store: {
-      baseline: StoreMutationLineage;
-      candidate: StoreMutationLineage;
-    };
-    state: {
-      token: RuntimeAuthProfileStoreMutationToken;
-      includeMain: boolean;
-      databaseOwner: RuntimeAuthProfileStoreMutationOwner;
-    };
-    profiles: Record<
-      string,
-      {
-        baseline: ProfileOwnerMutationLineage;
-        candidate: ProfileOwnerMutationLineage;
-      }
-    >;
-  }
-> = {};
+let activeSnapshotLineageAuthMutations: ReturnType<typeof captureAuthStoreMutationLineage> = {};
 let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
 const preparedSnapshotRefreshContext = new WeakMap<
   PreparedSecretsRuntimeSnapshot,
@@ -362,7 +342,7 @@ function readSharedProfileSetMutationToken(
 function captureAuthStoreMutationLineage(
   baselineAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
   candidateAuthStores: PreparedSecretsRuntimeSnapshot["authStores"],
-): typeof activeSnapshotLineageAuthMutations {
+) {
   const baseline = Object.fromEntries(baselineAuthStores.map((entry) => [entry.agentDir, entry]));
   const candidate = Object.fromEntries(candidateAuthStores.map((entry) => [entry.agentDir, entry]));
   const agentDirs = new Set([...Object.keys(baseline), ...Object.keys(candidate)]);
@@ -393,26 +373,29 @@ function captureAuthStoreMutationLineage(
             includeMain: effectiveStore?.runtimeInheritsMainState === true,
           },
           profiles: Object.fromEntries(
-            [...profileIds].map((profileId) => [
-              profileId,
-              {
-                baseline: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  baselineStore,
+            [...profileIds].map(
+              (profileId) =>
+                [
                   profileId,
-                  baselineOwner,
-                ),
-                candidate: captureProfileOwnerMutationLineage(
-                  agentDir,
-                  candidateStore,
-                  profileId,
-                  candidateOwner,
-                ),
-              },
-            ]),
+                  {
+                    baseline: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      baselineStore,
+                      profileId,
+                      baselineOwner,
+                    ),
+                    candidate: captureProfileOwnerMutationLineage(
+                      agentDir,
+                      candidateStore,
+                      profileId,
+                      candidateOwner,
+                    ),
+                  },
+                ] as const,
+            ),
           ),
         },
-      ];
+      ] as const;
     }),
   );
 }
@@ -628,7 +611,6 @@ function getProfileMutationDecision(params: {
   profileId: string;
   mutationLineage: typeof activeSnapshotLineageAuthMutations;
 }): {
-  baselineOwner: ProfileOwner;
   candidateOwner: ProfileOwner;
   candidateStatus: "mutated" | "unchanged" | "unknown";
   ownerChanged: boolean;
@@ -637,7 +619,6 @@ function getProfileMutationDecision(params: {
   const captured = params.mutationLineage[params.agentDir]?.profiles[params.profileId];
   if (!captured) {
     return {
-      baselineOwner: "absent",
       candidateOwner: "absent",
       candidateStatus: "mutated",
       ownerChanged: false,
@@ -649,7 +630,6 @@ function getProfileMutationDecision(params: {
     !isDeepStrictEqual(captured.baseline.databaseOwner, captured.candidate.databaseOwner);
   const relevant = ownerChanged ? captured.baseline : captured.candidate;
   return {
-    baselineOwner: captured.baseline.owner,
     candidateOwner: captured.candidate.owner,
     candidateStatus: compareMutationTokens(
       captured.candidate.token,

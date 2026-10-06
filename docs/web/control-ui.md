@@ -145,6 +145,13 @@ Existing workspace instructions are never overwritten. If `AGENTS.md` already
 contains different instructions, choose a new workspace for the custom agent.
 Created agents appear in Agents home and
 the agent switcher.
+
+The sidebar agent menu uses horizontal rows with a bounded, scrollable list.
+With more than six agents, **Find an agent…** filters by display name or agent ID;
+matching names retain their existing pinned order. Duplicate names show their
+IDs underneath. New-agent, directory, capability, and settings actions stay outside
+the scrolling list. Reopening the menu clears the filter and brings the selected
+agent into view.
 Opening **New agent** keeps your existing Ask OpenClaw conversation. Finish any
 pending wizard or approval before opening the creation choices.
 If team creation stops partway through, the custodian reports the retained

@@ -32,6 +32,7 @@ export type DraftRepositoryState =
 
 export type DraftCloudProfile = {
   id: string;
+  inference?: "worker";
   providerId: string;
   providerDisplayId?: string;
   trust?: "persistent" | "disposable";
@@ -140,6 +141,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         {
           id,
           providerId,
+          ...(profile.inference === "worker" ? { inference: profile.inference } : {}),
           ...(typeof profile.providerDisplayId === "string" &&
           /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
           profile.providerDisplayId.trim() === profile.providerDisplayId
