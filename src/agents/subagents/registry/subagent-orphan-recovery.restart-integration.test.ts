@@ -666,8 +666,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
       expect(persistedSession).toMatchObject({
         status: "interrupted",
         endedAt: expect.any(Number),
+        abortedLastRun: true,
       });
-      expect(persistedSession?.abortedLastRun).toBeUndefined();
       expect(
         (
           await loadTranscriptEvents({
