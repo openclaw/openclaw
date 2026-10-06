@@ -1037,8 +1037,8 @@ function resolveOperators(
 
   for (const bucket of commandTopologyBuckets(commands)) {
     const bucketOperatorSource = operatorSources.find(
-      (source) =>
-        source.context === bucket.context && source.parentCommandId === bucket.parentCommandId,
+      (entry) =>
+        entry.context === bucket.context && entry.parentCommandId === bucket.parentCommandId,
     );
     const bucketRanges = bucketOperatorSource
       ? commandSourceRanges(bucketOperatorSource.source, bucket.commands)
