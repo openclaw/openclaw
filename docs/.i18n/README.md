@@ -24,8 +24,8 @@ Edit English docs in `openclaw/openclaw` and push to `main`. The sync, translati
 
 ## Locale visibility
 
-- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, and `th`.
-- Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `hi`, `ar`, `it`, `vi`, `nl`, `fa`, `ru`, `tr`, `uk`, `id`, `pl`, `th`, and `sv`.
+- Docs translation workflows generate the same non-English locale set in `openclaw/docs`, except Swedish (`sv`), which is currently Control UI only.
 - The custom docs website supports the generated locale set, including Thai (`th`) and Persian (`fa`).
 - Do not treat locale visibility in generated `docs/docs.json` as proof that translation artifacts exist. Verify each generated locale folder and its translation memory in `openclaw/docs`.
 
