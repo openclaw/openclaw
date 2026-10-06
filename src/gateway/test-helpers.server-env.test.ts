@@ -60,7 +60,7 @@ async function closeListener(server: Server): Promise<void> {
 }
 
 describe("Gateway test environment lifecycle", () => {
-  it("owns an implicit E2E listener across startup and a rejected close", async () => {
+  it("owns an explicit E2E listener across startup and a rejected close", async () => {
     const configPath = process.env.OPENCLAW_CONFIG_PATH;
     assert(configPath);
     const serverModule = await import("./server.js");
