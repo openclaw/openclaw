@@ -2,7 +2,7 @@ import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
-import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-replay-safety.js";
+import { readMainSessionRecoveryCheckpoint } from "../agents/main-session-recovery/main-session-restart-recovery-checkpoint.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
