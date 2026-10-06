@@ -15,9 +15,11 @@ const mocks = vi.hoisted(() => ({
   logWs: vi.fn<typeof import("../../ws-log.js").logWs>(),
 }));
 
+// mock-isolation: Inject exact response errors without loading or dispatching real Gateway methods.
 vi.mock("./authenticated-request-dispatch.server-methods.runtime.js", () => ({
   handleGatewayRequest: mocks.handleGatewayRequest,
 }));
+// mock-isolation: Flood accounting owns no shared request queue or scheduling budget.
 vi.mock("./request-start.js", () => ({
   scheduleGatewayRequestStart: () => Promise.resolve(),
 }));
