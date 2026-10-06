@@ -336,6 +336,9 @@ importers:
       hosted-git-info:
         specifier: 10.1.1
         version: 10.1.1
+      htmlparser2:
+        specifier: 12.0.0
+        version: 12.0.0
       iconv-lite:
         specifier: 0.7.3
         version: 0.7.3
@@ -514,9 +517,6 @@ importers:
       baileys:
         specifier: 7.0.0-rc14
         version: 7.0.0-rc14(patch_hash=c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded)(audio-decode@3.12.0)(supports-color@10.2.2)
-      htmlparser2:
-        specifier: 12.0.0
-        version: 12.0.0
       ipaddr.js:
         specifier: 2.5.0
         version: 2.5.0
