@@ -1,6 +1,48 @@
+import { GitCommandTimeoutError } from "../../infra/git-exec.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { WorktreeWorkerOperations } from "./dispatch.worker.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
+import type { ManagedWorktreeRecord, WorktreeRemovalDeferral } from "./types.js";
+
+export function isWorktreeRemovalTimeout(error: unknown): boolean {
+  for (let cause = error; cause instanceof Error; cause = cause.cause) {
+    if (cause instanceof GitCommandTimeoutError) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Keep a timed-out attempt with the registry revision that still owns its checkout. */
+export async function deferTimedOutWorktreeRemoval(params: {
+  env: NodeJS.ProcessEnv;
+  observed: ManagedWorktreeRecord;
+  stage: string;
+  elapsedMs: number;
+  now: number;
+  previousAttempts: number;
+  claimToken: string;
+  assertCurrent: () => void;
+}): Promise<WorktreeRemovalDeferral | undefined> {
+  const attempts = Math.min(params.previousAttempts + 1, Number.MAX_SAFE_INTEGER);
+  const retry: WorktreeRemovalDeferral = {
+    stage: params.stage,
+    elapsedMs: params.elapsedMs,
+    attempts,
+    retryAt: params.now + Math.min(24, 2 ** Math.min(attempts, 5)) * 60 * 60_000,
+  };
+  const recorded = await deferWorktreeCleanup(
+    params.env,
+    {
+      observed: params.observed,
+      reason: `Git ${params.stage} timed out; cleanup deferred`,
+      retry,
+      removalToken: params.claimToken,
+    },
+    params.assertCurrent,
+  );
+  return recorded ? retry : undefined;
+}
 
 type WorktreeRetirementOperations = Pick<
   WorktreeWorkerOperations,

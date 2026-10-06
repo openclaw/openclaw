@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { listSessionBranches } from "../config/sessions/session-accessor.sqlite-branch-list.js";
@@ -22,6 +22,7 @@ import {
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import { readTranscriptStatsAsync } from "../config/sessions/session-transcript-stats.js";
 import { readSessionTranscriptWatermarkAsync } from "../config/sessions/session-transcript-watermark.js";
+import * as cronJobNames from "../cron/store/job-name.js";
 import { readChatHistoryDelta } from "../gateway/server-methods/chat-history-delta.js";
 import {
   readChatHistoryPage,
@@ -458,6 +459,62 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
       expect(disclosed).toBe(1);
       expect(() => guarded.assertCurrent()).toThrow("visitor grant revoked");
     });
+  });
+
+  it("projects named cron labels before encoding actor-backed history", async () => {
+    const { actor } = fixture;
+    const session = await create("encoded-cron-history");
+    const appended = await actor.sessions.transcript(authority, {
+      type: "session.message.append",
+      input: {
+        ...targetInput(session),
+        fence: { expectedLifecycleRevision: session.entry.lifecycleRevision },
+        message: {
+          role: "user",
+          content: "Scheduled report",
+          timestamp: 10_001,
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:main:cron:daily-report:run:completed",
+          },
+        },
+      },
+    });
+    assert(appended.ok);
+    const names = vi
+      .spyOn(cronJobNames, "prepareCronJobNameResolver")
+      .mockResolvedValue((jobId) => (jobId === "daily-report" ? "Daily report" : undefined));
+    try {
+      const page = await withIncognitoSessionActor(actor, () =>
+        readChatHistoryPage({
+          entry: session.entry,
+          provider: undefined,
+          sessionId: session.entry.sessionId,
+          storePath: actor.path,
+          sessionAgentId: actor.agentId,
+          canonicalKey: session.sessionKey,
+          max: 10,
+          maxHistoryBytes: 4096,
+          effectiveMaxChars: 1000,
+          offset: undefined,
+          messageId: undefined,
+          encodeResponse: true,
+        }),
+      );
+      assert(page.encodedResponse);
+      const encoded = new TextDecoder().decode(page.encodedResponse.messages);
+      expect(JSON.parse(encoded)).toMatchObject([
+        {
+          content: "Scheduled report",
+          senderLabel: "Forwarded from Daily report",
+          senderSession: { label: "Daily report" },
+        },
+      ]);
+      expect(page.encodedResponse.messagesBytes).toBe(Buffer.byteLength(encoded));
+    } finally {
+      names.mockRestore();
+    }
   });
 
   it("preserves raw visitor message ordinals across reset and visible control markers", async () => {

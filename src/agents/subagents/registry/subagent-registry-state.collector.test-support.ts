@@ -17,7 +17,7 @@ export function registerSubagentCollectorPublicationCases(params: {
   refuseNextWrite(): void;
 }) {
   const { createRun } = params;
-  it("invalidates the strict collector parent after each committed lifecycle transition", () => {
+  it("invalidates the strict collector parent after each committed lifecycle transition", async () => {
     const run: SubagentRunRecord = {
       ...createRun("cross-agent"),
       childSessionKey: "agent:research:subagent:child",
@@ -29,7 +29,7 @@ export function registerSubagentCollectorPublicationCases(params: {
     };
     const runs = new Map([[run.runId, run]]);
     params.mockRestoredRows(new Map());
-    getSubagentRunsSnapshotForRead(new Map());
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     const observed: Array<{ event: SessionLifecycleEvent; stored?: SubagentRunRecord }> = [];
     const unsubscribe = onSessionLifecycleEvent((event) => {
       observed.push({ event, stored: getSubagentRunsSnapshotForRead(new Map()).get(run.runId) });
@@ -125,7 +125,7 @@ export function registerSubagentCollectorPublicationCases(params: {
     }
   });
 
-  it("defers atomic collector notifications until all owner snapshots are published", () => {
+  it("defers atomic collector notifications until all owner snapshots are published", async () => {
     const run: SubagentRunRecord = {
       ...createRun("atomic"),
       collect: true,
@@ -138,7 +138,7 @@ export function registerSubagentCollectorPublicationCases(params: {
     try {
       const deferred: Array<() => void> = [];
       params.mockRestoredRows(new Map());
-      getSubagentRunsSnapshotForRead(new Map());
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       publishSubagentRunsAfterAtomicStore(new Map([[run.runId, run]]), [run.runId], deferred);
       expect(received).not.toHaveBeenCalled();
       expect(getSubagentRunsSnapshotForRead(new Map()).get(run.runId)?.groupId).toBe("batch");

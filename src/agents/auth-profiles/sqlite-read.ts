@@ -1,9 +1,11 @@
 import path from "node:path";
+import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -13,6 +15,7 @@ import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-work
 import { registerUserModelAuthProfileSecrets } from "../../state/user-model-accounts.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
+import { receiveAuthProfileUpdateValue } from "./store-update-transfer.js";
 import type {
   AuthProfileStore,
   AuthProfileRowRead,
@@ -194,18 +197,62 @@ export function prepareAgentAuthProfileRowsRead(options: {
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
 export async function readSharedAuthProfileRows(
   context: OpenClawStateWorkerContext,
+  artifactPreserving = isArtifactPreservingStateRead(),
 ): Promise<AuthProfileRowRead> {
+  let rows: AuthProfileRowRead | undefined;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    context.maintenanceScope?.assertAdmission();
+  };
   const result = await runOpenClawStateWorkerOperation(
     context,
-    (scope) =>
-      scope.execute({
+    async (scope) => {
+      await scope.execute({
         type: "authProfiles.read",
-        input: { artifactPreserving: isArtifactPreservingStateRead() },
+        input: { artifactPreserving },
+      });
+      return true;
+    },
+    {
+      existingOnly: true,
+      createAdmission: () => ({
+        nativeLocations: [context.admission.databasePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          const facts = request.facts;
+          if (!isRecord(facts) || !(facts.port instanceof MessagePort)) {
+            throw new Error("Auth profile read returned no field transport");
+          }
+          try {
+            assertCurrent();
+            if (request.stage !== "prepare" || facts.kind !== "auth-store-read" || rows) {
+              throw new Error("Auth profile read requested an invalid field transfer");
+            }
+            const value = receiveAuthProfileUpdateValue(facts.port);
+            if (
+              !isRecord(value) ||
+              !isInspection(value.store) ||
+              !isInspection(value.state) ||
+              typeof value.cacheable !== "boolean"
+            ) {
+              throw new Error("Auth profile reader returned invalid inspection rows");
+            }
+            rows = { store: value.store, state: value.state, cacheable: value.cacheable };
+            assertCurrent();
+            if (!grant()) {
+              throw new Error("Auth profile read authority expired");
+            }
+          } finally {
+            facts.port.close();
+          }
+        }),
       }),
-    { existingOnly: true },
+    },
   );
-  context.admission.assertCurrent();
-  return result ?? missing;
+  assertCurrent();
+  if (result && !rows) {
+    throw new Error("Auth profile read completed without its rows");
+  }
+  return rows ?? missing;
 }
 
 /** Read one selected account on the canonical actor; redaction remains caller-owned. */

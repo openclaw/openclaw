@@ -143,6 +143,13 @@ export function bindChatAbortTerminalDispatch(
   }
 }
 
+export function isCurrentChatAbortTerminalDispatch(
+  entry: object,
+  dispatch: Pick<ChatAbortTerminalDispatch, "failure">,
+): boolean {
+  return terminalDispatchByEntry.get(entry) === dispatch;
+}
+
 export function markChatAbortTerminalPersistenceError(entry: object, error: unknown): void {
   if (error === undefined) {
     terminalPersistenceErrorByEntry.delete(entry);

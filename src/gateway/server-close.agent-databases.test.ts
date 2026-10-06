@@ -14,6 +14,11 @@ import { admitReplyTurn } from "../auto-reply/reply/reply-turn-admission.js";
 import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
 import {
+  mutateSessionGoal,
+  readSessionGoalOperationInDatabase,
+} from "../config/sessions/goals-operations.js";
+import { createSessionGoal } from "../config/sessions/goals.js";
+import {
   loadSessionEntry,
   patchSessionEntryCore,
   replaceSessionEntry,
@@ -44,6 +49,7 @@ import {
   assertNoOpenClawAgentDatabaseLeasesReadOnly,
   OpenClawAgentDatabaseLeaseActiveError,
 } from "../state/openclaw-agent-db-lease.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import * as schema from "../state/openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -418,6 +424,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
   let acceptedLifecycle: ReturnType<typeof applySessionEntryLifecycleMutation> | undefined;
   let acceptedTerminal: Promise<void> | undefined;
+  let acceptedGoal: ReturnType<typeof mutateSessionGoal> | undefined;
   try {
     let persistenceOwner:
       | ReturnType<typeof lifecyclePersistence.createSessionLifecyclePersistenceOwner>
@@ -480,6 +487,20 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
         },
       );
     }
+    const goalTarget = {
+      agentId: "main",
+      storePath: activeStore,
+      sessionKey: "agent:main:main",
+    };
+    const goal = await createSessionGoal({ ...goalTarget, objective: "before close" });
+    const goalOperation = {
+      operationId: "close-goal-edit",
+      issuedAtMs: Date.now(),
+      requestFingerprint: "close-goal-edit",
+      action: "edit" as const,
+      goalId: goal.id,
+      objective: "accepted before close",
+    };
     const lifecycleKey = "agent:main:lifecycle-close";
     await replaceSessionEntry(
       { agentId: "main", storePath: activeStore, sessionKey: lifecycleKey },
@@ -613,8 +634,13 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
           agentId: "main",
           event: terminalEvent,
         });
+        acceptedGoal = mutateSessionGoal({
+          ...goalTarget,
+          expectedSessionId: "main-session",
+          operation: goalOperation,
+        });
         rootWorkEntered.resolve();
-        await Promise.all([acceptedFinal, acceptedLifecycle, acceptedTerminal]);
+        await Promise.all([acceptedFinal, acceptedLifecycle, acceptedTerminal, acceptedGoal]);
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -654,11 +680,27 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
     await expect(acceptedLifecycle).resolves.toMatchObject({ removedEntries: 0 });
     await expect(acceptedTerminal).resolves.toBeUndefined();
+    const goalResult = await acceptedGoal;
+    assert(goalResult);
+    expect(goalResult).toMatchObject({
+      replayed: false,
+      result: { action: "edit", goal: { objective: "accepted before close" } },
+    });
     await withinTest(rootJoinEntered.promise, signal);
     await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
     expect(shared.isOpen).toBe(false);
     expect(agent.isOpen).toBe(false);
+    const goalReceipt = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        readSessionGoalOperationInDatabase(database, {
+          sessionKey: goalTarget.sessionKey,
+          expectedSessionId: "main-session",
+          operation: goalOperation,
+        }),
+      { agentId: "main", env: fixture.state.env },
+    );
+    expect(goalReceipt).toEqual({ found: true, value: goalResult.result });
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: terminalKey }),
     ).toMatchObject({ status: "done", startedAt: 1_000, endedAt: 2_000 });
@@ -681,6 +723,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" }),
     ).toMatchObject({
       label: "writer settled before final",
+      goal: { id: goal.id, objective: "accepted before close" },
       pendingFinalDelivery: {
         deliveries: [{ id: "close-delivery", state: "delivered" }],
       },
@@ -693,6 +736,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       acceptedFinal,
       acceptedLifecycle,
       acceptedTerminal,
+      acceptedGoal,
       closing,
     ]);
     vi.useRealTimers();

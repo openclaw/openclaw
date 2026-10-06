@@ -161,17 +161,7 @@ export function resolveExtraActionMediaSourceParamKeys(params: {
     // Standard send params never need bundled action metadata discovery.
     return [];
   }
-  return resolveChannelMessageToolMediaSourceParamKeys({
-    cfg: params.cfg,
-    action: params.action,
-    channel: params.channel,
-    accountId: params.accountId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    agentId: params.agentId,
-    requesterSenderId: params.requesterSenderId,
-    senderIsOwner: params.senderIsOwner,
-  });
+  return resolveChannelMessageToolMediaSourceParamKeys(params);
 }
 
 export function collectActionMediaSourceHints(

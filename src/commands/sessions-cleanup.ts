@@ -33,10 +33,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
-  action: ReturnType<typeof resolveSessionCleanupAction>;
-  label?: string;
-};
+type SessionCleanupActionRow = ReturnType<typeof buildActionRows>[number];
 
 type SessionCleanupLabelSummary = {
   label: string;
@@ -72,7 +69,7 @@ function formatCleanupActionCell(
 
 function buildActionRows(
   params: Awaited<ReturnType<typeof runSessionsCleanup>>["previewResults"][number],
-): SessionCleanupActionRow[] {
+) {
   // Recompute row actions from the preview sets so dry-run output uses the same
   // action labels as the cleanup engine without mutating the preview store.
   return toSessionDisplayRows(params.beforeStore).map((row) =>

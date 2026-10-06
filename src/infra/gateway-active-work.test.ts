@@ -181,6 +181,25 @@ describe("waitForGatewayActiveWork", () => {
     expect(createGatewayActiveWorkSnapshot().writeCustody).toEqual([]);
   });
 
+  it("bounds holder details without dropping blocker counts", () => {
+    const admissions = Array.from({ length: 10 }, (_, index) =>
+      tryBeginGatewayRootWorkAdmission(`request-${index}`),
+    );
+    try {
+      const snapshot = createGatewayActiveWorkSnapshot();
+      expect(snapshot.blockers).toContainEqual({
+        kind: "root-request",
+        count: 10,
+        message:
+          "10 active gateway request(s): request-0, request-1, request-2, request-3, request-4, request-5, request-6, request-7, +2 more",
+      });
+    } finally {
+      for (const admission of admissions) {
+        admission?.release();
+      }
+    }
+  });
+
   it("does not mix default holders into an overridden root count", () => {
     const admission = tryBeginGatewayRootWorkAdmission("ws:agent");
     try {

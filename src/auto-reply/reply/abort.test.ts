@@ -474,7 +474,7 @@ describe("abort detection", () => {
 
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
     expect(runtimeAbortMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(childSessionId);
-    expect(getSubagentRunByChildSessionKey(childKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
       endedReason: "subagent-killed",
       killReconciliation: { suppressTaskDelivery: true },
     });
@@ -579,7 +579,9 @@ describe("abort detection", () => {
         replacement.abortSignal.aborted,
         "do not rediscover a replacement parent after ACP settles",
       ).toBe(false);
-      expect(getSubagentRunByChildSessionKey("agent:main:subagent:during-acp-wait")).toBeNull();
+      expect(
+        await getSubagentRunByChildSessionKey("agent:main:subagent:during-acp-wait"),
+      ).toBeNull();
     } finally {
       proceed.resolve();
       await pending;
@@ -780,8 +782,10 @@ describe("abort detection", () => {
       }),
     ).resolves.toEqual({ stopped: 1, failed: 1 });
     expect(failedTombstone).toBe(true);
-    expect(getSubagentRunByChildSessionKey(firstChildKey)?.killIntent).toBeDefined();
-    expect(getSubagentRunByChildSessionKey(secondChildKey)?.endedReason).toBe("subagent-killed");
+    expect((await getSubagentRunByChildSessionKey(firstChildKey))?.killIntent).toBeDefined();
+    expect((await getSubagentRunByChildSessionKey(secondChildKey))?.endedReason).toBe(
+      "subagent-killed",
+    );
     expectSessionLaneCleared(firstChildKey);
     expectSessionLaneCleared(secondChildKey);
   });

@@ -1,4 +1,3 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { expandToolGroups, normalizeToolPolicyName } from "../tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -28,11 +27,7 @@ export function resolveCliRuntimeToolPolicy(input: {
       params = { ...params, toolsAllow: undefined };
     } else {
       runtimeToolsAllowPolicy = [...params.toolsAllow];
-      const fallbackOpenClawTools = uniqueStrings(
-        expandToolGroups(params.toolsAllow)
-          .map((toolName) => normalizeToolPolicyName(toolName))
-          .filter(Boolean),
-      );
+      const fallbackOpenClawTools = expandToolGroups(params.toolsAllow);
       if (
         fallbackOpenClawTools.includes("write") &&
         !fallbackOpenClawTools.includes("apply_patch")

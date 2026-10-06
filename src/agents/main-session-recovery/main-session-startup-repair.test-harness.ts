@@ -34,8 +34,10 @@ import {
   expectRecord,
   type SessionEntryFixture,
 } from "../subagent-test-fixtures.test-helpers.js";
-import { saveSubagentRegistryToSqlite } from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
   discoverRestartRecoveryStoreTargets,

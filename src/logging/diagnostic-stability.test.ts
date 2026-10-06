@@ -83,7 +83,7 @@ describe("diagnostic stability recorder", () => {
     });
     emitDiagnosticEvent({
       type: "worker.request",
-      kind: "transcript",
+      kind: "sessionTranscript",
       requestClass: "task",
       phase: "queued",
       queueDepth: 1,

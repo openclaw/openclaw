@@ -32,16 +32,7 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-export function applyAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  added: AgentRouteBinding[];
-  updated: AgentRouteBinding[];
-  skipped: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = [...listRouteBindings(cfg)];
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const existingMatchMap = new Map<string, string>();
@@ -119,15 +110,7 @@ export function applyAgentBindings(
   };
 }
 
-export function removeAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  removed: AgentRouteBinding[];
-  missing: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function removeAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = listRouteBindings(cfg);
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const removeIndexes = new Set<number>();

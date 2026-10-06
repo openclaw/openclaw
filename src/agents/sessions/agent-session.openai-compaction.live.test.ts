@@ -8,10 +8,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  disposeOpenClawAgentDatabaseByPath,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { AgentSession } from "./agent-session.js";
@@ -305,8 +303,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         }
       };
       const reopen = async () => {
-        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
-        disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
         return SessionManager.open(sessionTarget, workspaceDir);
       };
       try {
@@ -379,8 +376,7 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
           `[openai-checkpoint-live] budget=${modelDefinition.contextTokens} compactions=${checkpointCount} replayTokens=${replayUsage.totalTokens} sqliteReplay=passed toolMarker=preserved\n`,
         );
       } finally {
-        await closeOpenClawAgentDatabaseByPathAsync(sessionTarget.storePath);
-        disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
+        await disposeOpenClawAgentDatabaseByPath(sessionTarget.storePath);
       }
     },
     10 * 60 * 1000,

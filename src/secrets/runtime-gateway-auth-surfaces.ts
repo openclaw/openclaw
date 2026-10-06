@@ -16,7 +16,6 @@ type GatewayAuthSurfacePath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
 
 /** Active/inactive decision for one gateway credential SecretRef surface. */
 type GatewayAuthSurfaceState = {
-  path: GatewayAuthSurfacePath;
   active: boolean;
   reason: string;
   hasSecretRef: boolean;
@@ -25,30 +24,8 @@ type GatewayAuthSurfaceState = {
 /** Complete state map keyed by every known gateway credential surface path. */
 type GatewayAuthSurfaceStateMap = Record<GatewayAuthSurfacePath, GatewayAuthSurfaceState>;
 
-function formatAuthMode(mode: string | undefined): string {
-  return mode ?? "unset";
-}
-
-function describeRemoteConfiguredSurface(parts: {
-  remoteMode: boolean;
-  remoteUrlConfigured: boolean;
-  tailscaleRemoteExposure: boolean;
-}): string {
-  const reasons: string[] = [];
-  if (parts.remoteMode) {
-    reasons.push('gateway.mode is "remote"');
-  }
-  if (parts.remoteUrlConfigured) {
-    reasons.push("gateway.remote.url is configured");
-  }
-  if (parts.tailscaleRemoteExposure) {
-    reasons.push('gateway.tailscale.mode is "serve" or "funnel"');
-  }
-  return reasons.join("; ");
-}
-
-function unconfiguredGatewayAuthSurface(path: GatewayAuthSurfacePath): GatewayAuthSurfaceState {
-  return { path, active: false, reason: "gateway configuration is not set.", hasSecretRef: false };
+function unconfiguredGatewayAuthSurface(): GatewayAuthSurfaceState {
+  return { active: false, reason: "gateway configuration is not set.", hasSecretRef: false };
 }
 
 /** Evaluates which gateway credential SecretRefs can affect the effective auth plan. */
@@ -60,10 +37,10 @@ export function evaluateGatewayAuthSurfaceStates(params: {
   const gateway = params.config.gateway as Record<string, unknown> | undefined;
   if (!isRecord(gateway)) {
     return {
-      "gateway.auth.token": unconfiguredGatewayAuthSurface("gateway.auth.token"),
-      "gateway.auth.password": unconfiguredGatewayAuthSurface("gateway.auth.password"),
-      "gateway.remote.token": unconfiguredGatewayAuthSurface("gateway.remote.token"),
-      "gateway.remote.password": unconfiguredGatewayAuthSurface("gateway.remote.password"),
+      "gateway.auth.token": unconfiguredGatewayAuthSurface(),
+      "gateway.auth.password": unconfiguredGatewayAuthSurface(),
+      "gateway.remote.token": unconfiguredGatewayAuthSurface(),
+      "gateway.remote.password": unconfiguredGatewayAuthSurface(),
     };
   }
   const auth = isRecord(gateway?.auth) ? gateway.auth : undefined;
@@ -128,11 +105,13 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     return "token auth can win (mode is unset and no password source is configured).";
   })();
 
-  const remoteSurfaceReason = describeRemoteConfiguredSurface({
-    remoteMode: plan.remoteMode,
-    remoteUrlConfigured: plan.remoteUrlConfigured,
-    tailscaleRemoteExposure: plan.tailscaleRemoteExposure,
-  });
+  const remoteSurfaceReason = [
+    plan.remoteMode && 'gateway.mode is "remote"',
+    plan.remoteUrlConfigured && "gateway.remote.url is configured",
+    plan.tailscaleRemoteExposure && 'gateway.tailscale.mode is "serve" or "funnel"',
+  ]
+    .filter(Boolean)
+    .join("; ");
 
   const remoteTokenReason = (() => {
     if (!remote) {
@@ -147,7 +126,7 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     // Remote credentials also act as local auth fallbacks when no stronger source wins.
     // Keep fallback diagnostics separate from explicit remote exposure diagnostics.
     if (!plan.localTokenCanWin) {
-      return `token auth cannot win with gateway.auth.mode="${formatAuthMode(plan.authMode)}".`;
+      return `token auth cannot win with gateway.auth.mode="${plan.authMode ?? "unset"}".`;
     }
     if (plan.envToken) {
       return "gateway token env var is configured.";
@@ -191,25 +170,21 @@ export function evaluateGatewayAuthSurfaceStates(params: {
 
   return {
     "gateway.auth.token": {
-      path: "gateway.auth.token",
       active: plan.localTokenSurfaceActive,
       reason: authTokenReason,
       hasSecretRef: plan.localToken.hasSecretRef,
     },
     "gateway.auth.password": {
-      path: "gateway.auth.password",
       active: plan.passwordCanWin,
       reason: authPasswordReason,
       hasSecretRef: plan.localPassword.hasSecretRef,
     },
     "gateway.remote.token": {
-      path: "gateway.remote.token",
       active: plan.remoteTokenActive,
       reason: remoteTokenReason,
       hasSecretRef: plan.remoteToken.hasSecretRef,
     },
     "gateway.remote.password": {
-      path: "gateway.remote.password",
       active: plan.remotePasswordActive,
       reason: remotePasswordReason,
       hasSecretRef: plan.remotePassword.hasSecretRef,

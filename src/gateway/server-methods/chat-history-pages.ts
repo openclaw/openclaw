@@ -18,6 +18,7 @@ import type { IncognitoSessionHistoryReader } from "../session-history-snapshot.
 import * as sessionTranscriptReaders from "../session-transcript-readers.js";
 import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { projectChatHistoryWithReplies } from "./chat-history-reply-messages.js";
+import { encodeChatHistoryResponsePage } from "./chat-history-response-page.js";
 
 function prepareChatHistoryParams<Params extends ChatHistoryPageParams>(input: Params): Params {
   return getCliSessionBinding(input.entry, "claude-cli")?.sessionId
@@ -156,10 +157,10 @@ export async function readChatHistoryPage(
         sessionEntry: params.entry,
       },
       async () => {
-        const page = await reader.rpc(params);
+        const page = await reader.rpc({ ...params, encodeResponse: false });
         const messages = await refreshForwardedLabels(page.messages);
         signal?.throwIfAborted();
-        return { ...page, messages };
+        return encodeChatHistoryResponsePage({ ...page, messages }, params);
       },
     );
   }

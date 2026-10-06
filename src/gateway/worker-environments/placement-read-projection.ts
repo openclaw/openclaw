@@ -11,6 +11,8 @@ import type {
   WorkerSessionPlacementProjection,
   WorkerSessionPlacementReadResult,
 } from "./placement-read-projection.types.js";
+import type { WorkerSessionPlacementRecord } from "./placement-record.js";
+import { fromRow } from "./placement-row-codec.js";
 import { parseWorkerSessionPlacementState } from "./placement-state.js";
 import { isCurrentJournalOwner } from "./placement-workspace-journal.js";
 import {
@@ -18,6 +20,24 @@ import {
   readWorkerWorkspaceReconciliationFacts,
 } from "./placement-workspace-result.js";
 import { decodeWorkerEnvironmentRow } from "./store-row-codec.js";
+
+export function readWorkerPlacementEnvironmentOwnerInDatabase(
+  db: DatabaseSync,
+  environmentId: string,
+): WorkerSessionPlacementRecord | undefined {
+  const rows = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<StateDatabase>(db)
+      .selectFrom("worker_session_placements")
+      .selectAll()
+      .where("environment_id", "=", environmentId)
+      .limit(2),
+  ).rows;
+  if (rows.length > 1) {
+    throw new Error(`Worker environment ${environmentId} has multiple placement owners`);
+  }
+  return rows[0] ? fromRow(rows[0]) : undefined;
+}
 
 export function readWorkerSessionPlacementProjectionInDatabase(
   db: DatabaseSync,

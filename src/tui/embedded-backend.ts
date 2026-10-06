@@ -882,7 +882,14 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }):
     | { kind: "handled"; runId: string }
     | { kind: "enqueue"; queue: NonNullable<LocalRunState["pendingQueue"]> } {
-    const pendingMessages = this.listPendingLocalMessages(params.runScope);
+    const pendingMessages: LocalPendingMessage[] = [];
+    for (const run of this.runs.values()) {
+      if (this.isSameRunScope(run, params.runScope) && run.pendingQueue) {
+        run.pendingQueue.messages.forEach((message, messageIndex) => {
+          pendingMessages.push({ run, messageIndex, message });
+        });
+      }
+    }
     const overflowQueue = {
       items: [...pendingMessages],
       cap: params.settings.cap ?? DEFAULT_QUEUE_CAP,
@@ -960,22 +967,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         summaryLines: overflowQueue.summaryLines,
       },
     };
-  }
-
-  private listPendingLocalMessages(params: {
-    sessionKey: string;
-    agentId?: string;
-  }): LocalPendingMessage[] {
-    const pending: LocalPendingMessage[] = [];
-    for (const run of this.runs.values()) {
-      if (!this.isSameRunScope(run, params) || !run.pendingQueue) {
-        continue;
-      }
-      run.pendingQueue.messages.forEach((message, messageIndex) => {
-        pending.push({ run, messageIndex, message });
-      });
-    }
-    return pending;
   }
 
   private findQueuedSessionRunPromise(params: {

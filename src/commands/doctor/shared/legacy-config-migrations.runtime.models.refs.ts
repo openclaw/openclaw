@@ -262,15 +262,6 @@ function rewriteModelRefMapKeys(
   return { value: changed ? next : record, changed };
 }
 
-type ProviderCatalogModelRow = {
-  index: number;
-  model: unknown;
-  modelRecord?: Record<string, unknown>;
-  originalId?: string;
-  normalizedId?: string;
-  changed?: boolean;
-};
-
 function rewriteProviderCatalogModelIds(
   providers: Record<string, unknown>,
   path: string,
@@ -283,7 +274,7 @@ function rewriteProviderCatalogModelIds(
     if (!provider || !Array.isArray(provider.models)) {
       continue;
     }
-    const rows: ProviderCatalogModelRow[] = provider.models.map((model, index) => {
+    const rows = provider.models.map((model: unknown, index) => {
       const modelRecord = getRecord(model);
       if (!modelRecord || typeof modelRecord.id !== "string") {
         return { index, model };

@@ -25,6 +25,11 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  captureOpenClawAgentDatabaseExecution,
+  supportsOpenClawAgentDatabaseExecution,
+} from "../../state/openclaw-agent-execution.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   captureLifecycleDatabaseScope,
@@ -229,6 +234,7 @@ export async function searchSessionTranscripts(
     env: scope.env,
     sessionKeys: params.sessionKeys?.slice(),
   };
+  let statusOwnerFailure: { error: unknown } | undefined;
   const finish = async (
     { found, revision, ...result }: SessionTranscriptSearchReadResult,
     isCurrent: (revision: string) => boolean | Promise<boolean>,
@@ -237,6 +243,9 @@ export async function searchSessionTranscripts(
     assertCurrent?.();
     let indexing: boolean;
     try {
+      if (found && statusOwnerFailure) {
+        throw statusOwnerFailure.error;
+      }
       indexing = found && (await readSessionTranscriptIndexStatus(options, assertCurrent));
     } catch {
       // Writable maintenance failure must not discard an authorized read-only result.
@@ -260,13 +269,27 @@ export async function searchSessionTranscripts(
       isSessionTranscriptSearchCurrentSync(revision, options),
     );
   }
-  return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-    return await finish(
-      await owner.searchTranscripts(request),
-      (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
-      owner.assertCurrent,
-    );
-  });
+  let execution: OpenClawAgentDatabaseExecution | undefined;
+  try {
+    try {
+      // Status reads must not idle-close and checkpoint the writer between the hit
+      // snapshot and its revision check. Native opening remains lazy and off-thread.
+      if (supportsOpenClawAgentDatabaseExecution(options)) {
+        execution = captureOpenClawAgentDatabaseExecution(options);
+      }
+    } catch (error) {
+      statusOwnerFailure = { error };
+    }
+    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
+      return await finish(
+        await owner.searchTranscripts(request),
+        (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
+        owner.assertCurrent,
+      );
+    });
+  } finally {
+    await execution?.release();
+  }
 }
 
 function validateSearchQuery(input: string): string {

@@ -44,6 +44,7 @@ import {
   getSubagentRegistryPublicationRevision,
   subscribeSubagentRunChanges,
 } from "./subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   registerSubagentRun,
@@ -51,7 +52,6 @@ import {
   prepareSubagentSessionCleanupRevocation,
 } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import { testing } from "./subagent-registry.test-helpers.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 

@@ -311,15 +311,15 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `c999d9cb92704b50fa8b15a3663b74e39d9b57c7` with WebKit
-`1600131e46b5af48bbda3559af8d8a3327230b6e` in prerelease
-`openclaw-v1.4.3-20261003-c999d9cb92-webkit-1600131e46`.
-WebKit advances from `fb1167ebf2` in the previous `e167be5c8f` pin. This build fixes idle
-HTTP connection shutdown and filesystem read/write argument defaults. It also
-retains newly assigned Windows environment variables in copies, resets Windows
-pipe standard I/O after completion, and preserves prepared ESM records for
-equivalent filesystem paths. Package resolution now reports selected invalid
-package metadata with Node 24.21 diagnostics.
+The pinned build pairs Bun `667c4ab22cbf6b101b3376c550b81cabc8c00518` with WebKit
+`f1e1ca1156c8cb3b468bec0e1989fbfa08899661` in prerelease
+`openclaw-v1.4.3-20261005-667c4ab22c-webkit-f1e1ca1156`.
+WebKit advances from `1ee09069fe` in the previous `bf0b6cde28` pin. This build
+syncs Bun to canary `9bd19c98`, fixes namespace interoperability and embedded
+module suffix keys, and supports `module.stripTypeScriptTypes`. It adds allocation
+sampling, Node-compatible stack positions, and ArrayBuffer/external accounting
+with busy-worker snapshots. The release publishes the four Darwin/Linux targets;
+Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module
 graphs. It activates after 1,750 distinct compiled sources and defaults to a

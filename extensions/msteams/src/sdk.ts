@@ -58,21 +58,8 @@ export type MSTeamsApp = {
   };
 };
 
-type AzureAccessToken = {
-  token?: string;
-} | null;
-
-type AzureTokenCredential = {
-  getToken: (scope: string | string[]) => Promise<AzureAccessToken>;
-};
-
-type AzureIdentityModule = {
-  ClientCertificateCredential: new (
-    tenantId: string,
-    clientId: string,
-    options: { certificate: string },
-  ) => AzureTokenCredential;
-};
+type AzureTokenCredential = Pick<import("@azure/identity").ClientCertificateCredential, "getToken">;
+type AzureIdentityModule = Pick<typeof import("@azure/identity"), "ClientCertificateCredential">;
 
 const AZURE_IDENTITY_MODULE = "@azure/identity";
 

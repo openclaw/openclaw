@@ -88,11 +88,9 @@ function isJsonVerificationResponse(res: Response): boolean {
   );
 }
 
-async function requestVerification(params: {
-  endpoint: string;
-  headers: Record<string, string>;
-  body: Record<string, unknown>;
-}): Promise<VerificationResult> {
+async function requestVerification(
+  params: ReturnType<typeof buildOpenAiVerificationProbeRequest>,
+): Promise<VerificationResult> {
   let res: Response | undefined;
   try {
     res = await fetchWithTimeout(

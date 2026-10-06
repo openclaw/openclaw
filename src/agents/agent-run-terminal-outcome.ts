@@ -138,17 +138,17 @@ function getAgentRunAttemptFailure(
       : terminal.failure;
 }
 
-function withAgentRunAttemptFailure<T extends AgentRunAttemptTerminal>(
-  terminal: T,
+function withAgentRunAttemptFailure(
+  terminal: AgentRunAttemptTerminal,
   failure: AgentRunAttemptFailure | undefined,
-): T {
+): AgentRunAttemptTerminal {
   if (!failure || terminal.kind === "ok") {
     return terminal;
   }
   if (terminal.kind === "failed") {
-    return { ...terminal, ...failure } as T;
+    return { ...terminal, ...failure };
   }
-  return { ...terminal, failure } as T;
+  return { ...terminal, failure };
 }
 
 function withAgentRunAttemptTimeoutObservation(
@@ -423,6 +423,8 @@ function formatAgentRunTerminalOutcome(
   input: Pick<AgentRunTerminalInput, "error" | "startedAt" | "endedAt">,
 ): AgentRunTerminalOutcome {
   const { reason, status, ...metadata } = facts;
+  const startedAt = asFiniteTimestamp(input.startedAt);
+  const endedAt = asFiniteTimestamp(input.endedAt);
   const rawError =
     input.error == null ? undefined : asNonEmptyString(formatErrorMessage(input.error));
   const error =
@@ -442,12 +444,8 @@ function formatAgentRunTerminalOutcome(
     status,
     ...(error ? { error } : {}),
     ...metadata,
-    ...(asFiniteTimestamp(input.startedAt) !== undefined
-      ? { startedAt: asFiniteTimestamp(input.startedAt) }
-      : {}),
-    ...(asFiniteTimestamp(input.endedAt) !== undefined
-      ? { endedAt: asFiniteTimestamp(input.endedAt) }
-      : {}),
+    ...(startedAt !== undefined ? { startedAt } : {}),
+    ...(endedAt !== undefined ? { endedAt } : {}),
   };
 }
 

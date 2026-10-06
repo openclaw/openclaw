@@ -2,8 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
-import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import {
   createManagedUpdateRequesterContinuationAuthority,
   UpdateRequesterRevokedError,
@@ -25,11 +23,9 @@ import {
   withOwnedManagedUpdateEnv,
 } from "./update-command-service-env.js";
 
-export type OwnedManagedUpdateContext = {
-  env: NodeJS.ProcessEnv;
-  configSnapshot: ConfigFileSnapshot;
-  pluginInstallRecords: Record<string, PluginInstallRecord>;
-};
+export type OwnedManagedUpdateContext = NonNullable<
+  Awaited<ReturnType<typeof captureOwnedManagedUpdateContext>>
+>;
 
 /** Resolve the service's selectors without reading or validating its configuration. */
 export function resolveOwnedManagedUpdatePreflightEnv(params: {
@@ -83,7 +79,7 @@ export async function captureOwnedManagedUpdateContext(params: {
   stopState: PreManagedServiceStop | undefined;
   processEnv?: NodeJS.ProcessEnv;
   invocationCwd?: string;
-}): Promise<OwnedManagedUpdateContext | undefined> {
+}) {
   const stopState = params.stopState;
   if (stopState?.inspected !== true) {
     return undefined;

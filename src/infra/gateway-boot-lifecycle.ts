@@ -78,13 +78,9 @@ export type GatewayBootLifecycleCompletion = {
   startupReason?: string;
 };
 
-export type GatewayCrashLoopBreakerDecision = {
-  tripped: boolean;
-  uncleanBoots: number;
-  windowMs: number;
-  shouldWriteStabilityBundle: boolean;
-  recovered: boolean;
-};
+export type GatewayCrashLoopBreakerDecision = ReturnType<
+  typeof buildGatewayCrashLoopBreakerDecision
+>;
 
 export function readGatewayLastShutdown(
   env: NodeJS.ProcessEnv = process.env,
@@ -125,7 +121,7 @@ function buildGatewayCrashLoopBreakerDecision(params: {
   uncleanBoots: number;
   latestBreakerStartedAtMs?: number | null;
   latestRecoveryStartedAtMs?: number | null;
-}): GatewayCrashLoopBreakerDecision {
+}) {
   const tripped = params.uncleanBoots >= GATEWAY_BOOT_LOOP_UNCLEAN_THRESHOLD;
   const hasUnrecoveredBreakerMarker =
     typeof params.latestBreakerStartedAtMs === "number" &&

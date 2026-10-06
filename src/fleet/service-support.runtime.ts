@@ -211,16 +211,6 @@ export async function detectHostSelinux(): Promise<boolean> {
   }
 }
 
-export function inspectionState(
-  record: FleetCellRecord,
-  inspection: FleetContainerInspectResult,
-): string {
-  if (inspection.kind !== "ok") {
-    return inspection.state;
-  }
-  return inspectionHasFleetOwner(record, inspection) ? inspection.state : "unknown";
-}
-
 export function assertManagedInspection(
   record: FleetCellRecord,
   inspection: FleetContainerInspectResult,

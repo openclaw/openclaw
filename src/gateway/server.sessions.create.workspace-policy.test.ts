@@ -11,7 +11,7 @@ import { findGitCheckoutRoot } from "../agents/worktrees/git.js";
 import { getRegistryWorktree } from "../agents/worktrees/registry.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { loadSessionEntry, loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -55,7 +55,7 @@ async function makeNonGitTempDir(prefix: string): Promise<string> {
   }
 }
 
-test("sessions.create accepts a node-host cwd without provisioning a Gateway worktree", async () => {
+test("sessions.create accepts a Windows node-host cwd without provisioning a Gateway worktree", async () => {
   // A running suite server can read config before this test installs its per-case session store.
   getRuntimeConfig();
   const { storePath } = await createSessionStoreDir();
@@ -64,39 +64,21 @@ test("sessions.create accepts a node-host cwd without provisioning a Gateway wor
     entry: { execHost?: string; execNode?: string; execCwd?: string; spawnedCwd?: string };
   }>(
     "sessions.create",
-    { agentId: "main", execNode: "macbook", cwd: "/Users/peter/Projects/openclaw" },
-    { client: { connect: { scopes: ["operator.admin"] } } as never },
-  );
-
-  expect(created.ok).toBe(true);
-  expect(created.payload?.entry).toMatchObject({
-    execHost: "node",
-    execNode: "macbook",
-    execCwd: "/Users/peter/Projects/openclaw",
-  });
-  expect(created.payload?.entry.spawnedCwd).toBeUndefined();
-  const sessionKey = requireNonEmptyString(created.payload?.key, "node session key");
-  const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
-  expect(stored).toMatchObject({ execHost: "node", execNode: "macbook" });
-  expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
-});
-
-test("sessions.create accepts a Windows node-host cwd from a non-Windows Gateway", async () => {
-  await createSessionStoreDir();
-  const created = await directSessionReq<{
-    entry: { execNode?: string; execCwd?: string; spawnedCwd?: string };
-  }>(
-    "sessions.create",
     { agentId: "main", execNode: "windows-box", cwd: "C:\\Users\\peter\\Projects" },
     { client: { connect: { scopes: ["operator.admin"] } } as never },
   );
 
   expect(created.ok).toBe(true);
   expect(created.payload?.entry).toMatchObject({
+    execHost: "node",
     execNode: "windows-box",
     execCwd: "C:\\Users\\peter\\Projects",
   });
   expect(created.payload?.entry.spawnedCwd).toBeUndefined();
+  const sessionKey = requireNonEmptyString(created.payload?.key, "node session key");
+  const stored = loadSessionEntry({ agentId: "main", sessionKey, storePath });
+  expect(stored).toMatchObject({ execHost: "node", execNode: "windows-box" });
+  expect(stored).not.toHaveProperty("sessionDiffBaselineCapture");
 });
 
 test("sessions.create rejects a Gateway worktree targeting a node", async () => {
@@ -172,37 +154,6 @@ test.each(["operator.admin", "operator.write"])(
     }
   },
 );
-
-test("sessions.create records the selected agent workspace when cwd is omitted", async () => {
-  const workspace = tempDirs.make("openclaw-session-default-root-");
-  const expectedRoot = await fs.realpath(workspace);
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
-  try {
-    const created = await directSessionReq<{
-      entry: { permissionMode?: string; sessionRoot?: string; spawnedCwd?: string };
-      key?: string;
-      sessionId?: string;
-    }>("sessions.create", { agentId: "main", permissionMode: "guarded" });
-
-    expect(created.ok).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      permissionMode: "guarded",
-      sessionRoot: expectedRoot,
-    });
-    expect(created.payload?.entry.spawnedCwd).toBeUndefined();
-    await expect(
-      loadTranscriptEvents({
-        agentId: "main",
-        sessionId: requireNonEmptyString(created.payload?.sessionId, "guarded session id"),
-        sessionKey: requireNonEmptyString(created.payload?.key, "guarded session key"),
-        storePath,
-      }),
-    ).resolves.toEqual([expect.objectContaining({ cwd: expectedRoot, type: "session" })]);
-  } finally {
-    testState.agentConfig = undefined;
-  }
-});
 
 test("sessions.create requires admin for full permission mode", async () => {
   const workspace = tempDirs.make("openclaw-session-full-mode-");

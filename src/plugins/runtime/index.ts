@@ -48,8 +48,8 @@ function createRuntimeGateway(): PluginRuntime["gateway"] {
       (await loadGatewayPluginRuntime()).openPluginPanelForRequester(params),
     readSessionFacts: async (params) =>
       (await loadGatewayPluginRuntime()).readTrustedPluginSessionFacts(params),
-    withSessionReadScope: async (run) =>
-      (await loadGatewayPluginRuntime()).withTrustedPluginSessionReadScope(run),
+    withSessionFacts: async (select, run) =>
+      (await loadGatewayPluginRuntime()).withTrustedPluginSessionFacts(select, run),
     subscribeSessionChanges: subscribeRuntimeSessionChanges,
     withUserProfileIdentity: async (params, run) => {
       const captured = {

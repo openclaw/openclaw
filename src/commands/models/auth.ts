@@ -1,10 +1,4 @@
-import {
-  cancel,
-  confirm as clackConfirm,
-  password as clackPassword,
-  select as clackSelect,
-  text as clackText,
-} from "@clack/prompts";
+import { cancel } from "@clack/prompts";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
@@ -12,8 +6,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { styleSelectParams } from "../../../packages/terminal-core/src/prompt-select-styled-params.js";
-import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import {
@@ -25,7 +17,6 @@ import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js"
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
-import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { logConfigUpdated } from "../../config/logging.js";
@@ -66,6 +57,12 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { validateAnthropicSetupToken } from "../auth-token.js";
+import {
+  confirm as clackConfirm,
+  password as clackPassword,
+  select as clackSelect,
+  text as clackText,
+} from "../configure.shared.js";
 import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 import { saveModelProviderApiKey } from "./auth-api-key.js";
 import { tryImportProviderCredential } from "./auth-credential-import.js";
@@ -129,28 +126,13 @@ function guardCancel<T>(value: T | typeof import("@clack/prompts").CANCEL_SYMBOL
 }
 
 const confirm = async (params: Parameters<typeof clackConfirm>[0]) =>
-  guardCancel(
-    await clackConfirm({
-      ...params,
-      message: stylePromptMessage(params.message),
-    }),
-  );
+  guardCancel(await clackConfirm(params));
 const text = async (params: Parameters<typeof clackText>[0]) =>
-  guardCancel(
-    await clackText({
-      ...params,
-      message: stylePromptMessage(params.message),
-    }),
-  );
+  guardCancel(await clackText(params));
 const password = async (params: Parameters<typeof clackPassword>[0]) =>
-  guardCancel(
-    await clackPassword({
-      ...params,
-      message: stylePromptMessage(params.message),
-    }),
-  );
+  guardCancel(await clackPassword(params));
 const select = async <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
-  guardCancel(await clackSelect(styleSelectParams(params)));
+  guardCancel(await clackSelect(params));
 
 const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
 
@@ -176,14 +158,7 @@ async function readPastedSecret(params: {
   return normalized;
 }
 
-type ResolvedModelsAuthContext = {
-  config: OpenClawConfig;
-  configSnapshot: ConfigFileSnapshot;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  providers: ProviderPlugin[];
-};
+type ResolvedModelsAuthContext = Awaited<ReturnType<typeof resolveModelsAuthContext>>;
 
 function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlugin[] {
   return providers.filter((provider) => provider.auth.some((method) => method.kind === "token"));
@@ -238,12 +213,11 @@ async function resolveModelsAuthContext(params?: {
   rawAgentId?: string | null;
   config?: OpenClawConfig;
   ownerPluginId?: string;
-}): Promise<ResolvedModelsAuthContext> {
+}) {
   const configSnapshot = await loadValidConfigSnapshotOrThrow();
   const config = params?.config ?? configSnapshot.runtimeConfig;
   const { agentId, agentDir } = await resolveModelsAuthAgent(params?.rawAgentId, config);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(config, agentId) ?? resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = resolveAgentWorkspaceDir(config, agentId);
   const requestedProvider = params?.requestedProvider?.trim();
   const providerRef = requestedProvider
     ? normalizeManualAuthProvider(requestedProvider)
@@ -514,35 +488,15 @@ async function promotePersistedAuthProfile(params: {
   }
 }
 
-async function runProviderAuthMethod(params: {
-  config: OpenClawConfig;
-  configSnapshot: ConfigFileSnapshot;
-  agentId: string;
-  agentDir: string;
-  workspaceDir: string;
-  provider: ProviderPlugin;
-  method: ProviderAuthMethod;
-  runtime: RuntimeEnv;
-  prompter: WizardPrompter;
-  profileId?: string;
-  setDefault?: boolean;
-  credentialOnly?: boolean;
-  assertCurrent?: () => void;
-  env?: NodeJS.ProcessEnv;
-  isRemote?: boolean;
-  signal?: AbortSignal;
-  openUrl?: (url: string) => Promise<void>;
-  browserAuthorization?: ProviderAuthContext["oauth"]["authorize"];
-  beforePersistentEffect?: () => void | Promise<void>;
-  refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
-  onModelAccessRequested?: (request: PreparedProviderModelAccess) => void;
-  existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
-  allowMissingReusedProfile?: boolean;
-}): Promise<{
-  result: ProviderAuthResult;
-  profiles: ProviderAuthResult["profiles"];
-  authRefresh: ModelAuthRefreshOutcome;
-}> {
+async function runProviderAuthMethod(
+  params: Omit<ModelsAuthLoginFlowOptions, "provider" | "method" | "config"> &
+    Omit<ResolvedModelsAuthContext, "providers"> & {
+      provider: ProviderPlugin;
+      method: ProviderAuthMethod;
+      existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
+      allowMissingReusedProfile?: boolean;
+    },
+) {
   params.signal?.throwIfAborted();
   params.assertCurrent?.();
   const modelAccess = prepareProviderModelAccess({

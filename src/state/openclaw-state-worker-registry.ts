@@ -48,6 +48,7 @@ import type {
 } from "../skills/workshop/store.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
+import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
 import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 import type { UserProfileWorkerOperations } from "./user-profiles.worker.js";
 import type { WorkerOperations } from "./worker-operation-registry.js";
@@ -92,6 +93,7 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof localWorks
   SkillCuratorOperations &
   TranscriptWriteOperations &
   AuthProfileWorkerOperations &
+  AgentDatabaseRegistryWorkerOperations &
   PluginModelCatalogCredentialReadWorkerOperations &
   PluginRuntimeWorkerOperations &
   WorkerInferenceStoreOperations &
@@ -138,6 +140,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<RegisteredState
       (m) => m.execAuthorizationOperations,
     ),
   userProfiles: () => import("./user-profiles.worker.js").then((m) => m.userProfileOperations),
+  agentDatabaseRegistry: () =>
+    import("./openclaw-agent-db-registry.worker.js").then((m) => m.agentDatabaseRegistryOperations),
   authProfiles: () =>
     import("../agents/auth-profiles/store.worker.js").then((m) => m.authProfileOperations),
   pluginModelCatalogCredentials: () =>

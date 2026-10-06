@@ -13,6 +13,7 @@ import {
   type InlineAuthFailureReceipt,
 } from "./inline-usage-kernel.js";
 import { inspectAuthProfileJsonCell } from "./sqlite-json.js";
+import { updateAuthProfileStoreInDatabase } from "./store-update-kernel.js";
 import type { AuthProfileUsageReceipt } from "./store.worker-contract.js";
 import { recordAuthProfileUsageInDatabase } from "./usage-kernel.js";
 
@@ -23,6 +24,11 @@ export function bindSqliteWorkerBackend(
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
   return {
     execute(command) {
+      if (command.type === "authProfiles.update") {
+        return runSqliteWorkerTransactionSync(context, () =>
+          updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
+        );
+      }
       if (command.type === "authProfiles.inlineSnapshot") {
         return runSqliteDeferredTransactionSync(context.database, () => ({
           store: inspectAuthProfileJsonCell(context.database, "store", "agent"),

@@ -48,14 +48,7 @@ let sql: ReturnType<typeof observeHostDataSql>;
 
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-compute-") };
-  const opened = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-  });
-  assert(opened);
-  actor = opened;
+  actor = await captureActor("main");
 });
 beforeEach(() => {
   sql = observeHostDataSql();
@@ -71,6 +64,18 @@ afterAll(async () => {
   await actor?.close();
   await closeOpenClawStateDatabaseAsync();
 });
+
+async function captureActor(agentId: string, options?: { existingOnly: true }) {
+  const opened = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId,
+    env,
+    authority,
+    ...options,
+  });
+  assert(opened);
+  return opened;
+}
 
 function location(owner = actor) {
   return { agentId: owner.agentId, path: owner.path };
@@ -167,6 +172,12 @@ function stats(target: IncognitoComputeTarget, owner = actor) {
     }),
   );
 }
+function recentHistory(target: IncognitoComputeTarget) {
+  return actor.sessions.history(authority, {
+    type: "session.history.recent",
+    input: { ...target, options: { maxMessages: 10 } },
+  });
+}
 function observeCompute(observe: (type: keyof IncognitoComputeOperations) => void | Promise<void>) {
   const withCompute = actor.sessions.withCompute;
   return vi
@@ -228,12 +239,7 @@ it("composes empty and multi-session store compute without holding its actor FIF
       }),
     ).resolves.toEqual({ reconciledSessions: 2 });
     for (const target of [first, second]) {
-      await expect(
-        actor.sessions.history(authority, {
-          type: "session.history.recent",
-          input: { ...target, options: { maxMessages: 10 } },
-        }),
-      ).resolves.toMatchObject({
+      await expect(recentHistory(target)).resolves.toMatchObject({
         totalMessages: 1,
         messages: [{ content: [{ type: "text", text: `current ${target.sessionId}` }] }],
       });
@@ -291,14 +297,7 @@ it("composes empty and multi-session store compute without holding its actor FIF
 
 it("refuses new compute work through a released borrow", async () => {
   const target = await create("released-borrow");
-  const reference = await captureOpenClawAgentDatabaseExecution({
-    kind: "ephemeral",
-    agentId: "main",
-    env,
-    authority,
-    existingOnly: true,
-  });
-  assert(reference);
+  const reference = await captureActor("main", { existingOnly: true });
   await reference.release();
   const operation = vi.fn(async () => "late compute");
   await expect(
@@ -329,14 +328,7 @@ describe("cross-actor compute", () => {
   beforeAll(async () => {
     const posted = vi.spyOn(Worker.prototype, "postMessage");
     try {
-      const opened = await captureOpenClawAgentDatabaseExecution({
-        kind: "ephemeral",
-        agentId: "other",
-        env,
-        authority,
-      });
-      assert(opened);
-      otherActor = opened;
+      otherActor = await captureActor("other");
       const index = posted.mock.calls.findIndex(
         ([request]) =>
           isRecord(request) &&
@@ -434,12 +426,7 @@ describe("cross-actor compute", () => {
           compute.execute({ type: "session.compute.status", input: first }),
         ),
       ).resolves.toBe(false);
-      await expect(
-        actor.sessions.history(authority, {
-          type: "session.history.recent",
-          input: { ...first, options: { maxMessages: 10 } },
-        }),
-      ).resolves.toMatchObject({
+      await expect(recentHistory(first)).resolves.toMatchObject({
         totalMessages: 1,
         messages: [{ content: [{ type: "text", text: "rewritten while yielding" }] }],
       });
@@ -494,14 +481,7 @@ describe("cross-actor compute", () => {
     const target = await create("actor-loss", otherActor);
     const barrier = await hold(otherActor);
     const outcome = Promise.resolve()
-      .then(() =>
-        otherActor.sessions.withCompute(authority, target, (compute) =>
-          compute.execute({
-            type: "session.compute.usage.stats",
-            input: { ...target, request: {} },
-          }),
-        ),
-      )
+      .then(() => stats(target, otherActor))
       .then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -757,14 +737,7 @@ it.each([false, true])(
   async (wholeStore) => {
     const target = await create(`released-compute-${wholeStore}`);
     await append(target, "private borrowed frame");
-    const borrowed = await captureOpenClawAgentDatabaseExecution({
-      kind: "ephemeral",
-      agentId: location(actor).agentId,
-      env,
-      authority,
-      existingOnly: true,
-    });
-    assert(borrowed);
+    const borrowed = await captureActor(location(actor).agentId, { existingOnly: true });
     expect(borrowed.identity).toEqual(actor.identity);
     const ready = createDeferredCore();
     const resume = createDeferredCore();
@@ -879,24 +852,14 @@ it("discards revoked partial projections and reconciles the complete active acto
   } finally {
     wrapped.mockRestore();
   }
-  await expect(
-    actor.sessions.history(authority, {
-      type: "session.history.recent",
-      input: { ...target, options: { maxMessages: 10 } },
-    }),
-  ).rejects.toThrow("projection is rebuilding");
+  await expect(recentHistory(target)).rejects.toThrow("projection is rebuilding");
   await expect(
     reconcileSessionTranscriptIndexes(
       { agentId: location(actor).agentId, path: location(actor).path, env },
       { actor, authority, target },
     ),
   ).resolves.toEqual({ reconciledSessions: 1 });
-  await expect(
-    actor.sessions.history(authority, {
-      type: "session.history.recent",
-      input: { ...target, options: { maxMessages: 10 } },
-    }),
-  ).resolves.toMatchObject({
+  await expect(recentHistory(target)).resolves.toMatchObject({
     totalMessages: 1,
     messages: [{ content: [{ type: "text", text: "current branch" }] }],
   });
@@ -949,12 +912,7 @@ it.each(["coalesce", "handoff"] as const)(
         startSessionTranscriptIndexReconcile(database);
         release.resolve();
         await Promise.all([waiting, waitForSessionTranscriptIndexReconcile(database)]);
-        await expect(
-          actor.sessions.history(authority, {
-            type: "session.history.recent",
-            input: { ...target, options: { maxMessages: 10 } },
-          }),
-        ).resolves.toMatchObject({
+        await expect(recentHistory(target)).resolves.toMatchObject({
           totalMessages: 1,
           messages: [{ content: [{ type: "text", text: "final branch" }] }],
         });

@@ -18,6 +18,7 @@ import {
   type SessionEntryPatchOptions,
 } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -399,11 +400,16 @@ export async function persistAgentSessionPhase(params: {
             replaceEntry: true,
             takeCacheOwnership: true,
             maintenanceConfig: params.maintenanceConfig,
-            assertCommitAllowed: () => {
-              params.assertAdmissionCurrent?.();
-              if (createdNewEntry) {
-                assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
-              }
+            workerGuard: {
+              source: composeSessionSourceAssertion(
+                [params.assertAdmissionCurrent],
+                (assertSource) => {
+                  assertSource();
+                  if (createdNewEntry) {
+                    assertPreparedSkillLibrarySelection(params.creation.skillLibrarySelections);
+                  }
+                },
+              ),
             },
           },
         )) ?? undefined;

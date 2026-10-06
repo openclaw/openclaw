@@ -6,19 +6,13 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
 
-type ConfiguredRuntimePluginInstallCandidate = {
-  /** Runtime/plugin id used in config and plugin installation records. */
+type ConfiguredRuntimePluginInstallCandidate = Pick<
+  PluginPackageInstall,
+  "npmSpec" | "clawhubSpec" | "defaultChoice"
+> & {
   pluginId: string;
-  /** Human-readable plugin label for prompts and notes. */
   label: string;
-  /** npm package spec for an official runtime plugin install. */
-  npmSpec?: string;
-  /** ClawHub install spec when the runtime plugin is sourced from ClawHub. */
-  clawhubSpec?: string;
-  /** True when the install source is trusted to link official runtime support. */
   trustedSourceLinkedOfficialInstall?: boolean;
-  /** Default installer choice when multiple official sources are available. */
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
   /** Keep this official runtime package on the same release cohort as OpenClaw. */
   versionBoundToOpenClaw?: boolean;
 };
