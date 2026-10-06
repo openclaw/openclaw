@@ -1403,7 +1403,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/subagents/spawn/subagent-spawn.depth-limits.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.fork-cleanup.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.in-process-gateway.test.ts",
-  "src/agents/subagents/spawn/subagent-spawn.mode-session-diagnostics.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.model-session.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.preparation-authority.test.ts",
   "src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts",
