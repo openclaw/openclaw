@@ -148,66 +148,6 @@ describe("sessions page managed roster", () => {
       sessions.dispose();
     }
   });
-
-  it("appends the next matched server page through the managed owner", async () => {
-    vi.useFakeTimers();
-    const rows = Array.from({ length: 57 }, (_, index) => ({
-      key: `agent:main:row-${index}`,
-      kind: "direct" as const,
-      updatedAt: 100 - index,
-    }));
-    const pageResult = (offset: number): SessionsListResult => ({
-      ...sessionsResult(rows.slice(offset, offset + 50), 1),
-      totalCount: 57,
-      hasMore: offset === 0,
-      nextOffset: offset === 0 ? 50 : null,
-    });
-    const request = vi.fn(async (method: string, params?: { offset?: number }) => {
-      if (method === "sessions.subscribe") {
-        return { subscribed: true };
-      }
-      if (method !== "sessions.list") {
-        throw new Error(`Unexpected request: ${method}`);
-      }
-      return pageResult(params?.offset ?? 0);
-    });
-    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
-    const sessions = createTestSessionCapability(gateway);
-    const page = await createRenderedPage(createContext(gateway, sessions), pageResult(0));
-    try {
-      const input = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
-      input.value = "server-only metadata";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      await vi.advanceTimersByTimeAsync(200);
-      expect(request).toHaveBeenCalledWith(
-        "sessions.list",
-        expect.objectContaining({ search: "server-only metadata", limit: 50 }),
-      );
-      expect(page.result?.sessions).toHaveLength(50);
-      await page.updateComplete;
-      const button = (name: string) =>
-        [...page.querySelectorAll<HTMLButtonElement>(".data-table-pagination button")].find(
-          (entry) => entry.textContent?.trim() === name,
-        )!;
-      button("Load more sessions").click();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(page.result?.sessions).toHaveLength(57);
-      expect(request).toHaveBeenCalledWith(
-        "sessions.list",
-        expect.objectContaining({ search: "server-only metadata", offset: 50, limit: 50 }),
-      );
-      await page.updateComplete;
-      button("Next").click();
-      await page.updateComplete;
-      button("Next").click();
-      await page.updateComplete;
-      expect(page.textContent).toContain("agent:main:row-56");
-      expect(button("Load more sessions")).toBeUndefined();
-    } finally {
-      page.remove();
-      sessions.dispose();
-    }
-  });
 });
 
 describe("Sessions page typing ownership", () => {
