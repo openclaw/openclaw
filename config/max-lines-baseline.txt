@@ -139,7 +139,6 @@ extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
-extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts

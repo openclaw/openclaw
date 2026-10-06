@@ -123,13 +123,6 @@ function createLoginShellExecSpec(params: LoginShellExecParams) {
   return { shell: params.shell, args, options };
 }
 
-function execLoginShellEnvZero(
-  params: LoginShellExecParams & { exec: typeof execFileSync },
-): Buffer {
-  const { shell, args, options } = createLoginShellExecSpec(params);
-  return params.exec(shell, args, options);
-}
-
 function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffer> {
   const { shell, args, options } = createLoginShellExecSpec(params);
   return new Promise((resolve, reject) => {
@@ -174,7 +167,7 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
         // spawn clears its timeout on exit, but descendants can retain the output pipes.
         outputTimeout = setTimeout(
           () => {
-            reject(new Error("Login-shell environment probe timed out"));
+            reject(new Error("Login-shell environment check timed out"));
             discardOutput();
           },
           Math.max(0, deadline - performance.now()),
@@ -185,7 +178,7 @@ function execLoginShellEnvZeroAsync(params: LoginShellExecParams): Promise<Buffe
       clearTimeout(outputTimeout);
       // spawn owns the timeout; even a shell that exits zero after SIGTERM failed the probe.
       if (overflow || child.killed || signal || code !== 0) {
-        reject(new Error("Login-shell environment probe failed"));
+        reject(new Error("Login-shell environment check failed"));
       } else {
         resolve(Buffer.concat(stdout));
       }
@@ -228,13 +221,12 @@ function resolveExecCacheId(exec: typeof execFileSync | undefined): string {
   return `exec:${id}`;
 }
 
-function createLoginShellEnvCacheKey(params: {
-  shell: string;
-  timeoutMs: number;
-  exec?: typeof execFileSync;
-  execEnv: NodeJS.ProcessEnv;
-  purpose: LoginShellEnvProbePurpose;
-}): string {
+function createLoginShellEnvCacheKey(
+  params: Omit<LoginShellExecParams, "env"> & {
+    exec?: typeof execFileSync;
+    execEnv: NodeJS.ProcessEnv;
+  },
+): string {
   const startupEnvEntries = Object.entries(params.execEnv)
     .filter(([key]) => {
       if (
@@ -266,13 +258,9 @@ type LoginShellEnvProbeResult =
   | { ok: true; shellEnv: Map<string, string> }
   | { ok: false; error: string };
 
-function probeLoginShellEnv(params: {
-  env: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  exec?: typeof execFileSync;
-  platform?: NodeJS.Platform;
-  purpose: LoginShellEnvProbePurpose;
-}): LoginShellEnvProbeResult {
+function probeLoginShellEnv(
+  params: Parameters<typeof getShellPathFromLoginShell>[0] & { purpose: LoginShellEnvProbePurpose },
+): LoginShellEnvProbeResult {
   const platform = params.platform ?? process.platform;
   if (platform === "win32") {
     return { ok: true, shellEnv: new Map() };
@@ -295,13 +283,13 @@ function probeLoginShellEnv(params: {
   }
 
   try {
-    const stdout = execLoginShellEnvZero({
+    const spec = createLoginShellExecSpec({
       shell,
       env: execEnv,
-      exec,
       timeoutMs,
       purpose: params.purpose,
     });
+    const stdout = exec(spec.shell, spec.args, spec.options);
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
     loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
@@ -316,14 +304,10 @@ type ShellEnvFallbackResult =
   | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
   | { ok: false; error: string; applied: [] };
 
-type ShellEnvFallbackOptions = {
+type ShellEnvFallbackOptions = Parameters<typeof getShellPathFromLoginShell>[0] & {
   enabled: boolean;
-  env: NodeJS.ProcessEnv;
   expectedKeys: string[];
   logger?: Pick<typeof console, "warn">;
-  timeoutMs?: number;
-  exec?: typeof execFileSync;
-  platform?: NodeJS.Platform;
 };
 
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
@@ -419,11 +403,9 @@ export function getShellPathFromLoginShell(opts: {
 }
 
 /** Prepare the synchronous executable resolvers without blocking their async caller. */
-export function prepareShellPathFromLoginShell(opts: {
-  env: NodeJS.ProcessEnv;
-  timeoutMs?: number;
-  platform?: NodeJS.Platform;
-}): Promise<string | null> {
+export function prepareShellPathFromLoginShell(
+  opts: Omit<Parameters<typeof getShellPathFromLoginShell>[0], "exec">,
+): Promise<string | null> {
   if (cachedShellPath !== undefined) {
     return Promise.resolve(cachedShellPath);
   }
@@ -473,14 +455,10 @@ type UserShellExecutableResolution = {
 
 export function resolveExecutableFromUserShellPath(
   executable: string,
-  opts: {
-    env: NodeJS.ProcessEnv;
+  opts: Parameters<typeof getShellPathFromLoginShell>[0] & {
     pathEnv?: string;
     includeExtensionless?: boolean;
     strategy: "fallback" | "prefer";
-    timeoutMs?: number;
-    exec?: typeof execFileSync;
-    platform?: NodeJS.Platform;
   },
 ): UserShellExecutableResolution | undefined {
   const direct = resolveExecutableFromPathEnv(

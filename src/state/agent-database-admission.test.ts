@@ -6,13 +6,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentDatabaseAdmissionRefusalSchema } from "../../packages/gateway-protocol/src/schema/agent-database-admission.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission,
@@ -40,11 +41,18 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
+const tempDirs = createTempDirTracker();
+afterEach(async () => {
+  try {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 describe("agent database admission", () => {
@@ -72,7 +80,9 @@ describe("agent database admission", () => {
         operation: "gateway-startup",
         config,
       }).catch((error: unknown) => error);
-      expect(findStartupMaintenanceRequiredError(failure)).toMatchObject({ kind: "newer-schema" });
+      expect(findStartupMaintenanceRequiredError(failure), String(failure)).toMatchObject({
+        kind: "newer-schema",
+      });
       expect(failure).toBeInstanceOf(AggregateError);
       expect(String(failure)).toContain(unavailablePath);
       expect(String(failure)).toContain(newerPath);
@@ -393,6 +403,7 @@ describe("agent database admission", () => {
       });
       deepStrictEqual(fs.readFileSync(target), copyBytes);
       expect(() => openOpenClawAgentDatabase({ agentId, env })).toThrow(refusal?.reason);
+      await cleanupSessionStateForTest({ stateDir });
       closeOpenClawAgentDatabasesForTest();
       closeOpenClawStateDatabaseForTest();
       fs.renameSync(target, `${target}.operator-backup`);

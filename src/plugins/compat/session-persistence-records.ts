@@ -1,6 +1,8 @@
+import { REPLY_TOOL_AUTHORITY_COMPAT_RECORD } from "./reply-tool-authority-record.js";
 import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
+  REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
     code: "session-upstream-links-sync-persistence",
     status: "deprecated",

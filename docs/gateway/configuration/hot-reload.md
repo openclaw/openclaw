@@ -285,7 +285,7 @@ Revoking a command cancels its active invocations and rejects later input and
 results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
-the current policy before granting access, including after SSH probes. Existing
+the current policy before granting access, including after SSH checks. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
 terminals; active terminals keep their original shell. Detached-session timeout
 changes recalculate deadlines from each terminal's original disconnect time.

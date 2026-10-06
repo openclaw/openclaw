@@ -755,7 +755,7 @@ export function parseFrontmatter(source) {
 
   const frontmatterStart = opening[0].length;
   const closing = closingDelimiter.exec(input.slice(frontmatterStart));
-  if (!closing || closing.index === undefined) {
+  if (!closing) {
     return { data: {}, content: input };
   }
 

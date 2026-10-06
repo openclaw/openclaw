@@ -299,7 +299,7 @@ function channelFindings(
     if (channel.enabled === false) {
       return [];
     }
-    const rule = denyRules.find((candidate) => candidate.when?.provider === channel.provider);
+    const rule = denyRules.find((candidate) => candidate.when.provider === channel.provider);
     if (rule === undefined) {
       return [];
     }

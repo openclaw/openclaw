@@ -10,7 +10,13 @@ import {
   stageSessionPendingInput,
   type SessionPendingInputReceipt,
 } from "../config/sessions/session-accessor.pending-inputs.js";
-import { createIncognitoPendingInputHistoryReader } from "../config/sessions/session-pending-input-history.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
+import {
+  createIncognitoPendingInputHistoryReader,
+  listSessionPendingInputs,
+  readSessionPendingInput,
+} from "../config/sessions/session-pending-input-history.js";
+import { readSessionPendingInputReceiptsInWorker } from "../config/sessions/session-pending-input-receipts.js";
 import type { PendingInputScope } from "../config/sessions/session-pending-input-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -98,25 +104,51 @@ async function fixture(name: string) {
   };
 }
 
-it("stages FIFO input, preserves live custody during history reads, and settles cancellation and completion on the actor", async () => {
+it("captures the shared actor for staging, submitted input, history, receipts and terminal settlement", async () => {
   const f = await fixture("custody");
-  const first = await f.stage("first", true);
-  const second = await f.stage("second");
-  expect((await f.history.list()).items.map(({ runId, state }) => ({ runId, state }))).toEqual([
-    { runId: "first", state: "queued" },
-    { runId: "second", state: "queued" },
-  ]);
-  expect(await readSessionSubmittedInput(f.scope, "first:user")).toEqual(first.message);
-  const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
-  expect(() => first.complete?.(outcome)).toThrow(IncognitoSessionSyncAccessError);
-  expect(await first.completeAsync?.(outcome)).toEqual(outcome);
-  first.finish("interrupted");
-  second.finish("cancelled");
-  await Promise.all([first.settled?.(), second.settled?.()]);
-  expect(() => second.run(() => {})).toThrow("ownership ended");
-  expect((await f.history.list()).items.map(({ state }) => state)).toEqual(["cancelled"]);
-  const replay = await f.stage("first", true);
-  expect(replay.completion).toEqual(outcome);
+  f.scope.incognito = undefined;
+  await withIncognitoSessionActor(actor, async () => {
+    const first = await f.stage("first", true);
+    const second = await f.stage("second");
+    expect(
+      (await listSessionPendingInputs(f.scope)).items.map(({ runId, state }) => ({ runId, state })),
+    ).toEqual([
+      { runId: "first", state: "queued" },
+      { runId: "second", state: "queued" },
+    ]);
+    expect(await readSessionPendingInput(f.scope, second.inputId)).toMatchObject({
+      runId: "second",
+      state: "queued",
+    });
+    expect(
+      await readSessionPendingInputReceiptsInWorker(f.scope, { runIds: ["first", "second"] }),
+    ).toEqual([
+      { runId: "first", state: "pending" },
+      { runId: "second", state: "pending" },
+    ]);
+    await expect(
+      readSessionPendingInputReceiptsInWorker(
+        { ...f.scope, sessionId: "retired-custody" },
+        { runIds: ["first"] },
+      ),
+    ).rejects.toThrow("session generation is no longer current");
+    expect(await readSessionSubmittedInput(f.scope, "first:user")).toEqual(first.message);
+    const outcome = buildAgentRunTerminalOutcome({ status: "ok" });
+    expect(() => first.complete?.(outcome)).toThrow(IncognitoSessionSyncAccessError);
+    expect(await first.completeAsync?.(outcome)).toEqual(outcome);
+    first.finish("interrupted");
+    second.finish("cancelled");
+    await Promise.all([first.settled?.(), second.settled?.()]);
+    expect(() => second.run(() => {})).toThrow("ownership ended");
+    expect((await listSessionPendingInputs(f.scope)).items.map(({ state }) => state)).toEqual([
+      "cancelled",
+    ]);
+    expect(await readSessionPendingInputReceiptsInWorker(f.scope, { runIds: ["second"] })).toEqual([
+      { runId: "second", state: "pending", cancelled: true },
+    ]);
+    const replay = await f.stage("first", true);
+    expect(replay.completion).toEqual(outcome);
+  });
 });
 
 it.each(["transaction", "commit"] as const)(
@@ -215,6 +247,39 @@ it("refuses pending execution after its captured actor reference is released", a
     expect(() => receipt.run(execute)).toThrow("Incognito execution reference is released");
     expect(execute).not.toHaveBeenCalled();
   } finally {
+    await borrowed.release();
+  }
+});
+
+it("refuses submitted-input disclosure when its shared actor borrow is released after reading", async () => {
+  const f = await fixture("submitted-release");
+  await f.stage("submitted-release");
+  f.scope.incognito = undefined;
+  const borrowed = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: actor.agentId,
+    env,
+    authority,
+    existingOnly: true,
+  });
+  assert(borrowed);
+  const read = borrowed.sessions.readPendingInput.bind(borrowed.sessions);
+  let releasing: Promise<void> | undefined;
+  vi.spyOn(borrowed.sessions, "readPendingInput").mockImplementation(async (...args) => {
+    const result = await read(...args);
+    releasing = borrowed.release();
+    return result;
+  });
+  const disclosed = vi.fn();
+  try {
+    await expect(
+      withIncognitoSessionActor(borrowed, async () => {
+        disclosed(await readSessionSubmittedInput(f.scope, "submitted-release:user"));
+      }),
+    ).rejects.toThrow("Incognito execution reference is released");
+    expect(disclosed).not.toHaveBeenCalled();
+  } finally {
+    await releasing;
     await borrowed.release();
   }
 });

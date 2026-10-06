@@ -1,13 +1,8 @@
-import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import {
-  type AgentCoreCompletionRuntimeDeps,
-  consumeAgentCoreStream,
-  resolveAgentCoreCompleteFn,
-} from "../../runtime-deps.js";
+import { consumeAgentCoreStream, resolveAgentCoreCompleteFn } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
@@ -19,6 +14,7 @@ import {
   ok,
   type Result,
 } from "../types.js";
+import type { SummarizationCompletionParams } from "./summarization-completion.js";
 import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
 import {
   computeFileLists,
@@ -66,26 +62,17 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
 }
 
 /** Options for generating a branch summary. */
-interface GenerateBranchSummaryOptions {
-  /** Model used for summarization. */
-  model: Model;
-  /** API key forwarded to the provider. */
+type GenerateBranchSummaryOptions = Pick<
+  SummarizationCompletionParams,
+  "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
+> & {
   apiKey: string;
-  /** Optional request headers forwarded to the provider. */
-  headers?: Record<string, string>;
-  /** Abort signal for the summarization request. */
   signal: AbortSignal;
-  /** Runtime used to complete the summarization request. */
-  runtime?: AgentCoreCompletionRuntimeDeps;
-  /** Optional stream implementation used instead of the runtime complete function. */
-  streamFn?: StreamFn;
-  /** Optional instructions appended to or replacing the default prompt. */
-  customInstructions?: string;
   /** Replace the default prompt with custom instructions instead of appending them. */
   replaceInstructions?: boolean;
   /** Tokens reserved for prompt and model output. Defaults to 16384. */
   reserveTokens?: number;
-}
+};
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
 export function collectEntriesForBranchSummaryFromBranches<TEntry extends BranchPathEntry>(

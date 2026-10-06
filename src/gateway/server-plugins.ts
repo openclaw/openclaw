@@ -48,7 +48,7 @@ import {
 } from "./server-plugin-in-process-dispatch.js";
 import {
   readTrustedPluginSessionFacts,
-  withTrustedPluginSessionReadScope,
+  withTrustedPluginSessionFacts,
 } from "./server-plugin-session-facts.js";
 import {
   canTrustedOfficialPluginRequestScopes,
@@ -73,7 +73,7 @@ export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-pro
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export {
   readTrustedPluginSessionFacts,
-  withTrustedPluginSessionReadScope,
+  withTrustedPluginSessionFacts,
   withTrustedPluginUserProfileIdentity,
   resolveTrustedPluginGitHubAccount,
 };
@@ -274,8 +274,8 @@ function createGatewayPluginRuntimeBindings(
           openPluginPanelForRequester(params, resolveBoundGatewayContext),
         readSessionFacts: (params) =>
           readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
-        withSessionReadScope: (run) =>
-          withTrustedPluginSessionReadScope(run, resolveBoundGatewayContext),
+        withSessionFacts: (select, run) =>
+          withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
         subscribeSessionChanges: subscribeRuntimeSessionChanges,
         withUserProfileIdentity: (params, run) =>
           withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),

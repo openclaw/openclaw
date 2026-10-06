@@ -1,11 +1,6 @@
 import type { ConfigUiHints } from "../api/types.ts";
 import { hintForPath, type JsonSchema } from "../lib/config-form-utils.ts";
 
-type ConfigSchemaTierSplit = {
-  common: JsonSchema | null;
-  advanced: JsonSchema | null;
-};
-
 function projectSchemaTier(params: {
   schema: JsonSchema;
   path: string[];
@@ -87,7 +82,7 @@ export function splitConfigSchemaByTier(params: {
   schema: JsonSchema;
   path: string[];
   hints: ConfigUiHints;
-}): ConfigSchemaTierSplit {
+}) {
   return {
     common: projectSchemaTier({ ...params, advanced: false }),
     advanced: projectSchemaTier({ ...params, advanced: true }),

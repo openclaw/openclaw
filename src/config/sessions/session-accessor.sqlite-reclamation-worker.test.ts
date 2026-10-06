@@ -499,9 +499,10 @@ test.each(["active key", "provider"] as const)(
         });
         const workerThreadIds: number[] = [];
         let raced = false;
-        const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
-          change === "provider" && raced ? [unrelated.sessionKey] : [],
-        );
+        const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+          capture: () => (change === "provider" && raced ? [unrelated.sessionKey] : []),
+          dispose() {},
+        }));
         observeSessionMaintenancePlanningWorker({
           afterPrepare() {
             if (raced || !armed) {

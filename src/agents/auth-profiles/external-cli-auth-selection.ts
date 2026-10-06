@@ -1,8 +1,3 @@
-/**
- * External CLI auth selection scoping.
- * Narrows CLI discovery to the provider/profile selected by model auth routing
- * so runtime auth setup avoids broad CLI probing.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
@@ -13,7 +8,6 @@ import type { AuthProfileStore } from "./types.js";
 
 const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
-/** Resolve external CLI overlay scope from the user's auth/model selection. */
 export function resolveExternalCliAuthOverlayScopeFromSelection(params: {
   provider: string;
   cfg?: OpenClawConfig;

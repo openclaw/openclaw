@@ -57,7 +57,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* selectSessionEntries(
+export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
@@ -422,6 +422,8 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  /** Reused only within one admitted caller/configuration/profile authority epoch. */
+  visibility?: WeakMap<object, boolean>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
@@ -458,10 +460,14 @@ export function prepareProjectedSessionList(params: {
       : undefined,
     entryFilter: (key, entry) => {
       const row = getTarget(key);
-      const visible = Boolean(
-        row &&
-        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-      );
+      let visible = params.visibility?.get(entry);
+      if (visible === undefined) {
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
+        params.visibility?.set(entry, visible);
+      }
       return (
         visible &&
         (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&

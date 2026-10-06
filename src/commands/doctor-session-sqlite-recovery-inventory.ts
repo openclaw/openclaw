@@ -47,30 +47,13 @@ type RecoveryCleanupArtifact = {
   consequence?: string;
   removedBytes?: number;
 };
-export type RecoveryCleanupReport = {
-  stateDir: string;
-  artifacts: RecoveryCleanupArtifact[];
-  totals: {
-    candidateBytes: number;
-    verificationRequiredBytes: number;
-    protectedBytes: number;
-    blockedBytes: number;
-    removedBytes: number;
-    removedFiles: number;
-  };
-  status: "preview" | "refused" | "complete" | "blocked";
-};
+export type RecoveryCleanupReport = ReturnType<typeof summarizeRecoveryCleanup>;
 export type RecoveryArtifactReference = {
   run: ActiveSessionSqliteMigrationRun;
   target: SessionSqliteMigrationTargetManifest;
   move: SessionSqliteMigrationMove;
   trusted: boolean;
   consumedByRestore: boolean;
-};
-type RecoveryInventory = {
-  report: RecoveryCleanupReport;
-  references: Map<string, RecoveryArtifactReference[]>;
-  manifestPaths: string[];
 };
 
 export function resolveRecoveryArtifact(
@@ -82,10 +65,7 @@ export function resolveRecoveryArtifact(
   );
 }
 
-export function collectRecoveryInventory(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-}): RecoveryInventory {
+export function collectRecoveryInventory(params: { cfg: OpenClawConfig; env: NodeJS.ProcessEnv }) {
   const stateDir = canonicalMigrationFilePath(path.join(resolveStateDir(params.env), "anchor"));
   const root = path.dirname(stateDir);
   const stores = new Set<string>();
@@ -458,8 +438,8 @@ export function protectRecoveryDependencies(
 export function summarizeRecoveryCleanup(
   stateDir: string,
   artifacts: RecoveryCleanupArtifact[],
-  status: RecoveryCleanupReport["status"],
-): RecoveryCleanupReport {
+  status: "preview" | "refused" | "complete" | "blocked",
+) {
   const totals = {
     candidateBytes: 0,
     verificationRequiredBytes: 0,

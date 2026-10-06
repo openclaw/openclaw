@@ -1235,7 +1235,6 @@ src/agents/anthropic-payload-log.ts	2
 src/agents/apply-patch-file-ops.ts	2
 src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
-src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1
@@ -1616,7 +1615,6 @@ src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/queue/drain.ts	1
 src/auto-reply/reply/queue/enqueue.ts	1
-src/auto-reply/reply/queue/settings.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
@@ -1812,7 +1810,6 @@ src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	4
 src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
-src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
@@ -1860,7 +1857,6 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
-src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
 src/commands/doctor/shared/stale-agent-model-ref-repair.ts	3
 src/commands/doctor/shared/stale-auth-order-store.ts	3

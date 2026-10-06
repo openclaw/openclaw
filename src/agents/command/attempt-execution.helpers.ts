@@ -202,7 +202,7 @@ export async function claudeCliSessionTranscriptHasContent(
   }
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   cliBackendLog.warn(
-    `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
+    `claude-cli transcript check v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
   );
   return false;
 }

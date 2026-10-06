@@ -242,6 +242,12 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         port1.postMessage(message, [...transfers]);
       },
       resourceBroker() {
+        if (source.closing) {
+          throw new Error("Native worker source is closing");
+        }
+        if (source.runtime?.failure) {
+          throw source.runtime.failure;
+        }
         return (source.broker ??= runInDetachedAsyncContext(() =>
           createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
         ));

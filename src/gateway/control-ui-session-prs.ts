@@ -38,19 +38,7 @@ export type ControlUiSessionPullRequestsParams = {
   refresh?: boolean;
 };
 
-type PullListItem = {
-  number: number;
-  title: string;
-  url: string;
-  owner: string;
-  repo: string;
-  state: ControlUiSessionPullRequest["state"];
-  author?: ControlUiSessionPullRequest["author"];
-  branch?: string;
-  headSha?: string;
-  baseRef?: string;
-  mergeCommitSha?: string;
-};
+type PullListItem = NonNullable<ReturnType<typeof parsePullListItem>>;
 
 /**
  * Cached GitHub snapshot plus the merged PRs' heads. The heads stay
@@ -201,7 +189,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-export function parsePullListItem(value: unknown): PullListItem | null {
+export function parsePullListItem(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }

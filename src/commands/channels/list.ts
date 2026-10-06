@@ -157,12 +157,7 @@ export async function channelsListCommand(
   // the manifest snapshot above because no plugin projection exists for them.
   const isInstalled = (channelId: string): boolean => installedByChannelId.get(channelId) ?? true;
 
-  type AccountLineSource = {
-    plugin: ChannelPlugin;
-    snapshot: ChannelAccountSnapshot;
-    installed: boolean;
-  };
-  const accountLines: AccountLineSource[] = [];
+  const accountLines: Parameters<typeof formatAccountLine>[0][] = [];
   const accountIdsByPlugin = new Map(
     plugins.map((plugin) => [plugin.id, plugin.config.listAccountIds(cfg) ?? []]),
   );

@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCompletionFromSessionEntry } from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import * as accessor from "../config/sessions/session-accessor.js";
@@ -34,6 +35,23 @@ import {
   runGatewaySessionStartupMaintenance,
 } from "./server-startup-session-migration.js";
 import { runStartupSessionMaintenanceForTest } from "./server-startup-session-migration.test-support.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "startup_settlement_fault",
+    match: /^insert into session_conversations\b/u,
+    sql: `CREATE TEMP TRIGGER startup_settlement_fault BEFORE INSERT ON main.session_conversations
+      WHEN EXISTS (SELECT 1 FROM session_nodes WHERE current_session_id = NEW.session_id
+        AND json_extract(entry_json, '$.status') = 'interrupted')
+      BEGIN SELECT RAISE(ABORT, 'synthetic settlement failure after interrupted row'); END;`,
+  },
+  {
+    name: "startup_receipt_fault",
+    match: /^insert into transcript_events\b/u,
+    sql: `CREATE TEMP TRIGGER startup_receipt_fault BEFORE INSERT ON main.transcript_events
+      BEGIN SELECT RAISE(ABORT, 'synthetic repair receipt write failure'); END;`,
+  },
+]);
 
 const roots = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
@@ -305,19 +323,14 @@ it.each(["owner", "durable-owner", "settlement", "receipt"] as const)(
             }, attachment),
           );
       } else {
-        // The companion write follows the interrupted row without changing canonical triggers.
-        database.db.exec(
-          failure === "receipt"
-            ? "CREATE TRIGGER startup_fault BEFORE INSERT ON transcript_events BEGIN SELECT RAISE(ABORT, 'synthetic repair receipt write failure'); END"
-            : "CREATE TRIGGER startup_fault BEFORE INSERT ON session_conversations WHEN EXISTS (SELECT 1 FROM session_nodes WHERE current_session_id = NEW.session_id AND json_extract(entry_json, '$.status') = 'interrupted') BEGIN SELECT RAISE(ABORT, 'synthetic settlement failure after interrupted row'); END",
-        );
+        fault.enable(failure === "receipt" ? 1 : 0);
       }
       try {
         await runStartup();
       } finally {
         revoke?.mockRestore();
         if (!ownerFailure) {
-          database.db.exec("DROP TRIGGER startup_fault");
+          fault.disable();
         }
       }
       if (ownerFailure) {

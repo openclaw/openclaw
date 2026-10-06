@@ -8,6 +8,10 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import {
+  readSessionTranscriptSummaryAsync,
+  type SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import { buildRunUserTurnIdempotencyKey } from "../../sessions/user-turn-transcript.js";
 import { getOwedHarnessCompletionTask } from "../agent-harness-completion-recovery.js";
 import {
@@ -22,6 +26,13 @@ import {
   mainSessionRecoveryLog,
   resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
+
+export async function readMainSessionRecoveryCheckpoint(scope: SessionTranscriptReadScope) {
+  const { checkpoint } = await readSessionTranscriptSummaryAsync(scope, {
+    kind: "recovery-checkpoint",
+  });
+  return checkpoint;
+}
 
 export async function reconcileInvalidHarnessCompletion(
   params: MainSessionRecoveryStoreTarget & {

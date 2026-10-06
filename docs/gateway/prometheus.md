@@ -108,6 +108,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
+| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request` or `startup`)                                                 |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
@@ -348,6 +349,12 @@ applies.
 
 The `transcripts` request family includes canonical event appends and retention.
 
+Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
+bounded operation-family classifier as SQLite writers. Examples include
+`devicePairing`, `acpSessions`, `workers`, and `cron`; standalone admission reads
+use `admit`. The read owner supplies the operation before queue admission, so
+queue wait and execution use the same class without labeling request payloads.
+
 Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
 timestamp. Request duration includes preparation, cold worker startup, transport,
 host exchanges, and I/O. General task pools report `task`; SQLite commands retain
@@ -369,6 +376,9 @@ histogram_quantile(0.99,
 
 # Request classes occupying dispatch slots for the most wall time
 sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+
+# Shared-state read rate, by operation family
+sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRead"}[5m]))
 ```
 
 ### Memory and process churn
@@ -600,6 +610,6 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
 ## Related
 
 - [Diagnostics export](/gateway/diagnostics) — local diagnostics zip for support bundles
-- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` probes
+- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` checks
 - [Logging](/logging) — file-based logging
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP push for traces, metrics, and logs

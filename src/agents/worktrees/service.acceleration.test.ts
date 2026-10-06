@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -10,6 +11,7 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as backoff from "../../infra/backoff.js";
 import * as gitExec from "../../infra/git-exec.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import * as commandRunner from "../../process/exec-runner.js";
 import * as commandExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
@@ -284,6 +286,42 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     }
 
     const sourceStatus = await git(repo, "status", "--porcelain", "--untracked-files=all");
+    const inspectCopy = async (checkout: string) => {
+      const template = listTemplates(env)[0]!;
+      const sourceIndex = path.resolve(
+        template.path,
+        await git(template.path, "rev-parse", "--git-path", "index"),
+      );
+      const copiedIndex = path.resolve(
+        checkout,
+        await git(checkout, "rev-parse", "--git-path", "index"),
+      );
+      const [sourceStat, copiedStat, sourceBytes, copiedBytes] = await Promise.all([
+        fs.stat(sourceIndex, { bigint: true }),
+        fs.stat(copiedIndex, { bigint: true }),
+        fs.readFile(sourceIndex),
+        fs.readFile(copiedIndex),
+      ]);
+      const cloneMetadata =
+        process.platform === "darwin" && probeTreeClone(path.dirname(copiedIndex)) === "apfs"
+          ? await readCloneFileMetadata([sourceIndex, copiedIndex])
+          : undefined;
+      return { sourceStat, copiedStat, sourceBytes, copiedBytes, cloneMetadata };
+    };
+    const copies: Awaited<ReturnType<typeof inspectCopy>>[] = [];
+    const inspectionErrors: unknown[] = [];
+    const run = commandRunner.runCommandWithTimeout;
+    vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (argv.includes("update-index") && argv.includes("--refresh")) {
+        // Retain observations before Git rewrites the copy; assert outside product recovery.
+        try {
+          copies.push(await inspectCopy(argv[argv.indexOf("-C") + 1]!));
+        } catch (error) {
+          inspectionErrors.push(error);
+        }
+      }
+      return await run(argv, options);
+    });
     const first = await service.create({
       repoRoot: repo,
       name: "first-deep-source-checkout",
@@ -303,6 +341,20 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
 
     expect(backend.createTemplate).toHaveBeenCalledTimes(1);
     expect(backend.cloneTemplate).toHaveBeenCalledTimes(2);
+    expect(inspectionErrors).toEqual([]);
+    expect(copies).toHaveLength(2);
+    for (const { sourceStat, copiedStat, sourceBytes, copiedBytes, cloneMetadata } of copies) {
+      expect(copiedBytes).toEqual(sourceBytes);
+      expect([copiedStat.dev, copiedStat.ino]).not.toEqual([sourceStat.dev, sourceStat.ino]);
+      if (process.platform !== "win32") {
+        expect(copiedStat.mode & 0o777n).toBe(sourceStat.mode & 0o777n);
+      }
+      if (cloneMetadata) {
+        const [sourceMetadata, copiedMetadata] = cloneMetadata;
+        expect(sourceMetadata?.cloneId).toBeTruthy();
+        expect(copiedMetadata?.cloneId).toBe(sourceMetadata?.cloneId);
+      }
+    }
     expect(listTemplates(env).map((entry) => entry.id)).toEqual([template.id]);
     expect(await git(repo, "status", "--porcelain", "--untracked-files=all")).toBe(sourceStatus);
     expect(await fs.readFile(path.join(second.path, "README.md"), "utf8")).toBe("base\n");

@@ -8,7 +8,7 @@ The default local backend: its restricted defaults, GPU and Docker-out-of-Docker
 
 ## Docker backend
 
-The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not probe or fall back to Podman.
+The Docker backend runs tools locally through the `docker` CLI. Its selection and error behavior are unchanged; it does not check or fall back to Podman.
 
 Defaults: `network: "none"` (no egress), `readOnlyRoot: true`, `capDrop: ["ALL"]`, image `openclaw-sandbox:bookworm-slim`.
 
@@ -80,7 +80,7 @@ Nested Gateway binds are projected too, with their read-only permissions preserv
 
 On Ubuntu/AppArmor hosts with Docker sandbox mode enabled, Codex app-server `workspace-write` shell execution needs unprivileged user namespaces inside the sandbox container, and this can fail before shell startup when the service user cannot create them. This needs an unprivileged network namespace too when Docker sandbox egress is disabled (`network: "none"`, the default). Common symptoms: `bwrap: setting up uid map: Permission denied` and `bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`.
 
-These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized probe failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace probe failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
+These Codex bwrap checks run in standalone `openclaw doctor` and are omitted during `openclaw update`; run `openclaw doctor` after the update. Doctor checks the user namespace with `unshare`. When Docker sandbox egress is disabled and a local Codex runtime is configured, it also runs the configured Codex binary's own `workspace-write` sandbox with network access disabled, exercising Bubblewrap's loopback setup. Unrecognized check failures are reported as unverified rather than as a namespace diagnosis. If doctor reports a Codex bwrap namespace check failure, prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable. Do not grant broader Docker container privileges just to satisfy nested `bwrap`.
 </Warning>
 
 ### Sandboxed browser

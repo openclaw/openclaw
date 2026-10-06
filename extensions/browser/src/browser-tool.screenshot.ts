@@ -17,25 +17,16 @@ import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { stageBrowserScreenshotForSharing } from "./browser/screenshot-sharing.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./browser/vision.js";
 
-export type BrowserScreenshotOptions = {
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  activeModel?: {
-    provider?: string;
-    model?: string;
-  };
+export type BrowserScreenshotOptions = Pick<
+  Parameters<typeof describeBrowserScreenshot>[0],
+  "agentId" | "agentDir" | "workspaceDir" | "activeModel" | "mediaScope"
+> & {
   screenshotResultMode?: "image" | "path";
   persistScreenshot?: (params: {
     sourcePath: string;
     type: "png" | "jpeg";
     targetId?: string;
   }) => Promise<string>;
-  mediaScope?: {
-    sessionKey?: string;
-    channel?: string;
-    chatType?: string;
-  };
 };
 
 const SCREENSHOT_SHARE_UNAVAILABLE =

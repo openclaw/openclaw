@@ -36,7 +36,7 @@ import {
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
-  getLatestSubagentRunByChildSessionKey,
+  buildLatestSubagentSessionListReadIndex,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
@@ -261,10 +261,10 @@ async function runSubagentAnnounceFlowBound(
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
-        shouldIgnorePostCompletionAnnounceForSession(
+        (await shouldIgnorePostCompletionAnnounceForSession(
           targetRequesterSessionKey,
           targetRequesterAgentId,
-        )
+        ))
       ) {
         return "delivered";
       }
@@ -298,7 +298,9 @@ async function runSubagentAnnounceFlowBound(
           childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
-              getLatestSubagentRunByChildSessionKey,
+              getLatestSubagentRunByChildSessionKey: buildLatestSubagentSessionListReadIndex(
+                directChildren.map((entry) => entry.childSessionKey),
+              ).getLatestSubagentRun,
             }),
           );
         }
@@ -470,10 +472,10 @@ async function runSubagentAnnounceFlowBound(
       if (!isSubagentSessionRunActive(targetRequesterSessionKey, targetRequesterAgentId)) {
         if (
           params.completionTarget !== "parent" &&
-          shouldIgnorePostCompletionAnnounceForSession(
+          (await shouldIgnorePostCompletionAnnounceForSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
-          )
+          ))
         ) {
           return "delivered";
         }
@@ -485,7 +487,7 @@ async function runSubagentAnnounceFlowBound(
             shouldDeleteChildSession = false;
             return "retryable";
           }
-          const fallback = resolveRequesterForChildSession(
+          const fallback = await resolveRequesterForChildSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
           );

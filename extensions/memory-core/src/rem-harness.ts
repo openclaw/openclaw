@@ -17,11 +17,7 @@ import {
   filterLiveShortTermRecallEntries,
   rankShortTermPromotionCandidates,
   readShortTermRecallEntries,
-  type PromotionCandidate,
 } from "./short-term-promotion.js";
-
-type MemoryRemHarnessRemConfig = ReturnType<typeof resolveMemoryRemDreamingConfig>;
-type MemoryRemHarnessDeepConfig = ReturnType<typeof resolveMemoryDeepDreamingConfig>;
 
 export type PreviewRemHarnessOptions = {
   workspaceDir: string;
@@ -36,23 +32,7 @@ export type PreviewRemHarnessOptions = {
   nowMs?: number;
 };
 
-export type PreviewRemHarnessResult = {
-  workspaceDir: string;
-  nowMs: number;
-  remConfig: MemoryRemHarnessRemConfig;
-  deepConfig: MemoryRemHarnessDeepConfig;
-  recallEntryCount: number;
-  remSkipped: boolean;
-  rem: RemDreamingPreview;
-  groundedInputPaths: string[];
-  grounded: GroundedRemPreviewResult | null;
-  deep: {
-    candidateLimit?: number;
-    candidateCount: number;
-    truncated: boolean;
-    candidates: PromotionCandidate[];
-  };
-};
+export type PreviewRemHarnessResult = Awaited<ReturnType<typeof previewRemHarness>>;
 
 function resolveRemPreviewLimit(configLimit: number, cap: number | undefined): number {
   if (configLimit <= 0) {
@@ -98,9 +78,7 @@ function resolveGroundedFileLimit(
   return configLimit > 0 ? Math.min(configLimit, normalizedCap) : normalizedCap;
 }
 
-export async function previewRemHarness(
-  params: PreviewRemHarnessOptions,
-): Promise<PreviewRemHarnessResult> {
+export async function previewRemHarness(params: PreviewRemHarnessOptions) {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const remConfig = resolveMemoryRemDreamingConfig({
     pluginConfig: params.pluginConfig,

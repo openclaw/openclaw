@@ -258,17 +258,30 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
-    `api.runtime.gateway.withSessionReadScope(async (scope) => result)` admits a
-    session-derived read through the same caller and lifecycle checks. Eligible
-    human readers receive an opaque scope shared across equal viewers and
-    published session, profile, access, and configuration revisions. A plugin
-    may reuse an immutable result for that scope and its own query/revision;
-    the token is not authority and must only be consumed inside this callback.
-    Agent, synthetic, and unscoped service callers receive `undefined` and
-    retain a fresh caller-scoped roster read. The host rechecks authority after
-    the callback settles. Ordinary session progress can finish the admitted
-    snapshot, but a subsequent invocation receives the new scope. Plugins own
-    their result bounds and domain invalidation; this adds no expiry timer.
+    `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
+    selects immutable facts through the same session-list filtering owner,
+    without pagination. Selection supports agent, archive, automation, activity,
+    and person filters, including the people facet. Unchanged session facts retain
+    object identity across reads; `revision` changes with the selected content or
+    its activity or retry deadline. Eligible human readers receive a stable opaque
+    `scope` for their query and current viewer, profile, access, configuration,
+    and redaction facts. Other callers receive `undefined`. The scope is not authority:
+    the host rechecks the caller after the callback settles, including awaited
+    plugin work. Consume reused results only inside this callback.
+
+    Selected rows include `isMain`. Failed acquisition batches retain authorized
+    roster fields with an `unavailable` reason; plugins can show their previous
+    facts for the same session identity and `redactionRevision`. When that revision
+    changes, discard retained text prepared under the old policy. Missing or no-longer-visible sessions are
+    omitted; `missingSessionKeys` identifies selected roster entries whose current
+    facts were omitted, so consumers can retire their fallback facts. Selected PR
+    facts retry from 60 seconds up to 15 minutes, retain a
+    last-confirmed list with `pullRequestsStale: true`, and reset on lifecycle
+    replacement or a successful read. When redaction rules change, the host omits
+    retained PR titles until fresh source text is available, while preserving
+    confirmed states and retry deadlines.
+    `activityExpiresAt` and `retryAt` describe the next relevant deadlines; no polling timer is created. Remove these
+    selection-only fields when adapting facts to another public response contract.
 
     `await api.runtime.gateway.resolveGitHubAccount({ login, signal? })` resolves a
     public GitHub login to `{ accountId, login }` using the Gateway's configured

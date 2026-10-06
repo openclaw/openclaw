@@ -245,7 +245,7 @@ export function ensureLocal(
     }),
   );
   const record = getRequired(db, identity.sessionId);
-  publishPlacementTurnClaimState(db, record);
+  publishPlacementTurnClaimState(db, record, null);
   return record;
 }
 
@@ -399,6 +399,6 @@ export function updateTransition(
     });
     onEnvironmentActivated?.(updated.environmentId!, lastActivatedAtMs);
   }
-  publishPlacementTurnClaimState(db, updated);
+  publishPlacementTurnClaimState(db, updated, current.state);
   return updated;
 }

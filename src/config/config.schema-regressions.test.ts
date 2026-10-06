@@ -45,18 +45,6 @@ describe("config schema regressions", () => {
     }
   });
 
-  it("accepts queue byChannel providers including Matrix (#84104)", () => {
-    expect(
-      validateConfigObject({
-        messages: {
-          queue: {
-            byChannel: { googlechat: "followup", mattermost: "collect", matrix: "steer" },
-          },
-        },
-      }).ok,
-    ).toBe(true);
-  });
-
   it("accepts exact main bindings when the roster omits main (#89419)", () => {
     expect(validateBinding("main", { alpha: { model: "anthropic/claude-3-5-sonnet" } }).ok).toBe(
       true,

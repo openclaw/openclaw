@@ -130,10 +130,10 @@ it.each([
     } else {
       expect(inspected.serviceMutationSkipMessage).toContain(
         scenario.stage === "unavailable"
-          ? "Task Scheduler probe failed (exit 2)."
+          ? "Task Scheduler check failed (exit 2)."
           : scenario.stage === "command then runtime"
-            ? "Scheduled Task probe timed out after 47000 ms (ETIMEDOUT)."
-            : "Task Scheduler probe timed out after 47000 ms.",
+            ? "Scheduled Task check timed out after 47000 ms (ETIMEDOUT)."
+            : "Task Scheduler check timed out after 47000 ms.",
       );
       if (scenario.stage !== "command then runtime") {
         expect(inspected.serviceUpdateVerdict).toMatchObject({

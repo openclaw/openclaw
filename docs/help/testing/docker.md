@@ -104,7 +104,7 @@ source/config. The staging step skips large local-only caches and app build
 outputs such as `.pnpm-store`, `.worktrees`, `__openclaw_vitest__`, and
 app-local `.build` or Gradle output directories so Docker live runs do not
 spend minutes copying machine-specific artifacts. They also set
-`OPENCLAW_SKIP_CHANNELS=1` so gateway live probes do not start real
+`OPENCLAW_SKIP_CHANNELS=1` so gateway live checks do not start real
 Telegram/Discord/etc. channel workers inside the container.
 `test:docker:live-models` still runs `pnpm test:live`, so pass through
 `OPENCLAW_LIVE_GATEWAY_*` as well when you need to narrow or exclude gateway
@@ -136,13 +136,13 @@ happens to surface.
 
 `test:docker:agent-bundle-mcp-tools` is deterministic and does not need a
 live model key. It builds the repo Docker image, starts a real stdio MCP
-probe server inside the container, materializes that server through the
+check server inside the container, materializes that server through the
 embedded OpenClaw bundle MCP runtime, executes the tool, then verifies
 `coding` and `messaging` keep `bundle-mcp` tools while `minimal` and
 `tools.deny: ["bundle-mcp"]` filter them.
 
 `test:docker:cron-mcp-cleanup` is deterministic and does not need a live
-model key. It starts a seeded Gateway with a real stdio MCP probe server,
+model key. It starts a seeded Gateway with a real stdio MCP check server,
 runs an isolated cron turn and a `sessions_spawn` one-shot child turn, then
 verifies the MCP child process exits after each run.
 

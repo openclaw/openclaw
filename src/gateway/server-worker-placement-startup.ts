@@ -388,7 +388,6 @@ export function createGatewayWorkerPlacementRuntime(
           : [placement.sessionKey],
       );
     const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
-      () => preservationKeys(params.placements.listForReconcile()),
       async () => {
         const prepared = await params.placements.prepareMaintenancePlacements();
         return {

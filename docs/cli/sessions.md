@@ -340,10 +340,10 @@ openclaw sessions cleanup --json
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
   session rows are preserved. Eligible empty files count as removed artifacts
   in both dry-run and applied summaries, even though they free zero bytes.
-- Cleanup reports short-lived Gateway model-run probe cleanup separately as
+- Cleanup reports short-lived Gateway model-run check cleanup separately as
   `modelRunPruned`. This only matches strict explicit keys shaped like
   `agent:*:explicit:model-run-<uuid>`. Retention is a fixed `24h` and is
-  pressure-gated: it only removes stale probe rows when session-entry
+  pressure-gated: it only removes stale check rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
 - `pruneAfter` archives eligible durable sessions in place, preserving their IDs

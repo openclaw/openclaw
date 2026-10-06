@@ -54,13 +54,7 @@ function hasClaimlessLiveDeliveryState(
   );
 }
 
-/**
- * Pure decision mirror of `beginRestartRecoveryTerminalDelivery`: the
- * disposition a terminal source-reply send on `scope.sourceTurnId` resolves
- * to against the given session entry. The send path and the steering fence
- * classify every entry through this single decision surface so they can
- * never drift apart.
- */
+/** Terminal sends and steering share the same source-ownership decision. */
 function resolveRestartRecoveryTerminalDeliveryDisposition(
   entry: SessionEntry | null | undefined,
   scope: Pick<RestartRecoveryTerminalDeliveryScope, "sessionId" | "sourceTurnId">,
@@ -70,11 +64,9 @@ function resolveRestartRecoveryTerminalDeliveryDisposition(
       entry.sessionId === scope.sessionId &&
       hasRestartRecoveryTerminalRun(entry, scope.sourceTurnId)
     ) {
-      // The source turn already completed a terminal send.
       return "already-delivered";
     }
     if (hasClaimlessLiveDeliveryState(entry, scope)) {
-      // No durable claim was ever armed for this turn.
       return "not-applicable";
     }
   }
@@ -104,8 +96,6 @@ export function resolveRestartRecoverySteeringBlockReason(
   | "stale-claim"
   | undefined {
   if (!entry) {
-    // No session entry means no persisted receipt state to fence; the send
-    // path arms a fresh claim on the same entry surface.
     return undefined;
   }
   if (entry.restartRecoveryDeliveryReceiptState) {
@@ -120,13 +110,7 @@ export function resolveRestartRecoverySteeringBlockReason(
     sourceTurnId: normalizedSourceTurnId,
   });
   if (disposition === "not-applicable") {
-    // Claimless entries are the legitimate fresh state ("not-applicable" in
-    // beginRestartRecoveryTerminalDelivery); a tombstone only fail-closes the
-    // fence when it records this exact source turn, not any earlier one.
-    // Unknown active source ("") is ambiguous: the run's real tool-context
-    // source may still be tombstoned, so any retained tombstone fail-closes
-    // to queue rather than risk steering into a refused terminal send.
-    // A tombstone-free unknown source stays fresh.
+    // Without a known active source, any retained tombstone could belong to it.
     if (
       normalizedSourceTurnId === "" &&
       (normalizeRestartRecoveryTerminalRunIds(entry.restartRecoveryTerminalRunIds)?.length ?? 0) > 0
@@ -150,11 +134,7 @@ function loadCurrent(scope: RestartRecoveryTerminalDeliveryScope): SessionEntry 
   });
 }
 
-/**
- * Persists ambiguity before a terminal external send is allowed to start.
- * Arms the receipt only when the full disposition is "startable", so the
- * fail-closed classification stays shared with the steering fence.
- */
+/** Persists ambiguity before a terminal external send is allowed to start. */
 export async function beginRestartRecoveryTerminalDelivery(
   scope: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"started" | "already-delivered" | "delivery-ambiguous" | "stale" | "not-applicable"> {

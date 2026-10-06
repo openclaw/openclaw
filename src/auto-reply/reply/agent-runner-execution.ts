@@ -274,6 +274,7 @@ async function executeAgentTurnInternalLoop(
           }),
       };
       return (transcriptStartPreparation = (async () => {
+        using _ = agentTurnTiming.observe(params.opts?.onTranscriptStartPreparation);
         const { readSessionTranscriptStartAsync } =
           await import("../../config/sessions/session-transcript-watermark.js");
         const prepared = await readSessionTranscriptStartAsync(target);

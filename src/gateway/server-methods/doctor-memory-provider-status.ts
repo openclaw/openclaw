@@ -7,7 +7,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 export const SKIPPED_MEMORY_EMBEDDING_PROBE = {
   ok: false,
   checked: false,
-  error: "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+  error: "memory embedding readiness not checked; run `openclaw memory status --deep` to check",
 } as const;
 
 type ProviderStatusRequest = Pick<

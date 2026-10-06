@@ -36,7 +36,6 @@ import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { renderChatTranscriptLayout, type TranscriptRow } from "./chat-transcript-layout.ts";
 import {
   isTranscriptMaintenanceScroll,
-  isTranscriptManualScroll,
   isTranscriptProgrammaticScroll,
   observeTranscriptOffset,
   scrollTranscriptOffset,
@@ -219,16 +218,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
           instance,
           callback,
         ),
-      measureElement: (element, entry, instance) => {
-        const size = measureTranscriptRow(element, entry, instance);
-        if (
-          element.dataset.virtualRowKey === "presence:typing" &&
-          instance.itemSizeCache.get("presence:typing") !== size
-        ) {
-          this.endAnchor.clear();
-        }
-        return size;
-      },
+      measureElement: measureTranscriptRow,
       rangeExtractor: (range) =>
         this.prependAnchor.extractRange(range, this.rowIndexesByKey, this.focusedRowKey),
       // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
@@ -573,10 +563,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
-  get isManualScroll(): boolean {
-    return isTranscriptManualScroll(this.offsetState, this.scrollElement);
-  }
-
   private canAutoFollow(): boolean {
     const command = this.offsetState.scrollCommand;
     return (!command || command.target === "end") && (this.callbacks.canFollowEnd?.() ?? true);
@@ -729,12 +715,6 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   private syncRows(nextKeys: readonly string[]): void {
     const virtualizer = this.virtualizer;
-    const typingAdded =
-      !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
-    // Remote typing is presence, not a local request to move the viewport.
-    if (typingAdded) {
-      this.endAnchor.clear();
-    }
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;

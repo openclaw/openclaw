@@ -371,30 +371,8 @@ export function createReplyRestartRecoveryClaimController(params: {
       canTransferAbortedControlUiClaim && !recoverableDeliveryContext
         ? (admissionRunId ?? recoveryRunId)
         : recoveryRunId;
-    const patch: SessionTranscriptTurnLifecyclePatch = recoverableDeliveryContext
-      ? {
-          ...retiredClaim,
-          abortedLastRun: false,
-          endedAt: undefined,
-          restartRecoveryBeforeAgentReplyState: undefined,
-          restartRecoveryDeliveryReceiptState: undefined,
-          restartRecoveryDeliveryToolCallId: undefined,
-          restartRecoveryDeliveryContext: recoverableDeliveryContext,
-          restartRecoveryDeliveryRequestFingerprint: undefined,
-          restartRecoveryDeliveryRunId: nextRecoveryRunId,
-          restartRecoveryDeliverySourceRunId: sourceTurnId,
-          restartRecoveryRequesterAccountId: normalizeOptionalString(params.requesterAccountId),
-          restartRecoveryRequesterSenderId: normalizeOptionalString(params.requesterSenderId),
-          restartRecoverySameChannelThreadRequired:
-            params.sameChannelThreadRequired === true ? true : undefined,
-          restartRecoverySourceIngress: "channel",
-          restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-          runtimeMs: undefined,
-          startedAt: updatedAt,
-          status: "running",
-          updatedAt,
-        }
-      : canTransferAbortedControlUiClaim
+    const patch: SessionTranscriptTurnLifecyclePatch =
+      recoverableDeliveryContext || canTransferAbortedControlUiClaim
         ? {
             ...retiredClaim,
             abortedLastRun: false,
@@ -402,15 +380,26 @@ export function createReplyRestartRecoveryClaimController(params: {
             restartRecoveryBeforeAgentReplyState: undefined,
             restartRecoveryDeliveryReceiptState: undefined,
             restartRecoveryDeliveryToolCallId: undefined,
-            restartRecoveryDeliveryContext: undefined,
+            restartRecoveryDeliveryContext: recoverableDeliveryContext,
             restartRecoveryDeliveryRequestFingerprint: undefined,
             restartRecoveryDeliveryRunId: nextRecoveryRunId,
-            restartRecoveryDeliverySourceRunId: nextRecoveryRunId,
-            restartRecoveryRequesterAccountId: undefined,
-            restartRecoveryRequesterSenderId: undefined,
-            restartRecoverySameChannelThreadRequired: undefined,
-            restartRecoverySourceIngress: "control-ui",
-            restartRecoverySourceReplyDeliveryMode: undefined,
+            restartRecoveryDeliverySourceRunId: recoverableDeliveryContext
+              ? sourceTurnId
+              : nextRecoveryRunId,
+            restartRecoveryRequesterAccountId: recoverableDeliveryContext
+              ? normalizeOptionalString(params.requesterAccountId)
+              : undefined,
+            restartRecoveryRequesterSenderId: recoverableDeliveryContext
+              ? normalizeOptionalString(params.requesterSenderId)
+              : undefined,
+            restartRecoverySameChannelThreadRequired:
+              recoverableDeliveryContext && params.sameChannelThreadRequired === true
+                ? true
+                : undefined,
+            restartRecoverySourceIngress: recoverableDeliveryContext ? "channel" : "control-ui",
+            restartRecoverySourceReplyDeliveryMode: recoverableDeliveryContext
+              ? params.sourceReplyDeliveryMode
+              : undefined,
             runtimeMs: undefined,
             startedAt: updatedAt,
             status: "running",

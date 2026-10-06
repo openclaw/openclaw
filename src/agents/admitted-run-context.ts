@@ -536,7 +536,7 @@ export function prepareAgentRunAdmission(params: {
   let closed = false;
   return Object.freeze({
     operationalRunInstance,
-    assertSourceCurrent: () => assertSourceCurrent?.(),
+    assertSourceCurrent: composeSessionSourceAssertion([assertSourceCurrent]),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {

@@ -31,6 +31,7 @@ type FollowupQueueState = {
   /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
   activeSummarySources: WeakSet<FollowupRun>;
   summaryElisions: Array<{
+    /** Storage grouping only; delivery rechecks mutable tool policy for every source. */
     contextKey: string;
     /** Compact sources stay strong so cancellation follows summarized content until delivery. */
     sources: FollowupRun[];

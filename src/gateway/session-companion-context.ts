@@ -26,11 +26,7 @@ type SessionCompanionContextReadResult =
 
 export type SessionCompanionContextReader = {
   currentSessionId: (params: { agentId: string; sessionKey: string }) => string | undefined;
-  read: (params: {
-    agentId: string;
-    sessionKey: string;
-    signal?: AbortSignal;
-  }) => Promise<SessionCompanionContextReadResult>;
+  read: typeof readSessionCompanionContext;
 };
 
 function normalizeContextText(value: string): string {
