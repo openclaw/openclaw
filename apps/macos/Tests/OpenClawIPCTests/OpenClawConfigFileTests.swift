@@ -4,6 +4,32 @@ import Testing
 
 @Suite(.serialized)
 struct OpenClawConfigFileTests {
+    @MainActor
+    @Test
+    func `unrelated local saves retain authored roster order`() async throws {
+        let override = self.makeConfigOverridePath()
+        let url = URL(fileURLWithPath: override)
+        let directory = url.deletingLastPathComponent()
+        defer { try? FileManager().removeItem(at: directory) }
+        try FileManager().createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(#"{"agents":{"ownership":"explicit","entries":{"zmain":{},"alpha":{}}},"gateway":{"mode":"local"}}"#
+            .utf8)
+            .write(to: url)
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": override,
+            "OPENCLAW_STATE_DIR": directory.path,
+        ]) {
+            for enabled in [false, true, false] {
+                #expect(OpenClawConfigFile.saveDict(["browser": ["enabled": enabled]], preserveExistingKeys: true))
+                let raw = try String(contentsOf: url, encoding: .utf8)
+                let main = try #require(raw.range(of: "\"zmain\""))
+                let other = try #require(raw.range(of: "\"alpha\""))
+                #expect(main.lowerBound < other.lowerBound)
+                #expect((OpenClawConfigFile.loadDict()["browser"] as? [String: Any])?["enabled"] as? Bool == enabled)
+            }
+        }
+    }
+
     private func makeConfigOverridePath() -> String {
         // Foundation otherwise uses the account's temp directory, outside the test launcher's sandbox root.
         let temporaryRoot = ProcessInfo.processInfo.environment["TMPDIR"]

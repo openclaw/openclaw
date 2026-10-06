@@ -25,6 +25,8 @@ enum ConfigStore {
         var root: [String: Any]
         fileprivate let origin: Origin
         fileprivate let hash: String?
+        fileprivate var raw: String?
+        fileprivate var baseline: [String: Any]?
         fileprivate let readError: Error?
 
         var isCurrent: Bool {
@@ -98,10 +100,14 @@ enum ConfigStore {
             let snapshot: ConfigSnapshot = try await gateway.requestDecoded(
                 method: .configGet, params: nil, timeoutMs: 8000, ifCurrentRoute: lease.route)
             guard origin.isCurrent else { throw self.sourceChanged() }
+            let root = snapshot.config?.mapValues { $0.foundationValue } ?? [:]
+            let raw = snapshot.raw ?? (snapshot.exists == false || root.isEmpty ? "{}" : nil)
             return Document(
-                root: snapshot.config?.mapValues { $0.foundationValue } ?? [:],
+                root: root,
                 origin: origin,
                 hash: snapshot.hash,
+                raw: raw,
+                baseline: root,
                 readError: nil)
         } catch {
             guard !remote, origin.isCurrent, self.permitsLocalFallback(after: error) else {
@@ -199,7 +205,21 @@ enum ConfigStore {
             return
         }
         guard let lease = document.origin.lease, document.isCurrent else { throw self.sourceChanged() }
-        let data = try JSONSerialization.data(withJSONObject: document.root, options: [.prettyPrinted, .sortedKeys])
+        let data: Data
+        let method: String
+        var replacePaths: [String] = []
+        if let source = document.raw {
+            data = try ConfigJSONWriter.data(withJSONObject: document.root, preserving: source)
+            method = GatewayConnection.Method.configSet.rawValue
+        } else {
+            // Redaction can intentionally withhold raw source. Patch only edits
+            // onto the Gateway-owned source rather than guessing its key order.
+            guard let baseline = document.baseline else { throw self.sourceChanged() }
+            let patch = ConfigMergePatch.between(baseline, and: document.root)
+            data = try JSONSerialization.data(withJSONObject: patch.root, options: [.sortedKeys])
+            method = "config.patch"
+            replacePaths = patch.replacePaths
+        }
         guard let raw = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "ConfigStore", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Failed to encode config.",
@@ -207,8 +227,9 @@ enum ConfigStore {
         }
         var params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
         if let hash = document.hash { params["baseHash"] = AnyCodable(hash) }
+        if !replacePaths.isEmpty { params["replacePaths"] = AnyCodable(replacePaths) }
         _ = try await document.origin.gateway.request(
-            method: GatewayConnection.Method.configSet.rawValue,
+            method: method,
             params: params,
             timeoutMs: 10000,
             ifCurrentRoute: lease.route)
