@@ -10,9 +10,11 @@ sidebarTitle: "Advanced configuration"
 
 ## GPT-5 prompt contribution
 
-OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-family
-OpenClaw-assembled prompts. The OpenAI plugin setting below controls the
-friendly style on OpenAI-family routes. Older GPT-4.x model ids do not match.
+OpenClaw adds a shared GPT-5 prompt contribution to matching GPT-5-and-later
+OpenClaw-assembled prompts (`gpt-5*`, `gpt-6*`, such as the default
+`gpt-6-astra`, and later generations). The OpenAI plugin setting below controls
+the friendly style on OpenAI-family routes. Older GPT-4.x, `gpt-oss`, o-series,
+and `codex-mini` model ids do not match.
 
 The native Codex app-server harness does not receive the persona/tool-
 discipline behavior contract or the friendly interaction-style overlay through
