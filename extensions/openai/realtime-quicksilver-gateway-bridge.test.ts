@@ -1,3 +1,4 @@
+import type { RealtimeVoiceBridgeCreateRequest } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
@@ -34,13 +35,30 @@ function readPendingAudio(pending: OpenAIQuicksilverPendingAudio): Buffer {
 }
 
 describe("GPT-Live gateway relay bridge", () => {
-  function createPendingPeerBridge(params?: {
-    onClose?: (reason: "completed" | "error") => void;
-    onError?: (error: Error) => void;
-  }) {
+  function createPendingPeerBridge(
+    params?: Partial<
+      Pick<
+        RealtimeVoiceBridgeCreateRequest,
+        | "audioFormat"
+        | "onAudio"
+        | "onTranscript"
+        | "onResponseDone"
+        | "onEvent"
+        | "onClose"
+        | "onError"
+        | "runAgentConsult"
+        | "handleDelegationInput"
+      >
+    >,
+  ) {
     let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
     let rejectPeer: ((error: Error) => void) | undefined;
     let peerCallbacks: OpenAIQuicksilverAudioPeerCallbacks | undefined;
+    let socket: FakeSocket | undefined;
+    let markPeerStarted!: () => void;
+    const peerStarted = new Promise<void>((resolve) => {
+      markPeerStarted = resolve;
+    });
     const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve, reject) => {
       resolvePeer = resolve;
       rejectPeer = reject;
@@ -54,6 +72,7 @@ describe("GPT-Live gateway relay bridge", () => {
     } satisfies OpenAIQuicksilverAudioPeerContract;
     const createPeer = vi.fn((callbacks: OpenAIQuicksilverAudioPeerCallbacks) => {
       peerCallbacks = callbacks;
+      markPeerStarted();
       return peerPromise;
     });
     const onClose = vi.fn();
@@ -63,12 +82,20 @@ describe("GPT-Live gateway relay bridge", () => {
         providerConfig: {},
         model: "gpt-live-test-canary",
         voice: "marin",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-        onAudio: vi.fn(),
+        audioFormat: params?.audioFormat ?? {
+          encoding: "pcm16",
+          sampleRateHz: 24_000,
+          channels: 1,
+        },
+        onAudio: params?.onAudio ?? vi.fn(),
+        onTranscript: params?.onTranscript,
+        onResponseDone: params?.onResponseDone,
+        onEvent: params?.onEvent,
         onClearAudio: vi.fn(),
         onClose: params?.onClose ?? onClose,
         onError: params?.onError,
-        runAgentConsult: vi.fn(async () => ({ text: "done" })),
+        runAgentConsult: params?.runAgentConsult ?? vi.fn(async () => ({ text: "done" })),
+        handleDelegationInput: params?.handleDelegationInput,
         logger,
         resolveAuth: vi.fn(async () => ({
           type: "oauth" as const,
@@ -77,7 +104,7 @@ describe("GPT-Live gateway relay bridge", () => {
         })),
         createPeer,
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
-        webSocketFactory: () => new FakeSocket(),
+        webSocketFactory: () => (socket = new FakeSocket()),
       },
       openAIRealtimeHost,
     );
@@ -88,15 +115,187 @@ describe("GPT-Live gateway relay bridge", () => {
       onClose,
       logger,
       peer,
+      getSocket: () => {
+        if (!socket) {
+          throw new Error("expected sideband socket");
+        }
+        return socket;
+      },
       rejectPeer: (error: Error) => rejectPeer?.(error),
       resolvePeer: () => resolvePeer?.(peer),
       triggerPeerError: (error: Error) => peerCallbacks?.onError(error),
       triggerPeerMediaError: (error: Error) => peerCallbacks?.onMediaError?.(error),
-      waitForPeerStart: async () => {
-        await vi.waitFor(() => expect(createPeer).toHaveBeenCalledOnce());
-      },
+      triggerPeerAudio: (audio: Buffer) => peerCallbacks?.onAudio(audio),
+      waitForPeerStart: () => peerStarted,
     };
   }
+
+  it.each(["pcm16", "g711_ulaw"] as const)(
+    "keeps WebRTC audio flowing across transcript finals (%s)",
+    async (encoding) => {
+      const deliveredAudio: Buffer[] = [];
+      const onTranscript = vi.fn();
+      const onResponseDone = vi.fn();
+      const harness = createPendingPeerBridge({
+        audioFormat:
+          encoding === "pcm16"
+            ? { encoding, sampleRateHz: 24_000, channels: 1 }
+            : { encoding, sampleRateHz: 8_000, channels: 1 },
+        onAudio: (audio) => deliveredAudio.push(audio),
+        onTranscript,
+        onResponseDone,
+      });
+      try {
+        await harness.waitForPeerStart();
+        harness.resolvePeer();
+        await harness.connection;
+        const pcm = Buffer.alloc(960, 0x12);
+        harness.triggerPeerAudio(pcm);
+        emitSideband(harness.getSocket(), {
+          type: "turn.done",
+          turn: { role: "assistant", transcript: "Received reply" },
+        });
+        harness.triggerPeerAudio(pcm);
+        expect(onTranscript).toHaveBeenCalledExactlyOnceWith("assistant", "Received reply", true);
+        expect(onResponseDone).not.toHaveBeenCalled();
+        expect(Buffer.concat(deliveredAudio)).toHaveLength(encoding === "pcm16" ? 1920 : 315);
+        expect(harness.bridge.isConnected()).toBe(true);
+      } finally {
+        await harness.bridge.close();
+      }
+    },
+  );
+
+  it("does not complete a reply when its final transcript callback closes the bridge", async () => {
+    const onResponseDone = vi.fn();
+    const onAudio = vi.fn();
+    const harness = createPendingPeerBridge({
+      onAudio,
+      onResponseDone,
+      onTranscript: (_role, _text, done) => {
+        if (done) {
+          void harness.bridge.close();
+        }
+      },
+    });
+    try {
+      await harness.waitForPeerStart();
+      harness.resolvePeer();
+      await harness.connection;
+      emitSideband(harness.getSocket(), {
+        type: "turn.done",
+        turn: { role: "assistant", transcript: "Finished" },
+      });
+      harness.triggerPeerAudio(Buffer.alloc(960));
+      expect(onResponseDone).not.toHaveBeenCalled();
+      expect(onAudio).not.toHaveBeenCalled();
+      expect(harness.bridge.isConnected()).toBe(false);
+    } finally {
+      await harness.bridge.close();
+    }
+  });
+
+  it("admits delegation final audio before its first transcript after a spoken receipt", async () => {
+    let resolveConsult!: (result: { text: string }) => void;
+    const consultResult = new Promise<{ text: string }>((resolve) => {
+      resolveConsult = resolve;
+    });
+    let finalSent!: () => void;
+    const finalAppend = new Promise<void>((resolve) => {
+      finalSent = resolve;
+    });
+    const callbacks: string[] = [];
+    const onAudio = vi.fn(() => callbacks.push("audio"));
+    const onResponseDone = vi.fn();
+    const harness = createPendingPeerBridge({
+      onAudio,
+      onResponseDone,
+      handleDelegationInput: () => "consult",
+      runAgentConsult: vi.fn(async () => consultResult),
+      onEvent: (event) => {
+        if (event.direction === "client" && event.type === "response.create") {
+          callbacks.push("requested");
+        }
+      },
+    });
+    try {
+      await harness.waitForPeerStart();
+      harness.resolvePeer();
+      await harness.connection;
+      const socket = harness.getSocket();
+      const send = socket.send.bind(socket);
+      let deliveredFinalAudio = false;
+      socket.send = (payload) => {
+        send(payload);
+        if ((JSON.parse(payload) as { type?: string }).type === "delegation.context.append") {
+          callbacks.push("final-append");
+          if (!deliveredFinalAudio) {
+            deliveredFinalAudio = true;
+            harness.triggerPeerAudio(Buffer.alloc(960, 0x12));
+            finalSent();
+          }
+        }
+      };
+      emitSideband(socket, {
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "delegation-media-first",
+          content: [{ type: "input_text", text: "Check this request" }],
+        },
+      });
+      harness.triggerPeerAudio(Buffer.alloc(960, 0x12));
+      emitSideband(socket, {
+        type: "turn.done",
+        turn: { role: "assistant", transcript: "I will check that request." },
+      });
+      expect(onResponseDone).not.toHaveBeenCalled();
+
+      resolveConsult({ text: "Final ".repeat(100) });
+      await finalAppend;
+
+      expect(onAudio).toHaveBeenCalledTimes(2);
+      expect(callbacks.filter((callback) => callback === "requested")).toHaveLength(2);
+      expect(callbacks.slice(-4)).toEqual(["requested", "final-append", "audio", "final-append"]);
+      emitSideband(socket, {
+        type: "turn.done",
+        turn: { role: "assistant", transcript: "The final answer." },
+      });
+      expect(onResponseDone).not.toHaveBeenCalled();
+      expect(harness.bridge.isConnected()).toBe(true);
+    } finally {
+      resolveConsult({ text: "Finished" });
+      await harness.bridge.close();
+    }
+  });
+
+  it("does not append requested speech when response admission reentrantly closes the bridge", async () => {
+    const harness = createPendingPeerBridge({
+      onEvent: (event) => {
+        if (event.direction === "client" && event.type === "response.create") {
+          void harness.bridge.close();
+        }
+      },
+    });
+    try {
+      await harness.waitForPeerStart();
+      harness.resolvePeer();
+      await harness.connection;
+      const socket = harness.getSocket();
+      const sentBeforeAdmission = [...socket.sent];
+
+      harness.bridge.sendUserMessage("Do not send speech after closure.");
+
+      expect(
+        socket.sent.slice(sentBeforeAdmission.length).map((payload) => JSON.parse(payload)),
+      ).toEqual([{ type: "session.close" }]);
+      expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
+      expect(harness.bridge.isConnected()).toBe(false);
+    } finally {
+      await harness.bridge.close();
+    }
+  });
 
   it("preserves the call on media errors without logging raw error details", async () => {
     const harness = createPendingPeerBridge();

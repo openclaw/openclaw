@@ -9,6 +9,7 @@ import type {
   RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBridge,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -144,6 +145,22 @@ export class TalkRealtimeRelayOutputOwnership {
     }
     this.fail("Realtime provider output has no live response owner.");
     return false;
+  }
+
+  resolveAudio(
+    audio: Buffer,
+    bridge?: Pick<RealtimeVoiceBridge, "outputAudioMode">,
+  ): string | undefined {
+    // Continuous transports send idle PCM without starting a provider response.
+    if (
+      bridge?.outputAudioMode === "continuous" &&
+      this.phase === "unowned" &&
+      !this.activeTurnId() &&
+      audio.every((byte) => byte === 0)
+    ) {
+      return undefined;
+    }
+    return this.resolve(true);
   }
 
   resolve(claim: boolean): string | undefined {
