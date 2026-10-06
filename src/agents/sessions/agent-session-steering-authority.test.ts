@@ -245,7 +245,7 @@ it.each([
       operation.setPhase("running");
       setActiveEmbeddedRun(sessionId, handle, sessionKey);
       let changed = false;
-      const project = operation.projectToolAuthorityFingerprintAsync.bind(operation);
+      const project = operation.projectToolAuthorityFingerprintAsync;
       const delayed = vi
         .spyOn(operation, "projectToolAuthorityFingerprintAsync")
         .mockImplementation(async (caller) => {

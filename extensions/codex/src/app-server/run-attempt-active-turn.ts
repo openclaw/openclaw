@@ -1,7 +1,5 @@
 import path from "node:path";
 import {
-  cancelPendingAgentQuestionForSession,
-  claimPendingAgentQuestionAnswer,
   detectAndLoadAgentHarnessPromptImages,
   embeddedAgentLog,
   formatErrorMessage,
@@ -16,7 +14,7 @@ import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isTerminalTurnStatus } from "./attempt-notifications.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
-  createCodexQuestionAuthority,
+  createCodexQuestionInputHandlers,
   createCodexSteeringQueue,
   type CodexQuestionInputAuthority as InputAuthority,
   type CodexSteeringQueueOptions,
@@ -447,48 +445,15 @@ export function activateCodexAttemptTurn(
     },
   });
   steeringQueueRef.current = activeSteeringQueue;
-  const questionAuthority = createCodexQuestionAuthority(assertSteeringActive);
+  const { claimPendingUserInputAnswer, cancelPendingUserInput } = createCodexQuestionInputHandlers(
+    params.sessionKey ?? params.sessionId,
+    assertSteeringActive,
+  );
   const injectionGuard = (assertCurrent?: () => void) => () => {
     assertCurrent?.();
     assertSteeringActive();
     return true;
   };
-  const claimPendingUserInputAnswer = async (
-    text: string,
-    optionsLocal?: CodexSteeringQueueOptions,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-    toolAuthorityPreparation?: CodexSteeringPreparation,
-  ) => {
-    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
-      return false;
-    }
-    assertSteeringActive();
-    return await claimPendingAgentQuestionAnswer({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      text,
-      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
-      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
-      // Older supported hosts use the ordinary-question callback. Current hosts
-      // prefer the recorder owner so staged secret inputs commit before consumption.
-      persist: optionsLocal.userTurnTranscriptRecorder
-        ? async () => {
-            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
-          }
-        : undefined,
-    });
-  };
-  const cancelPendingUserInput = (
-    resolvedBy: string,
-    assertCurrent?: () => void,
-    authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
-    toolAuthorityPreparation?: CodexSteeringPreparation,
-  ) =>
-    cancelPendingAgentQuestionForSession({
-      sessionKey: params.sessionKey ?? params.sessionId,
-      resolvedBy,
-      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
-    });
   // V1 retains backend-only authority; V2 requires a host assertion.
   const queueMessage = async (
     text: string,
@@ -498,14 +463,15 @@ export function activateCodexAttemptTurn(
     preparation?: CodexSteeringPreparation,
   ) => {
     const canClaim = injectionGuard(assertCurrent);
-    const claimed = await claimPendingUserInputAnswer(
-      text,
-      optionsLocal,
-      assertCurrent,
-      authorityKind,
-      preparation,
-    );
-    if (claimed) {
+    if (
+      await claimPendingUserInputAnswer(
+        text,
+        optionsLocal,
+        assertCurrent,
+        authorityKind,
+        preparation,
+      )
+    ) {
       // A question claim is already consumption. Closing the run during its
       // response must not turn that answer into a rejected, replayable steer.
       optionsLocal?.onQueueAccepted?.(true);
