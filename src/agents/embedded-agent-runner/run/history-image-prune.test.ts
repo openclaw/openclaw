@@ -94,6 +94,20 @@ function oldEnoughTail(): AgentMessage[] {
   ];
 }
 
+function toolRound(id: number): AgentMessage[] {
+  return [
+    castAgentMessage({
+      role: "assistant",
+      content: [{ type: "toolCall", id: `call_${id}`, name: "read", arguments: {} }],
+    } as AgentMessage),
+    castAgentMessage(textToolResult(`call_${id}`, "read", "bytes")),
+  ];
+}
+
+function toolRounds(count: number, firstId = 0): AgentMessage[] {
+  return Array.from({ length: count }, (_, index) => toolRound(firstId + index)).flat();
+}
+
 describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
   const assistantTurn = () => castAgentMessage({ role: "assistant", content: "ack" });
@@ -556,6 +570,100 @@ describe("pruneProcessedHistoryImages", () => {
     expect(JSON.stringify(messages.slice(0, retainedLength))).toBe(retainedBytes);
   });
 
+  it("keeps images while the active tool loop is below the eviction threshold", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, { ...image }] }),
+      ...toolRounds(5),
+    ];
+
+    expectImageMessagePreserved(messages, "expected user array content");
+  });
+
+  it("evicts the turn-opening image once the active tool loop crosses the threshold", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, { ...image }] }),
+      ...toolRounds(6),
+    ];
+
+    const pruned = expectPrunedMessages(messages);
+    expectContentBlock(expectArrayMessageContent(pruned[0], "expected pruned content")[1], {
+      type: "text",
+      text: PRUNED_HISTORY_IMAGE_MARKER,
+    });
+    // Only the opening image is rewritten; every later message stays
+    // byte-identical so the warm prefix after the cutoff survives.
+    expect(JSON.stringify(pruned.slice(1))).toBe(JSON.stringify(messages.slice(1)));
+  });
+
+  it("prunes older toolResult images at coarse steps while keeping recent rounds", () => {
+    const imageToolRound = (id: number): AgentMessage[] => [
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: `call_${id}`, name: "screenshot", arguments: {} }],
+      } as AgentMessage),
+      castAgentMessage({
+        role: "toolResult",
+        toolName: "screenshot",
+        content: [{ type: "text", text: "frame" }, { ...image }],
+      }),
+    ];
+    // With the opening user message at index 0, round j's toolResult sits at
+    // index 2 + 2j.
+    const toolResultIndex = (round: number) => 2 + 2 * round;
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "start" }),
+      ...Array.from({ length: 6 }, (_, id) => imageToolRound(id)).flat(),
+    ];
+
+    const firstView = expectPrunedMessages(messages);
+    expectContentBlock(
+      expectArrayMessageContent(firstView[toolResultIndex(1)], "expected evicted round")[1],
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    );
+    expectContentBlock(
+      expectArrayMessageContent(firstView[toolResultIndex(2)], "expected kept round")[1],
+      { type: "image", data: "abc" },
+    );
+
+    // Rounds 7 through 25 keep the pruned view byte-identical to the first
+    // crossing; the cutoff only advances at the next coarse step.
+    const firstLength = firstView.length;
+    const firstBytes = JSON.stringify(firstView);
+    for (let id = 6; id < 25; id++) {
+      messages.push(...imageToolRound(id));
+      expect(JSON.stringify(expectPrunedMessages(messages).slice(0, firstLength))).toBe(firstBytes);
+    }
+
+    messages.push(...imageToolRound(25));
+    const stepped = expectPrunedMessages(messages);
+    expect(JSON.stringify(stepped.slice(0, firstLength))).not.toBe(firstBytes);
+    expectContentBlock(
+      expectArrayMessageContent(stepped[toolResultIndex(21)], "expected evicted round")[1],
+      { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER },
+    );
+    expectContentBlock(
+      expectArrayMessageContent(stepped[toolResultIndex(22)], "expected kept round")[1],
+      { type: "image", data: "abc" },
+    );
+  });
+
+  it("does not resurrect evicted images when a later user message closes the turn", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: [{ type: "text", text: "look" }, { ...image }] }),
+      ...toolRounds(6),
+    ];
+    const duringLoop = expectPrunedMessages(messages);
+    expectContentBlock(expectArrayMessageContent(duringLoop[0], "expected evicted image")[1], {
+      type: "text",
+      text: PRUNED_HISTORY_IMAGE_MARKER,
+    });
+
+    messages.push(assistantTurn(), userText());
+
+    const afterClose = expectPrunedMessages(messages);
+    expect(JSON.stringify(afterClose.slice(0, duringLoop.length))).toBe(JSON.stringify(duringLoop));
+  });
+
   it("prunes image blocks from toolResult messages older than 3 completed turns", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
@@ -822,6 +930,52 @@ describe("installHistoryImagePruneContextTransform", () => {
       expect(meta?.media).toBeUndefined();
       expect(meta?.mediaImageBlockFactIndexes).toBeUndefined();
       expect(meta?.mediaImageLayout).toBeUndefined();
+    } finally {
+      restore();
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops rehydrating a long turn's opening facts once the loop crosses the threshold", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-intra-turn-prune-"));
+    const imagePath = path.join(workspaceDir, "old.png");
+    await fs.writeFile(imagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+    const baseBridge = createHostSandboxFsBridge(workspaceDir);
+    let hydrationReadCount = 0;
+    const bridge = {
+      ...baseBridge,
+      readFile: async (params: Parameters<typeof baseBridge.readFile>[0]) => {
+        hydrationReadCount++;
+        return await baseBridge.readFile(params);
+      },
+    };
+    const message = castAgentMessage({
+      role: "user",
+      content: "[media attached: ./old.png (image/png)]",
+      __openclaw: {
+        media: [{ path: "./old.png", contentType: "image/png" }],
+        mediaImageBlockFactIndexes: [0],
+        mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
+      },
+    });
+    const agent: {
+      transformContext?: (messages: AgentMessage[]) => Promise<AgentMessage[]> | AgentMessage[];
+    } = {};
+    const restore = installHistoryImagePruneContextTransform(agent, {
+      workspaceDir,
+      model: { input: ["text", "image"] },
+      workspaceOnly: true,
+      sandbox: { root: workspaceDir, bridge },
+    });
+
+    try {
+      const replay = await agent.transformContext?.([message, ...toolRounds(6)]);
+      const meta = (replay?.[0] as unknown as Record<string, unknown>)?.["__openclaw"] as
+        | Record<string, unknown>
+        | undefined;
+      expect(hydrationReadCount).toBe(0);
+      expect(meta?.media).toBeUndefined();
+      expect(meta?.mediaImagePruned).toBe(true);
     } finally {
       restore();
       await fs.rm(workspaceDir, { recursive: true, force: true });
