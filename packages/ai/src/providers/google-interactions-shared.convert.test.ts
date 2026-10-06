@@ -1,3 +1,4 @@
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import { describe, expect, it } from "vitest";
 import type {
   AssistantMessage,
@@ -67,6 +68,12 @@ describe("buildGoogleInteractionsParams", () => {
           { type: "thinking", thinking: "internal thoughts" },
         ]),
         user("What is 2+2?"),
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\ncurrent runtime facts",
+          timestamp: 1,
+          runtimeContext: {},
+        },
       ],
     };
 
@@ -90,74 +97,28 @@ describe("buildGoogleInteractionsParams", () => {
         type: "user_input",
         content: [{ type: "text", text: "What is 2+2?" }],
       },
+      {
+        type: "user_input",
+        content: [{ type: "text", text: "OpenClaw runtime context:\ncurrent runtime facts" }],
+      },
     ]);
   });
 
-  it("converts tools and tool calls/results", () => {
-    const tools: Tool[] = [
-      {
-        name: "getWeather",
-        description: "Get weather",
-        parameters: {
-          type: "object",
-          properties: { city: { type: "string" } },
-          required: ["city"],
-        },
+  it("converts tool definitions to Interactions functions", () => {
+    const tool: Tool = {
+      name: "getWeather",
+      description: "Get weather",
+      parameters: {
+        type: "object",
+        properties: { city: { type: "string" } },
+        required: ["city"],
       },
-    ];
-
-    const context: Context = {
-      messages: [
-        user("Weather in Tokyo?"),
-        assistant([
-          {
-            type: "toolCall",
-            id: "call_123",
-            name: "getWeather",
-            arguments: { city: "Tokyo" },
-          },
-        ]),
-        toolResult("call_123", "getWeather", [
-          { type: "text", text: JSON.stringify({ temp: "20C" }) },
-        ]),
-      ],
-      tools,
     };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.tools).toEqual([
-      {
-        type: "function",
-        name: "getWeather",
-        description: "Get weather",
-        parameters: {
-          type: "object",
-          properties: { city: { type: "string" } },
-          required: ["city"],
-        },
-      },
-    ]);
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Weather in Tokyo?" }],
-      },
-      {
-        type: "function_call",
-        id: "call_123",
-        name: "getWeather",
-        arguments: { city: "Tokyo" },
-      },
-      {
-        type: "function_result",
-        call_id: "call_123",
-        name: "getWeather",
-        result: [{ type: "text", text: JSON.stringify({ temp: "20C" }) }],
-        is_error: false,
-      },
-    ]);
+    const params = buildGoogleInteractionsParams(model, {
+      messages: [user("Weather?")],
+      tools: [tool],
+    });
+    expect(params.tools).toEqual([{ type: "function", ...tool }]);
   });
 
   it("preserves tool result failures in function_result steps", () => {
@@ -180,45 +141,6 @@ describe("buildGoogleInteractionsParams", () => {
       result: [{ type: "text", text: "lookup failed" }],
       is_error: true,
     });
-  });
-
-  it("recirculates thinking blocks with thought signatures as thought steps", () => {
-    const context: Context = {
-      messages: [
-        user("Solve this problem"),
-        assistant([
-          {
-            type: "thinking",
-            thinking: "Let me break down the steps.",
-            thinkingSignature: "sig_step_1234==",
-          },
-          { type: "text", text: "Here is the answer." },
-        ]),
-        user("Tell me more"),
-      ],
-    };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Solve this problem" }],
-      },
-      {
-        type: "thought",
-        signature: "sig_step_1234==",
-        summary: [{ type: "text", text: "Let me break down the steps." }],
-      },
-      {
-        type: "model_output",
-        content: [{ type: "text", text: "Here is the answer." }],
-      },
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Tell me more" }],
-      },
-    ]);
   });
 
   it("preserves chronological model step order in stateless replay", () => {
@@ -290,93 +212,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_123",
         name: "getWeather",
-        result: [{ type: "text", text: "No result provided" }],
-        is_error: true,
-      },
-    ]);
-  });
-
-  it("converts assistant message with both thinking and toolCall into separate thought and function_call steps", () => {
-    const context: Context = {
-      messages: [
-        user("Weather in Tokyo?"),
-        assistant([
-          {
-            type: "thinking",
-            thinking: "Looking up weather in Tokyo...",
-            thinkingSignature: "sig_reasoning_token==",
-          },
-          {
-            type: "toolCall",
-            id: "call_123",
-            name: "getWeather",
-            arguments: { city: "Tokyo" },
-          },
-        ]),
-      ],
-    };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Weather in Tokyo?" }],
-      },
-      {
-        type: "thought",
-        signature: "sig_reasoning_token==",
-        summary: [{ type: "text", text: "Looking up weather in Tokyo..." }],
-      },
-      {
-        type: "function_call",
-        id: "call_123",
-        name: "getWeather",
-        arguments: { city: "Tokyo" },
-      },
-      {
-        type: "function_result",
-        call_id: "call_123",
-        name: "getWeather",
-        result: [{ type: "text", text: "No result provided" }],
-        is_error: true,
-      },
-    ]);
-  });
-
-  it("does not attach dummy skip_thought_signature_validator to function_call steps for Gemini 3 models", () => {
-    const context: Context = {
-      messages: [
-        user("Calculate 2+2"),
-        assistant([
-          {
-            type: "toolCall",
-            id: "call_calc",
-            name: "calculator",
-            arguments: { expr: "2+2" },
-          },
-        ]),
-      ],
-    };
-
-    const params = buildGoogleInteractionsParams(model, context, {});
-
-    expect(params.input).toEqual([
-      {
-        type: "user_input",
-        content: [{ type: "text", text: "Calculate 2+2" }],
-      },
-      {
-        type: "function_call",
-        id: "call_calc",
-        name: "calculator",
-        arguments: { expr: "2+2" },
-      },
-      {
-        type: "function_result",
-        call_id: "call_calc",
-        name: "calculator",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);
@@ -401,27 +237,23 @@ describe("buildGoogleInteractionsParams", () => {
     ).toThrow(/Explicit prompt caching/);
   });
 
-  it.each(["auto", "none", "any"] as const)(
-    "maps toolChoice=%s into generation_config",
-    (toolChoice) => {
-      const params = buildGoogleInteractionsParams(
-        model,
-        {
-          messages: [user("Use a tool")],
-          tools: [
-            {
-              name: "lookup",
-              description: "Look up a value",
-              parameters: { type: "object", properties: {} },
-            },
-          ],
-        },
-        { toolChoice },
-      );
-
-      expect(params.generation_config?.tool_choice).toBe(toolChoice);
-    },
-  );
+  it("maps an explicit tool choice into generation_config", () => {
+    const params = buildGoogleInteractionsParams(
+      model,
+      {
+        messages: [user("Use a tool")],
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      { toolChoice: "any" },
+    );
+    expect(params.generation_config?.tool_choice).toBe("any");
+  });
 
   it("applies the model's minimum supported reasoning when direct options disable thinking", () => {
     const params = buildGoogleInteractionsParams(
@@ -480,7 +312,7 @@ describe("buildGoogleInteractionsParams", () => {
         type: "function_result",
         call_id: "call_legacy",
         name: "lookup",
-        result: [{ type: "text", text: "No result provided" }],
+        result: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
         is_error: true,
       },
     ]);

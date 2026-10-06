@@ -838,11 +838,6 @@ describe("renderAgentFiles", () => {
       expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
         "Unsaved instructions",
       );
-      const preview = container.querySelector(".md-preview-dialog__meta");
-      expect(preview?.querySelector("strong")?.textContent).toBe(
-        showMissing ? "Will Create on Save" : "Live Draft Preview",
-      );
-      expect(preview?.textContent).toContain(showMissing ? "Not Created Yet" : "Updated Unknown");
       const resolutionButtons =
         container.querySelectorAll<HTMLButtonElement>(".callout.danger button");
       expect(Array.from(resolutionButtons, (button) => button.textContent?.trim())).toEqual(
@@ -855,82 +850,4 @@ describe("renderAgentFiles", () => {
       }
     },
   );
-
-  it("renders the upgraded markdown preview structure with file metadata", () => {
-    const container = document.createElement("div");
-
-    renderFiles(
-      {
-        agentFileContents: {
-          "USER.md":
-            "# User Profile\n\nHello world\n\n```ts\nconst answer = 42;\n```\n\n<script>alert('unsafe')</script>\n\n![Remote](https://e.co/i)",
-        },
-        agentFileDrafts: {},
-      },
-      container,
-    );
-
-    expect(container.querySelector(".md-preview-dialog__path")?.textContent?.trim()).toBe(
-      "USER.md",
-    );
-    expect(container.querySelector(".md-preview-dialog__chip strong")?.textContent).toBe(
-      "Saved Preview",
-    );
-    expect(container.querySelector(".md-preview-dialog__eyebrow span")?.textContent?.trim()).toBe(
-      "Markdown Preview",
-    );
-    const reader = container.querySelector(".md-preview-dialog__reader.sidebar-markdown");
-    expect(reader?.querySelector("img")?.getAttribute("src")).toBe("https://e.co/i");
-    expect(reader?.querySelector("pre code")?.textContent).toBe("const answer = 42;\n");
-    expect(reader?.querySelector(".code-block-copy, script")).toBeNull();
-  });
-
-  it("renders preview header controls as icon-only buttons with accessible labels", () => {
-    const container = document.createElement("div");
-
-    renderFiles({}, container);
-
-    const actions = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".md-preview-dialog__actions button"),
-    );
-
-    expect(actions).toHaveLength(3);
-    expect(actions.map((button) => button.getAttribute("aria-label"))).toEqual([
-      "Expand preview",
-      "Edit file",
-      "Close preview",
-    ]);
-    expect(actions.map((button) => button.textContent?.trim())).toEqual(["", "", ""]);
-  });
-
-  it("resets the expanded preview button state when the dialog closes", () => {
-    const container = document.createElement("div");
-
-    renderFiles({}, container);
-
-    const dialog = container.querySelector("openclaw-modal-dialog");
-    const panel = container.querySelector<HTMLElement>(".md-preview-dialog__panel");
-    const expandButton = container.querySelector<HTMLButtonElement>(".md-preview-expand-btn");
-
-    expect(dialog).not.toBeNull();
-    expect(panel).toBeInstanceOf(HTMLElement);
-    expect(expandButton).toBeInstanceOf(HTMLButtonElement);
-    const previewPanel = panel!;
-    const previewExpandButton = expandButton!;
-    previewExpandButton.click();
-
-    expect(previewPanel.classList.contains("fullscreen")).toBe(true);
-    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(true);
-    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("true");
-    expect(previewExpandButton.getAttribute("aria-label")).toBe("Collapse preview");
-    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Collapse preview");
-
-    container.querySelector<HTMLButtonElement>('[aria-label="Close preview"]')?.click();
-
-    expect(previewPanel.classList.contains("fullscreen")).toBe(false);
-    expect(previewExpandButton.classList.contains("is-fullscreen")).toBe(false);
-    expect(previewExpandButton.getAttribute("aria-pressed")).toBe("false");
-    expect(previewExpandButton.getAttribute("aria-label")).toBe("Expand preview");
-    expect(previewExpandButton.closest("openclaw-tooltip")?.content).toBe("Expand preview");
-  });
 });

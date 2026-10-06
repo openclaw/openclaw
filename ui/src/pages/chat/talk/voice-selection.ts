@@ -189,7 +189,7 @@ export class RealtimeTalkVoiceSelection {
     const change = this.change;
     if (change) {
       this.clearChange(change);
-      this.reportFailure(change, t("tasksPage.status.cancelled"));
+      this.reportFailure(change, t("common.cancelled"));
     }
   }
 }

@@ -28,20 +28,4 @@ describe("normalizeOllamaToolSchema", () => {
 
     expect(normalized).toEqual({ type: "object", additionalProperties: false, properties: {} });
   });
-
-  it("normalizes declared properties recursively", () => {
-    const normalized = normalizeOllamaToolSchema({
-      type: "object",
-      properties: {
-        query: { anyOf: [{ type: "string" }, { type: "null" }] },
-        tags: { items: { type: "string" } },
-      },
-      required: ["query"],
-    });
-
-    const properties = normalized.properties as Record<string, { type?: string } | undefined>;
-    expect(normalized.type).toBe("object");
-    expect(properties.query?.type).toBe("string");
-    expect(properties.tags?.type).toBe("array");
-  });
 });

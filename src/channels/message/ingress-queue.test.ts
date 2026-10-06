@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
 import {
   executeSqliteQuerySync,
@@ -12,30 +12,18 @@ import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-sta
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createTestIngressQueue, useRetainedIngressState } from "./ingress-queue.test-helpers.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
-function createTestIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
-  stateDir: string,
-  options: Omit<
-    Parameters<typeof createChannelIngressQueue>[0],
-    "channelId" | "accountId" | "stateDir"
-  > = {},
-) {
-  return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>({
-    channelId: "test",
-    accountId: "account",
-    stateDir,
-    ...options,
-  });
-}
-
-async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+async function withIsolatedState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-ingress-queue-", applyEnv: false },
     ({ stateDir }) => fn(stateDir),
   );
 }
+
+const withTempState = useRetainedIngressState(afterAll);
 
 function openIngressStateDatabase(stateDir: string) {
   return openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } });
@@ -58,7 +46,7 @@ describe("channel ingress queue", () => {
   it.each(["cold", "warm"] as const)(
     "preserves append and prune order with a %s writer",
     async (writer) => {
-      await withTempState(async (stateDir) => {
+      await withIsolatedState(async (stateDir) => {
         const queue = createTestIngressQueue<{ text: string }>(stateDir);
         if (writer === "warm") {
           await queue.enqueue("warmup", { text: "already processed" });
@@ -77,7 +65,7 @@ describe("channel ingress queue", () => {
   );
 
   it("purges all states only for the selected channel and account", async () => {
-    await withTempState(async (stateDir) => {
+    await withIsolatedState(async (stateDir) => {
       const queues = [
         createChannelIngressQueue({ channelId: "telegram", accountId: "a", stateDir }),
         createChannelIngressQueue({ channelId: "telegram", accountId: "b", stateDir }),
@@ -110,7 +98,7 @@ describe("channel ingress queue", () => {
     });
   });
   it("rolls back a purge when its account is cancelled before commit", async () => {
-    await withTempState(async (stateDir) => {
+    await withIsolatedState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir);
       await queue.enqueue("pending", { text: "pending" });
       await queue.enqueue("claimed", { text: "claimed" });
@@ -145,7 +133,7 @@ describe("channel ingress queue", () => {
   });
 
   it("deduplicates pending and completed ingress events", async () => {
-    await withTempState(async (stateDir) => {
+    await withIsolatedState(async (stateDir) => {
       const queue = createTestIngressQueue<
         { text: string },
         { source: string },

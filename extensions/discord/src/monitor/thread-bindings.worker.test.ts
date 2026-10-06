@@ -32,7 +32,7 @@ vi.mock("../runtime.js", () => {
 it("keeps binding restoration, mutation, and shutdown SQL off the process main thread", async () => {
   expect(isMainThread).toBe(true);
   await resetThreadBindingsForTests();
-  await withOpenClawTestState({ label: "discord-binding-worker-sql" }, async (state) => {
+  await withOpenClawTestState({ label: "discord-binding-worker-sql" }, async () => {
     const saved: ThreadBindingRecord = {
       accountId: "work",
       channelId: "parent-1",
@@ -49,7 +49,7 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       maxEntries: 10_000,
     });
     native.register("work:thread-1", saved);
-    const calibration = observeHostDataSql(state.env);
+    const calibration = observeHostDataSql();
     try {
       expect(native.lookup("work:thread-1")).toEqual(saved);
       expect(calibration.queries.length).toBeGreaterThan(0);
@@ -57,7 +57,7 @@ it("keeps binding restoration, mutation, and shutdown SQL off the process main t
       calibration.restore();
     }
     await closeOpenClawStateDatabaseAsync();
-    const observation = observeHostDataSql(state.env);
+    const observation = observeHostDataSql();
     const raw = [
       vi.spyOn(DatabaseSync.prototype, "prepare"),
       vi.spyOn(DatabaseSync.prototype, "exec"),

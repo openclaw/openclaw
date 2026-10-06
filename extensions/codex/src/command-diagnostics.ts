@@ -72,29 +72,35 @@ export async function handleCodexDiagnosticsFeedback(
   if (parsed.action === "cancel") {
     return { text: cancelCodexDiagnosticsFeedback(ctx, parsed.token) };
   }
-  if (ctx.diagnosticsUploadApproved === true) {
-    return {
-      text: await sendCodexDiagnosticsFeedbackForContext(deps, ctx, pluginConfig, parsed.note),
-    };
-  }
-  if (ctx.diagnosticsPreviewOnly === true) {
-    return {
-      text: await previewCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note),
-    };
-  }
-  return await requestCodexDiagnosticsFeedbackApproval(deps, ctx, parsed.note, commandPrefix);
-}
-
-async function requestCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  note: string,
-  commandPrefix: string,
-): Promise<PluginCommandResult> {
   const targets = await requireCodexDiagnosticsTargets(deps, ctx);
   if (typeof targets === "string") {
     return { text: targets };
   }
+  if (ctx.diagnosticsUploadApproved === true) {
+    return {
+      text: await sendCodexDiagnosticsFeedbackForTargets(
+        deps,
+        ctx,
+        pluginConfig,
+        parsed.note,
+        targets,
+      ),
+    };
+  }
+  if (ctx.diagnosticsPreviewOnly === true) {
+    return {
+      text: previewCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note),
+    };
+  }
+  return requestCodexDiagnosticsFeedbackApproval(targets, ctx, parsed.note, commandPrefix);
+}
+
+function requestCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
+  ctx: PluginCommandContext,
+  note: string,
+  commandPrefix: string,
+): PluginCommandResult {
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now);
   if (cooldownMessage) {
@@ -156,15 +162,11 @@ async function requestCodexDiagnosticsFeedbackApproval(
   };
 }
 
-async function previewCodexDiagnosticsFeedbackApproval(
-  deps: CodexCommandDeps,
+function previewCodexDiagnosticsFeedbackApproval(
+  targets: CodexDiagnosticsTarget[],
   ctx: PluginCommandContext,
   note: string,
-): Promise<string> {
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return targets;
-  }
+): string {
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, Date.now(), {
     includeThreadId: false,
   });
@@ -207,7 +209,7 @@ async function confirmCodexDiagnosticsFeedback(
     pluginConfig,
     pending.note ?? "",
     currentTargets,
-    { cooldownScope: pending.scopeKey },
+    pending.scopeKey,
   );
 }
 
@@ -223,33 +225,20 @@ function cancelCodexDiagnosticsFeedback(ctx: PluginCommandContext, token: string
   ].join("\n");
 }
 
-async function sendCodexDiagnosticsFeedbackForContext(
-  deps: CodexCommandDeps,
-  ctx: PluginCommandContext,
-  pluginConfig: unknown,
-  note: string,
-): Promise<string> {
-  const targets = await requireCodexDiagnosticsTargets(deps, ctx);
-  if (typeof targets === "string") {
-    return targets;
-  }
-  return await sendCodexDiagnosticsFeedbackForTargets(deps, ctx, pluginConfig, note, targets);
-}
-
 async function sendCodexDiagnosticsFeedbackForTargets(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
   pluginConfig: unknown,
   note: string,
   targets: CodexDiagnosticsTarget[],
-  options: { cooldownScope?: string } = {},
+  cooldownScope?: string,
 ): Promise<string> {
   if (targets.length === 0) {
     return NO_DIAGNOSTICS_THREAD;
   }
   const now = Date.now();
   const cooldownMessage = readCodexDiagnosticsTargetsCooldownMessage(targets, ctx, now, {
-    cooldownScope: options.cooldownScope,
+    cooldownScope,
   });
   if (cooldownMessage) {
     return cooldownMessage;
@@ -314,7 +303,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       ? normalizeOptionalString(response.value.threadId)
       : undefined;
     sent.push({ ...target, threadId: responseThreadId ?? target.threadId });
-    recordCodexDiagnosticsUpload(target.threadId, ctx, now, options.cooldownScope);
+    recordCodexDiagnosticsUpload(target.threadId, ctx, now, cooldownScope);
   }
   return formatCodexDiagnosticsUploadResult(sent, failed);
 }

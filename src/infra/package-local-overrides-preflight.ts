@@ -23,7 +23,6 @@ export async function preflightLocalOverrides(params: {
   );
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   const conflicts: LocalPackageOverridesResult["conflicts"] = [];
@@ -39,10 +38,6 @@ export async function preflightLocalOverrides(params: {
       if (nextEntry || targetProbe.status !== "missing") {
         conflicts.push({ path: change.path, reason: "target-exists" });
       }
-      continue;
-    }
-    if (!change.baseline) {
-      conflicts.push({ path: change.path, reason: "target-missing" });
       continue;
     }
     if (targetProbe.status === "blocked") {

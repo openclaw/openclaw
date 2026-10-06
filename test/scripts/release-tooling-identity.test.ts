@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -57,7 +58,6 @@ describe("release tooling identity", () => {
   it.each([
     ["1", "main", "refs/heads/main"],
     ["2", "release/2026.8.1", "refs/heads/release/2026.8.1"],
-    ["2", "tideclaw/alpha/2026-08-21-1200Z", "refs/heads/tideclaw/alpha/2026-08-21-1200Z"],
   ])("derives contract %s identity for safe direct workflow ref %s", (contract, ref, fullRef) => {
     expect(
       resolveReleaseToolingIdentity({
@@ -67,6 +67,21 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toEqual({ fullRef, ref, sha: SHA });
+  });
+
+  it("rejects retired Tideclaw tooling even when prevalidated", () => {
+    const workflowRef = "tideclaw/alpha/2026-08-21-1200Z";
+    const identity = {
+      workflowRef,
+      workflowFullRef: `refs/heads/${workflowRef}`,
+      workflowSha: SHA,
+    };
+    expect(() => resolveReleaseToolingIdentity({ ...identity, workflowContract: "2" })).toThrow(
+      "Alpha releases are retired;",
+    );
+    expect(() =>
+      validateReleaseToolingIdentity({ ...identity, allowPrevalidatedRef: true }),
+    ).toThrow("Alpha releases are retired;");
   });
 
   it("rejects unsupported contract 3 even with explicit identity", () => {
@@ -147,6 +162,40 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toThrow("release-ci workflow ref does not match the workflow SHA");
+  });
+
+  it("loads candidate qualification admission without deadlocking the CLI module cycle", () => {
+    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts/release-tooling-identity.mjs"),
+        "resolve",
+        "--qualification-admission-json",
+        "{}",
+        "--qualification-inputs-json",
+        "{}",
+        "--candidate-sha",
+        SHA,
+        "--repository",
+        "openclaw/openclaw",
+        "--workflow-contract",
+        "2",
+        "--workflow-ref",
+        releaseCiRef,
+        "--workflow-full-ref",
+        `refs/heads/${releaseCiRef}`,
+        "--workflow-sha",
+        SHA,
+        "--requested-identity-json",
+        JSON.stringify({ ref: releaseCiRef, fullRef: `refs/heads/${releaseCiRef}`, sha: SHA }),
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid admission descriptor fields");
+    expect(result.stderr).not.toContain("unsettled top-level await");
   });
 
   it("rejects a candidate SHA substituted for the release-ci Tooling SHA", () => {

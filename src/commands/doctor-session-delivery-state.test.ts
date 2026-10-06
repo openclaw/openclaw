@@ -3,10 +3,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
-import {
-  listSessionEntriesCore,
-  rewriteDoctorSessionEntries,
-} from "../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../config/sessions/session-accessor.js";
+import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.sqlite-exact-read.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -21,6 +19,7 @@ import {
   repairCanonicalSessionResolvedSkills,
 } from "./doctor-session-delivery-state.js";
 import { repairReservedIncognitoSessionKeys } from "./doctor-session-incognito-key-repair.js";
+import { rewriteDoctorSessionEntries } from "./doctor/shared/session-entry-rewrite.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -590,36 +589,45 @@ describe("doctor canonical session resolved skills", () => {
       version: 7,
     };
     for (const agentId of ["main", "work"]) {
+      const sessionKey = `agent:${agentId}:runtime-skills`;
+      const skillsSnapshot = {
+        ...compactSnapshot,
+        resolvedSkills: [{ name: "demo", description: "x".repeat(20_000) }],
+      };
       insertSessionRow(
         env,
-        `agent:${agentId}:runtime-skills`,
+        sessionKey,
         {
           sessionId: `${agentId}-runtime-skills`,
           updatedAt: 42,
-          skillsSnapshot: {
-            ...compactSnapshot,
-            resolvedSkills: [{ name: "demo", description: "x".repeat(20_000) }],
-          },
+          ...(agentId === "main" ? { skillsSnapshot } : {}),
         },
         agentId,
       );
+      if (agentId === "work") {
+        openOpenClawAgentDatabase({ agentId, env })
+          .db.prepare(
+            "INSERT INTO session_entry_snapshots (session_key, field, value_json) VALUES (?, 'skillsSnapshot', ?)",
+          )
+          .run(sessionKey, JSON.stringify(skillsSnapshot));
+      }
       expect(
         listSessionEntriesCore({ agentId, clone: false, env })[0]?.entry.skillsSnapshot
           ?.resolvedSkills,
       ).toBeDefined();
+      expect(
+        rewriteDoctorSessionEntries({
+          scope: {
+            agentId,
+            env,
+            storePath: resolveSessionStorePathCore(undefined, { agentId, env }),
+          },
+          sessionKeys: [sessionKey],
+          transform: (entry) => entry,
+        }),
+      ).toBe(0);
     }
 
-    expect(
-      rewriteDoctorSessionEntries({
-        scope: {
-          agentId: "main",
-          env,
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env }),
-        },
-        sessionKeys: ["agent:main:runtime-skills"],
-        transform: (entry) => entry,
-      }),
-    ).toBe(0);
     expect(repairCanonicalSessionResolvedSkills({ apply: false, cfg: {}, env })).toEqual({
       found: 2,
       repaired: 0,
@@ -636,8 +644,11 @@ describe("doctor canonical session resolved skills", () => {
     });
     for (const agentId of ["main", "work"]) {
       const sessionKey = `agent:${agentId}:runtime-skills`;
-      expect(JSON.parse(readEntryJson(env, sessionKey, agentId)).skillsSnapshot).toEqual(
-        compactSnapshot,
+      expect(
+        loadExactSessionEntryReadOnly({ agentId, env, sessionKey })?.entry.skillsSnapshot,
+      ).toEqual(compactSnapshot);
+      expect(JSON.parse(readEntryJson(env, sessionKey, agentId))).not.toHaveProperty(
+        "skillsSnapshot",
       );
       expect(
         listSessionEntriesCore({ agentId, clone: false, env })[0]?.entry.skillsSnapshot,

@@ -171,9 +171,10 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
-  it("runs queued tasks in their enqueue-time async context", async () => {
+  it("runs queued tasks and their lifecycle callbacks in their enqueue-time async context", async () => {
     const context = new AsyncLocalStorage<string>();
     const blocker = createDeferred();
+    const callbacks: Array<[string, string | undefined]> = [];
     const first = context.run("first", () =>
       enqueueCommandInLane(CommandLane.Main, async () => {
         await blocker.promise;
@@ -181,13 +182,31 @@ describe("command queue", () => {
       }),
     );
     const second = context.run("second", () =>
-      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
+        warnAfterMs: 0,
+        onWait: () => callbacks.push(["wait", context.getStore()]),
+        taskTimeoutMs: 60_000,
+        taskTimeoutProgressAtMs: () => {
+          callbacks.push(["progress", context.getStore()]);
+          return Date.now();
+        },
+        taskTimeoutSubscribe: () => {
+          callbacks.push(["subscribe", context.getStore()]);
+          return () => callbacks.push(["unsubscribe", context.getStore()]);
+        },
+      }),
     );
 
     blocker.resolve();
 
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
+    expect(callbacks).toEqual([
+      ["wait", "second"],
+      ["progress", "second"],
+      ["subscribe", "second"],
+      ["unsubscribe", "second"],
+    ]);
   });
 
   it("runs foreground work before already queued background work", async () => {
@@ -948,11 +967,39 @@ describe("command queue", () => {
     await expect(second).resolves.toBe("second");
   });
 
-  it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
-    markGatewayDraining();
-    await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
-    ).rejects.toBeInstanceOf(GatewayDrainingError);
+  it.each([
+    { reason: "restart", message: "Gateway is restarting. Please try again shortly." },
+    {
+      reason: "restart (SIGUSR2: update.run)",
+      message: "Gateway is restarting. Please try again shortly.",
+    },
+    {
+      reason: "restart (SIGTERM: gateway.restart)",
+      message: "Gateway is restarting. Please try again shortly.",
+    },
+    {
+      reason: "stop (SIGTERM)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+    {
+      reason: "stop (SIGINT)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+    {
+      reason: "stop (hosted Gateway stop)",
+      message: "Gateway is shutting down. Please try again once it is back online.",
+    },
+  ] satisfies {
+    reason: Parameters<CommandQueueModule["markGatewayDraining"]>[0];
+    message: string;
+  }[])("explains why new enqueues are refused for $reason", async ({ reason, message }) => {
+    markGatewayDraining(reason);
+    const task = vi.fn(async () => "blocked");
+    await expect(enqueueCommandInLane(CommandLane.Main, task)).rejects.toMatchObject({
+      name: "GatewayDrainingError",
+      message,
+    });
+    expect(task).not.toHaveBeenCalled();
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {
@@ -966,9 +1013,9 @@ describe("command queue", () => {
     const { task, release } = enqueueBlockedMainTask(async () => "active-finished");
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension?.commit()).toBe(true);
-    await expect(
-      enqueueCommandInLane(CommandLane.Main, async () => "blocked"),
-    ).rejects.toBeInstanceOf(GatewayDrainingError);
+    await expect(enqueueCommandInLane(CommandLane.Main, async () => "blocked")).rejects.toThrow(
+      "Gateway is temporarily paused. Please try again shortly.",
+    );
 
     release();
     await expect(task).resolves.toBe("active-finished");

@@ -38,10 +38,7 @@ import {
   buildSyntheticContext,
   buildSyntheticTextMessage,
 } from "./bot-handlers.message-context.js";
-import type {
-  RegisterTelegramHandlerParams,
-  TelegramCallbackRouter,
-} from "./bot-handlers.types.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -59,6 +56,7 @@ import {
 } from "./callback-query-answer-state.js";
 import { buildCommandsPaginationKeyboard } from "./command-ui.js";
 import { escapeTelegramHtml } from "./format-html.js";
+import { markdownToTelegramHtml } from "./format.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
@@ -97,7 +95,7 @@ export function createTelegramCallbackRouter({
   params: RegisterTelegramHandlerParams;
   message: TelegramCallbackMessageRuntime;
   authorization: TelegramHandlerAuthorization;
-}): TelegramCallbackRouter {
+}) {
   const { processMessageWithReplyChain } = messageRuntime;
   const {
     resolveTelegramEventAuthorizationContext,
@@ -111,36 +109,24 @@ export function createTelegramCallbackRouter({
     if (!callback) {
       return;
     }
-    let callbackAnswered = false;
     const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
         fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
-      callbackAnswered = true;
     };
-    if (shouldSkipUpdate(ctx)) {
-      const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
-      if (earlyAnswerPromise) {
-        await earlyAnswerPromise.catch(async () => await answerCallbackQuery());
-      } else {
-        await answerCallbackQuery();
-      }
-      return;
-    }
+    const skipUpdate = shouldSkipUpdate(ctx);
     const data = (callback.data ?? "").trim();
     const typedQuestionCallback = parseTelegramQuestionCallbackData(data);
     const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
     if (earlyAnswerPromise) {
-      try {
-        await earlyAnswerPromise;
-        callbackAnswered = true;
-      } catch {
-        await answerCallbackQuery();
-      }
+      await earlyAnswerPromise.catch(answerCallbackQuery);
     } else {
       await answerCallbackQuery();
+    }
+    if (skipUpdate) {
+      return;
     }
 
     try {
@@ -268,7 +254,6 @@ export function createTelegramCallbackRouter({
         chatTitle: callbackMessage.chat.title,
         isGroup,
         senderId,
-        senderUsername,
         mode: authorizationMode,
         context: eventAuthContext,
       });
@@ -291,7 +276,6 @@ export function createTelegramCallbackRouter({
           chatId,
           isGroup,
           senderId,
-          senderUsername,
           context: eventAuthContext,
         });
       if (typedApprovalCallback) {
@@ -412,22 +396,10 @@ export function createTelegramCallbackRouter({
       if (isTelegramSpooledReplayUpdate(ctx.update)) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
       }
-    } finally {
-      if (typedQuestionCallback && !callbackAnswered) {
-        await answerCallbackQuery();
-      }
     }
   };
 
-  return {
-    route: async (ctx) => {
-      if (!ctx.callbackQuery) {
-        return { kind: "ignored" };
-      }
-      await handleCallback(ctx);
-      return { kind: "handled" };
-    },
-  };
+  return { route: handleCallback };
 }
 
 async function handleTelegramModelCallback(params: {
@@ -505,7 +477,10 @@ async function handleTelegramModelCallback(params: {
           )
         : undefined;
     try {
-      await editCallbackMessage(result.text, keyboard ? { reply_markup: keyboard } : undefined);
+      await editCallbackMessage(markdownToTelegramHtml(result.text), {
+        parse_mode: "HTML",
+        ...(keyboard ? { reply_markup: keyboard } : {}),
+      });
     } catch (editErr) {
       if (!String(editErr).includes("message is not modified")) {
         throw new TelegramRetryableCallbackError(editErr);

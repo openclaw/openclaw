@@ -28,7 +28,7 @@ export type RealtimeVoiceAudioSink = {
 /**
  * Controls how provider playback marks are bridged to transports that may or may not ack marks.
  */
-export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
+type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
 
 /**
  * Stable session facade handed to gateway code and provider tool callbacks.

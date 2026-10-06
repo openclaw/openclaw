@@ -22,6 +22,8 @@ vi.mock("../../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: generate,
 }));
 
+const settledTurn = () => ({ released: Promise.resolve(false), settled: Promise.resolve() });
+
 it.each([
   { titleSource: undefined, expectedSource: "Original release plan" },
   { titleSource: "Accepted worktree intent", expectedSource: "Accepted worktree intent" },
@@ -60,13 +62,16 @@ it.each([
       const reads = observeSqliteReadSql(StatementSync.prototype);
       let released: Promise<void> | undefined;
       try {
-        scheduleChatDashboardSessionTitle({
-          ...scope,
-          admittedSessionId: scope.sessionId,
-          cfg,
-          context,
-          request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
-        });
+        scheduleChatDashboardSessionTitle(
+          {
+            ...scope,
+            admittedSessionId: scope.sessionId,
+            cfg,
+            context,
+            request: { rawMessage: "A later follow-up", normalizedAttachments: [] },
+          },
+          settledTurn(),
+        );
         await Promise.race([started.promise, failed.promise]);
         released = getSessionWorkAdmissionRelease({
           scope: scope.storePath,
@@ -87,3 +92,44 @@ it.each([
     });
   },
 );
+
+it("falls back after one label attempt when naming starts after its turn settled", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+    };
+    const scope = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:settled-title",
+      sessionId: "settled-title-session",
+      storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+    };
+    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+    const started = createDeferredCore();
+    const label = createDeferredCore<string>();
+    generate.mockReset().mockImplementation(async () => {
+      started.resolve();
+      return await label.promise;
+    });
+    scheduleChatDashboardSessionTitle(
+      {
+        ...scope,
+        admittedSessionId: scope.sessionId,
+        cfg,
+        context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+        request: { rawMessage: "Plan the release", normalizedAttachments: [] },
+      },
+      settledTurn(),
+    );
+    await started.promise;
+    const released = getSessionWorkAdmissionRelease({
+      scope: scope.storePath,
+      identities: [scope.sessionKey, scope.sessionId],
+    });
+    expect(released).toBeDefined();
+    label.reject(new Error("conversation label generation failed (primary fallback)"));
+    await released;
+    expect(generate).toHaveBeenCalledOnce();
+    expect(loadSessionEntry(scope)?.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+  });
+});

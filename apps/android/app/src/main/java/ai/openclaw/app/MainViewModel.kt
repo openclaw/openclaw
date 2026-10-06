@@ -1,6 +1,5 @@
 package ai.openclaw.app
 
-import ai.openclaw.app.chat.BackgroundTask
 import ai.openclaw.app.chat.ChatActiveRunPresentation
 import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.chat.ChatComposerOwner
@@ -11,6 +10,7 @@ import ai.openclaw.app.chat.ChatPermissionMode
 import ai.openclaw.app.chat.ChatProgressCard
 import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
+import ai.openclaw.app.chat.ChatReactionSummary
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
 import ai.openclaw.app.chat.ChatThinkingLevelSelection
@@ -18,7 +18,6 @@ import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
-import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -68,6 +67,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -357,6 +357,20 @@ class MainViewModel private constructor(
   private val chatDraftState = MutableStateFlow<ChatDraft?>(null)
   internal val chatDraft: StateFlow<ChatDraft?> = chatDraftState
   private val chatDraftLock = Any()
+  private val chatBrowserDismissalsState = MutableStateFlow<Map<ChatComposerOwner, List<String>>>(emptyMap())
+  internal val chatBrowserDismissals = chatBrowserDismissalsState.asStateFlow()
+
+  internal fun dismissChatBrowser(
+    owner: ChatComposerOwner,
+    presentation: List<String>,
+  ) {
+    chatBrowserDismissalsState.update { it + (owner to presentation) }
+  }
+
+  internal fun reopenChatBrowser(owner: ChatComposerOwner) {
+    chatBrowserDismissalsState.update { it - owner }
+  }
+
   private var attachedComposerRuntime: NodeRuntime? = null
   private var removeChatSessionDeletionListener: (() -> Unit)? = null
 
@@ -505,7 +519,7 @@ class MainViewModel private constructor(
 
   val runtimeInitialized: StateFlow<Boolean> =
     runtimeRef
-      .flatMapLatest { runtime -> flowOf(runtime != null) }
+      .map { runtime -> runtime != null }
       .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
   val gateways: StateFlow<List<GatewayEndpoint>> = runtimeState(initial = emptyList()) { it.gateways }
@@ -519,7 +533,6 @@ class MainViewModel private constructor(
   val notificationForwardingQuietEnd: StateFlow<String> = prefs.notificationForwardingQuietEnd
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> =
     prefs.notificationForwardingMaxEventsPerMinute
-  val notificationForwardingSessionKey: StateFlow<String?> = prefs.notificationForwardingSessionKey
 
   val isConnected: StateFlow<Boolean> = runtimeState(initial = false) { it.isConnected }
   val gatewayControlPage: StateFlow<NodeRuntime.GatewayControlPage?> =
@@ -531,8 +544,6 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
     runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
-  val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
@@ -610,7 +621,6 @@ class MainViewModel private constructor(
   val locationMode: StateFlow<LocationMode> = prefs.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
-  val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
@@ -674,6 +684,9 @@ class MainViewModel private constructor(
 
   val chatSessionOwnerAgentId: StateFlow<String?> = runtimeState(initial = null) { it.chat.sessionOwnerAgentId }
   val chatMessages: StateFlow<List<ChatMessage>> = runtimeState(initial = emptyList()) { it.chat.messages }
+  internal val chatMessageReactions: StateFlow<Map<String, List<ChatReactionSummary>>> = runtimeState(initial = emptyMap()) { it.chat.messageReactions }
+  internal val chatCanReact: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.canReact }
+  internal val chatReactionViewerId: StateFlow<String?> = runtimeState(initial = null) { it.chat.reactionViewerId }
   val chatTranscriptAnchor: StateFlow<ChatTranscriptAnchorState?> =
     runtimeState(initial = null) { it.chat.transcriptAnchor }
   val chatHistoryLoading: StateFlow<Boolean> = runtimeState(initial = false) { it.chat.historyLoading }
@@ -691,8 +704,6 @@ class MainViewModel private constructor(
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chat.streamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.pendingToolCalls }
   val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chat.toolActivities }
-  val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
-    runtimeState(initial = emptyMap()) { it.chat.subagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chat.questions }
   val chatProgressCard: StateFlow<ChatProgressCard?> = runtimeState(initial = null) { it.chat.progressCard }
   val chatSessions: StateFlow<List<ChatSessionEntry>> = runtimeState(initial = emptyList()) { it.chat.sessions }
@@ -767,22 +778,6 @@ class MainViewModel private constructor(
     prefs.setPreventSleep(value)
   }
 
-  fun setManualEnabled(value: Boolean) {
-    prefs.setManualEnabled(value)
-  }
-
-  fun setManualHost(value: String) {
-    prefs.setManualHost(value)
-  }
-
-  fun setManualPort(value: Int) {
-    prefs.setManualPort(value)
-  }
-
-  fun setManualTls(value: Boolean) {
-    prefs.setManualTls(value)
-  }
-
   /** Auth replacement retires the old gateway identity, including every retained composer owner. */
   internal suspend fun clearChatComposerGateway(stableId: String) {
     val gateway = stableId.trim()
@@ -827,6 +822,7 @@ class MainViewModel private constructor(
     // Repeat after suspending share cleanup. Any callback that raced the first tombstone is
     // serialized with this final token-and-attachment purge before cleanup returns.
     chatComposerState.removeMediaOwners(matches)
+    chatBrowserDismissalsState.update { dismissals -> dismissals.filterKeys { !matches(it) } }
   }
 
   internal fun saveGatewayConfigAndConnect(
@@ -960,12 +956,7 @@ class MainViewModel private constructor(
     ensureRuntime().setNotificationForwardingMode(mode)
   }
 
-  fun setNotificationForwardingPackagesCsv(csv: String) {
-    val packages =
-      csv
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
+  fun setNotificationForwardingPackages(packages: List<String>) {
     ensureRuntime().setNotificationForwardingPackages(packages)
   }
 
@@ -974,14 +965,6 @@ class MainViewModel private constructor(
     start: String,
     end: String,
   ): Boolean = ensureRuntime().setNotificationForwardingQuietHours(enabled = enabled, start = start, end = end)
-
-  fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    ensureRuntime().setNotificationForwardingMaxEventsPerMinute(value)
-  }
-
-  fun setNotificationForwardingSessionKey(value: String?) {
-    ensureRuntime().setNotificationForwardingSessionKey(value)
-  }
 
   fun setVoiceScreenActive(active: Boolean) {
     ensureRuntime().setVoiceScreenActive(active)
@@ -1196,7 +1179,7 @@ class MainViewModel private constructor(
     viewModelScope.launch {
       try {
         val accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = pending.owner,
             message = prompt,
             thinking = thinking,
@@ -1245,11 +1228,7 @@ class MainViewModel private constructor(
     ensureRuntime().setTalkModeEnabled(enabled)
   }
 
-  suspend fun requestVoiceNotePermission(): Boolean = requestRecordAudioPermission()
-
-  suspend fun requestDictationPermission(): Boolean = requestRecordAudioPermission()
-
-  private suspend fun requestRecordAudioPermission(): Boolean {
+  internal suspend fun requestRecordAudioPermission(): Boolean {
     val requester = permissionRequester ?: return false
     return try {
       requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))[Manifest.permission.RECORD_AUDIO] == true
@@ -1431,6 +1410,11 @@ class MainViewModel private constructor(
       ensureRuntime().forgetGateway(stableId, isCurrent)
     }
   }
+
+  suspend fun renameGateway(
+    stableId: String,
+    name: String,
+  ): Boolean = withContext(Dispatchers.IO) { prefs.gatewayRegistry.rename(stableId, name) }
 
   fun disconnect() {
     gatewayConfigOperationSeq.incrementAndGet()
@@ -1715,6 +1699,14 @@ class MainViewModel private constructor(
     ensureRuntime().chat.refresh()
   }
 
+  internal fun chatSetMessageReaction(
+    messageId: String,
+    emoji: String,
+    remove: Boolean,
+  ) {
+    runtimeRef.value?.chat?.setMessageReaction(messageId, emoji, remove)
+  }
+
   fun refreshChatSessions(
     limit: Int? = null,
     archived: Boolean = false,
@@ -1730,6 +1722,8 @@ class MainViewModel private constructor(
     clearLabel: Boolean = false,
     category: String? = null,
     clearCategory: Boolean = false,
+    snoozedUntil: Long? = null,
+    clearSnooze: Boolean = false,
     color: String? = null,
     clearColor: Boolean = false,
     pinned: Boolean? = null,
@@ -1744,6 +1738,8 @@ class MainViewModel private constructor(
       clearLabel = clearLabel,
       category = category,
       clearCategory = clearCategory,
+      snoozedUntil = snoozedUntil,
+      clearSnooze = clearSnooze,
       color = color,
       clearColor = clearColor,
       pinned = pinned,
@@ -1777,16 +1773,22 @@ class MainViewModel private constructor(
   suspend fun renameChatSessionGroup(
     from: String,
     to: String,
+    expectedGatewayStableId: String?,
   ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     val stored = prefs.sessionCustomGroups.value
     // Web semantics: replace a stored name in place, otherwise remember the new name.
     prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
-    ensureRuntime().chat.renameSessionGroup(from = from, to = to)
+    ensureRuntime().chat.renameSessionGroup(from = from, to = to, expectedGatewayId = expectedGatewayStableId)
   }
 
-  suspend fun deleteChatSessionGroup(group: String) {
+  suspend fun deleteChatSessionGroup(
+    group: String,
+    expectedGatewayStableId: String?,
+  ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
-    ensureRuntime().chat.dissolveSessionGroup(group)
+    ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayId = expectedGatewayStableId)
   }
 
   suspend fun forkChatSession(
@@ -1949,6 +1951,17 @@ class MainViewModel private constructor(
 
   internal fun captureChatShareOwner(): ChatComposerOwner = currentOrProvisionalChatComposerOwner()
 
+  internal fun chatComposerAgentName(owner: ChatComposerOwner): String? {
+    if (!isCurrentChatComposerOwner(owner)) return null
+    // Read the current catalog with its owner, not a separately collected Compose snapshot.
+    return owner.agentDisplayName(
+      runtimeRef.value
+        ?.gatewayAgents
+        ?.value
+        .orEmpty(),
+    )
+  }
+
   internal fun isCurrentChatComposerOwner(expected: ChatComposerOwner): Boolean =
     runtimeRef.value
       ?.gatewayConnectionHandoff
@@ -2110,25 +2123,6 @@ class MainViewModel private constructor(
     ensureRuntime().chat.skipQuestion(prompt)
   }
 
-  suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().chat.listBackgroundTasks(agentId)
-
-  suspend fun getBackgroundTask(taskId: String): BackgroundTask = ensureRuntime().chat.getBackgroundTask(taskId)
-
-  internal suspend fun sendChatForOwnerAwaitAcceptance(
-    owner: ChatComposerOwner,
-    message: String,
-    thinking: String,
-    attachments: List<OutgoingAttachment>,
-    idempotencyKey: String,
-  ): Boolean =
-    ensureRuntime().sendChatForOwnerAwaitAcceptance(
-      owner = owner,
-      message = message,
-      thinking = thinking,
-      attachments = attachments,
-      idempotencyKey = idempotencyKey,
-    )
-
   /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
   internal fun beginChatComposerSend(
     owner: ChatComposerOwner,
@@ -2142,7 +2136,7 @@ class MainViewModel private constructor(
       var accepted: Boolean? = null
       try {
         accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = request.owner,
             message = request.message,
             thinking = thinking,

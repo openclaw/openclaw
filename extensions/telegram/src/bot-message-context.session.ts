@@ -1,3 +1,4 @@
+import { isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import {
   type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
@@ -26,7 +27,7 @@ import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/secur
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { NormalizedAllowFrom } from "./bot-access.js";
-import { isSenderAllowed, normalizeAllowFrom } from "./bot-access.js";
+import { normalizeAllowFrom } from "./bot-access.js";
 import type {
   TelegramMediaRef,
   TelegramMessageContextOptions,
@@ -87,7 +88,7 @@ type TelegramMessageContextSessionRuntime =
 const sessionRuntimeMethods = [
   "buildChannelInboundEventContext",
   "readAmbientTranscriptWatermark",
-  "readSessionUpdatedAt",
+  "readSessionUpdatedAtAsync",
   "recordInboundSession",
   "resolveAmbientTranscriptWatermarkKey",
   "resolveInboundLastRouteSessionKey",
@@ -331,17 +332,12 @@ export async function buildTelegramInboundContextPayload(params: {
   const shouldIncludeGroupSupplementalContext = (paramsLocal: {
     kind: "quote" | "forwarded";
     senderId?: string;
-    senderUsername?: string;
   }): boolean => {
     if (!isGroup) {
       return true;
     }
     const senderAllowed = effectiveGroupAllow?.hasEntries
-      ? isSenderAllowed({
-          allow: effectiveGroupAllow,
-          senderId: paramsLocal.senderId,
-          senderUsername: paramsLocal.senderUsername,
-        })
+      ? isSenderIdAllowed(effectiveGroupAllow, paramsLocal.senderId, true)
       : true;
     return evaluateSupplementalContextVisibility({
       mode: contextVisibilityMode,
@@ -360,7 +356,6 @@ export async function buildTelegramInboundContextPayload(params: {
       !shouldIncludeGroupSupplementalContext({
         kind: "quote",
         senderId: target.senderId,
-        senderUsername: target.senderUsername,
       })
     ) {
       return null;
@@ -370,7 +365,6 @@ export async function buildTelegramInboundContextPayload(params: {
       shouldIncludeGroupSupplementalContext({
         kind: "forwarded",
         senderId: target.forwardedFrom.fromId,
-        senderUsername: target.forwardedFrom.fromUsername,
       })
         ? target.forwardedFrom
         : undefined;
@@ -380,7 +374,6 @@ export async function buildTelegramInboundContextPayload(params: {
     ? shouldIncludeGroupSupplementalContext({
         kind: "forwarded",
         senderId: forwardOrigin.fromId,
-        senderUsername: forwardOrigin.fromUsername,
       })
     : false;
   const visibleReplyTarget = resolveVisibleReplyTarget(replyTarget);
@@ -441,7 +434,6 @@ export async function buildTelegramInboundContextPayload(params: {
       !shouldIncludeGroupSupplementalContext({
         kind: "quote",
         senderId: visibleEntry.senderId,
-        senderUsername: visibleEntry.senderUsername,
       })
     ) {
       return [];
@@ -451,7 +443,6 @@ export async function buildTelegramInboundContextPayload(params: {
       shouldIncludeGroupSupplementalContext({
         kind: "forwarded",
         senderId: visibleEntry.forwardedFromId,
-        senderUsername: visibleEntry.forwardedFromUsername,
       });
     return [includeForwarded ? visibleEntry : stripReplyChainForwarded(visibleEntry)];
   });
@@ -472,7 +463,6 @@ export async function buildTelegramInboundContextPayload(params: {
           shouldIncludeGroupSupplementalContext({
             kind: "forwarded",
             senderId: bufferedForwardOrigin.fromId,
-            senderUsername: bufferedForwardOrigin.fromUsername,
           })
             ? bufferedForwardOrigin
             : null;
@@ -528,7 +518,7 @@ export async function buildTelegramInboundContextPayload(params: {
     agentId: route.agentId,
   });
   const envelopeOptions = resolveEnvelopeFormatOptions(cfg);
-  const previousTimestamp = sessionRuntime.readSessionUpdatedAt({
+  const previousTimestamp = await sessionRuntime.readSessionUpdatedAtAsync({
     storePath,
     sessionKey: route.sessionKey,
   });
@@ -748,19 +738,13 @@ export async function buildTelegramInboundContextPayload(params: {
       mentions: mentionFacts,
     },
     command:
-      commandSource === "native"
+      commandSource === "native" || commandSource === "text"
         ? {
-            kind: "native",
+            kind: commandSource === "native" ? "native" : "text-slash",
             authorized: commandAuthorized,
             body: commandBody,
           }
-        : commandSource === "text"
-          ? {
-              kind: "text-slash",
-              authorized: commandAuthorized,
-              body: commandBody,
-            }
-          : undefined,
+        : undefined,
     media: currentMediaFacts,
     supplemental: {
       quote:

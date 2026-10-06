@@ -1,6 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -28,16 +28,18 @@ import {
   markTrackedRoomIfFirst,
   shouldDeferMatrixAudioPreflightForRoomIngress,
 } from "./handler-helpers.js";
-import { resolveMatrixIngressAccess } from "./handler-ingress-access.js";
+import {
+  resolveMatrixIngressAccess,
+  type MatrixIngressAccessParams,
+} from "./handler-ingress-access.js";
 import { resolveMatrixIngressContent } from "./handler-ingress-content.js";
 import { readMatrixIngressPrefix } from "./handler-ingress-prefix.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
-import type { MatrixLocationPayload } from "./location.js";
-import { createRoomHistoryTracker, type ReservedHistorySlot } from "./room-history.js";
-import type { MatrixRawEvent, RoomMessageEventContent } from "./types.js";
+import { createRoomHistoryTracker } from "./room-history.js";
+import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
 
 // Core emits this stable error code across the plugin boundary; Matrix cannot import the
@@ -64,15 +66,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     blockStreamingEnabled,
     historyLimit,
     startupMs,
-    startupGraceMs,
     dropPreStartupMessages,
     inboundDeduper,
     directTracker,
     getMemberDisplayName,
     resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
     resolveStorePath: resolveStorePathImpl = resolveStorePath,
-    createChannelInboundEnvelopeBuilder:
-      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilder,
+    createChannelInboundEnvelopeBuilderAsync:
+      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilderAsync,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
   const handlerConfig: MatrixHandlerRuntimeConfig = {
@@ -82,7 +83,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     configuredBotUserIds,
     resolveLiveUserAllowlist,
     resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
   const handlerState = createMatrixHandlerState({
@@ -166,7 +167,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           eventTs: eventTs ?? undefined,
           eventAge: eventAge ?? undefined,
           startupMs,
-          startupGraceMs,
           event,
           eventType,
           eventId,
@@ -178,14 +178,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             inboundReplayClaim = handle;
           },
         });
-      const continueIngress = async (paramsLocal: {
-        audioPreflightMode?: "defer" | "run";
-        content: RoomMessageEventContent;
-        isDirectMessage: boolean;
-        locationPayload: MatrixLocationPayload | null;
-        reservedHistorySlot?: ReservedHistorySlot;
-        selfUserId: string;
-      }) => {
+      const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
         const access = await resolveMatrixIngressAccess({
           handler: handlerConfig,
           params: paramsLocal,

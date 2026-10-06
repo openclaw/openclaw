@@ -1,11 +1,14 @@
 {
+  "oldestSupportedBaseline": "2026.6.34",
   "scenarios": [
     "base",
+    "backup-schedule",
     "abandoned-update",
     "legacy-operator-state",
     "workshop-doctor-recovery",
     "update-report-recovery",
     "dreaming-cron-doctor",
+    "cron-owner-doctor",
     "mobile-pairing-reconnect",
     "acpx-openclaw-tools-bridge",
     "feishu-channel",
@@ -19,7 +22,6 @@
     "projects-doctor",
     "channel-owner-policy",
     "projects-startup-migration",
-    "taskflow-restoration",
     "stale-source-plugin-shadow",
     "prerelease-plugin-registry",
     "tilde-log-path",

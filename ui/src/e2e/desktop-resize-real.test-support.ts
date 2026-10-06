@@ -1,5 +1,4 @@
 import { randomInt } from "node:crypto";
-import { once } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import net, { type Socket } from "node:net";
 import path from "node:path";
@@ -16,6 +15,8 @@ import {
 import { createWorkerEnvironmentStore } from "../../../src/gateway/worker-environments/store.js";
 import type { WorkerDesktopEndpoint, WorkerSshEndpoint } from "../../../src/plugins/types.js";
 import { runCommandWithTimeout } from "../../../src/process/exec.js";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
 
 /** Serialized into the fixture page; observe the real client without replacing its transport. */
@@ -214,7 +215,7 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
       tails.set(socket, bytes.subarray(-9));
     }
   };
-  const server = net.createServer((client) => {
+  const acceptClient = (client: Socket) => {
     if (closed || peers.size >= 32) {
       fail("Desktop endpoint connection bound exceeded");
       client.destroy();
@@ -277,9 +278,15 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
     client.on("data", (chunk: Buffer) => observe(client, chunk));
     client.pipe(upstream);
     upstream.pipe(client);
+  };
+  signal.throwIfAborted();
+  const reservation = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => net.createServer(acceptClient),
   });
+  const server = reservation.listener;
   const close = () =>
-    (closing ??= (async () => {
+    (closing ??= runQaGatewayFixture(async () => {
       closed = true;
       signal.removeEventListener("abort", abort);
       fail("Desktop endpoint observation ended before completion");
@@ -293,17 +300,9 @@ export async function observeDesktopEndpointPackets(port: number, signal: AbortS
             socket.destroy();
           }),
       );
-      await Promise.all([
-        ...stopped,
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        }),
-      ]);
-    })());
+      await Promise.all([...stopped, reservation.releaseListener()]);
+    }, reservation.claim.release));
   const abort = () => fail("Desktop endpoint observation aborted before completion");
-  signal.throwIfAborted();
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) {
     await close();

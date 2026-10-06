@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,8 +8,8 @@ import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 
 const native = vi.hoisted(() => ({
   directory: "",
@@ -51,30 +50,7 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
 vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: vi.fn(async () => ({ healthy: true })),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
-}));
-// Retain real SQLite exclusion while keeping every coordinator in the fixture.
-vi.mock("../infra/state-database-coordinator.js", async (original) => {
-  const actual = await original<typeof import("../infra/state-database-coordinator.js")>();
-  return {
-    ...actual,
-    acquireGatewayMaintenanceCoordinator: (
-      params: Parameters<typeof actual.acquireGatewayMaintenanceCoordinator>[0],
-    ) =>
-      actual.acquireGatewayMaintenanceCoordinator({
-        ...params,
-        runtimeDirectory: native.directory,
-      }),
-    acquireStateDatabaseCoordinator: (
-      params: Parameters<typeof actual.acquireStateDatabaseCoordinator>[0],
-    ) => actual.acquireStateDatabaseCoordinator({ ...params, runtimeDirectory: native.directory }),
-  };
-});
-vi.mock("../infra/sqlite-coordinator.js", async (original) => ({
-  ...(await original<typeof import("../infra/sqlite-coordinator.js")>()),
-  // A synthetic root account cannot change real host ownership or Windows mode bits.
-  ensurePrivateSqliteCoordinatorDirectory: (directory: string) =>
-    fs.mkdirSync(directory, { recursive: true }),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -93,7 +69,7 @@ type Scenario =
 beforeEach(() => {
   vi.clearAllMocks();
   native.resident.mockReset();
-  mockProcessPlatform("linux");
+  mockDoctorServicePlatform("linux");
   vi.spyOn(process, "geteuid").mockReturnValue(0);
   vi.spyOn(os, "homedir").mockImplementation(() => native.directory);
   vi.spyOn(os, "userInfo").mockImplementation(() => ({
@@ -186,6 +162,9 @@ async function repair(scenario: Scenario) {
         StartLimitBurst: { type: "u", data: 5 },
         ActiveEnterTimestampMonotonic: { type: "t", data: 100 },
         InactiveEnterTimestampMonotonic: { type: "t", data: 200 },
+        UnitFileState: { type: "s", data: "enabled" },
+        RefuseManualStart: { type: "b", data: false },
+        CanStart: { type: "b", data: true },
         Result: { type: "s", data: "success" },
         NRestarts: { type: "u", data: 0 },
         MainPID: { type: "u", data: running ? pid : 0 },

@@ -13,6 +13,7 @@ import { FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 const appendFileTransferAudit = vi.fn(async () => undefined);
 const saveMediaBuffer = vi.fn<() => Promise<{ path: string }>>();
 const invokeNodeToolPayload = vi.fn<typeof import("./node-tool-invoke.js").invokeNodeToolPayload>();
+let bindFileTransferAudit: typeof import("../shared/audit-context.js").bindFileTransferAudit;
 let createDirFetchTool: typeof import("./dir-fetch-tool.js").createDirFetchTool;
 let tmpRoot: string;
 
@@ -28,6 +29,7 @@ beforeAll(async () => {
     }),
     invokeNodeToolPayload,
   }));
+  ({ bindFileTransferAudit } = await import("../shared/audit-context.js"));
   ({ createDirFetchTool } = await import("./dir-fetch-tool.js"));
 });
 
@@ -119,9 +121,7 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
     await fs.writeFile(archivePath, tarBuffer);
     return { path: archivePath };
   });
-  invokeNodeToolPayload.mockImplementation(async () => ({
-    nodeId: "node-1",
-    nodeDisplayName: "Node One",
+  invokeNodeToolPayload.mockImplementation(async (input) => ({
     payload: {
       ok: true,
       path: canonicalPath,
@@ -130,7 +130,15 @@ function prepareArchive(tarBuffer: Buffer, mediaName = "media", canonicalPath = 
       sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
       fileCount: 3,
     },
-    startedAt: Date.now(),
+    audit: bindFileTransferAudit(
+      {
+        op: input.command,
+        nodeId: "node-1",
+        nodeDisplayName: "Node One",
+        requestedPath: input.requestedPath,
+      },
+      Date.now(),
+    ),
   }));
   return { archivePath, mediaDir };
 }

@@ -14,6 +14,7 @@ import {
 import { BoardValidationError } from "./board-layout.js";
 import { createBoardWidgetPutSnapshot, type BoardStore } from "./board-store.js";
 import { readBoardHtml, createTestBoardStore } from "./board-store.test-support.js";
+import { readBoardSnapshotWithHtmlViewMetadata } from "./sqlite-board-store.kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -335,9 +336,13 @@ describe("board store", () => {
       expect(error).toMatchObject({ code: "invalid_operation" });
       expect((error as Error).message).toContain("more than 48 widgets");
     }
-    await expect(
-      putHtml(createTestBoardStore(), "session", "large", "é".repeat(131_073)),
-    ).rejects.toThrow("262144 UTF-8 bytes");
+    const largeStore = createTestBoardStore();
+    const html = "é".repeat(5 * 1024 * 1024);
+    await putHtml(largeStore, "session", "large", html);
+    await expect(putHtml(largeStore, "session", "large", html + "é")).rejects.toThrow(
+      "10485760 UTF-8 bytes",
+    );
+    expect((await readBoardHtml(largeStore, { sessionKey: "session" }, "large"))?.html).toBe(html);
   });
 
   it("bumps once per applyOps transaction and removes widget bytes", async () => {
@@ -366,7 +371,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   });
   const prepare = vi.spyOn(database.db, "prepare");
 
-  const prepared = await store.getSnapshotWithHtmlViewMetadata({ sessionKey });
+  const prepared = readBoardSnapshotWithHtmlViewMetadata(database, sessionKey);
 
   const widgetSelects = prepare.mock.calls
     .map(([sql]) => sql)
@@ -374,6 +379,7 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
   expect(widgetSelects).toHaveLength(1);
   expect(widgetSelects[0]).toContain('"sha256"');
   expect(widgetSelects[0]).not.toContain('"html"');
-  expect(prepared.htmlViewMetadata.get("status")).not.toHaveProperty("html");
+  expect(prepared?.htmlViewMetadata.get("status")).not.toHaveProperty("html");
   prepare.mockRestore();
+  expect(await store.getSnapshotWithHtmlViewMetadata({ sessionKey })).toEqual(prepared);
 });

@@ -1,16 +1,16 @@
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeIdentifier,
+  readNativeSubagentThreadIds,
+  readThreadParentThreadId,
+  readThreadSpawnSource,
+} from "./native-subagent-assignment.js";
 import type {
   ChildState,
   DirectSpawnEvidence,
   ParentOwner,
   ParentState,
 } from "./native-subagent-monitor-types.js";
-import {
-  normalizeIdentifier,
-  readNativeSubagentThreadIds,
-  readThreadParentThreadId,
-  readThreadSpawnSource,
-} from "./native-subagent-task-ids.js";
 import { isJsonObject, type CodexServerNotification, type JsonObject } from "./protocol.js";
 
 type NotificationRoutingDependencies = {

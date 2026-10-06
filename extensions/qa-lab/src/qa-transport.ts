@@ -1,9 +1,6 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
-import { QaSuiteInfraError } from "./errors.js";
-import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
   QaBusEditMessageInput,
   QaBusEvent,
@@ -14,7 +11,10 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusWaitForInput,
-} from "./runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
+import type { QaRunnerCliRegistration } from "openclaw/plugin-sdk/qa-runner-runtime";
+import { QaSuiteInfraError } from "./errors.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 
 type QaTransportAdapterDefinition = Awaited<
   ReturnType<NonNullable<QaRunnerCliRegistration["adapterFactory"]>["create"]>
@@ -237,218 +237,154 @@ function describeQaTransportTimeout(params: {
 export type QaTransportAdapter = Omit<
   QaTransportAdapterDefinition,
   "assertTransportHealthy" | "resetTransport"
-> & {
+> &
+  ReturnType<typeof createQaTransportStateMethods> & {
+    waitForCompletedReply?: (input: {
+      inbound: QaBusMessage;
+      gateway: Parameters<QaTransportAdapterDefinition["waitReady"]>[0]["gateway"];
+      timeoutMs?: number;
+    }) => Promise<QaBusMessage>;
+  };
+
+export async function sendQaTransportNativeCommand(
+  transport: Pick<QaTransportAdapter, "sendInbound">,
+  input: QaTransportNativeCommandInput,
+): Promise<void> {
+  const { command, ...message } = input;
+  await transport.sendInbound({
+    ...message,
+    text: `/${command}`,
+    nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
+  });
+}
+
+export function createQaTransportStateMethods(params: {
+  accountId: string;
   state: QaTransportState;
-  reset: () => Promise<void>;
-  waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
-  waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
-  waitForCondition: <T>(
-    check: () => T | Promise<T | null | undefined> | null | undefined,
-    timeoutMs?: number,
-    intervalMs?: number,
-  ) => Promise<T>;
-};
-
-export abstract class QaStateBackedTransportAdapter implements QaTransportAdapter {
-  readonly id: string;
-  readonly label: string;
-  readonly accountId: string;
-  readonly requiredPluginIds: readonly string[];
-  readonly supportedActions: readonly QaTransportActionName[];
-  readonly state: QaTransportState;
-  readonly waitForCondition: QaTransportAdapter["waitForCondition"];
-  private readonly assertTransportHealthy: () => void;
-  private readonly describeTimeout: () => string;
-
-  constructor(params: {
-    id: string;
-    label: string;
-    accountId: string;
-    requiredPluginIds: readonly string[];
-    supportedActions?: readonly QaTransportActionName[];
-    state: QaTransportState;
-    assertTransportHealthy?: () => void;
-    describeTimeout?: () => string;
-    describeTransportState?: () => string;
-  }) {
-    this.id = params.id;
-    this.label = params.label;
-    this.accountId = params.accountId;
-    this.requiredPluginIds = params.requiredPluginIds;
-    this.supportedActions = params.supportedActions ?? [];
-    this.state = params.state;
-    this.assertTransportHealthy = params.assertTransportHealthy ?? (() => undefined);
-    this.describeTimeout =
-      params.describeTimeout ??
-      (() =>
-        describeQaTransportTimeout({
-          accountId: this.accountId,
-          describeTransportState: params.describeTransportState,
-          state: this.state,
-        }));
-    this.waitForCondition = async (check, timeoutMs, intervalMs) => {
+  assertTransportHealthy?: () => void;
+  describeTransportState?: () => string;
+}) {
+  const { state, accountId } = params;
+  const assertTransportHealthy = params.assertTransportHealthy ?? (() => undefined);
+  const describeTimeout = () => describeQaTransportTimeout(params);
+  const outboundSince = (sinceIndex = 0) =>
+    state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(sinceIndex)
+      .filter((message) => message.accountId === accountId);
+  return {
+    state,
+    reset: async () => {
+      assertTransportHealthy();
+      await state.reset();
+    },
+    async sendInbound(input: QaBusInboundMessageInput) {
+      return await state.addInboundMessage(input);
+    },
+    waitForCondition: async <T>(
+      check: () => T | Promise<T | null | undefined> | null | undefined,
+      timeoutMs?: number,
+      intervalMs?: number,
+    ): Promise<T> => {
       const failureOptions = {
-        accountId: this.accountId,
-        sinceIndex: this.state.getSnapshot().messages.length,
+        accountId,
+        sinceIndex: state.getSnapshot().messages.length,
         cursorSpace: "all" as const,
       };
       return await waitForQaTransportCondition(
         async () => {
-          assertNoFailureReplies(this.state, failureOptions);
-          this.assertTransportHealthy();
+          assertNoFailureReplies(state, failureOptions);
+          assertTransportHealthy();
           const value = await check();
-          assertNoFailureReplies(this.state, failureOptions);
+          assertNoFailureReplies(state, failureOptions);
           return value;
         },
         timeoutMs,
         intervalMs,
-        this.describeTimeout,
+        describeTimeout,
       );
-    };
-  }
-
-  abstract createGatewayConfig: QaTransportAdapterDefinition["createGatewayConfig"];
-  abstract waitReady: QaTransportAdapterDefinition["waitReady"];
-  abstract buildAgentDelivery: QaTransportAdapterDefinition["buildAgentDelivery"];
-  abstract handleAction: QaTransportAdapterDefinition["handleAction"];
-  abstract createReportNotes: QaTransportAdapterDefinition["createReportNotes"];
-
-  async reset() {
-    this.assertTransportHealthy();
-    await this.state.reset();
-  }
-
-  async sendInbound(input: QaBusInboundMessageInput) {
-    return await this.state.addInboundMessage(input);
-  }
-
-  async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
-    this.assertTransportHealthy();
-    const quietMs = resolveTimerTimeoutMs(input.quietMs, 1_200, 0);
-    await sleep(quietMs);
-    this.assertTransportHealthy();
-    assertNoFailureReplies(this.state, {
-      accountId: this.accountId,
-      sinceIndex: input.sinceIndex,
-      cursorSpace: "outbound",
-    });
-    const observed = this.outboundSince(input.sinceIndex);
-    if (observed.length > 0) {
-      const summary = observed.map((message) => `${message.id}:${message.text}`).join("\n");
-      throw new Error(`expected no outbound messages for ${quietMs}ms, saw:\n${summary}`);
-    }
-  }
-
-  async waitForOutbound(input: QaTransportOutboundMatch) {
-    return await waitForQaTransportCondition(
-      () => {
-        this.assertTransportHealthy();
-        assertNoFailureReplies(this.state, {
-          accountId: this.accountId,
-          sinceIndex: input.sinceIndex,
-          cursorSpace: "outbound",
-        });
-        return this.outboundSince(input.sinceIndex).find((message) => {
-          if (message.deleted) {
-            return false;
-          }
-          if (input.conversation && message.conversation.id !== input.conversation.id) {
-            return false;
-          }
-          if (input.conversation && message.conversation.kind !== input.conversation.kind) {
-            return false;
-          }
-          if (input.senderId && message.senderId !== input.senderId) {
-            return false;
-          }
-          if (input.threadId && message.threadId !== input.threadId) {
-            return false;
-          }
-          return !input.textIncludes || message.text.includes(input.textIncludes);
-        });
-      },
-      input.timeoutMs,
-      undefined,
-      this.describeTimeout,
-    );
-  }
-
-  private outboundSince(sinceIndex = 0) {
-    return this.state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound")
-      .slice(sinceIndex)
-      .filter((message) => message.accountId === this.accountId);
-  }
+    },
+    waitForNoOutbound: async (input: QaTransportWaitForNoOutboundInput = {}) => {
+      assertTransportHealthy();
+      const quietMs = resolveTimerTimeoutMs(input.quietMs, 1_200, 0);
+      await sleep(quietMs);
+      assertTransportHealthy();
+      assertNoFailureReplies(state, {
+        accountId,
+        sinceIndex: input.sinceIndex,
+        cursorSpace: "outbound",
+      });
+      const observed = outboundSince(input.sinceIndex);
+      if (observed.length > 0) {
+        const summary = observed.map((message) => `${message.id}:${message.text}`).join("\n");
+        throw new Error(`expected no outbound messages for ${quietMs}ms, saw:\n${summary}`);
+      }
+    },
+    waitForOutbound: async (input: QaTransportOutboundMatch) => {
+      return await waitForQaTransportCondition(
+        () => {
+          assertTransportHealthy();
+          assertNoFailureReplies(state, {
+            accountId,
+            sinceIndex: input.sinceIndex,
+            cursorSpace: "outbound",
+          });
+          return outboundSince(input.sinceIndex).find(
+            (message) =>
+              !message.deleted &&
+              (!input.conversation ||
+                (message.conversation.id === input.conversation.id &&
+                  message.conversation.kind === input.conversation.kind)) &&
+              (!input.senderId || message.senderId === input.senderId) &&
+              (!input.threadId || message.threadId === input.threadId) &&
+              (!input.textIncludes || message.text.includes(input.textIncludes)),
+          );
+        },
+        input.timeoutMs,
+        undefined,
+        describeTimeout,
+      );
+    },
+  };
 }
 
 export function createQaStateBackedTransportAdapter(
   state: QaTransportState,
   params: QaTransportAdapterDefinition,
 ): QaTransportAdapter {
-  const describeTimeout = () =>
-    describeQaTransportTimeout({
-      accountId: params.accountId,
-      describeTransportState: params.describeTransportState,
-      state,
-    });
-  const adapter = new (class extends QaStateBackedTransportAdapter {
-    createGatewayConfig = params.createGatewayConfig;
-    waitReady = params.waitReady;
-    buildAgentDelivery = params.buildAgentDelivery;
-    handleAction = params.handleAction;
-    createReportNotes = params.createReportNotes;
-    whenUnhealthy = params.whenUnhealthy;
-    captureBeforeGatewayCleanup = params.captureBeforeGatewayCleanup;
-
-    override sendInbound = params.sendInbound;
-
-    override async reset() {
-      await params.resetTransport?.();
-      await super.reset();
-    }
-  })({
-    id: params.id,
-    label: params.label,
-    accountId: params.accountId,
-    requiredPluginIds: params.requiredPluginIds,
-    supportedActions: params.supportedActions,
-    state,
-    assertTransportHealthy: params.assertTransportHealthy,
-    describeTimeout,
-  });
-  Object.assign(adapter, {
-    ...(params.sendNativeCommand ? { sendNativeCommand: params.sendNativeCommand } : {}),
+  const { assertTransportHealthy, resetTransport, ...definition } = params;
+  const methods = createQaTransportStateMethods({ ...params, state });
+  return {
+    ...methods,
+    ...definition,
+    async reset() {
+      await resetTransport?.();
+      await methods.reset();
+    },
     waitForOutboundSequence:
       params.waitForOutboundSequence ??
-      (async (input: QaTransportOutboundSequenceMatch) =>
+      (async (input) =>
         await waitForQaTransportOutboundSequence({
           accountId: params.accountId,
           input,
           readEvents: () => {
-            params.assertTransportHealthy?.();
+            assertTransportHealthy?.();
             return state.getSnapshot().events;
           },
-          describeTimeout,
+          describeTimeout: () => describeQaTransportTimeout({ ...params, state }),
         })),
-    ...(params.createRuntimeEnvPatch
-      ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
-      : {}),
-    ...(params.createRuntimePreloads
-      ? { createRuntimePreloads: params.createRuntimePreloads }
-      : {}),
-    ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
-    ...(params.captureArtifacts ? { captureArtifacts: params.captureArtifacts } : {}),
-    ...(params.cleanup ? { cleanup: params.cleanup } : {}),
-    ...(params.cleanupAfterGatewayStop
-      ? { cleanupAfterGatewayStop: params.cleanupAfterGatewayStop }
-      : {}),
-  });
-  return adapter;
+  };
 }
 
-function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEvent | null {
+function normalizeQaTransportOutboundEvent(
+  event: QaBusEvent | QaTransportOutboundEvent,
+): QaTransportOutboundEvent | null {
   switch (event.kind) {
+    case "sent":
+    case "edited":
+    case "deleted":
+      return event;
     case "outbound-message":
       return { cursor: event.cursor, kind: "sent", message: event.message };
     case "message-edited":
@@ -458,12 +394,6 @@ function normalizeQaBusOutboundEvent(event: QaBusEvent): QaTransportOutboundEven
     default:
       return null;
   }
-}
-
-function isQaTransportOutboundEvent(
-  event: QaBusEvent | QaTransportOutboundEvent,
-): event is QaTransportOutboundEvent {
-  return event.kind === "sent" || event.kind === "edited" || event.kind === "deleted";
 }
 
 export async function waitForQaTransportOutboundSequence(params: {
@@ -482,9 +412,7 @@ export async function waitForQaTransportOutboundSequence(params: {
     async () => {
       const ownedEvents = (await params.readEvents())
         .filter((event) => event.cursor > (params.input.sinceCursor ?? 0))
-        .map((event) =>
-          isQaTransportOutboundEvent(event) ? event : normalizeQaBusOutboundEvent(event),
-        )
+        .map(normalizeQaTransportOutboundEvent)
         .filter((event): event is QaTransportOutboundEvent => event !== null)
         .filter(
           ({ message }) =>
@@ -498,15 +426,12 @@ export async function waitForQaTransportOutboundSequence(params: {
           throw new Error(failureReply);
         }
       }
-      const events = ownedEvents.filter(({ message }) => {
-        if (
-          params.input.conversationId &&
-          message.conversation.id !== params.input.conversationId
-        ) {
-          return false;
-        }
-        return !params.input.threadId || message.threadId === params.input.threadId;
-      });
+      const events = ownedEvents.filter(
+        ({ message }) =>
+          (!params.input.conversationId ||
+            message.conversation.id === params.input.conversationId) &&
+          (!params.input.threadId || message.threadId === params.input.threadId),
+      );
       const candidate = events.findLast(
         ({ kind, message }) =>
           kind !== "deleted" &&

@@ -2409,8 +2409,14 @@ button.evidence-matrix-cell {
 }
 
 .capture-selected-session-chip-x {
-  font-size: 14px;
-  line-height: 1;
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
   color: var(--text-tertiary);
 }
 

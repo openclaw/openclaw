@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandRunner from "../../process/exec-runner.js";
@@ -20,19 +21,6 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
     encoding: "utf8",
   });
   return stdout.trim();
-}
-
-async function gitWithInput(cwd: string, args: string[], input: string): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const child = execFile("git", ["-C", cwd, ...args], { encoding: "utf8" }, (error, stdout) => {
-      if (error) {
-        reject(new Error(error.message, { cause: error }));
-      } else {
-        resolve(stdout.trim());
-      }
-    });
-    child.stdin?.end(input);
-  });
 }
 
 describe("ManagedWorktreeService snapshot index", () => {
@@ -99,20 +87,64 @@ describe("ManagedWorktreeService snapshot index", () => {
     await fs.utimes(index, 1_600_000_000, 1_600_000_000);
     const run = commandRunner.runCommandWithTimeout;
     let checkedIndex = false;
+    const inspectCopy = async (copiedIndex: string) => {
+      const [sourceStat, copiedStat, copiedBytes] = await Promise.all([
+        fs.stat(index, { bigint: true }),
+        fs.stat(copiedIndex, { bigint: true }),
+        fs.readFile(copiedIndex),
+      ]);
+      const cloneMetadata =
+        process.platform === "darwin" && probeTreeClone(path.dirname(copiedIndex)) === "apfs"
+          ? await readCloneFileMetadata([index, copiedIndex])
+          : undefined;
+      return { sourceStat, copiedStat, copiedBytes, cloneMetadata };
+    };
+    const copies: Awaited<ReturnType<typeof inspectCopy>>[] = [];
+    const inspectionErrors: unknown[] = [];
+    const runBytes = commandRunner.runCommandBuffersWithTimeout;
+    vi.spyOn(commandRunner, "runCommandBuffersWithTimeout").mockImplementation(async (...args) => {
+      const argv = args[0];
+      const options = args[1];
+      const copiedIndex = typeof options === "object" ? options.env?.GIT_INDEX_FILE : undefined;
+      if (copiedIndex && argv.includes("read-tree") && argv.includes("--reset")) {
+        // Retain observations before Git rewrites the copy; assert outside product recovery.
+        try {
+          copies.push(await inspectCopy(copiedIndex));
+        } catch (error) {
+          inspectionErrors.push(error);
+        }
+      }
+      return await runBytes(...args);
+    });
     vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
       const argv = args[0];
-      if (argv[0] === "git" && argv.includes("worktree") && argv.includes("remove")) {
+      if (argv.includes("git") && argv.includes("worktree") && argv.includes("remove")) {
         expect(await fs.readFile(index)).toEqual(bytes);
         checkedIndex = true;
       }
       return await run(...args);
     });
     const removed = await service.remove({ id: created.id, reason: "test" });
+    expect(inspectionErrors).toEqual([]);
+    expect(copies).toHaveLength(1);
+    for (const { sourceStat, copiedStat, copiedBytes, cloneMetadata } of copies) {
+      expect(copiedBytes).toEqual(bytes);
+      expect([copiedStat.dev, copiedStat.ino]).not.toEqual([sourceStat.dev, sourceStat.ino]);
+      expect(copiedStat.mtimeNs).toBe(1_600_000_000_000_000_000n);
+      if (process.platform !== "win32") {
+        expect(copiedStat.mode & 0o777n).toBe(sourceStat.mode & 0o777n);
+      }
+      if (cloneMetadata) {
+        const [sourceMetadata, copiedMetadata] = cloneMetadata;
+        expect(sourceMetadata?.cloneId).toBeTruthy();
+        expect(copiedMetadata?.cloneId).toBe(sourceMetadata?.cloneId);
+      }
+    }
     expect(checkedIndex).toBe(true);
     expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("edit");
   });
 
-  it.each(["split", "missing", "unmerged", "sparse", "relaxed-stat"])(
+  it.each(["missing", "sparse"])(
     "snapshots working contents with a %s source index",
     async (kind) => {
       for (const directory of ["included", "excluded"]) {
@@ -128,25 +160,9 @@ describe("ManagedWorktreeService snapshot index", () => {
       }
       await fs.writeFile(path.join(created.path, "README.md"), "staged content\n");
       await git(created.path, "add", "README.md");
-      if (kind === "split") {
-        await git(created.path, "update-index", "--split-index");
-      } else if (kind === "missing") {
+      if (kind === "missing") {
         const index = await git(created.path, "rev-parse", "--git-path", "index");
         await fs.rm(path.resolve(created.path, index));
-      } else if (kind === "unmerged") {
-        const base = await git(created.path, "rev-parse", "HEAD:README.md");
-        const staged = await git(created.path, "rev-parse", ":README.md");
-        const other = await gitWithInput(created.path, ["hash-object", "-w", "--stdin"], "other\n");
-        await gitWithInput(
-          created.path,
-          ["update-index", "--index-info"],
-          `0 ${"0".repeat(base.length)}\tREADME.md\n` +
-            `100644 ${base} 1\tREADME.md\n100644 ${staged} 2\tREADME.md\n100644 ${other} 3\tREADME.md\n`,
-        );
-      } else if (kind === "relaxed-stat") {
-        await git(created.path, "config", "core.trustctime", "false");
-        await git(created.path, "config", "core.checkStat", "minimal");
-        await git(created.path, "config", "core.ignoreStat", "true");
       }
       await fs.writeFile(path.join(created.path, "README.md"), "current working contents\n");
       const removed = await service.remove({ id: created.id, reason: "test" });

@@ -13,7 +13,10 @@ import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
-import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalStringifiedId,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
   notifyDiscordActiveTurnThreadCreated,
@@ -39,10 +42,7 @@ import { readDiscordAutoArchiveDurationParam } from "./runtime.shared.js";
 const providerId = "discord";
 
 function withCurrentSourceReplyRoute<T>(result: AgentToolResult<T>): AgentToolResult<T> {
-  const details =
-    result.details && typeof result.details === "object" && !Array.isArray(result.details)
-      ? result.details
-      : {};
+  const details = asOptionalRecord(result.details) ?? {};
   return {
     ...result,
     details: { ...details, sourceReplyRoute: "current-source" } as T,
@@ -124,27 +124,14 @@ async function dispatchDiscordMessageAction(
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
     ...readPolicyOptions,
   } as const;
-  const runAction = ({
-    action: runtimeAction,
-    ...payload
-  }: {
-    action: string;
-    [key: string]: unknown;
-  }) =>
-    handleDiscordAction(
-      { action: runtimeAction, accountId: accountId ?? undefined, ...payload },
-      cfg,
-      actionOptions,
-    );
+  const runAction = (payload: { action: string; [key: string]: unknown }) =>
+    handleDiscordAction({ accountId, ...payload }, cfg, actionOptions);
   const notifyVisibleOutbound = (
     result: AgentToolResult<unknown>,
     to: string,
     fallbackSessionKey?: string,
   ) => {
-    const details =
-      result.details && typeof result.details === "object" && !Array.isArray(result.details)
-        ? (result.details as { ok?: unknown })
-        : undefined;
+    const details = asOptionalRecord(result.details);
     // Resolved failures are not delivery receipts; clearing room history would
     // otherwise permanently discard context without any visible reply.
     if (details?.ok !== true) {
@@ -162,10 +149,7 @@ async function dispatchDiscordMessageAction(
     to: string,
     fallbackSessionKey?: string,
   ) => {
-    const details =
-      result.details && typeof result.details === "object" && !Array.isArray(result.details)
-        ? (result.details as { ok?: unknown })
-        : undefined;
+    const details = asOptionalRecord(result.details);
     // Only a positive runtime receipt may suppress the source fallback. A
     // resolved failure must leave the turn eligible for visible error delivery.
     if (details?.ok !== true) {
@@ -192,10 +176,10 @@ async function dispatchDiscordMessageAction(
     return result;
   };
 
-  const readTarget = () => {
+  const readTarget = ([firstKey, secondKey]: readonly [string, string] = ["channelId", "to"]) => {
     const target =
-      readStringParam(params, "channelId") ??
-      readStringParam(params, "to") ??
+      readStringParam(params, firstKey) ??
+      readStringParam(params, secondKey) ??
       readCurrentDiscordTarget(ctx.toolContext);
     if (!target) {
       throw new Error("Discord channel target is required (use channel:<id>).");
@@ -203,28 +187,38 @@ async function dispatchDiscordMessageAction(
     return target;
   };
   const resolveChannelId = () => resolveDiscordChannelId(readTarget());
-  const readSendTarget = () => {
-    const target =
-      readStringParam(params, "to") ??
-      readStringParam(params, "target") ??
-      readCurrentDiscordTarget(ctx.toolContext);
-    if (!target) {
-      throw new Error("Discord channel target is required (use channel:<id>).");
-    }
-    return target;
-  };
 
-  if (action === "send") {
-    const to = readSendTarget();
-    const asVoice = readBooleanParam(params, "asVoice") === true;
+  if (action === "send" || action === "upload-file") {
+    const to = readTarget(["to", "target"]);
+    const asVoice = action === "send" ? readBooleanParam(params, "asVoice") === true : undefined;
+    const [firstMediaKey, lastMediaKey] =
+      action === "send" ? (["media", "filePath"] as const) : (["filePath", "media"] as const);
     const mediaUrl =
-      readStringParam(params, "media", { trim: false }) ??
+      readStringParam(params, firstMediaKey, { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
-      readStringParam(params, "filePath", { trim: false });
-    const content = readStringParam(params, "message", { allowEmpty: true, trim: false });
-    const explicitComponents = coerceDiscordComponentParam(params.components);
+      readStringParam(params, lastMediaKey, { trim: false });
+    if (action === "upload-file" && !mediaUrl) {
+      // Buffer attachments are send-only; upload-file covers existing file/media sources.
+      if (readStringParam(params, "buffer", { trim: false })) {
+        throw new Error(
+          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+        );
+      }
+      throw new Error("upload-file requires filePath, path, or media.");
+    }
+    const content =
+      readStringParam(params, "message", { allowEmpty: true, trim: false }) ??
+      (action === "upload-file"
+        ? (readStringParam(params, "content", { allowEmpty: true, trim: false }) ??
+          readStringParam(params, "caption", { allowEmpty: true, trim: false }) ??
+          "")
+        : undefined);
+    const explicitComponents =
+      action === "send" ? coerceDiscordComponentParam(params.components) : undefined;
     const presentation =
-      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
+      action === "send" && explicitComponents == null
+        ? normalizeMessagePresentation(params.presentation)
+        : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -244,16 +238,17 @@ async function dispatchDiscordMessageAction(
     const presentationFellBack = Boolean(
       generatedPresentationComponents && !presentationComponents,
     );
-    const rawComponents = presentationFellBack
-      ? undefined
-      : (explicitComponents ??
-        presentationComponents ??
-        buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
+    const rawComponents =
+      action !== "send" || presentationFellBack
+        ? undefined
+        : (explicitComponents ??
+          presentationComponents ??
+          buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    const rawEmbeds = params.embeds;
+    const rawEmbeds = action === "send" ? params.embeds : undefined;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const deliveryContent =
       presentationFellBack && presentation
@@ -268,7 +263,7 @@ async function dispatchDiscordMessageAction(
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
-    const threadName = readStringParam(params, "threadName");
+    const threadName = action === "send" ? readStringParam(params, "threadName") : undefined;
     const result = await runAction({
       action: "sendMessage",
       to,
@@ -277,53 +272,7 @@ async function dispatchDiscordMessageAction(
       mediaUrl: mediaUrl ?? undefined,
       filename: filename ?? undefined,
       replyTo: replyTo ?? undefined,
-      components,
-      embeds,
-      asVoice,
-      silent,
-      ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-      __sessionKey: sessionKey ?? undefined,
-      __agentId: agentId ?? undefined,
-    });
-    notifyVisibleOutbound(result, to, sessionKey);
-    return withAdoptedThreadReplyRoute(result, to, sessionKey);
-  }
-
-  if (action === "upload-file") {
-    const to = readSendTarget();
-    const mediaUrl =
-      readStringParam(params, "filePath", { trim: false }) ??
-      readStringParam(params, "path", { trim: false }) ??
-      readStringParam(params, "media", { trim: false });
-    if (!mediaUrl) {
-      // Buffer attachments are send-only; upload-file covers existing file/media sources.
-      if (readStringParam(params, "buffer", { trim: false })) {
-        throw new Error(
-          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
-        );
-      }
-      throw new Error("upload-file requires filePath, path, or media.");
-    }
-    const content =
-      readStringParam(params, "message", { allowEmpty: true, trim: false }) ??
-      readStringParam(params, "content", { allowEmpty: true, trim: false }) ??
-      // `media` is accepted as an alias for the file, so a send-shaped call
-      // arrives with its text in `caption`; without this alias that text is
-      // silently dropped instead of becoming the uploaded message's content.
-      readStringParam(params, "caption", { allowEmpty: true, trim: false });
-    const filename = readStringParam(params, "filename");
-    const replyTo = readStringParam(params, "replyTo");
-    const silent = readBooleanParam(params, "silent") === true;
-    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
-    const sessionKey = readStringParam(params, "__sessionKey");
-    const agentId = readStringParam(params, "__agentId");
-    const result = await runAction({
-      action: "sendMessage",
-      to,
-      content: content ?? "",
-      mediaUrl,
-      filename: filename ?? undefined,
-      replyTo: replyTo ?? undefined,
+      ...(action === "send" ? { components, embeds, asVoice } : {}),
       silent,
       ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
       __sessionKey: sessionKey ?? undefined,

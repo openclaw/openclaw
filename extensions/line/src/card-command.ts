@@ -147,11 +147,7 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  * Parse quoted arguments from command string
  * Supports: /card type "arg1" "arg2" "arg3" --flag value
  */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
+function parseCardArgs(argsStrInput: string) {
   let argsStr = argsStrInput;
   const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",
@@ -159,7 +155,6 @@ function parseCardArgs(argsStrInput: string): {
     flags: {},
   };
 
-  // Extract type (first word)
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
     result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
@@ -225,20 +220,18 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
         const bubble = createActionCard(
           title,
           body,
-          actions.map((action) => ({
-            label: action.label,
-            action:
-              action.type === "uri"
-                ? { type: "uri", label: action.label, uri: action.uri }
-                : action.type === "postback"
-                  ? {
-                      type: "postback",
-                      label: action.label,
-                      data: action.data,
-                      displayText: action.label,
-                    }
-                  : { type: "message", label: action.label, text: action.data },
-          })),
+          actions.map((action) =>
+            action.type === "uri"
+              ? { type: "uri", label: action.label, uri: action.uri }
+              : action.type === "postback"
+                ? {
+                    type: "postback",
+                    label: action.label,
+                    data: action.data,
+                    displayText: action.label,
+                  }
+                : { type: "message", label: action.label, text: action.data },
+          ),
           { imageUrl: flags.url || flags.image },
         );
         return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);

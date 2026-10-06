@@ -32,22 +32,28 @@ The browser-side CSP restriction itself is always on and not configurable.
 
 ## Public transcript boundary
 
-The authenticated Control UI does not become public when a session is published.
-Public transcript links use the dedicated `/share/session?token=<opaque>` route;
-the encrypted token is the read capability and does not reveal the agent, session
-key, session ID, or publication ID. Anonymous visitors cannot use it to connect
-to the Gateway, send messages, invoke tools, or open other Control UI routes.
+Public threads use the same `/chat/...` URL as the authenticated Control UI.
+Anonymous readers receive a separate, read-only document, never an operator
+connection. **Log in** goes through a protected same-origin handoff and returns
+to that thread with the person's existing permissions. Identity headers on the
+anonymous thread path do not authorize private access. Private and missing
+threads have the same anonymous unavailable response.
 
-The public renderer reads only user messages and assistant final-answer text.
+The public renderer includes only user messages and assistant final-answer text.
 It omits tools, reasoning, files, images, widgets, hidden messages, and internal
-metadata, and applies credential-pattern redaction. Responses use a restrictive
-content security policy, `Cache-Control: no-store`, and `Referrer-Policy: no-referrer`.
-Treat the complete URL as public: anyone who receives it can read existing and
-future published text until the creator or a Gateway admin disables access.
+metadata, and applies best-effort credential-pattern redaction. A restrictive
+content security policy permits only the fixed reader script; transcript HTML
+cannot execute. Responses retain `Cache-Control: no-store` and
+`Referrer-Policy: no-referrer`. Server-side representation reuse never substitutes
+for a current publication check, including before a `304` response.
 
-When a login proxy protects the host, bypass authentication only for the Control
-UI's `/share/*` namespace. Keep the WebSocket, bootstrap, API, dashboard, and all
-other routes protected. The detailed deployment, token, revocation, and restore
+Anyone who knows a public thread URL can read its existing and future published
+text until the creator or a Gateway admin disables access. Re-enabling access
+revives the normal thread URL, but not previously revoked token links.
+
+A login proxy must expose only the public thread documents and share namespace.
+Keep the session-entry login handoff, WebSocket, bootstrap, API, media, dashboard,
+and other application routes protected. The detailed deployment and revocation
 contract is in [Public session transcripts](/web/urls#public-session-transcripts).
 
 ## Avatar route auth
@@ -121,7 +127,7 @@ before they expire.
 
 This keeps media rendering compatible with browser-native media elements without putting reusable gateway credentials in visible media URLs.
 
-Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. Retention applies only to that mounted image; it does not extend its media ticket or authorize fresh reads. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image.
+Uploaded and local chat image previews rendered with native image elements keep an already-loaded image visible during temporary connection or metadata-renewal failures. That failure tolerance applies only to the mounted image; it does not extend its media ticket or authorize fresh reads. Scrolling can reuse a successfully decoded image from the bounded in-memory preview cache while its existing metadata and ticket remain valid, without another image download or loading placeholder. An explicit missing or access-denied response, or a change to the source, credentials, or access scope, clears the retained image. When the UI receives a sharing invalidation, a role-configuration change, or the connection close for a role reassignment, cached previews must pass fresh admission before remounting.
 
 Uploaded images also stay visible while a new session's workspace or worktree details arrive. Media access is rechecked in the background without replacing the loaded preview with a loading card.
 

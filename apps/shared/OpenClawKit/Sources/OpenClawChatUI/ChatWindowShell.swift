@@ -4,16 +4,27 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Window-local presentation commands shared with the app menu. Gateway/session
-/// operations remain on the chat view model owned by that same window.
+/// Window-local presentation commands and sidebar actions. Each window retains
+/// its own Gateway connection; menu views consume that admitted source.
 @MainActor
 @Observable
 public final class OpenClawChatWindowCommands {
+    var sessionMenuActions = ChatSessionSidebarActions()
     public var isCommandPalettePresented = false
     var composerFocusRequest = 0
     var findRequest = 0
 
     public init() {}
+
+    public func setSessionMenuConnection(_ connection: OpenClawSessionMenuConnection?) {
+        self.sessionMenuActions.refreshTask?.cancel()
+        self.sessionMenuActions = ChatSessionSidebarActions(connection: connection)
+        self.sessionMenuActions.refresh()
+    }
+
+    public func refreshSessionMenus() {
+        self.sessionMenuActions.refresh()
+    }
 }
 
 extension EnvironmentValues {
@@ -47,6 +58,8 @@ public struct OpenClawChatWindowShell: View {
     @State private var isPresentingNewSessionOptions = false
     @State private var renameSessionTarget: OpenClawChatSessionTarget?
     @State private var renameText = ""
+    private let detailHost: AnyView?
+    private let focusWebComposer: (() -> Void)?
     private let attentionRequests: [OpenClawChatAttentionRequest]
     private let userAccent: Color?
     private let displayOptions: OpenClawChatDisplayOptions
@@ -61,6 +74,8 @@ public struct OpenClawChatWindowShell: View {
     public init(
         viewModel: OpenClawChatViewModel,
         windowCommands: OpenClawChatWindowCommands? = nil,
+        detailHost: AnyView? = nil,
+        focusWebComposer: (() -> Void)? = nil,
         userAccent: Color? = nil,
         attentionRequests: [OpenClawChatAttentionRequest] = [],
         displayOptions: OpenClawChatDisplayOptions? = nil,
@@ -74,6 +89,8 @@ public struct OpenClawChatWindowShell: View {
     {
         _viewModel = State(initialValue: viewModel)
         _windowCommands = State(initialValue: windowCommands ?? OpenClawChatWindowCommands())
+        self.detailHost = detailHost
+        self.focusWebComposer = focusWebComposer
         self.attentionRequests = attentionRequests
         self.userAccent = userAccent
         self.displayOptions = displayOptions ?? .assistantTrace(showsAssistantTrace)
@@ -92,35 +109,51 @@ public struct OpenClawChatWindowShell: View {
                 query: self.$sessionQuery,
                 groups: self.$sessionGroups,
                 previews: self.sessionPreviews,
+                menuActions: self.windowCommands.sessionMenuActions,
                 additionalAttentionRequests: self.attentionRequests)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
-            OpenClawChatView(
-                viewModel: self.viewModel,
-                drawsBackground: false,
-                userAccent: self.userAccent,
-                displayOptions: self.displayOptions,
-                assistantName: self.viewModel.selectedAgent?.displayName,
-                assistantAvatarText: self.viewModel.selectedAgent?.emoji,
-                showsAssistantAvatars: false,
-                composerChrome: .clean,
-                messagePlaceholder: self.viewModel.selectedAgent.map {
-                    String(format: String(localized: "Message %@…"), $0.displayName)
-                },
-                emptyAssistantIntro: self.emptyAssistantIntro,
-                emptyAssistantPrompts: self.emptyAssistantPrompts,
-                talkControl: self.talkControl,
-                voiceNoteControl: self.voiceNoteControl,
-                speech: self.speech,
-                mediaPlaybackAllowed: self.mediaPlaybackAllowed)
-                .environment(\.openClawChatDesktopLayout, true)
-                .environment(\.openClawChatWindowCommands, self.windowCommands)
-                .navigationTitle(self.activeSessionTitle)
-                .toolbar { self.detailToolbar }
-                .background(self.keyboardShortcutHandlers)
-                .background(OpenClawChatTheme.desktopCanvas(in: self.colorScheme))
+            ZStack {
+                if !self.viewModel.usesWebConversation {
+                    OpenClawChatView(
+                        viewModel: self.viewModel,
+                        drawsBackground: false,
+                        userAccent: self.userAccent,
+                        displayOptions: self.displayOptions,
+                        assistantName: self.viewModel.selectedAgent?.displayName,
+                        assistantAvatarText: self.viewModel.selectedAgent?.emoji,
+                        showsAssistantAvatars: false,
+                        composerChrome: .clean,
+                        messagePlaceholder: self.viewModel.selectedAgent.map {
+                            String(format: String(localized: "Message %@…"), $0.displayName)
+                        },
+                        emptyAssistantIntro: self.emptyAssistantIntro,
+                        emptyAssistantPrompts: self.emptyAssistantPrompts,
+                        talkControl: self.talkControl,
+                        voiceNoteControl: self.voiceNoteControl,
+                        speech: self.speech,
+                        mediaPlaybackAllowed: self.mediaPlaybackAllowed)
+                }
+                if let detailHost {
+                    detailHost
+                        .opacity(self.viewModel.usesWebConversation ? 1 : 0)
+                        .allowsHitTesting(self.viewModel.usesWebConversation)
+                        .accessibilityHidden(!self.viewModel.usesWebConversation)
+                }
+            }
+            // The web header owns the detail titlebar band; the sidebar keeps
+            // its native safe area and window controls.
+            .ignoresSafeArea(.container, edges: self.viewModel.usesWebConversation ? .top : [])
+            .environment(\.openClawChatDesktopLayout, true)
+            .environment(\.openClawChatWindowCommands, self.windowCommands)
+            .navigationTitle(self.activeSessionTitle)
+            .toolbar { self.detailToolbar }
+            .background(self.keyboardShortcutHandlers)
+            .background(OpenClawChatTheme.desktopCanvas(in: self.colorScheme))
         }
-        .task { await self.viewModel.refreshAgents() }
+        .task {
+            if case .none = self.detailHost { await self.viewModel.refreshAgents() }
+        }
         .sheet(
             isPresented: self.$windowCommands.isCommandPalettePresented,
             onDismiss: {
@@ -188,25 +221,27 @@ public struct OpenClawChatWindowShell: View {
             .keyboardShortcut("n", modifiers: [.command, .shift])
             .focusable(false)
 
-            Button {
-                self.viewModel.refresh()
-                self.viewModel.refreshSessions(limit: 200)
-            } label: {
-                Text("Refresh")
-                    .font(OpenClawChatTypography.body)
-            }
-            .keyboardShortcut("r", modifiers: [.command])
-            .focusable(false)
+            if !self.viewModel.usesWebConversation {
+                Button {
+                    self.viewModel.refresh()
+                    self.viewModel.refreshSessions(limit: 200)
+                } label: {
+                    Text("Refresh")
+                        .font(OpenClawChatTypography.body)
+                }
+                .keyboardShortcut("r", modifiers: [.command])
+                .focusable(false)
 
-            Button {
-                self.exportTranscript()
-            } label: {
-                Text("Export Transcript")
-                    .font(OpenClawChatTypography.body)
+                Button {
+                    self.exportTranscript()
+                } label: {
+                    Text("Export Transcript")
+                        .font(OpenClawChatTypography.body)
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .focusable(false)
+                .disabled(self.viewModel.messages.isEmpty)
             }
-            .keyboardShortcut("e", modifiers: [.command, .shift])
-            .focusable(false)
-            .disabled(self.viewModel.messages.isEmpty)
 
             Button {
                 self.isPresentingSessions = true
@@ -223,6 +258,7 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private var activeSessionTitle: String {
+        if self.viewModel.usesWebConversation, let title = self.viewModel.webConversation?.state?.title { return title }
         if let entry = self.activeSessionEntry {
             return ChatSessionSidebarModel.displayName(for: entry)
         }
@@ -239,18 +275,20 @@ public struct OpenClawChatWindowShell: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
-        if #available(macOS 26.0, *) {
-            ToolbarItem(placement: .principal) {
-                self.conversationIdentity
+        if !self.viewModel.usesWebConversation {
+            if #available(macOS 26.0, *) {
+                ToolbarItem(placement: .principal) {
+                    self.conversationIdentity
+                }
+                .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .principal) {
+                    self.conversationIdentity
+                }
             }
-            .sharedBackgroundVisibility(.hidden)
-        } else {
-            ToolbarItem(placement: .principal) {
-                self.conversationIdentity
+            ToolbarItem(placement: .primaryAction) {
+                self.sessionActionsMenu
             }
-        }
-        ToolbarItem(placement: .primaryAction) {
-            self.sessionActionsMenu
         }
     }
 
@@ -299,13 +337,7 @@ public struct OpenClawChatWindowShell: View {
         let activity = self.activeSessionEntry.flatMap {
             ChatSessionSidebarModel.activity(for: $0, now: date.timeIntervalSince1970 * 1000)
         }
-        if activity?.kind == .attention {
-            return (String(localized: "Needs you"), "exclamationmark.bubble", OpenClawChatTheme.warning)
-        }
-        if activity?.kind == .queued {
-            return (String(localized: "Queued"), "hourglass", .secondary)
-        }
-        if self.viewModel.hasBlockingRunActivity {
+        if self.viewModel.hasBlockingRunActivity, activity?.kind != .attention, activity?.kind != .queued {
             return (String(localized: "Working"), "circle.dotted", .secondary)
         }
         guard let activity else { return nil }
@@ -527,6 +559,15 @@ public struct OpenClawChatWindowShell: View {
     }
 
     private func performPaletteAction(_ action: ChatCommandPaletteAction?) {
+        if self.viewModel.usesWebConversation {
+            switch action {
+            case .newThread: Task { await self.viewModel.startNewSession() }
+            case .threads: self.isPresentingSessions = true
+            case nil: self.focusWebComposer?()
+            case .find, .export: break
+            }
+            return
+        }
         if action == .find {
             self.windowCommands.findRequest += 1
             return

@@ -10,12 +10,6 @@ type DiagnosticStabilityQueryInput = {
   sinceSeq?: unknown;
 };
 
-type NormalizedDiagnosticStabilityQuery = {
-  limit: number;
-  type: string | undefined;
-  sinceSeq: number | undefined;
-};
-
 function parseOptionalNonNegativeInteger(value: unknown, field: string): number | undefined {
   if (value === undefined || value === null || value === "") {
     return undefined;
@@ -59,7 +53,7 @@ function normalizeLimit(limit: unknown, defaultLimit = DEFAULT_DIAGNOSTIC_STABIL
 export function normalizeDiagnosticStabilityQuery(
   input: DiagnosticStabilityQueryInput = {},
   options?: { defaultLimit?: number },
-): NormalizedDiagnosticStabilityQuery {
+) {
   return {
     limit: normalizeLimit(input.limit, options?.defaultLimit),
     type: parseOptionalType(input.type),

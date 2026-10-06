@@ -90,6 +90,7 @@ export async function clearRemovedSessionAuthProfiles(params: {
               env: inventory.env,
               sessionKeys,
               includeAuthorization: true,
+              snapshotFields: [],
             });
             assertCurrent();
             if (selected.entries.length === 0) {

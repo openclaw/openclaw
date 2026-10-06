@@ -73,6 +73,7 @@ When `tts.auto` is enabled, OpenClaw:
 - Skips replies dominated by fenced code; inline code and surrounding prose remain eligible for speech.
 - Summarizes long replies when summaries are enabled, using
   `summaryModel` (or `agents.defaults.model.primary`).
+  Summary model access uses the replying agent's credentials and ownership.
 - Attaches the generated audio to the reply.
 - In `mode: "final"`, sends TTS after streamed text completes. Channels without
   captioned-final support receive an audio-only supplement; Telegram puts text

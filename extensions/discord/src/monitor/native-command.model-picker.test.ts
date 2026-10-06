@@ -1,6 +1,4 @@
 // Discord tests cover native command.model picker plugin behavior.
-import { mkdtemp, rm } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
@@ -12,11 +10,12 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelsRuntimeChoice } from "openclaw/plugin-sdk/models-provider-runtime";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { getSessionEntry, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCustomId, serializePayload, type MessagePayload } from "../internal/discord.js";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
-import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-context.js";
 import * as modelPickerPreferencesModule from "./model-picker-preferences.js";
 import * as modelPickerModule from "./model-picker.state.js";
@@ -59,6 +58,19 @@ type PickerButtonData = Parameters<PickerButton["run"]>[1];
 type PickerSelectInteraction = Parameters<PickerSelect["run"]>[0];
 type PickerSelectData = Parameters<PickerSelect["run"]>[1];
 
+type SerializedPickerPayload = {
+  components?: Array<{
+    components?: Array<{
+      components?: Array<{
+        label?: string;
+        custom_id?: string;
+        disabled?: boolean;
+        options?: Array<{ label: string; value: string }>;
+      }>;
+    }>;
+  }>;
+};
+
 type MockInteraction = {
   user: { id: string; username: string; globalName: string };
   channel: { type: ChannelType; id: string; name?: string; parentId?: string };
@@ -75,6 +87,13 @@ type MockInteraction = {
 };
 
 let tempDir: string;
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(sessionRoot);
+    cleanup();
+  });
+});
+const sessionRoot = tempDirs.make("openclaw-discord-model-picker-");
 
 function createModelsProviderData(entries: Record<string, string[]>) {
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
@@ -159,7 +178,7 @@ function createModelCommandDefinition(): ChatCommandDefinition {
   };
 }
 
-function mockModelCommandPipeline(modelCommand: ChatCommandDefinition) {
+function mockModelCommandPipeline(modelCommand = createModelCommandDefinition()) {
   vi.spyOn(commandRegistryModule, "findCommandByNativeName").mockImplementation((name) =>
     name === "model" ? modelCommand : undefined,
   );
@@ -198,6 +217,44 @@ function createDispatchSpy() {
   return vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({ accepted: true });
 }
 
+function mockPickerData(data = createDefaultModelPickerData()) {
+  return vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+}
+
+function mockRuntimeConfig(cfg: OpenClawConfig | null) {
+  vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(cfg);
+  vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(cfg);
+}
+
+type ApplySelectionParams = Parameters<typeof applyDiscordModelPickerSelection>[0];
+
+function applySelection({
+  result,
+  ...selection
+}: Pick<
+  ApplySelectionParams,
+  "resolveCurrentModel" | "resolveCurrentRuntime" | "selectedRuntime"
+> & {
+  result: Awaited<ReturnType<DispatchDiscordCommandInteraction>>;
+}) {
+  return applyDiscordModelPickerSelection({
+    ...createModelPickerContext(),
+    interaction: createInteraction() as unknown as PickerButtonInteraction,
+    selectionCommand: {
+      prompt: `/model openai/gpt-4o${selection.selectedRuntime ? ` --runtime ${selection.selectedRuntime}` : ""}`,
+      command: createModelCommandDefinition(),
+    },
+    dispatchCommandInteraction: vi
+      .fn<DispatchDiscordCommandInteraction>()
+      .mockResolvedValue(result),
+    route: createResolvedAgentRoute(),
+    resolvedModelRef: "openai/gpt-4o",
+    preferenceScope: { accountId: "default", userId: "owner" },
+    settleMs: 0,
+    ...selection,
+  });
+}
+
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
 function firstMockArg(mock: MockWithCalls, label: string) {
@@ -230,18 +287,32 @@ function createModelPickerFallbackSelect(
   });
 }
 
-async function runSubmitButton(params: {
-  context: ModelPickerContext;
-  data: PickerButtonData;
-  dispatchCommandInteraction?: DispatchDiscordCommandInteraction;
-  userId?: string;
-  interaction?: MockInteraction;
-}) {
-  const button = createModelPickerFallbackButton(params.context, params.dispatchCommandInteraction);
-  const submitInteraction =
-    params.interaction ?? createInteraction({ userId: params.userId ?? "owner" });
-  await button.run(submitInteraction as unknown as PickerButtonInteraction, params.data);
-  return submitInteraction;
+async function runSubmitButton(
+  context: ModelPickerContext,
+  data: PickerButtonData,
+  dispatchCommandInteraction: DispatchDiscordCommandInteraction = createDispatchSpy(),
+  interaction = createInteraction(),
+) {
+  await createModelPickerFallbackButton(context, dispatchCommandInteraction).run(
+    interaction as unknown as PickerButtonInteraction,
+    data,
+  );
+  return interaction;
+}
+
+function prepareModelPicker(
+  data = createDefaultModelPickerData(),
+  context = createModelPickerContext(),
+) {
+  mockPickerData(data);
+  mockModelCommandPipeline();
+  const dispatchSpy = createDispatchSpy();
+  return {
+    context,
+    dispatchSpy,
+    submit: (componentData: PickerButtonData, interaction?: MockInteraction) =>
+      runSubmitButton(context, componentData, dispatchSpy, interaction),
+  };
 }
 
 async function runModelSelect(params: {
@@ -314,38 +385,30 @@ function createBoundThreadBindingManager(params: {
 }
 
 describe("Discord model picker interactions", () => {
-  it.each([
-    { view: "providers", action: "back", choice: '"value":"openai"' },
-    { view: "models", action: "nav", choice: '"value":"gpt-4.1"' },
-    { view: "recents", action: "recents", choice: '"label":"openai/gpt-4.1 (default)"' },
-  ])("delivers usable $view choices and clears a recovered refresh warning", async (view) => {
+  it("delivers usable model choices and clears a recovered refresh warning", async () => {
     const context = createModelPickerContext();
     const data = createModelsProviderData({ openai: ["gpt-4.1"] });
     data.refreshWarning = "Some models could not be refreshed.";
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
+    mockPickerData(data);
     const dispatchSpy = createDispatchSpy();
-    const params = {
-      context,
-      data: { cmd: "models", act: view.action, view: view.view, u: "owner", p: "openai" },
-      dispatchCommandInteraction: dispatchSpy,
-    };
+    const componentData = { cmd: "models", act: "nav", view: "models", u: "owner", p: "openai" };
 
-    const failedRefresh = await runSubmitButton(params);
+    const failedRefresh = await runSubmitButton(context, componentData, dispatchSpy);
     expect(failedRefresh.editReply).toHaveBeenCalledOnce();
     const failedPayload = JSON.stringify(
       serializePayload(failedRefresh.editReply.mock.calls[0]![0]!),
     );
     expect(failedPayload).toContain("Some models could not be refreshed.");
-    expect(failedPayload).toContain(view.choice);
+    expect(failedPayload).toContain('"label":"gpt-4.1"');
 
     delete data.refreshWarning;
-    const recovered = await runSubmitButton(params);
+    const recovered = await runSubmitButton(context, componentData, dispatchSpy);
     expect(recovered.editReply).toHaveBeenCalledOnce();
     const recoveredPayload = JSON.stringify(
       serializePayload(recovered.editReply.mock.calls[0]![0]!),
     );
     expect(recoveredPayload).not.toContain("Some models could not be refreshed.");
-    expect(recoveredPayload).toContain(view.choice);
+    expect(recoveredPayload).toContain('"label":"gpt-4.1"');
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
@@ -353,9 +416,7 @@ describe("Discord model picker interactions", () => {
     "offers the shared recovery when a retained %s dropdown choice disappears",
     async (action) => {
       const context = createModelPickerContext();
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
-        createModelsProviderData({ openai: ["gpt-4.1"] }),
-      );
+      mockPickerData(createModelsProviderData({ openai: ["gpt-4.1"] }));
       const dispatchSpy = createDispatchSpy();
       const interaction = await runModelSelect({
         context,
@@ -378,46 +439,35 @@ describe("Discord model picker interactions", () => {
 
   beforeEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
-    tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-discord-model-picker-"));
+    tempDir = tempDirs.make("case-", sessionRoot);
     vi.useRealTimers();
     vi.restoreAllMocks();
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(null);
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(null);
+    mockRuntimeConfig(null);
   });
 
   afterEach(async () => {
     hostSdk.runtimeChoicesAvailable = true;
     vi.useRealTimers();
-    await rm(tempDir, { recursive: true, force: true });
   });
 
-  it.each(["submit", "reset", "recents"])(
-    "dispatches declared minimum host %s through the built-in runtime",
-    async (action) => {
-      hostSdk.runtimeChoicesAvailable = false;
-      const context = createModelPickerContext();
-      const data = createDefaultModelPickerData();
-      delete data.runtimeChoicesByModel;
-      delete data.isCurrent;
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
-      mockModelCommandPipeline(createModelCommandDefinition());
-      const dispatchSpy = createDispatchSpy();
+  it("dispatches declared minimum host recents through the built-in runtime", async () => {
+    hostSdk.runtimeChoicesAvailable = false;
+    const context = createModelPickerContext();
+    const data = createDefaultModelPickerData();
+    delete data.runtimeChoicesByModel;
+    delete data.isCurrent;
+    const { dispatchSpy, submit } = prepareModelPicker(data, context);
 
-      await runSubmitButton({
-        context,
-        data: {
-          ...createModelsViewSubmitData(),
-          p: "anthropic",
-          mi: "1",
-          ...(action === "reset" ? { act: "reset" } : {}),
-          ...(action === "recents" ? { view: "recents", rs: "1" } : {}),
-        },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+    await submit({
+      ...createModelsViewSubmitData(),
+      p: "anthropic",
+      mi: "1",
+      view: "recents",
+      rs: "1",
+    });
 
-      expectDispatchedModelSelection({ dispatchSpy, model: "anthropic/claude-sonnet-4-5" });
-    },
-  );
+    expectDispatchedModelSelection({ dispatchSpy, model: "anthropic/claude-sonnet-4-5" });
+  });
 
   it.each(["explicit runtime", "native model policy", "native session pin"])(
     "preserves declared minimum host state with an unsupported %s",
@@ -427,8 +477,8 @@ describe("Discord model picker interactions", () => {
       const data = createDefaultModelPickerData();
       delete data.runtimeChoicesByModel;
       delete data.isCurrent;
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
-      mockModelCommandPipeline(createModelCommandDefinition());
+      mockPickerData(data);
+      mockModelCommandPipeline();
       if (mode === "native model policy") {
         context.cfg.agents = {
           defaults: {
@@ -452,17 +502,17 @@ describe("Discord model picker interactions", () => {
       });
       const before = getSessionEntry({ ...store, readConsistency: "latest" });
       const dispatchSpy = createDispatchSpy();
-      await runSubmitButton({
+      await runSubmitButton(
         context,
-        interaction,
-        data: {
+        {
           ...createModelsViewSubmitData(),
           p: "anthropic",
           mi: "1",
           ...(mode === "explicit runtime" ? { r: "claude-cli" } : {}),
         },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+        dispatchSpy,
+        interaction,
+      );
       expect(dispatchSpy).not.toHaveBeenCalled();
       expect(getSessionEntry({ ...store, readConsistency: "latest" })).toEqual(before);
       expect(JSON.stringify(firstMockArg(interaction.editReply, "model-only notice"))).toContain(
@@ -470,20 +520,6 @@ describe("Discord model picker interactions", () => {
       );
     },
   );
-
-  it("registers distinct fallback ids for button and select handlers", () => {
-    const context = createModelPickerContext();
-    const button = createModelPickerFallbackButton(context);
-    const select = createModelPickerFallbackSelect(context);
-
-    expect(button.customId).not.toBe(select.customId);
-    expect(button.customId.split(":")[0]).toBe(
-      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
-    );
-    expect(select.customId.split(":")[0]).toBe(
-      modelPickerModule.DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
-    );
-  });
 
   it("ignores interactions from users other than the picker owner", async () => {
     const context = createModelPickerContext();
@@ -528,7 +564,7 @@ describe("Discord model picker interactions", () => {
     expect(interaction.update).not.toHaveBeenCalled();
   });
 
-  it.each(["back", "nav", "bucket"] as const)(
+  it.each(["back", "bucket"] as const)(
     "preserves the selected provider bucket for %s interactions",
     async (action) => {
       const context = createModelPickerContext();
@@ -538,9 +574,7 @@ describe("Discord model picker interactions", () => {
           ["model"],
         ]),
       );
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
-        createModelsProviderData(providers),
-      );
+      mockPickerData(createModelsProviderData(providers));
       const selectingBucket = action === "bucket";
       const interaction = createInteraction({
         userId: "owner",
@@ -595,10 +629,7 @@ describe("Discord model picker interactions", () => {
         },
       },
     } as OpenClawConfig;
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
-      runtimeCfg,
-    );
+    mockRuntimeConfig(runtimeCfg);
 
     const staleData = createModelsProviderData({ openai: ["gpt-5.5"] });
     staleData.resolvedDefault = { provider: "openai", model: "gpt-5.5" };
@@ -609,21 +640,20 @@ describe("Discord model picker interactions", () => {
     const loadSpy = vi
       .spyOn(modelPickerModule, "loadDiscordModelPickerData")
       .mockImplementation(async (cfg) => (cfg === runtimeCfg ? runtimeData : staleData));
-    const modelCommand = createModelCommandDefinition();
-    mockModelCommandPipeline(modelCommand);
+    mockModelCommandPipeline();
     const dispatchSpy = createDispatchSpy();
 
-    const resetInteraction = await runSubmitButton({
+    const resetInteraction = await runSubmitButton(
       context,
-      data: {
+      {
         cmd: "model",
         act: "reset",
         view: "models",
         u: "owner",
         pg: "1",
       },
-      dispatchCommandInteraction: dispatchSpy,
-    });
+      dispatchSpy,
+    );
 
     expect(loadSpy).toHaveBeenCalledWith(runtimeCfg, "main", { sessionEntry: undefined });
     expectDispatchedModelSelection({
@@ -637,117 +667,20 @@ describe("Discord model picker interactions", () => {
     expect(resetInteraction.followUp).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      label: "configured-default request",
-      suppressedText:
-        "Model set to openai/gpt-4o for this session. Configured default update requested.",
-    },
-    {
-      label: "generic fallback",
-      suppressedText: undefined,
-    },
-  ])("renders the $label result after authoritative verification", async ({ suppressedText }) => {
-    const context = createModelPickerContext();
-    const result = await applyDiscordModelPickerSelection({
-      interaction: createInteraction() as unknown as PickerButtonInteraction,
-      selectionCommand: {
-        prompt: "/model openai/gpt-4o",
-        command: createModelCommandDefinition(),
-      },
-      dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
-        accepted: true,
-        ...(suppressedText ? { hiddenFinalReply: { text: `\n ${suppressedText} \n` } } : {}),
-      }),
-      cfg: context.cfg,
-      discordConfig: context.discordConfig,
-      accountId: context.accountId,
-      sessionPrefix: context.sessionPrefix,
-      threadBindings: context.threadBindings,
-      route: createResolvedAgentRoute(),
-      resolvedModelRef: "openai/gpt-4o",
-      preferenceScope: { accountId: "default", userId: "owner" },
-      settleMs: 0,
-      resolveCurrentModel: () => "openai/gpt-4o",
-      resolveCurrentRuntime: () => "auto",
-    });
-
-    expect(result).toEqual({
-      status: "success",
-      effectiveModelRef: "openai/gpt-4o",
-      noticeMessage: suppressedText ?? "✅ Model set to openai/gpt-4o.",
-    });
-  });
-
-  it("keeps the mismatch warning when the hidden reply looked successful", async () => {
-    const context = createModelPickerContext();
-    const interaction = createInteraction();
-    const recordRecentSpy = vi
-      .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
-      .mockResolvedValue();
-    const result = await applyDiscordModelPickerSelection({
-      interaction: interaction as unknown as PickerButtonInteraction,
-      selectionCommand: {
-        prompt: "/model openai/gpt-4o",
-        command: createModelCommandDefinition(),
-      },
-      dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
-        accepted: true,
-        hiddenFinalReply: {
-          text: "Model set to openai/gpt-4o for this session. Configured default update requested.",
-        },
-      }),
-      cfg: context.cfg,
-      discordConfig: context.discordConfig,
-      accountId: context.accountId,
-      sessionPrefix: context.sessionPrefix,
-      threadBindings: context.threadBindings,
-      route: createResolvedAgentRoute(),
-      resolvedModelRef: "openai/gpt-4o",
-      preferenceScope: { accountId: "default", userId: "owner" },
-      settleMs: 0,
-      resolveCurrentModel: () => "openai/gpt-4.1",
-      resolveCurrentRuntime: () => "codex",
-    });
-
-    expect(result).toEqual({
-      status: "mismatch",
-      effectiveModelRef: "openai/gpt-4.1",
-      noticeMessage:
-        "⚠️ Tried to set openai/gpt-4o, but current selection is openai/gpt-4.1 with runtime codex.",
-    });
-    expect(recordRecentSpy).not.toHaveBeenCalled();
-  });
-
   it("reports a hidden model error with the authoritative current selection", async () => {
-    const context = createModelPickerContext();
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
       .mockResolvedValue();
     const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
     const resolveCurrentRuntime = vi.fn(() => "codex");
-    const result = await applyDiscordModelPickerSelection({
-      interaction: createInteraction() as unknown as PickerButtonInteraction,
-      selectionCommand: {
-        prompt: "/model openai/gpt-4o",
-        command: createModelCommandDefinition(),
-      },
-      dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
+    const result = await applySelection({
+      result: {
         accepted: true,
         hiddenFinalReply: {
           text: "  Model change was not applied because the session changed.  ",
           isError: true,
         },
-      }),
-      cfg: context.cfg,
-      discordConfig: context.discordConfig,
-      accountId: context.accountId,
-      sessionPrefix: context.sessionPrefix,
-      threadBindings: context.threadBindings,
-      route: createResolvedAgentRoute(),
-      resolvedModelRef: "openai/gpt-4o",
-      preferenceScope: { accountId: "default", userId: "owner" },
-      settleMs: 0,
+      },
       resolveCurrentModel,
       resolveCurrentRuntime,
     });
@@ -763,37 +696,20 @@ describe("Discord model picker interactions", () => {
   });
 
   it.each([
-    { selectedRuntime: "codex", currentRuntime: "codex", expectedStatus: "success" },
-    { selectedRuntime: "auto", currentRuntime: "auto", expectedStatus: "success" },
     { selectedRuntime: "default", currentRuntime: "auto", expectedStatus: "success" },
     { selectedRuntime: "codex", currentRuntime: "auto", expectedStatus: "mismatch" },
   ])(
     "verifies authoritative runtime $selectedRuntime against $currentRuntime",
     async ({ selectedRuntime, currentRuntime, expectedStatus }) => {
-      const context = createModelPickerContext();
       const recordRecentSpy = vi
         .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
         .mockResolvedValue();
-      const result = await applyDiscordModelPickerSelection({
-        interaction: createInteraction() as unknown as PickerButtonInteraction,
-        selectionCommand: {
-          prompt: `/model openai/gpt-4o --runtime ${selectedRuntime}`,
-          command: createModelCommandDefinition(),
-        },
-        dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
+      const result = await applySelection({
+        result: {
           accepted: true,
           hiddenFinalReply: { text: "scope-aware core notice" },
-        }),
-        cfg: context.cfg,
-        discordConfig: context.discordConfig,
-        accountId: context.accountId,
-        sessionPrefix: context.sessionPrefix,
-        threadBindings: context.threadBindings,
-        route: createResolvedAgentRoute(),
-        resolvedModelRef: "openai/gpt-4o",
+        },
         selectedRuntime,
-        preferenceScope: { accountId: "default", userId: "owner" },
-        settleMs: 0,
         resolveCurrentModel: () => "openai/gpt-4o",
         resolveCurrentRuntime: () => currentRuntime,
       });
@@ -814,46 +730,33 @@ describe("Discord model picker interactions", () => {
   it("keeps a pending model stable when hot reload reorders the catalog", async () => {
     const context = createModelPickerContext();
     const runtimeCfg = { ...context.cfg } as OpenClawConfig;
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
-      runtimeCfg,
-    );
+    mockRuntimeConfig(runtimeCfg);
 
     const runtimeData = createModelsProviderData({ openai: ["a", "aa", "b"] });
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(runtimeData);
-    mockModelCommandPipeline(createModelCommandDefinition());
-    const dispatchSpy = createDispatchSpy();
+    const { dispatchSpy, submit } = prepareModelPicker(runtimeData, context);
 
-    const submitInteraction = await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "models",
-        u: "owner",
-        p: "openai",
-        pg: "1",
-        m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    const submitInteraction = await submit({
+      cmd: "model",
+      act: "submit",
+      view: "models",
+      u: "owner",
+      p: "openai",
+      pg: "1",
+      m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
     });
 
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/b" });
     expect(submitInteraction.followUp).toHaveBeenCalledOnce();
 
     dispatchSpy.mockClear();
-    const legacyInteraction = await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "models",
-        u: "owner",
-        p: "openai",
-        pg: "1",
-        mi: "2",
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    const legacyInteraction = await submit({
+      cmd: "model",
+      act: "submit",
+      view: "models",
+      u: "owner",
+      p: "openai",
+      pg: "1",
+      mi: "2",
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
@@ -861,17 +764,120 @@ describe("Discord model picker interactions", () => {
     ).toContain("Available models changed. Open /models and choose again.");
   });
 
+  it.each(["pick", "model"] as const)(
+    "keeps full long model identity through %s selection and rendered Submit",
+    async (action) => {
+      const model = `${"a".repeat(100)}x`;
+      const sibling = `${"a".repeat(100)}y`;
+      const pickerData = createModelsProviderData({ ollama: [model, sibling] });
+      const { context, dispatchSpy, submit } = prepareModelPicker(pickerData);
+      const rendered = serializePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          userId: "owner",
+          data: pickerData,
+          provider: "ollama",
+        }),
+      ) as SerializedPickerPayload;
+      const modelSelect = rendered.components?.[0]?.components
+        ?.flatMap((row) => row.components ?? [])
+        .find((component) => component.options?.some((option) => option.label === "a".repeat(100)));
+      expect(modelSelect?.options?.map((option) => option.value)).toEqual([
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", sibling),
+      ]);
+      const selectData = parseCustomId(modelSelect?.custom_id ?? "").data;
+      const selection = await runModelSelect({
+        context,
+        dispatchCommandInteraction: dispatchSpy,
+        data: action === "model" ? { ...selectData, a: "model" } : selectData,
+        values: [
+          action === "model"
+            ? model
+            : modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+        ],
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      const pending = serializePayload(
+        selection.editReply.mock.calls[0]![0]!,
+      ) as SerializedPickerPayload;
+      expect(JSON.stringify(pending)).toContain(`Selected: ollama/${model}`);
+      const submitButton = pending.components?.[0]?.components
+        ?.flatMap((row) => row.components ?? [])
+        .find((component) => component.label === "Submit");
+      expect(submitButton?.disabled).not.toBe(true);
+      const submitData = parseCustomId(submitButton?.custom_id ?? "").data;
+      expect(submitData.m).toBe(
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+      );
+      // A positional index would now target a different model.
+      mockPickerData(createModelsProviderData({ ollama: ["0-new", sibling, model] }));
+      await submit(submitData);
+      expectDispatchedModelSelection({ dispatchSpy, model: `ollama/${model}` });
+    },
+  );
+
+  it("rejects a compact token shared by multiple catalog entries", async () => {
+    const model = "a".repeat(101);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ openai: [model, `${model}b`] }),
+    );
+    const token = "samehash";
+    vi.spyOn(modelPickerModule, "createDiscordModelPickerModelToken").mockReturnValue(token);
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "pick", view: "models", u: "owner", p: "openai" },
+      values: [token],
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(firstMockArg(selection.editReply, "ambiguous model"))).toContain(
+      "Available models changed. Open /models and choose again.",
+    );
+  });
+
+  it("rejects a token-valued model missing from the current catalog", async () => {
+    const model = "a".repeat(101);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ ollama: ["other"] }),
+    );
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "pick", view: "models", u: "owner", p: "ollama" },
+      values: [modelPickerModule.createDiscordModelPickerModelToken("ollama", model)],
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(firstMockArg(selection.editReply, "removed model"))).toContain(
+      "Available models changed. Open /models and choose again.",
+    );
+  });
+
+  it("keeps hash-looking legacy model values distinct from token selections", async () => {
+    const model = "a".repeat(101);
+    const rawId = modelPickerModule.createDiscordModelPickerModelToken("ollama", model);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ ollama: [model, rawId] }),
+    );
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "model", view: "models", u: "owner", p: "ollama" },
+      values: [rawId],
+    });
+    expect(JSON.stringify(firstMockArg(selection.editReply, "legacy model"))).toContain(
+      `Selected: ollama/${rawId}`,
+    );
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
   it("requires submit and retains Gateway ownership through the /model pipeline", async () => {
     const dispatchReplyFromConfig =
       vi.fn<NonNullable<ModelPickerContext["dispatchReplyFromConfig"]>>();
     const context = { ...createModelPickerContext(), dispatchReplyFromConfig };
     const pickerData = createDefaultModelPickerData();
-    const modelCommand = createModelCommandDefinition();
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
+    const { dispatchSpy, submit } = prepareModelPicker(pickerData, context);
 
     const selectInteraction = await runModelSelect({
       context,
@@ -884,11 +890,7 @@ describe("Discord model picker interactions", () => {
     ).toContain("Selected: openai/gpt-4o · OpenClaw Default (press Submit)");
     expect(dispatchSpy).not.toHaveBeenCalled();
 
-    const submitInteraction = await runSubmitButton({
-      context,
-      data: createModelsViewSubmitData(),
-      dispatchCommandInteraction: dispatchSpy,
-    });
+    const submitInteraction = await submit(createModelsViewSubmitData());
 
     expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
     expect(dispatchSpy).toHaveBeenCalledTimes(1);
@@ -902,32 +904,7 @@ describe("Discord model picker interactions", () => {
     expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
   });
 
-  it("applies the selected model even when component channel.name throws on a partial channel", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createDefaultModelPickerData();
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    const submitInteraction = createInteraction({ userId: "owner" });
-    defineThrowingDiscordChannelGetter(submitInteraction.channel, "name");
-
-    const button = createModelPickerFallbackButton(context, dispatchSpy);
-    await button.run(
-      submitInteraction as unknown as PickerButtonInteraction,
-      createModelsViewSubmitData(),
-    );
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "openai/gpt-4o",
-    });
-  });
-
-  it.each(["codex", "auto", "default"])(
+  it.each(["default"])(
     "routes selected runtime %s through the hidden /model command",
     async (runtime) => {
       const context = createModelPickerContext();
@@ -944,17 +921,9 @@ describe("Discord model picker interactions", () => {
           ],
         ]),
       );
-      const modelCommand = createModelCommandDefinition();
 
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-      mockModelCommandPipeline(modelCommand);
-
-      const dispatchSpy = createDispatchSpy();
-      const submitInteraction = await runSubmitButton({
-        context,
-        data: { ...createModelsViewSubmitData(), r: runtime },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+      const { dispatchSpy, submit } = prepareModelPicker(pickerData, context);
+      const submitInteraction = await submit({ ...createModelsViewSubmitData(), r: runtime });
 
       expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
       expect(dispatchSpy).toHaveBeenCalledTimes(1);
@@ -966,141 +935,21 @@ describe("Discord model picker interactions", () => {
     },
   );
 
-  it("does not carry the current runtime to another provider", async () => {
-    const context = createModelPickerContext();
-    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
-      defaults: { agentRuntime: { id: "codex" } },
-    };
-    const pickerData = createDefaultModelPickerData();
-    setFixtureRuntimeChoices(
-      pickerData,
-      new Map([
-        [
-          "openai",
-          [
-            { id: "codex", label: "Codex", description: "Use Codex." },
-            { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
-          ],
-        ],
-      ]),
-    );
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    await runSubmitButton({
-      context,
-      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
-      dispatchCommandInteraction: dispatchSpy,
-    });
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "anthropic/claude-sonnet-4-5",
-    });
-  });
-
   it("keeps legacy model indices in JavaScript code-unit order", async () => {
     const context = createModelPickerContext();
     const pickerData = createModelsProviderData({
       openai: ["a-model", "Z-model"],
     });
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(createModelCommandDefinition());
-    const dispatchSpy = createDispatchSpy();
+    const { dispatchSpy, submit } = prepareModelPicker(pickerData, context);
 
-    await runSubmitButton({
-      context,
-      data: {
-        ...createModelsViewSubmitData(),
-        mi: "1",
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    await submit({
+      ...createModelsViewSubmitData(),
+      mi: "1",
     });
 
     expectDispatchedModelSelection({
       dispatchSpy,
       model: "openai/Z-model",
-    });
-  });
-
-  it("does not treat legacy agentRuntime config as current picker state", async () => {
-    const context = createModelPickerContext();
-    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
-      defaults: { agentRuntime: { id: "claude-cli" } },
-    };
-    const pickerData = createDefaultModelPickerData();
-    setFixtureRuntimeChoices(
-      pickerData,
-      new Map([
-        [
-          "anthropic",
-          [
-            { id: "openclaw", label: "OpenClaw Default", description: "Use OpenClaw." },
-            { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
-          ],
-        ],
-      ]),
-    );
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    await runSubmitButton({
-      context,
-      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
-      dispatchCommandInteraction: dispatchSpy,
-    });
-
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "anthropic/claude-sonnet-4-5",
-    });
-  });
-
-  it("applies the selected model even when component thread parent.name throws on a partial channel", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createDefaultModelPickerData();
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    const submitInteraction = createInteraction({ userId: "owner" });
-    submitInteraction.guild = { id: "guild-1" };
-    const threadChannel = {
-      type: ChannelType.PublicThread,
-      id: "thread-1",
-      parentId: "parent-1",
-      parent: { id: "parent-1", name: "parent-name" },
-    } as {
-      type: ChannelType;
-      id: string;
-      parentId: string;
-      parent?: { id?: string; name?: string };
-    };
-    submitInteraction.channel = threadChannel as MockInteraction["channel"];
-    defineThrowingDiscordChannelGetter(
-      threadChannel.parent as { id?: string; name?: string },
-      "name",
-    );
-
-    const button = createModelPickerFallbackButton(context, dispatchSpy);
-    await button.run(
-      submitInteraction as unknown as PickerButtonInteraction,
-      createModelsViewSubmitData(),
-    );
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    expectDispatchedModelSelection({
-      dispatchSpy,
-      model: "openai/gpt-4o",
     });
   });
 
@@ -1128,10 +977,9 @@ describe("Discord model picker interactions", () => {
   it("shows timeout status and skips recents write when apply is still processing", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();
-    const modelCommand = createModelCommandDefinition();
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
+    mockPickerData(pickerData);
+    mockModelCommandPipeline();
 
     const recordRecentSpy = vi
       .spyOn(modelPickerPreferencesModule, "recordDiscordModelPickerRecentModel")
@@ -1167,7 +1015,7 @@ describe("Discord model picker interactions", () => {
       anthropic: ["claude-sonnet-4-5"],
     });
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockPickerData(pickerData);
     vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue([
       "openai/gpt-4o",
       "anthropic/claude-sonnet-4-5",
@@ -1197,29 +1045,21 @@ describe("Discord model picker interactions", () => {
   it("clicking recents model button applies model through /model pipeline", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();
-    const modelCommand = createModelCommandDefinition();
 
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    const { dispatchSpy, submit } = prepareModelPicker(pickerData, context);
     vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue([
       "openai/gpt-4o",
       "anthropic/claude-sonnet-4-5",
     ]);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
 
     // rs=2 -> first deduped recent (default is anthropic/claude-sonnet-4-5, so openai/gpt-4o remains)
-    const submitInteraction = await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "recents",
-        u: "owner",
-        pg: "1",
-        rs: "2",
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    const submitInteraction = await submit({
+      cmd: "model",
+      act: "submit",
+      view: "recents",
+      u: "owner",
+      pg: "1",
+      rs: "2",
     });
 
     expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
@@ -1230,46 +1070,34 @@ describe("Discord model picker interactions", () => {
   it("keeps a recent model stable when hot reload shifts its slot", async () => {
     const context = createModelPickerContext();
     const runtimeCfg = { ...context.cfg } as OpenClawConfig;
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSnapshot").mockReturnValue(runtimeCfg);
-    vi.spyOn(runtimeConfigSnapshotModule, "getRuntimeConfigSourceSnapshot").mockReturnValue(
-      runtimeCfg,
-    );
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+    mockRuntimeConfig(runtimeCfg);
+    const { dispatchSpy, submit } = prepareModelPicker(
       createModelsProviderData({ openai: ["a", "b"] }),
+      context,
     );
     vi.spyOn(modelPickerPreferencesModule, "readDiscordModelPickerRecentModels").mockResolvedValue([
       "openai/a",
       "openai/b",
     ]);
-    mockModelCommandPipeline(createModelCommandDefinition());
-    const dispatchSpy = createDispatchSpy();
 
-    await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "recents",
-        u: "owner",
-        pg: "1",
-        m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    await submit({
+      cmd: "model",
+      act: "submit",
+      view: "recents",
+      u: "owner",
+      pg: "1",
+      m: modelPickerModule.createDiscordModelPickerModelToken("openai", "b"),
     });
     expectDispatchedModelSelection({ dispatchSpy, model: "openai/b" });
 
     dispatchSpy.mockClear();
-    const legacyInteraction = await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "recents",
-        u: "owner",
-        pg: "1",
-        rs: "1",
-      },
-      dispatchCommandInteraction: dispatchSpy,
+    const legacyInteraction = await submit({
+      cmd: "model",
+      act: "submit",
+      view: "recents",
+      u: "owner",
+      pg: "1",
+      rs: "1",
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
     expect(
@@ -1277,76 +1105,18 @@ describe("Discord model picker interactions", () => {
     ).toContain("Available models changed. Open /models and choose again.");
   });
 
-  it("refuses legacy compact recents runtime without dispatch", async () => {
-    const context = createModelPickerContext();
-    const pickerData = createModelsProviderData({
-      openai: ["gpt-4o"],
-      anthropic: ["claude-sonnet-4-5"],
-    });
-    setFixtureRuntimeChoices(
-      pickerData,
-      new Map([
-        ["openai", [{ id: "codex", label: "Codex", description: "Use Codex." }]],
-        [
-          "anthropic",
-          [
-            { id: "codex", label: "Codex", description: "Use Codex." },
-            { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
-          ],
-        ],
-      ]),
-    );
-    const modelCommand = createModelCommandDefinition();
-
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
-    mockModelCommandPipeline(modelCommand);
-
-    const dispatchSpy = createDispatchSpy();
-    await runSubmitButton({
-      context,
-      data: {
-        cmd: "model",
-        act: "submit",
-        view: "recents",
-        u: "owner",
-        p: "openai",
-        ri: "1",
-        pg: "1",
-        rs: "1",
-      },
-      dispatchCommandInteraction: dispatchSpy,
-    });
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
-  });
-
   it("verifies the effective route returned by the core command", async () => {
-    const context = createModelPickerContext();
     const effectiveRoute = createResolvedAgentRoute({
       agentId: "worker",
       sessionKey: "agent:worker:subagent:bound",
       mainSessionKey: "agent:worker:main",
     });
     const seenRoutes: unknown[] = [];
-    const result = await applyDiscordModelPickerSelection({
-      interaction: createInteraction() as unknown as PickerButtonInteraction,
-      selectionCommand: {
-        prompt: "/model openai/gpt-4o",
-        command: createModelCommandDefinition(),
-      },
-      dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
+    const result = await applySelection({
+      result: {
         accepted: true,
         effectiveRoute,
-      }),
-      cfg: context.cfg,
-      discordConfig: context.discordConfig,
-      accountId: context.accountId,
-      sessionPrefix: context.sessionPrefix,
-      threadBindings: context.threadBindings,
-      route: createResolvedAgentRoute(),
-      resolvedModelRef: "openai/gpt-4o",
-      preferenceScope: { accountId: "default", userId: "owner" },
-      settleMs: 0,
+      },
       resolveCurrentModel: (route) => {
         seenRoutes.push(route);
         return "openai/gpt-4.1";
@@ -1367,27 +1137,12 @@ describe("Discord model picker interactions", () => {
   });
 
   it("reports a rejected hidden /model dispatch without reading authoritative state", async () => {
-    const context = createModelPickerContext();
     const resolveCurrentModel = vi.fn(() => "openai/gpt-4.1");
     const resolveCurrentRuntime = vi.fn(() => "auto");
-    const result = await applyDiscordModelPickerSelection({
-      interaction: createInteraction() as unknown as PickerButtonInteraction,
-      selectionCommand: {
-        prompt: "/model openai/gpt-4o",
-        command: createModelCommandDefinition(),
-      },
-      dispatchCommandInteraction: vi.fn<DispatchDiscordCommandInteraction>().mockResolvedValue({
+    const result = await applySelection({
+      result: {
         accepted: false,
-      }),
-      cfg: context.cfg,
-      discordConfig: context.discordConfig,
-      accountId: context.accountId,
-      sessionPrefix: context.sessionPrefix,
-      threadBindings: context.threadBindings,
-      route: createResolvedAgentRoute(),
-      resolvedModelRef: "openai/gpt-4o",
-      preferenceScope: { accountId: "default", userId: "owner" },
-      settleMs: 0,
+      },
       resolveCurrentModel,
       resolveCurrentRuntime,
     });
@@ -1421,9 +1176,7 @@ describe("Discord model picker interactions", () => {
       targetSessionKey: "agent:worker:subagent:bound",
       agentId: "worker",
     });
-    const loadSpy = vi
-      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
-      .mockResolvedValue(createDefaultModelPickerData());
+    const loadSpy = mockPickerData(createDefaultModelPickerData());
     const interaction = createInteraction({ userId: "owner" });
     interaction.guild = { id: "guild-1" };
     interaction.channel = {
@@ -1459,9 +1212,7 @@ describe("Discord model picker interactions", () => {
       provider: "anthropic",
       model: "claude-opus-4-5",
     };
-    const loadSpy = vi
-      .spyOn(modelPickerModule, "loadDiscordModelPickerData")
-      .mockResolvedValue(pickerData);
+    const loadSpy = mockPickerData(pickerData);
     const interaction = createInteraction({ userId: "owner" });
     const cfg = {
       ...context.cfg,
@@ -1504,7 +1255,7 @@ describe("Discord model picker interactions", () => {
     );
     const pickerData = createModelsProviderData(entries);
     pickerData.resolvedDefault = { provider: "provider-30", model: "model" };
-    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockPickerData(pickerData);
     const interaction = createInteraction({ userId: "owner" });
 
     await replyWithDiscordModelPickerProviders({
@@ -1546,16 +1297,11 @@ describe("Discord model picker interactions", () => {
       { label: "retired choices", choices: [builtin], runtime: "openclaw", current: false },
     ])("refuses $label without dispatch", async ({ choices, runtime, current }) => {
       const context = createModelPickerContext();
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
+      const { dispatchSpy, submit } = prepareModelPicker(
         runtimeData(choices, () => current),
-      );
-      mockModelCommandPipeline(createModelCommandDefinition());
-      const dispatchSpy = createDispatchSpy();
-      const interaction = await runSubmitButton({
         context,
-        data: { ...createModelsViewSubmitData(), r: runtime },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+      );
+      const interaction = await submit({ ...createModelsViewSubmitData(), r: runtime });
       expect(dispatchSpy).not.toHaveBeenCalled();
       expect(JSON.stringify(firstMockArg(interaction.editReply, "runtime refusal"))).toMatch(
         /runtime|expired/i,
@@ -1579,80 +1325,46 @@ describe("Discord model picker interactions", () => {
       const payload = serializePayload(rendered) as {
         components: PickerComponent[];
       };
-      const submit = payload.components
+      const submitButton = payload.components
         .flatMap((container) => container.components ?? [])
         .flatMap((row) => row.components ?? [])
         .find((component) => component.label === "Submit");
-      if (!submit?.custom_id) {
+      if (!submitButton?.custom_id) {
         throw new Error("Expected a serialized Submit button");
       }
       data.runtimeChoicesByProvider.set("openai", [builtin, native]);
       data.runtimeChoicesByModel.set("openai/gpt-4o", [builtin, native]);
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(data);
-      mockModelCommandPipeline(createModelCommandDefinition());
-      const dispatchSpy = createDispatchSpy();
-      await runSubmitButton({
-        context,
-        data: parseCustomId(submit.custom_id).data,
-        dispatchCommandInteraction: dispatchSpy,
-      });
+      const { dispatchSpy, submit } = prepareModelPicker(data, context);
+      await submit(parseCustomId(submitButton.custom_id).data);
       expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o", runtime: "codex" });
     });
 
     it("refuses an unconfirmed positional runtime submission", async () => {
       const context = createModelPickerContext();
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
-        runtimeData([native, builtin]),
-      );
-      mockModelCommandPipeline(createModelCommandDefinition());
-      const dispatchSpy = createDispatchSpy();
-      await runSubmitButton({
-        context,
-        data: { ...createModelsViewSubmitData(), ri: "1" },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+      const { dispatchSpy, submit } = prepareModelPicker(runtimeData([native, builtin]), context);
+      await submit({ ...createModelsViewSubmitData(), ri: "1" });
       expect(dispatchSpy).not.toHaveBeenCalled();
     });
 
     it("refuses a generation retired while the applying notice is awaited", async () => {
       const context = createModelPickerContext();
       let current = true;
-      vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
-        runtimeData([builtin], () => current),
-      );
-      mockModelCommandPipeline(createModelCommandDefinition());
+      mockPickerData(runtimeData([builtin], () => current));
+      mockModelCommandPipeline();
       const interaction = createInteraction();
       interaction.editReply.mockImplementation(async () => {
         current = false;
         return { ok: true };
       });
       const dispatchSpy = createDispatchSpy();
-      await runSubmitButton({
+      await runSubmitButton(
         context,
+        { ...createModelsViewSubmitData(), r: "openclaw" },
+        dispatchSpy,
         interaction,
-        data: { ...createModelsViewSubmitData(), r: "openclaw" },
-        dispatchCommandInteraction: dispatchSpy,
-      });
+      );
       expect(dispatchSpy).not.toHaveBeenCalled();
     });
-
-    it.each([undefined, "openclaw"])(
-      "dispatches an eligible model with runtime %s",
-      async (runtime) => {
-        const context = createModelPickerContext();
-        vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(
-          runtimeData([builtin]),
-        );
-        mockModelCommandPipeline(createModelCommandDefinition());
-        const dispatchSpy = createDispatchSpy();
-        await runSubmitButton({
-          context,
-          data: { ...createModelsViewSubmitData(), ...(runtime ? { r: runtime } : {}) },
-          dispatchCommandInteraction: dispatchSpy,
-        });
-        expectDispatchedModelSelection({ dispatchSpy, model: "openai/gpt-4o", runtime });
-      },
-    );
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

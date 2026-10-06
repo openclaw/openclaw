@@ -92,21 +92,6 @@ describe("runEmbeddedAgent silent-error retry", () => {
     await state?.cleanup();
   });
 
-  it("retries when a turn ends with stopReason=error and zero output tokens", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(emptyErrorAttempt("ollama", "glm-5.1:cloud"));
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      provider: "ollama",
-      model: "glm-5.1:cloud",
-      runId: "run-empty-error-retry-basic",
-    });
-
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.payloads).toBeUndefined();
-  });
-
   it("retries server_error when the attempt is otherwise silent and side-effect-free", async () => {
     mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -124,6 +109,37 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "surfaces a local transcript conflict without provider classification or retry (preflight recovered: %s)",
+    async (recovered) => {
+      const { SqliteTranscriptMutationConflictError } =
+        await import("../../config/sessions/session-mutation-conflict-error.js");
+      const error = new SqliteTranscriptMutationConflictError("conflicting-session");
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          ...emptyErrorAttempt("anthropic", "claude-opus-4-8"),
+          terminal: { kind: "failed", source: "prompt", error },
+          ...(recovered
+            ? { preflightRecovery: { handled: true, source: "mid-turn", route: "compact_only" } }
+            : {}),
+        }),
+      );
+
+      await expect(
+        runEmbeddedAgent({
+          ...createOverflowRunParams(state),
+          provider: "anthropic",
+          model: "claude-opus-4-8",
+          runId: "run-transcript-conflict",
+        }),
+      ).rejects.toBe(error);
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
+      expect(mockedClassifyFailoverReason).not.toHaveBeenCalled();
+      expect(mockedClassifyAssistantFailoverReason).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not intercept concrete non-transient failover errors", async () => {
     mockedClassifyFailoverReason.mockReturnValue("model_not_found");

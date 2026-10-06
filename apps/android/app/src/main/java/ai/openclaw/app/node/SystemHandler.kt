@@ -34,10 +34,10 @@ private class AndroidSystemNotificationPoster(
 ) : SystemNotificationPoster {
   /** Posts through a priority-specific channel so Android's immutable channel importance is respected. */
   override fun post(request: SystemNotifyRequest) {
+    // Android lint must see the platform check before notify().
     if (
       Build.VERSION.SDK_INT >= 33 &&
-      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) !=
-      PackageManager.PERMISSION_GRANTED
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
     ) {
       throw SecurityException("notifications permission missing")
     }
@@ -122,24 +122,15 @@ class SystemHandler internal constructor(
   fun handleSystemNotify(paramsJson: String?): GatewaySession.InvokeResult {
     val params =
       parseNotifyRequest(paramsJson)
-        ?: return GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: expected JSON object with title/body",
-        )
+        ?: return nodeInvokeError("INVALID_REQUEST", "expected JSON object with title/body")
     if (params.title.isEmpty() && params.body.isEmpty()) {
-      return GatewaySession.InvokeResult.error(
-        code = "INVALID_REQUEST",
-        message = "INVALID_REQUEST: empty notification",
-      )
+      return nodeInvokeError("INVALID_REQUEST", "empty notification")
     }
     return try {
       poster.post(params)
       GatewaySession.InvokeResult.ok(null)
     } catch (_: SecurityException) {
-      GatewaySession.InvokeResult.error(
-        code = "NOT_AUTHORIZED",
-        message = "NOT_AUTHORIZED: enable OpenClaw notifications and the selected priority in Android Settings",
-      )
+      nodeInvokeError("NOT_AUTHORIZED", "enable OpenClaw notifications and the selected priority in Android Settings")
     } catch (err: Throwable) {
       GatewaySession.InvokeResult.error(
         code = "UNAVAILABLE",

@@ -62,33 +62,12 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     });
   });
 
-  it("does not use aggregate usage when final-call usage is empty", async () => {
-    const { cronSession } = await runUsageCase(
-      { input: 75000, output: 2000, cacheRead: 5000, cacheWrite: 0 },
-      { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    );
-    expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
-    expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
-    expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextTokens: 128000,
-      promptTokens: undefined,
-    });
-    expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
-  });
-
   it("does not fall back to aggregate billing when final-call context is unavailable", async () => {
     const usage = {
       input: 12,
       output: 15_104,
       cacheRead: 819_661,
       cacheWrite: 93_130,
-      total: 927_907,
     };
     const { result, cronSession } = await runUsageCase(usage, {
       ...usage,

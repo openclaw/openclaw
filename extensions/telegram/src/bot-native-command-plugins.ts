@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -40,12 +39,6 @@ function resolveTelegramNativeReplyChannelData(
   return result.channelData?.telegram as TelegramNativeReplyChannelData | undefined;
 }
 
-function normalizeTelegramNativeReplyPayload(
-  result: TelegramNativeReplyPayload | null | undefined,
-): TelegramNativeReplyPayload {
-  return result && typeof result === "object" ? result : {};
-}
-
 function hasTelegramNativeReplyReaction(result: TelegramNativeReplyPayload): boolean {
   const reactionEmoji = resolveTelegramNativeReplyChannelData(result)?.reaction?.emoji;
   return typeof reactionEmoji === "string" && reactionEmoji.trim().length > 0;
@@ -75,26 +68,6 @@ function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): b
     !hasTelegramNativeReplyReaction(result) &&
     telegramData?.pin !== true,
   );
-}
-
-async function cleanupTelegramProgressPlaceholder(params: {
-  bot: Bot;
-  chatId: number;
-  progressMessageId?: number;
-  runtime: TelegramCommandExecutorParams["runtime"];
-}): Promise<void> {
-  if (params.progressMessageId == null) {
-    return;
-  }
-  try {
-    await withTelegramApiErrorLogging({
-      operation: "deleteMessage",
-      runtime: params.runtime,
-      fn: () => params.bot.api.deleteMessage(params.chatId, params.progressMessageId!),
-    });
-  } catch {
-    // Best-effort cleanup before fallback or suppression exits.
-  }
 }
 
 async function resolveTelegramCommandTranscriptContext(params: {
@@ -163,6 +136,21 @@ export async function executeTelegramPluginCommand(
       : `telegram:${dispatch.chatId}`;
   const { deliverReplies, emitTelegramMessageSentHooks } = await dispatch.loadDeliveryRuntime();
   let progressMessageId: number | undefined;
+  const cleanupProgressPlaceholder = async () => {
+    const messageId = progressMessageId;
+    if (messageId == null) {
+      return;
+    }
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "deleteMessage",
+        runtime: dispatch.runtime,
+        fn: () => dispatch.bot.api.deleteMessage(dispatch.chatId, messageId),
+      });
+    } catch {
+      // Best-effort cleanup before fallback or suppression exits.
+    }
+  };
   if (params.candidate.progressMessage) {
     try {
       const sent = await withTelegramApiErrorLogging({
@@ -175,10 +163,7 @@ export async function executeTelegramPluginCommand(
             buildTelegramThreadParams(dispatch.threadSpec),
           ),
       });
-      const maybeMessageId = (sent as { message_id?: unknown } | undefined)?.message_id;
-      if (typeof maybeMessageId === "number") {
-        progressMessageId = maybeMessageId;
-      }
+      progressMessageId = sent.message_id;
     } catch {
       // Fall back to the normal final reply path if the placeholder send fails.
     }
@@ -188,26 +173,24 @@ export async function executeTelegramPluginCommand(
     agentId: dispatch.route.agentId,
     sessionKey: dispatch.targetSessionKey,
   });
-  const result = normalizeTelegramNativeReplyPayload(
-    await pluginCommandDispatch.execute({
-      senderId: dispatch.senderId,
-      channel: "telegram",
-      isAuthorizedSender: dispatch.commandAuthorized,
-      senderIsOwner: dispatch.senderIsOwner,
-      assertOwnerCurrent: dispatch.assertOwnerCurrent,
-      agentId: dispatch.route.agentId,
-      sessionKey: dispatch.targetSessionKey,
-      sessionId: transcriptContext.sessionId,
-      sessionFile: transcriptContext.sessionFile,
-      authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
-      commandBody,
-      config: dispatch.runtimeCfg,
-      from,
-      to,
-      accountId: dispatch.accountId,
-      messageThreadId: dispatch.threadSpec.id,
-    }),
-  );
+  const result = await pluginCommandDispatch.execute({
+    senderId: dispatch.senderId,
+    channel: "telegram",
+    isAuthorizedSender: dispatch.commandAuthorized,
+    senderIsOwner: dispatch.senderIsOwner,
+    assertOwnerCurrent: dispatch.assertOwnerCurrent,
+    agentId: dispatch.route.agentId,
+    sessionKey: dispatch.targetSessionKey,
+    sessionId: transcriptContext.sessionId,
+    sessionFile: transcriptContext.sessionFile,
+    authProfileId: transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+    commandBody,
+    config: dispatch.runtimeCfg,
+    from,
+    to,
+    accountId: dispatch.accountId,
+    messageThreadId: dispatch.threadSpec.id,
+  });
   const suppressReply =
     shouldSuppressLocalTelegramExecApprovalPrompt({
       cfg: dispatch.runtimeCfg,
@@ -215,12 +198,7 @@ export async function executeTelegramPluginCommand(
       payload: result,
     }) || result.suppressReply === true;
   if (suppressReply) {
-    await cleanupTelegramProgressPlaceholder({
-      bot: dispatch.bot,
-      chatId: dispatch.chatId,
-      progressMessageId,
-      runtime: dispatch.runtime,
-    });
+    await cleanupProgressPlaceholder();
     return;
   }
   const hasReaction = hasTelegramNativeReplyReaction(result);
@@ -274,12 +252,7 @@ export async function executeTelegramPluginCommand(
       // Fall through to cleanup + normal delivered reply if editing fails.
     }
   }
-  await cleanupTelegramProgressPlaceholder({
-    bot: dispatch.bot,
-    chatId: dispatch.chatId,
-    progressMessageId,
-    runtime: dispatch.runtime,
-  });
+  await cleanupProgressPlaceholder();
   await deliverReplies({
     replies: [deliverableResult],
     ...dispatch.buildDeliveryBaseOptions({

@@ -4,11 +4,7 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import { createServiceRuntimeInspectionFailure } from "../../daemon/service-runtime.js";
 import type { GatewayServiceEnvArgs, GatewayServiceState } from "../../daemon/service-types.js";
-import {
-  readGatewayServiceState,
-  resolveGatewayService,
-  type GatewayService,
-} from "../../daemon/service.js";
+import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 
 type DaemonServiceState = Pick<
@@ -17,9 +13,7 @@ type DaemonServiceState = Pick<
 > & { inspectionFailed?: true };
 
 /** Status may report incomplete inspection, but it cannot override an observed owner. */
-export async function readDaemonServiceStatus(
-  args: GatewayServiceEnvArgs,
-): Promise<{ service: GatewayService; state: DaemonServiceState }> {
+export async function readDaemonServiceStatus(args: GatewayServiceEnvArgs) {
   const service = resolveGatewayService();
   const state: DaemonServiceState = await readGatewayServiceState(service, args).catch(
     (error: unknown): DaemonServiceState => {

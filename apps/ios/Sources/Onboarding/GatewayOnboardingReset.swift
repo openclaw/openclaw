@@ -145,7 +145,7 @@ enum GatewayOnboardingReset {
         }
 
         if gatewayStableID == nil {
-            GatewaySettingsStore.clearGatewayRegistry(defaults: defaults)
+            GatewaySettingsStore.clearGatewayRegistry()
         }
         GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
         GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)

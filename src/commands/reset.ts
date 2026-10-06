@@ -1,9 +1,4 @@
-/**
- * Reset command implementation.
- *
- * It removes selected config/state/workspace surfaces after confirmation and
- * stops managed gateway services before deleting broader state.
- */
+// Stop managed Gateway services before deleting broader state.
 import { cancel, confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import {
@@ -16,7 +11,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCleanupPlanForDryRun, resolveCleanupPlanForRemoval } from "./cleanup-plan.js";
 import {
-  listAgentSessionDirs,
+  removeAgentSessions,
   removePath,
   removeStateAndLinkedPaths,
   removeWorkspaceDirs,
@@ -24,7 +19,6 @@ import {
 
 type ResetScope = "config" | "config+creds+sessions" | "full";
 
-/** CLI options accepted by `openclaw reset`. */
 type ResetOptions = {
   scope?: ResetScope;
   yes?: boolean;
@@ -58,11 +52,6 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv): Promise<boolean> {
   }
 }
 
-function logBackupRecommendation(runtime: RuntimeEnv) {
-  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
-}
-
-/** Runs the reset command for config, credential/session, or full state scopes. */
 export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
   const interactive = !opts.nonInteractive;
   if (!interactive && !opts.yes) {
@@ -134,7 +123,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
     return;
   }
 
-  logBackupRecommendation(runtime);
+  runtime.log(`Recommended first: ${formatCliCommand("openclaw backup create")}`);
   if (dryRun) {
     runtime.log("[dry-run] stop gateway service");
   } else if (!(await stopGatewayIfRunning(runtime))) {
@@ -154,20 +143,15 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
 
   let failed = false;
   if (scope === "config+creds+sessions") {
+    try {
+      await removeAgentSessions(cleanupPlan, runtime, { dryRun });
+    } catch (error) {
+      runtime.error(`Failed to reset session history: ${String(error)}`);
+      failed = true;
+    }
     const configRemoval = await removePath(configPath, runtime, { dryRun, label: configPath });
     const oauthRemoval = await removePath(oauthDir, runtime, { dryRun, label: oauthDir });
-    failed = !configRemoval.ok || !oauthRemoval.ok;
-    const sessionDirs = await listAgentSessionDirs(stateDir).catch((error: unknown) => {
-      runtime.error(`Failed to inspect session directories: ${String(error)}`);
-      failed = true;
-      return [];
-    });
-    // Session stores are per-agent directories under state; enumerate them from
-    // disk so reset handles agents that are no longer present in config.
-    for (const dir of sessionDirs) {
-      const removal = await removePath(dir, runtime, { dryRun, label: dir });
-      failed ||= !removal.ok;
-    }
+    failed ||= !configRemoval.ok || !oauthRemoval.ok;
   }
 
   if (scope === "full") {

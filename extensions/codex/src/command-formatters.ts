@@ -11,6 +11,7 @@ import {
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
+import { isLikelyEmailAddress } from "./command-account-email.js";
 import type { CodexAccountAuthOverview } from "./command-account.js";
 import type { readCodexStatusProbes, SafeValue } from "./command-rpc.js";
 
@@ -171,6 +172,9 @@ export function formatComputerUseStatus(status: CodexComputerUseStatus): string 
 }
 
 function computerUsePluginState(status: CodexComputerUseStatus): string {
+  if (status.installed === null) {
+    return "installation unchecked";
+  }
   if (!status.installed) {
     return "not installed";
   }
@@ -236,12 +240,10 @@ export function formatCodexTextForDisplay(value: string): string {
 }
 
 function sanitizeCodexTextForDisplay(value: string): string {
-  let safe = "";
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
-  }
-  return safe;
+  return value.replace(
+    /[\p{Cc}\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu,
+    "?",
+  );
 }
 
 export function escapeCodexChatText(value: string): string {
@@ -286,26 +288,6 @@ export function formatCodexAccountLine(value: string): string {
   }
   formatted += escapeCodexChatText(safe.slice(lastIndex));
   return formatted;
-}
-
-function isLikelyEmailAddress(value: string): boolean {
-  return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(value);
-}
-
-function isUnsafeDisplayCodePoint(codePoint: number): boolean {
-  return (
-    codePoint <= 0x001f ||
-    (codePoint >= 0x007f && codePoint <= 0x009f) ||
-    codePoint === 0x00ad ||
-    codePoint === 0x061c ||
-    codePoint === 0x180e ||
-    (codePoint >= 0x200b && codePoint <= 0x200f) ||
-    (codePoint >= 0x202a && codePoint <= 0x202e) ||
-    (codePoint >= 0x2060 && codePoint <= 0x206f) ||
-    codePoint === 0xfeff ||
-    (codePoint >= 0xfff9 && codePoint <= 0xfffb) ||
-    (codePoint >= 0xe0000 && codePoint <= 0xe007f)
-  );
 }
 
 export function buildHelp(): string {

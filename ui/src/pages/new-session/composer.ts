@@ -7,13 +7,18 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import "../../components/tooltip.ts";
+import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
   renderAttachmentPreview,
   renderAttachmentReadStatus,
-  renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
@@ -55,25 +60,20 @@ function renderStartControl(options: NewSessionComposerOptions) {
     ? t("newSession.starting")
     : t(options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
   const reasonedBlock = !options.canSubmit && options.submitDisabledReason !== undefined;
+  const busy = options.submitting || options.pendingAttachmentReads > 0;
   return html` <openclaw-tooltip content=${options.submitDisabledReason ?? startLabel}>
     <button
       type="button"
       class="chat-send-btn new-session-page__start-submit ${
         reasonedBlock ? "new-session-page__start-submit--blocked" : ""
-      }"
+      } ${busy ? "new-session-page__start-submit--busy" : ""}"
       ?disabled=${!options.canSubmit && !reasonedBlock}
       aria-disabled=${String(!options.canSubmit)}
-      aria-busy=${String(options.submitting || options.pendingAttachmentReads > 0)}
+      aria-busy=${String(busy)}
       aria-label=${startLabel}
       @click=${() => submitNewSession(options)}
     >
-      ${
-        options.submitting || options.pendingAttachmentReads > 0
-          ? icons.loader
-          : options.nativeTerminal
-            ? icons.squareTerminal
-            : icons.arrowUp
-      }
+      ${busy ? icons.loader : options.nativeTerminal ? icons.squareTerminal : icons.arrowUp}
     </button>
   </openclaw-tooltip>`;
 }
@@ -90,8 +90,7 @@ function handleComposerKeydown(
     options.submitting ||
     options.messageLocked ||
     options.textareaController.composing ||
-    event.isComposing ||
-    event.keyCode === 229
+    isComposingKeyboardEvent(event)
   ) {
     return;
   }
@@ -166,11 +165,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const emojiMenu = options.textareaController.emojiMenu;
   const composerLocked =
     options.submitting || options.messageLocked === true || options.dictationActive === true;
-  mentionMenu.syncDirectory(
-    options.submitting || options.messageLocked || options.dictationActive
-      ? undefined
-      : options.mentionDirectory,
-  );
+  mentionMenu.syncDirectory(composerLocked ? undefined : options.mentionDirectory);
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
@@ -249,6 +244,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const attachmentProps = {
     attachmentReads: options.attachmentReads,
     attachmentLimits: options.attachmentLimits,
+    uploadConfig: options.uploadConfig,
     attachments: options.attachments,
     get disabled() {
       return (
@@ -425,12 +421,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               @focus=${handleSelect}
               @pointerup=${handleSelect}
               @keyup=${(event: KeyboardEvent) => {
+                clearCompositionEnd(event);
                 emojiMenu.handleKeyup(event);
                 if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
                   handleSelect(event);
                 }
               }}
-              @blur=${() => {
+              @blur=${(event: FocusEvent) => {
+                clearCompositionEnd(event);
                 const emojiWasOpen = emojiMenu.open;
                 options.textareaController.composing = false;
                 emojiMenu.close();
@@ -439,6 +437,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
               @compositionend=${(event: CompositionEvent) => {
+                recordCompositionEnd(event);
                 options.textareaController.composing = false;
                 if (event.target instanceof HTMLTextAreaElement) {
                   updateMenus(event.target);

@@ -20,7 +20,7 @@ import {
   waitForCreatedSessionRun,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   dashboardTitleGenerationMocks,
   requireNonEmptyString,
   removeSessionWorktree,
@@ -35,7 +35,7 @@ import {
 import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir, withSessionTestState } = setupSessionCreateTestHarness(
+const { createSessionStoreDir, withSessionTestState } = setupSessionCreateHandlerTestHarness(
   async (makeTempDir) => {
     gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
   },
@@ -62,29 +62,6 @@ function managedWorktreeFixture(params: {
 }
 
 test.each([
-  {
-    name: "agent default",
-    request: {},
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {},
-    expectedTitleSelection: { regularModelRef: "openai/gpt-5.6-luna" },
-  },
-  {
-    name: "explicit model",
-    request: { model: "anthropic/sonnet-4.6@work" },
-    catalogTarget: undefined,
-    parentEntry: undefined,
-    expectedEntry: {
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      authProfileOverride: "work",
-    },
-    expectedTitleSelection: {
-      regularModelRef: "anthropic/claude-sonnet-4-6@work",
-      preferredProfile: "work",
-    },
-  },
   {
     name: "registered catalog target",
     request: { catalogId: "claude" },
@@ -281,128 +258,90 @@ test("sessions.create does not start title generation for a model denied by poli
   }
 });
 
-test("sessions.create keeps the crustacean fallback when no title source exists", async () => {
+test("sessions.create maps worktree options and preserves a nested dot-prefixed workspace cwd", async () => {
+  const workspaceRelativePath = "..notes/app";
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
-    prefix: "openclaw-session-worktree-empty-title-",
+    prefix: "openclaw-session-worktree-options-",
   });
-  const workspace = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const repoRoot = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
+  const workspace = path.join(repoRoot, workspaceRelativePath);
+  const worktreePath = path.join(openClawState.root, "managed-worktree");
+  const key = "agent:main:dashboard:worktree-options";
+  await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
+  await Promise.all([
+    fs.mkdir(workspace, { recursive: true }),
+    fs.mkdir(worktreePath, { recursive: true }),
+  ]);
   testState.agentConfig = { workspace };
   await createSessionStoreDir();
-  let worktreeId: string | undefined;
+  const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
+    record: managedWorktreeFixture({
+      id: "worktree-options",
+      name: "target-task",
+      ownerId: key,
+      path: worktreePath,
+      repoRoot,
+    }),
+    materialized: true,
+  });
   try {
-    const created = await directSessionReq<{ worktree: { id: string; branch: string } }>(
+    const created = await directSessionReq<{
+      entry: {
+        permissionMode?: string;
+        sessionRoot?: string;
+        spawnedCwd?: string;
+        worktree?: { id: string; branch: string; repoRoot: string };
+      };
+      worktree: { id: string; path: string; branch: string };
+    }>(
       "sessions.create",
-      { agentId: "main", worktree: true },
+      {
+        agentId: "main",
+        key,
+        worktree: true,
+        worktreeName: "target-task",
+        worktreeBaseRef: "base-branch",
+        permissionMode: "workspace",
+      },
       { client: { connect: { scopes: ["operator.admin"] } } as never },
     );
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    worktreeId = created.payload?.worktree.id;
-    expect(created.payload?.worktree.branch).toMatch(
-      /^openclaw\/[a-z]+-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/,
+    expect(created.ok).toBe(true);
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: workspace,
+        ownerKind: "session",
+        ownerId: key,
+        name: "target-task",
+        baseRef: "base-branch",
+      }),
     );
-    expect(dashboardTitleGenerationMocks.generate).not.toHaveBeenCalled();
+    expect(created.payload?.entry).toMatchObject({
+      permissionMode: "workspace",
+      sessionRoot: worktreePath,
+      spawnedCwd: path.join(worktreePath, workspaceRelativePath),
+      worktree: {
+        id: "worktree-options",
+        branch: "openclaw/target-task",
+        repoRoot,
+      },
+    });
+    await expect(fs.stat(path.join(worktreePath, workspaceRelativePath))).resolves.toBeDefined();
+
+    const rejected = await directSessionReq(
+      "sessions.create",
+      { agentId: "main", worktreeName: "no-flag" },
+      { client: { connect: { scopes: ["operator.admin"] } } as never },
+    );
+    expect(rejected.ok).toBe(false);
   } finally {
-    if (worktreeId) {
-      await managedWorktrees.remove({
-        id: worktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    createSpy.mockRestore();
     await disposeSessionReadContexts();
     testState.agentConfig = undefined;
     await openClawState.cleanup();
   }
 });
-
-test.each(["packages/app", "..notes"])(
-  "sessions.create maps worktree options and preserves nested workspace cwd %s",
-  async (workspaceRelativePath) => {
-    const openClawState = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "openclaw-session-worktree-options-",
-    });
-    const repoRoot = await copyGitWorkspace(gitWorkspaceTemplate, openClawState.root);
-    const workspace = path.join(repoRoot, workspaceRelativePath);
-    const worktreePath = path.join(openClawState.root, "managed-worktree");
-    const key = "agent:main:dashboard:worktree-options";
-    await execFileAsync("git", ["-C", repoRoot, "branch", "base-branch"]);
-    await Promise.all([
-      fs.mkdir(workspace, { recursive: true }),
-      fs.mkdir(worktreePath, { recursive: true }),
-    ]);
-    testState.agentConfig = { workspace };
-    await createSessionStoreDir();
-    const createSpy = vi.spyOn(managedWorktrees, "createWithOutcome").mockResolvedValue({
-      record: managedWorktreeFixture({
-        id: "worktree-options",
-        name: "target-task",
-        ownerId: key,
-        path: worktreePath,
-        repoRoot,
-      }),
-      materialized: true,
-    });
-    try {
-      const created = await directSessionReq<{
-        entry: {
-          permissionMode?: string;
-          sessionRoot?: string;
-          spawnedCwd?: string;
-          worktree?: { id: string; branch: string; repoRoot: string };
-        };
-        worktree: { id: string; path: string; branch: string };
-      }>(
-        "sessions.create",
-        {
-          agentId: "main",
-          key,
-          worktree: true,
-          worktreeName: "target-task",
-          worktreeBaseRef: "base-branch",
-          permissionMode: "workspace",
-        },
-        { client: { connect: { scopes: ["operator.admin"] } } as never },
-      );
-
-      expect(created.ok).toBe(true);
-      expect(createSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoRoot: workspace,
-          ownerKind: "session",
-          ownerId: key,
-          name: "target-task",
-          baseRef: "base-branch",
-        }),
-      );
-      expect(created.payload?.entry).toMatchObject({
-        permissionMode: "workspace",
-        sessionRoot: worktreePath,
-        spawnedCwd: path.join(worktreePath, workspaceRelativePath),
-        worktree: {
-          id: "worktree-options",
-          branch: "openclaw/target-task",
-          repoRoot,
-        },
-      });
-      await expect(fs.stat(path.join(worktreePath, workspaceRelativePath))).resolves.toBeDefined();
-
-      const rejected = await directSessionReq(
-        "sessions.create",
-        { agentId: "main", worktreeName: "no-flag" },
-        { client: { connect: { scopes: ["operator.admin"] } } as never },
-      );
-      expect(rejected.ok).toBe(false);
-    } finally {
-      createSpy.mockRestore();
-      await disposeSessionReadContexts();
-      testState.agentConfig = undefined;
-      await openClawState.cleanup();
-    }
-  },
-);
 
 test("sessions.create maps an admin-selected worktree cwd and rejects repository changes", async () => {
   const openClawState = await createOpenClawTestState({

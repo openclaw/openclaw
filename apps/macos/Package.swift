@@ -19,7 +19,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.15.1"),
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.0"),
-        .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.6.0"),
+        .package(url: "https://github.com/openclaw/Peekaboo.git", exact: "4.7.0"),
         .package(url: "https://github.com/pointfreeco/swift-concurrency-extras", from: "1.4.1"),
         .package(path: "../shared/OpenClawKit"),
         .package(path: "../shared/OpenClawMLXTTSProtocol"),
@@ -96,6 +96,13 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
+        .target(
+            name: "OpenClawWebKitTestSupport",
+            path: "Tests/OpenClawWebKitTestSupport",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("WebKit"),
+            ]),
         .testTarget(
             name: "OpenClawIPCTests",
             dependencies: [
@@ -103,6 +110,7 @@ let package = Package(
                 "OpenClaw",
                 "OpenClawMacCLI",
                 "OpenClawDiscovery",
+                "OpenClawWebKitTestSupport",
                 .product(name: "OpenClawChatUI", package: "OpenClawKit"),
                 .product(name: "OpenClawKit", package: "OpenClawKit"),
                 .product(name: "OpenClawMLXTTSProtocol", package: "OpenClawMLXTTSProtocol"),

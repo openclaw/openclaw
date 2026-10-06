@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
@@ -141,7 +142,7 @@ private fun SecretStoreConsent(
         onValueChange = { value -> onDraftChanged { it.copy(secretStoreAllowedHostsText = value) } },
         modifier = Modifier.fillMaxWidth(),
         enabled = enabled,
-        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body) },
+        label = { Text(nativeString("Allowed HTTPS hosts"), style = ClawTheme.type.body.copy(fontSize = LocalTextStyle.current.fontSize)) },
         placeholder = { Text(nativeString("api.example.com, uploads.example.com"), style = ClawTheme.type.body) },
         textStyle = ClawTheme.type.body,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
@@ -207,9 +208,9 @@ private fun QuestionSection(
     )
     Text(text = question.question, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     question.options.forEach { option ->
-      val selected = option.label in draft.selectedOptions[question.questionId].orEmpty()
+      val selected = (option.value ?: option.label) in draft.selectedOptions[question.questionId].orEmpty()
       Surface(
-        onClick = { onDraftChanged { it.toggle(question, option.label) } },
+        onClick = { onDraftChanged { it.toggle(question, option.value ?: option.label) } },
         enabled = enabled,
         shape = RoundedCornerShape(ClawTheme.radii.row),
         color = if (selected) ClawTheme.colors.surfacePressed else ClawTheme.colors.surface,
@@ -301,7 +302,7 @@ internal fun terminalQuestionAnswer(
   // Secret terminal summaries never echo submitted answer text.
   if (question.isSecret != true) {
     prompt.record.answers?.answers?.get(question.questionId)?.takeIf { it.isNotEmpty() }?.let {
-      return it.joinToString(", ")
+      return it.joinToString(", ") { value -> question.options.firstOrNull { option -> (option.value ?: option.label) == value }?.label ?: value }
     }
   }
   return if (status == ChatQuestionStatus.AnsweredElsewhere) nativeString("Answered elsewhere") else nativeString("Answered")

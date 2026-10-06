@@ -1,7 +1,3 @@
-/**
- * Builds an Adaptive Card for welcoming users when the bot is added to a conversation.
- */
-
 const DEFAULT_PROMPT_STARTERS = [
   "What can you do?",
   "Summarize my last meeting",
@@ -15,9 +11,6 @@ type WelcomeCardOptions = {
   promptStarters?: string[];
 };
 
-/**
- * Build a welcome Adaptive Card for 1:1 personal chats.
- */
 export function buildWelcomeCard(options?: WelcomeCardOptions): Record<string, unknown> {
   const botName = options?.botName || "OpenClaw";
   const starters = options?.promptStarters?.length
@@ -50,9 +43,6 @@ export function buildWelcomeCard(options?: WelcomeCardOptions): Record<string, u
   };
 }
 
-/**
- * Build a brief welcome message for group chats (when the bot is @mentioned).
- */
 export function buildGroupWelcomeText(botName?: string): string {
   const name = botName || "OpenClaw";
   return `Hi! I'm ${name}. Mention me with @${name} to get started.`;

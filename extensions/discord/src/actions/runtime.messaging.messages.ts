@@ -28,29 +28,6 @@ function parseDiscordMessageLink(link: string) {
   };
 }
 
-function describeDiscordMessageListResult(value: unknown): string {
-  if (Array.isArray(value)) {
-    return "array";
-  }
-  if (value === null) {
-    return "null";
-  }
-  if (value && typeof value === "object") {
-    const keys = Object.keys(value).toSorted();
-    return keys.length ? `object with keys ${keys.join(", ")}` : "object";
-  }
-  return typeof value;
-}
-
-function assertDiscordMessageListResult(value: unknown): Array<unknown> {
-  if (Array.isArray(value)) {
-    return value;
-  }
-  throw new Error(
-    `Discord message read returned ${describeDiscordMessageListResult(value)} instead of an array.`,
-  );
-}
-
 export async function handleDiscordMessageManagementAction(ctx: DiscordMessagingActionContext) {
   switch (ctx.action) {
     case "permissions": {
@@ -119,13 +96,7 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               ctx.withOpts(),
             ),
           ]
-        : assertDiscordMessageListResult(
-            await discordMessagingActionRuntime.readMessagesDiscord(
-              channelId,
-              query,
-              ctx.withOpts(),
-            ),
-          );
+        : await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, ctx.withOpts());
       return jsonResult({
         ok: true,
         channelId,
@@ -169,34 +140,21 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       );
       return jsonResult({ ok: true, message });
     }
-    case "deleteMessage": {
-      if (!ctx.isActionEnabled("messages")) {
-        throw new Error("Discord message deletes are disabled.");
-      }
-      const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
-      await ctx.assertReadTargetAllowed({ channelId });
-      await discordMessagingActionRuntime.deleteMessageDiscord(
-        channelId,
-        messageId,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true });
-    }
+    case "deleteMessage":
     case "pinMessage":
     case "unpinMessage": {
-      if (!ctx.isActionEnabled("pins")) {
-        throw new Error("Discord pins are disabled.");
+      const deleting = ctx.action === "deleteMessage";
+      if (!ctx.isActionEnabled(deleting ? "messages" : "pins")) {
+        throw new Error(
+          deleting ? "Discord message deletes are disabled." : "Discord pins are disabled.",
+        );
       }
       const channelId = ctx.resolveChannelId();
-      const messageId = readStringParam(ctx.params, "messageId", {
-        required: true,
-      });
+      const messageId = readStringParam(ctx.params, "messageId", { required: true });
       await ctx.assertReadTargetAllowed({ channelId });
-      const mutate =
-        ctx.action === "pinMessage"
+      const mutate = deleting
+        ? discordMessagingActionRuntime.deleteMessageDiscord
+        : ctx.action === "pinMessage"
           ? discordMessagingActionRuntime.pinMessageDiscord
           : discordMessagingActionRuntime.unpinMessageDiscord;
       await mutate(channelId, messageId, ctx.withOpts());
@@ -223,7 +181,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       }
       const channelId = readStringParam(ctx.params, "channelId");
       const channelIds = readStringArrayParam(ctx.params, "channelIds");
-      // Resolve guildId from channel info when not explicitly provided.
       if (!guildId) {
         const rawInferChannelId = channelId ?? channelIds?.[0];
         if (rawInferChannelId) {
@@ -274,9 +231,6 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         },
         ctx.withOpts(),
       );
-      if (!results || typeof results !== "object") {
-        return jsonResult({ ok: true, results });
-      }
       const messages = results.messages;
       const normalizedMessages = Array.isArray(messages)
         ? messages.map((group) =>

@@ -1,8 +1,7 @@
 import { normalizeLineAction } from "../actions.js";
-import { createCardBubble } from "./common.js";
+import { createCardBubble, createCardTitle } from "./common.js";
 import type {
   Action,
-  CardAction,
   FlexBox,
   FlexBubble,
   FlexButton,
@@ -28,15 +27,10 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
             cornerRadius: "2px",
           } as FlexBox,
           {
-            type: "text",
-            text: title,
-            weight: "bold",
-            size: "xl",
-            color: "#111111",
-            wrap: true,
+            ...createCardTitle(title),
             flex: 1,
             margin: "lg",
-          } as FlexText,
+          },
         ],
       } as FlexBox,
       // Body text in subtle container, only when there is a body to show:
@@ -69,7 +63,7 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
 }
 
 export function createListCard(title: string, items: ListItem[]): FlexBubble {
-  const itemContents: FlexComponent[] = items.slice(0, 8).map((item, index) => {
+  const itemContents = items.slice(0, 8).map<FlexBox>((item, index) => {
     const itemContentsLocal: FlexComponent[] = [
       {
         type: "text",
@@ -92,7 +86,7 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
       } as FlexText);
     }
 
-    const itemBox: FlexBox = {
+    return {
       type: "box",
       layout: "horizontal",
       contents: [
@@ -123,23 +117,10 @@ export function createListCard(title: string, items: ListItem[]): FlexBubble {
       ],
       margin: index > 0 ? "lg" : undefined,
     };
-
-    if (item.action) {
-      itemBox.action = normalizeLineAction(item.action, 40);
-    }
-
-    return itemBox;
   });
 
   return createCardBubble([
-    {
-      type: "text",
-      text: title,
-      weight: "bold",
-      size: "xl",
-      color: "#111111",
-      wrap: true,
-    } as FlexText,
+    createCardTitle(title),
     {
       type: "separator",
       margin: "lg",
@@ -183,25 +164,16 @@ function createTitleBody(title: string, body?: string): FlexBox {
   return box;
 }
 
-export function createImageCard(
-  imageUrl: string,
-  title: string,
-  body?: string,
-  options?: {
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
-    aspectMode?: "cover" | "fit";
-    action?: Action;
-  },
-): FlexBubble {
+export function createImageCard(imageUrl: string, title: string, body?: string): FlexBubble {
   return {
     type: "bubble",
     hero: {
       type: "image",
       url: imageUrl,
       size: "full",
-      aspectRatio: options?.aspectRatio ?? "20:13",
-      aspectMode: options?.aspectMode ?? "cover",
-      action: options?.action === undefined ? undefined : normalizeLineAction(options.action, 40),
+      aspectRatio: "20:13",
+      aspectMode: "cover",
+      action: undefined,
     },
     body: createTitleBody(title, body),
   };
@@ -210,10 +182,9 @@ export function createImageCard(
 export function createActionCard(
   title: string,
   body: string,
-  actions: CardAction[],
+  actions: Action[],
   options?: {
     imageUrl?: string;
-    aspectRatio?: "1:1" | "1.51:1" | "1.91:1" | "4:3" | "16:9" | "20:13" | "2:1" | "3:1";
   },
 ): FlexBubble {
   const bubble: FlexBubble = {
@@ -226,7 +197,7 @@ export function createActionCard(
         (action, index) =>
           ({
             type: "button",
-            action: normalizeLineAction(action.action, 40),
+            action: normalizeLineAction(action, 40),
             style: index === 0 ? "primary" : "secondary",
             margin: index > 0 ? "sm" : undefined,
           }) as FlexButton,
@@ -240,7 +211,7 @@ export function createActionCard(
       type: "image",
       url: options.imageUrl,
       size: "full",
-      aspectRatio: options.aspectRatio ?? "20:13",
+      aspectRatio: "20:13",
       aspectMode: "cover",
     } as FlexImage;
   }

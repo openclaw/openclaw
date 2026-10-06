@@ -9,7 +9,7 @@ import {
   ChannelBotLoopProtectionSchema,
   ChannelDangerouslyAllowNameMatchingSchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   ProviderCommandsSchema,
   refineChannelDmPolicy,
   TtsConfigSchema,
@@ -24,9 +24,6 @@ import { z } from "zod";
 import { discordChannelConfigUiHints } from "./config-ui-hints.js";
 
 const SecretInputSchema = buildSecretInputSchema();
-const DiscordPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  progress: ChannelStreamingProgressSchema.optional(),
-}).strict();
 
 const DiscordIdSchema = z
   .union([z.string(), z.number()])
@@ -115,20 +112,16 @@ const DiscordGuildSchema = buildGroupEntrySchema(
   { omit: ["enabled", "skills", "allowFrom", "systemPrompt"] },
 );
 
-const DiscordVoiceAutoJoinSchema = z
-  .object({
-    guildId: z.string().min(1),
-    channelId: z.string().min(1),
-    whenOccupied: z.boolean().optional(),
-  })
-  .strict();
-
 const DiscordVoiceAllowedChannelSchema = z
   .object({
     guildId: z.string().min(1),
     channelId: z.string().min(1),
   })
   .strict();
+
+const DiscordVoiceAutoJoinSchema = DiscordVoiceAllowedChannelSchema.extend({
+  whenOccupied: z.boolean().optional(),
+});
 
 const DiscordVoiceRealtimeToolPolicySchema = z.enum(["safe-read-only", "owner", "none"]);
 const DiscordVoiceRealtimeConsultPolicySchema = z.enum(["auto", "always"]);
@@ -202,7 +195,7 @@ const DiscordVoiceSchema = z
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   omit: ["groupAllowFrom"],
   allowFrom: DiscordIdListSchema.optional(),
-  streaming: DiscordPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const DiscordAccountSchemaBase = z
@@ -274,16 +267,7 @@ const DiscordAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     intents: z
       .object({
         messageContent: z.boolean().optional(),

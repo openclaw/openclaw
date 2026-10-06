@@ -46,7 +46,7 @@ describe("worktrees.remove/restore padded ids on live registry", () => {
       expect(await call(handlers, "worktrees.remove", { id })).toEqual([
         false,
         undefined,
-        { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}` },
+        { code: "UNAVAILABLE", message: `Error: unknown active worktree: ${id}`, retryable: false },
       ]);
       await expect(call(handlers, "worktrees.restore", { id })).rejects.toThrow(
         `worktree ${id} is not restorable`,

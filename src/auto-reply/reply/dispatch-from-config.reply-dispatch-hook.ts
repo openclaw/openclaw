@@ -9,7 +9,11 @@ import type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 
 export function runReplyDispatchHook(
   state: PrepareDispatchOperationReadyState,
-  options: { shouldSendToolSummaries: () => boolean; isTailDispatch?: true },
+  options: {
+    shouldSendToolSummaries: () => boolean;
+    shouldSendToolSummariesAsync: () => Promise<boolean>;
+    isTailDispatch?: true;
+  },
 ) {
   const { hookRunner, params } = state;
   if (
@@ -24,8 +28,10 @@ export function runReplyDispatchHook(
       return await runWithDispatchAbortSignal(
         // Reset tails have entered dispatch admission; initial takeover still owns the pre-dispatch lease.
         options.isTailDispatch ? state.getDispatchAbortSignal() : state.getPreDispatchAbortSignal(),
-        () =>
-          hookRunner.runReplyDispatch(
+        async () => {
+          const shouldSendFullToolDetails = await state.shouldEmitFullVerboseProgressAsync();
+          state.assertProgressCurrent();
+          return hookRunner.runReplyDispatch(
             createReplyDispatchEvent({
               ctx: state.ctx,
               runId: params.replyOptions?.runId,
@@ -45,7 +51,9 @@ export function runReplyDispatchHook(
               originatingThreadId: state.routeReplyThreadId,
               originatingChatType: state.replyRoute.chatType,
               shouldSendToolSummaries: options.shouldSendToolSummaries,
-              shouldSendFullToolDetails: state.shouldEmitFullVerboseProgress(),
+              shouldSendToolSummariesAsync: options.shouldSendToolSummariesAsync,
+              shouldSendFullToolDetails,
+              shouldSendFullToolDetailsAsync: state.shouldEmitFullVerboseProgressAsync,
               sendPolicy: state.sendPolicy,
               ...(options.isTailDispatch ? { isTailDispatch: true } : {}),
             }),
@@ -63,9 +71,10 @@ export function runReplyDispatchHook(
                 recordProcessed: state.recordProcessed,
                 markIdle: state.markIdle,
               },
-              options.isTailDispatch ? undefined : state.assertCurrentBindingRoute,
+              options.isTailDispatch ? undefined : { prepare: state.assertCurrentBindingRoute },
             ),
-          ),
+          );
+        },
         state.trackDispatchLifecycleWork,
       );
     });
@@ -75,8 +84,12 @@ export function runReplyDispatchHook(
 export async function runReplyDispatchTakeover(
   state: PrepareDispatchOperationReadyState,
   shouldSendToolSummaries: () => boolean,
+  shouldSendToolSummariesAsync: () => Promise<boolean>,
 ): Promise<{ status: "complete"; result: DispatchFromConfigResult } | undefined> {
-  const result = await runReplyDispatchHook(state, { shouldSendToolSummaries });
+  const result = await runReplyDispatchHook(state, {
+    shouldSendToolSummaries,
+    shouldSendToolSummariesAsync,
+  });
   if (!result?.handled) {
     return undefined;
   }

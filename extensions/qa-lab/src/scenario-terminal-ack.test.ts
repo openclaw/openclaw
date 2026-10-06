@@ -31,16 +31,15 @@ async function startPublicCase(
   const releaseParent = createDeferred<void>();
   const parentSent = createDeferred<void>();
   const marker = "QA-SUBAGENT-TERMINAL-FALLBACK-OK";
-  const task = {
-    taskId: "child-task",
-    title: "qa-terminal-fallback",
-    status: "completed",
-    deliveryStatus: "delivered",
-    sessionKey: "parent",
+  const run = {
+    label: "qa-terminal-fallback",
+    execution: { status: "terminal", outcome: { status: "ok" } },
+    delivery: { status: "delivered" },
+    requesterSessionKey: "parent",
     childSessionKey: "child",
     runId: "run",
   };
-  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: task.title } }];
+  const requests = [{ plannedToolName: "sessions_spawn", plannedToolArgs: { label: run.label } }];
   let parentSend: Promise<void> | undefined;
   const result = runLoadedScenarioFlow(scenario.id, {
     state,
@@ -60,6 +59,7 @@ async function startPublicCase(
     api: {
       fs,
       path,
+      readNativeQaSubagentRuns: async () => [run],
       config: {
         ...scenario.execution.config,
         cases: [{ name: "fallback", marker, expectedSendCount: 1 }],
@@ -70,9 +70,6 @@ async function startPublicCase(
         mock: { baseUrl: "http://mock.invalid" },
         gateway: {
           call: async (method: string) => {
-            if (method === "tasks.list") {
-              return { tasks: [task] };
-            }
             if (method === "chat.history") {
               return {
                 messages: [

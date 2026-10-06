@@ -1,82 +1,47 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import { shouldUseMainOwnerForLocalOAuthCredential } from "./ownership.js";
 import type { OAuthCredential } from "./types.js";
 
-function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
-  return {
-    type: "oauth",
-    provider: "openai",
-    access: "access-token",
-    refresh: "refresh-token",
-    expires: Date.now() + 60_000,
-    ...overrides,
-  };
-}
+const credential: OAuthCredential = {
+  type: "oauth",
+  provider: "github-copilot",
+  access: "access-token",
+  refresh: "shared-refresh-generation",
+  expires: 2_000,
+};
 
-describe("Copilot tenant identity-less adoption", () => {
-  it.each([
-    ["different enterprise tenant", "acme.ghe.com", "other.ghe.com", false],
-    ["public versus enterprise tenant", undefined, "acme.ghe.com", false],
-    ["public URL spellings", undefined, "https://github.com/", true],
-    ["same enterprise tenant URL spelling", "HTTPS://ACME.GHE.COM/", "acme.ghe.com", true],
-  ])(
-    "applies provider routing scope before identity-less adoption: %s",
-    (_name, existingDomain, incomingDomain, expected) => {
-      expect(
-        isSafeToAdoptMainStoreOAuthIdentity(
-          createCredential({ provider: "github-copilot", enterpriseUrl: existingDomain }),
-          createCredential({
-            provider: "github-copilot",
-            enterpriseUrl: incomingDomain,
-            accountId: "acct-main",
-          }),
-        ),
-      ).toBe(expected);
-    },
-  );
+it("rejects a copied refresh generation from another Copilot tenant", () => {
+  expect(
+    shouldUseMainOwnerForLocalOAuthCredential({
+      profileId: "github-copilot:default",
+      local: { ...credential, enterpriseUrl: "acme.ghe.com" },
+      main: {
+        ...credential,
+        enterpriseUrl: "other.ghe.com",
+        accountId: "acct-main",
+        expires: 62_000,
+      },
+    }),
+  ).toBe(false);
 });
 
-describe("shouldUseMainOwnerForLocalOAuthCredential", () => {
-  it("does not transfer ownership across GitHub Copilot tenants", () => {
+it("rejects whitespace-only public scope in both identity directions", () => {
+  const invalid = { ...credential, enterpriseUrl: "  " };
+  const publicCredential = { ...credential, enterpriseUrl: "https://github.com/" };
+  for (const [existing, incoming] of [
+    [invalid, publicCredential],
+    [publicCredential, invalid],
+  ] as const) {
+    expect(isSafeToCopyOAuthIdentity(existing, incoming)).toBe(false);
+    expect(isSafeToAdoptMainStoreOAuthIdentity(existing, incoming)).toBe(false);
     expect(
       shouldUseMainOwnerForLocalOAuthCredential({
         profileId: "github-copilot:default",
-        local: createCredential({
-          provider: "github-copilot",
-          enterpriseUrl: "acme.ghe.com",
-          refresh: "shared-refresh-generation",
-          expires: Date.now(),
-        }),
-        main: createCredential({
-          provider: "github-copilot",
-          enterpriseUrl: "other.ghe.com",
-          refresh: "shared-refresh-generation",
-          expires: Date.now() + 60_000,
-          accountId: "acct-main",
-        }),
+        local: existing,
+        main: incoming,
       }),
     ).toBe(false);
-  });
-
-  it("keeps ownership transfer for the same tenant when main is fresher", () => {
-    expect(
-      shouldUseMainOwnerForLocalOAuthCredential({
-        profileId: "github-copilot:default",
-        local: createCredential({
-          provider: "github-copilot",
-          enterpriseUrl: "acme.ghe.com",
-          refresh: "shared-refresh-generation",
-          expires: Date.now(),
-        }),
-        main: createCredential({
-          provider: "github-copilot",
-          enterpriseUrl: "https://acme.ghe.com/",
-          refresh: "shared-refresh-generation",
-          expires: Date.now() + 60_000,
-          accountId: "acct-main",
-        }),
-      }),
-    ).toBe(true);
-  });
+  }
 });

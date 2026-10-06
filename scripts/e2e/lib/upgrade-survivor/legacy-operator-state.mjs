@@ -191,10 +191,13 @@ function seedLegacyOperatorWebhooks(set) {
     token: "synthetic-survivor-hook-token",
   };
   const prior = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins ?? {};
-  // An explicit allowlist retains the baseline's enabled plugins. The deny entry
-  // keeps this migration specimen idle while exercising both retired-id lists.
+  // Keep the fixture allowlist tied to authored config, not bundled defaults.
+  // The deny entry keeps this specimen idle while exercising both retired-id lists.
   const allow =
-    prior.allow ?? inventory.plugins.filter((plugin) => plugin.enabled).map((p) => p.id);
+    prior.allow ??
+    Object.entries(prior.entries ?? {})
+      .filter(([, plugin]) => plugin.enabled !== false)
+      .map(([id]) => id);
   set("plugins", {
     ...prior,
     allow: [...new Set([...allow, "webhooks"])],
@@ -230,6 +233,19 @@ export function seedLegacyOperatorExternalPlugin() {
   };
   if (bundled) {
     // This is the published bundled-era web-search configuration, authored by its CLI.
+    const allow = readJson(requiredEnv("OPENCLAW_CONFIG_PATH")).plugins?.allow;
+    if (Array.isArray(allow) && !allow.includes("duckduckgo")) {
+      cli(
+        [
+          "config",
+          "set",
+          "plugins.allow",
+          JSON.stringify([...allow, "duckduckgo"]),
+          "--strict-json",
+        ],
+        "legacy-operator-allow-duckduckgo",
+      );
+    }
     cli(["plugins", "enable", "duckduckgo"], "legacy-operator-enable-duckduckgo");
     for (const [key, value] of Object.entries({
       "plugins.entries.duckduckgo": entry,
@@ -316,10 +332,17 @@ export function assertLegacyOperatorExternalPlugin(expectedVersion) {
 function seedLegacyOperatorApprovals() {
   const approvals = approvalsCommand();
   const policyInput = artifact("legacy-operator-policy-input.json");
+  const nativeEligibility = artifact("native-assignment-eligibility.json");
+  const nativeAssignmentsRequired =
+    fs.existsSync(nativeEligibility) && readJson(nativeEligibility).status === "required";
   writeJson(policyInput, {
     version: 1,
     defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
-    agents: {},
+    // The synthetic native peer needs Codex execution admission; the operator
+    // defaults and main/ops allowlists remain the separate migration specimen.
+    agents: nativeAssignmentsRequired
+      ? { "native-proof": { security: "full", ask: "off", askFallback: "deny" } }
+      : {},
   });
   cli([approvals, "set", "--file", policyInput, "--json"], "legacy-operator-approvals-set", {
     privateOutput: true,

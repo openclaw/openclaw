@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -165,29 +166,34 @@ async function createLiveRedirectSandbox(
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   it("cancels an outstanding nonstreaming HTTP response when its exec-server socket closes", async () => {
     const responseClosed = vi.fn();
+    const responseReceived = createDeferred<ServerResponse>();
     let heldResponse: ServerResponse | undefined;
     const fixture = await createLiveRedirectSandbox("source.test", 302, (response) => {
       heldResponse = response;
       response.once("close", responseClosed);
+      responseReceived.resolve(response);
     });
     try {
       const socket = await openSandboxHttpSocket(fixture.sandbox);
       try {
         await rpc(socket, "initialize", { clientName: "test" });
-        socket.send(
-          JSON.stringify({
-            id: 2,
-            method: "http/request",
-            params: { requestId: "pending-http", method: "GET", url: fixture.url },
-          }),
-        );
-        await vi.waitFor(() => expect(heldResponse).toBeDefined());
-
-        socket.terminate();
-
-        await vi.waitFor(() => expect(responseClosed).toHaveBeenCalledOnce(), {
-          timeout: 5_000,
+        const request = rpc(socket, "http/request", {
+          requestId: "pending-http",
+          method: "GET",
+          url: fixture.url,
         });
+        // Python startup and redirects are ready only when the real server holds the response.
+        const response = await Promise.race([
+          responseReceived.promise,
+          request.then(() => {
+            throw new Error("HTTP request completed before the fixture held its response");
+          }),
+        ]);
+        expect(heldResponse).toBeDefined();
+        const closed = once(response, "close");
+        socket.terminate();
+        await closed;
+        expect(responseClosed).toHaveBeenCalledOnce();
       } finally {
         socket.terminate();
       }

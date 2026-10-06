@@ -33,6 +33,18 @@ export function createSnapshot(params: {
   };
 }
 
+export function includeSnapshot(
+  configPath: string,
+  sourceConfig: OpenClawConfig,
+): ConfigFileSnapshot {
+  return createSnapshot({
+    hash: "include-hash",
+    path: configPath,
+    parsed: { plugins: { $include: "./config/plugins.json5" } },
+    sourceConfig,
+  });
+}
+
 export async function createPluginIncludeFixture(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");

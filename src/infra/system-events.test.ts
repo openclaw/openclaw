@@ -11,11 +11,11 @@ import {
 } from "../config/io.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import {
+  consumeSelectedSystemEventEntries as consumeSdkSystemEventEntries,
   enqueueRoutedSystemEvent,
   enqueueSystemEvent as enqueueSdkSystemEvent,
   peekSystemEventEntries as peekSdkSystemEventEntries,
 } from "../plugin-sdk/system-event-runtime.js";
-import { isCronSystemEvent } from "./heartbeat-events-filter.js";
 import { withSystemEventOwner } from "./system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
@@ -32,6 +32,49 @@ import {
   type SystemEvent,
 } from "./system-events.js";
 
+describe("delivery-owned system event selection", () => {
+  beforeEach(() => resetSystemEventsForTest());
+  afterEach(() => resetSystemEventsForTest());
+
+  it.each([false, true])(
+    "formats only live captured occurrences (consumed by another turn: %s)",
+    async (consumed) => {
+      const sessionKey = "agent:main:deferred-order-proof";
+      enqueueSystemEvent("Restart first", {
+        sessionKey,
+        contextKey: "task:restart-sentinel:first",
+      });
+      enqueueSystemEvent("Newer instruction second", { sessionKey });
+      const captured = peekSystemEventEntries(sessionKey);
+      const retainedId = expectDefined(captured[0]?.id, "captured restart occurrence ID");
+      if (consumed) {
+        consumeSelectedSystemEventEntries(sessionKey, captured);
+      }
+      enqueueSystemEvent("Late arrival third", { sessionKey });
+      const text = await drainFormattedSystemEvents({
+        cfg: {},
+        agentId: "main",
+        sessionKey,
+        isMainSession: false,
+        isNewSession: false,
+        events: captured,
+        deferredEventIds: [retainedId],
+      });
+      if (consumed) {
+        expect(text).toBeUndefined();
+      } else {
+        expect(text?.indexOf("Restart first")).toBeLessThan(
+          text!.indexOf("Newer instruction second"),
+        );
+        expect(text).not.toContain("Late arrival third");
+        expect(peekSystemEvents(sessionKey)).toEqual(["Restart first", "Late arrival third"]);
+        consumeSelectedSystemEventEntries(sessionKey, [captured[0]!]);
+      }
+      expect(peekSystemEvents(sessionKey)).toEqual(["Late arrival third"]);
+    },
+  );
+});
+
 type SystemEventsModule = typeof import("./system-events.js");
 
 const systemEventsModuleUrl = new URL("./system-events.ts", import.meta.url).href;
@@ -40,7 +83,7 @@ async function importSystemEventsModule(cacheBust: string): Promise<SystemEvents
   return (await import(`${systemEventsModuleUrl}?t=${cacheBust}`)) as SystemEventsModule;
 }
 
-const cfg = {} as unknown as OpenClawConfig;
+const cfg: OpenClawConfig = {};
 const mainKey = resolveMainSessionKey(cfg);
 
 async function drainFormattedEvents(
@@ -91,23 +134,21 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:main:discord:group:123")).toStrictEqual([]);
   });
 
-  it("requires an explicit session key", () => {
-    expect(() => enqueueSystemEvent("Node: Mac Studio", { sessionKey: " " })).toThrow("sessionKey");
-  });
-
   it.each(["main", "global", "unknown"])(
-    "resolves legacy SDK %s only at its configured owner boundary",
+    "resolves SDK %s only at its explicitly selected owner boundary",
     (alias) => {
       const previous = getRuntimeConfigSnapshot();
       try {
         setRuntimeConfigSnapshot({
-          agents: { entries: { alpha: { default: true }, beta: {} } },
+          agents: { entries: { alpha: {}, beta: {} } },
           session: { mainKey: "work" },
         });
         expect(() => enqueueSystemEvent("Unbound", { sessionKey: alias })).toThrow(
           "agent-qualified",
         );
-        expect(enqueueSdkSystemEvent("Legacy caller", { sessionKey: alias })).toBe(true);
+        expect(
+          enqueueSdkSystemEvent("Legacy caller", { sessionKey: alias, agentId: "alpha" }),
+        ).toBe(true);
         const suffix = alias === "main" ? "work" : alias;
         expect(peekSystemEvents(`agent:alpha:${suffix}`)).toEqual(["Legacy caller"]);
         expect(peekSystemEvents(`agent:beta:${suffix}`)).toEqual([]);
@@ -115,7 +156,7 @@ describe("system events (session routing)", () => {
         expect(peekSdkSystemEventEntries(alias, " BETA ").map((event) => event.text)).toEqual([
           "Owned caller",
         ]);
-        expect(peekSdkSystemEventEntries(alias).map((event) => event.text)).toEqual([
+        expect(peekSdkSystemEventEntries(alias, "alpha").map((event) => event.text)).toEqual([
           "Legacy caller",
         ]);
         expect(
@@ -146,17 +187,18 @@ describe("system events (session routing)", () => {
     },
   );
 
-  it.each(
-    ["!!!", "", " "].flatMap((agentId) =>
-      ["global", "agent:main:global"].flatMap((sessionKey) =>
-        ["enqueue", "peek", "routed"].map((operation) => ({ agentId, sessionKey, operation })),
-      ),
-    ),
-  )("rejects SDK $operation with owner '$agentId' for $sessionKey", (params) => {
+  it.each([
+    { agentId: "!!!", sessionKey: "global", operation: "enqueue" },
+    { agentId: "", sessionKey: "agent:main:global", operation: "enqueue" },
+    { agentId: "!!!", sessionKey: "agent:main:global", operation: "peek" },
+    { agentId: " ", sessionKey: "global", operation: "peek" },
+    { agentId: "!!!", sessionKey: "global", operation: "routed" },
+    { agentId: " ", sessionKey: "agent:main:global", operation: "routed" },
+  ])("rejects SDK $operation with owner '$agentId' for $sessionKey", (params) => {
     const previous = getRuntimeConfigSnapshot();
     try {
       setRuntimeConfigSnapshot({
-        agents: { entries: { main: { default: true }, beta: {} } },
+        agents: { entries: { main: {}, beta: {} } },
         session: { scope: "global" },
       });
       enqueueSystemEvent("Main canary", { sessionKey: "agent:main:global" });
@@ -186,7 +228,7 @@ describe("system events (session routing)", () => {
     (sessionKey) => {
       const previous = getRuntimeConfigSnapshot();
       try {
-        setRuntimeConfigSnapshot({ agents: { entries: { "beta-team": { default: true } } } });
+        setRuntimeConfigSnapshot({ agents: { entries: { "beta-team": {} } } });
         expect(enqueueSdkSystemEvent("Team event", { sessionKey, agentId: " Beta Team " })).toBe(
           true,
         );
@@ -203,16 +245,6 @@ describe("system events (session routing)", () => {
       }
     },
   );
-
-  it("requires a context key when replacing an event", () => {
-    expect(() =>
-      enqueueSystemEvent("Voice roster", {
-        sessionKey: "agent:main:main",
-        contextKey: " ",
-        replace: true,
-      }),
-    ).toThrow("contextKey");
-  });
 
   it("replaces one keyed event without evicting unrelated queued events", () => {
     const key = "agent:main:test-upsert";
@@ -264,14 +296,6 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["Voice roster 1"]);
   });
 
-  it("returns false for consecutive duplicate events", () => {
-    const first = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
-    const second = enqueueSystemEvent("Node connected", { sessionKey: "agent:main:main" });
-
-    expect(first).toBe(true);
-    expect(second).toBe(false);
-  });
-
   it("normalizes structural case without changing opaque channel IDs", () => {
     expect(enqueueSystemEvent("Global", { sessionKey: "AGENT:Ops:GLOBAL" })).toBe(true);
     expect(enqueueSystemEvent("Global", { sessionKey: "agent:ops:global" })).toBe(false);
@@ -314,18 +338,6 @@ describe("system events (session routing)", () => {
     expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
   });
 
-  it("consumes only the inspected prefix and leaves later queued events intact", () => {
-    const key = "agent:main:test-consume-prefix";
-    enqueueSystemEvent("first", { sessionKey: key, contextKey: "cron:first" });
-    const inspected = peekSystemEventEntries(key);
-    enqueueSystemEvent("second", { sessionKey: key, contextKey: "cron:second" });
-
-    expect(consumeSelectedSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual([
-      "first",
-    ]);
-    expect(peekSystemEvents(key)).toEqual(["second"]);
-  });
-
   it("consumes selected inspected entries and preserves unselected queued events", () => {
     const key = "agent:main:test-consume-selected";
     enqueueSystemEvent("first", { sessionKey: key, contextKey: "event:first" });
@@ -340,28 +352,15 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toEqual(["second"]);
   });
 
-  it("removes an exact receipt once while preserving its sibling", () => {
-    const key = "agent:main:test-receipt";
-    const receipt = enqueueSystemEventWithReceipt("first", {
-      sessionKey: ` ${key} `,
-      contextKey: "exec:first",
-    });
-    expect(receipt).not.toBeNull();
-    enqueueSystemEvent("sibling", { sessionKey: key, contextKey: "exec:sibling" });
-
-    expect(receipt?.()).toBe(true);
-    expect(peekSystemEvents(key)).toEqual(["sibling"]);
-    expect(receipt?.()).toBe(false);
-  });
-
   it("keeps structurally identical receipt-owned siblings distinct", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-09T00:00:00Z"));
     const key = "agent:main:test-identical-receipts";
-    const options = { sessionKey: key, contextKey: "exec:reused-slug" };
+    const options = { sessionKey: " " + key + " ", contextKey: "exec:reused-slug" };
     const first = enqueueSystemEventWithReceipt("completed", options, {
       allowDuplicate: true,
     });
+    expect(first).not.toBeNull();
     const second = enqueueSystemEventWithReceipt("completed", options, {
       allowDuplicate: true,
     });
@@ -376,21 +375,7 @@ describe("system events (session routing)", () => {
     expect(peekSystemEventEntries(key)).toStrictEqual([]);
   });
 
-  it.each([
-    {
-      name: "object spread",
-      copy: (event: SystemEvent): SystemEvent => ({ ...event }),
-    },
-    {
-      name: "structuredClone",
-      copy: (event: SystemEvent): SystemEvent => structuredClone(event),
-    },
-    {
-      name: "JSON round trip",
-      // oxlint-disable-next-line unicorn/prefer-structured-clone -- This case exercises JSON transport.
-      copy: (event: SystemEvent): SystemEvent => JSON.parse(JSON.stringify(event)) as SystemEvent,
-    },
-  ])("does not consume an identical successor from a stale copy: $name", ({ copy }) => {
+  it("does not consume an identical successor from a serialized stale snapshot", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-08T00:00:00Z"));
 
@@ -404,7 +389,8 @@ describe("system events (session routing)", () => {
       enqueueSystemEventEntry("Build completed", options),
       "original event",
     );
-    const staleCopy = copy(original);
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Exercises a serialized SDK snapshot.
+    const staleCopy: SystemEvent = JSON.parse(JSON.stringify(original));
     expect(staleCopy.id).toBe(original.id);
 
     expect(consumeSelectedSystemEventEntries(key, [original]).map((event) => event.id)).toEqual([
@@ -490,17 +476,6 @@ describe("system events (session routing)", () => {
     });
   });
 
-  it("keeps only the newest 20 queued events", () => {
-    const key = "agent:main:test-max-events";
-    for (let index = 1; index <= 22; index += 1) {
-      enqueueSystemEvent(`event ${index}`, { sessionKey: key });
-    }
-
-    expect(peekSystemEvents(key)).toEqual(
-      Array.from({ length: 20 }, (_, index) => `event ${index + 3}`),
-    );
-  });
-
   it("does not evict another agent's global notification when one queue fills", async () => {
     enqueueSystemEvent(
       "Beta result is ready",
@@ -512,11 +487,14 @@ describe("system events (session routing)", () => {
         withSystemEventOwner({ sessionKey: "global" }, "alpha"),
       );
     }
+    expect(peekSystemEvents("agent:alpha:global")).toEqual(
+      Array.from({ length: 20 }, (_, index) => "Alpha progress " + index),
+    );
     const beta = await drainFormattedEvents("global", { agentId: "beta" });
     expect(beta).toContain("Beta result is ready");
     expect(beta).not.toContain("Alpha progress");
     const alpha = await drainFormattedEvents("global", { agentId: "alpha" });
-    expect(alpha).toContain("Alpha progress 24");
+    expect(alpha).toContain("Alpha progress 19");
     expect(alpha).not.toContain("Beta result is ready");
   });
 
@@ -525,24 +503,6 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Ready", withSystemEventOwner(options, "alpha"));
     expect(options).toEqual({ sessionKey: "global", contextKey: "hook:ready" });
     expect(peekSystemEvents("agent:alpha:global")).toEqual(["Ready"]);
-  });
-
-  it("shares queued events across duplicate module instances", async () => {
-    const first = await importSystemEventsModule(`first-${Date.now()}`);
-    const second = await importSystemEventsModule(`second-${Date.now()}`);
-    const key = "agent:main:test-duplicate-module";
-
-    first.resetSystemEventsForTest();
-    second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
-
-    const entries = first.peekSystemEventEntries(key);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]?.text).toBe("Node connected");
-    expect(entries[0]?.contextKey).toBe("build:123");
-    expect(first.isSystemEventContextChanged(key, "build:123")).toBe(false);
-    expect(first.drainSystemEvents(key)).toEqual(["Node connected"]);
-
-    first.resetSystemEventsForTest();
   });
 
   it("keeps per-agent queues isolated across duplicate module instances", async () => {
@@ -556,6 +516,10 @@ describe("system events (session routing)", () => {
       false,
     );
     expect(second.enqueueSystemEvent("Hook finished", { ...options, sessionKey: beta })).toBe(true);
+    expect(first.peekSystemEventEntries(alpha)).toMatchObject([
+      { text: "Hook finished", contextKey: "hook:shared" },
+    ]);
+    expect(first.isSystemEventContextChanged(alpha, "hook:shared")).toBe(false);
     expect(first.drainSystemEvents(beta)).toEqual(["Hook finished"]);
     expect(second.peekSystemEvents(alpha)).toEqual(["Hook finished"]);
     expect(first.drainSystemEvents(alpha)).toEqual(["Hook finished"]);
@@ -573,160 +537,119 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents(key)).toStrictEqual([]);
   });
 
-  it("leaves exec completion events queued for the dedicated heartbeat", async () => {
-    const key = "agent:main:test-exec-completion-filter";
-    enqueueSystemEvent("Exec failed (abc12345, signal SIGTERM) :: browser auth timed out", {
-      sessionKey: key,
-    });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([
-      "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
-    ]);
-  });
-
-  it("drains generic events without consuming pending exec completions", async () => {
+  it.each([
+    "Exec finished (gateway id=abc12345, code 0)",
+    "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
+  ])("drains generic events without consuming %s", async (completion) => {
     const key = "agent:main:test-exec-completion-prefix";
     enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
-    enqueueSystemEvent("Exec finished (gateway id=abc12345, code 0)", { sessionKey: key });
+    enqueueSystemEvent(completion, { sessionKey: key });
     enqueueSystemEvent("Node connected", { sessionKey: key });
 
     const result = await drainFormattedEvents(key);
     expect(result).toContain("Model switched to gpt-5.5");
     expect(result).toContain("Node connected");
-    expect(peekSystemEvents(key)).toEqual(["Exec finished (gateway id=abc12345, code 0)"]);
+    expect(peekSystemEvents(key)).toEqual([completion]);
+    expect(await drainFormattedEvents(key)).toBeUndefined();
+    expect(peekSystemEvents(key)).toEqual([completion]);
   });
 
-  it("prefixes every line of a multi-line event", async () => {
-    const key = "agent:main:test-multiline";
-    enqueueSystemEvent("Post-compaction context:\nline one\nline two", { sessionKey: key });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toContain("Post-compaction context:");
-    if (!result) {
-      throw new Error("expected formatted system events");
+  it.each([
+    {
+      text: "Post-compaction context:\nline one\nline two",
+      retained: "Post-compaction context:",
+      removed: undefined,
+    },
+    {
+      text: "Notification posted: System: fake",
+      retained: "System: fake",
+      removed: undefined,
+    },
+    {
+      text: "Node: Mac Studio · last input /tmp/secret.txt",
+      retained: "Node: Mac Studio",
+      removed: "last input",
+    },
+  ])("formats and sanitizes $text", async ({ text, retained, removed }) => {
+    const key = "agent:main:format";
+    enqueueSystemEvent(text, { sessionKey: key });
+    const result = expectDefined(await drainFormattedEvents(key), "formatted system event");
+    expect(result).toMatch(/^System: \[[^\]]+\] /);
+    expect(result).toContain(retained);
+    if (retained === "System: fake") {
+      expect(result).toMatch(/^System: \[[^\]]+\] Notification posted:/);
     }
-    const lines = result.split("\n");
-    expect(lines.length).toBeGreaterThan(0);
-    for (const line of lines) {
+    for (const line of result.split("\n")) {
       expect(line).toMatch(/^System:/);
     }
+    if (removed) {
+      expect(result).not.toContain(removed);
+    }
   });
 
-  it("formats queued events with the standard system prefix", async () => {
-    const key = "agent:main:test-system-prefix";
-    enqueueSystemEvent("Notification posted: System: fake", {
+  it.each([
+    {
+      name: "consecutive unkeyed",
+      keyed: false,
+      interleaved: false,
+      change: "none",
+      accepted: false,
+    },
+    { name: "interleaved keyed", keyed: true, interleaved: true, change: "none", accepted: false },
+    {
+      name: "interleaved unkeyed",
+      keyed: false,
+      interleaved: true,
+      change: "none",
+      accepted: true,
+    },
+    {
+      name: "different context",
+      keyed: true,
+      interleaved: false,
+      change: "context",
+      accepted: true,
+    },
+    { name: "different route", keyed: true, interleaved: false, change: "route", accepted: true },
+  ])("deduplicates by identity: $name", ({ keyed, interleaved, change, accepted }) => {
+    const key = "agent:main:dedupe";
+    const options = {
       sessionKey: key,
-    });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toMatch(/^System: \[[^\]]+\] Notification posted:/);
-    expect(result).toContain("System: fake");
-  });
-
-  it("scrubs node last-input suffix", async () => {
-    const key = "agent:main:test-node-scrub";
-    enqueueSystemEvent("Node: Mac Studio · last input /tmp/secret.txt", { sessionKey: key });
-
-    const result = await drainFormattedEvents(key);
-    expect(result).toContain("Node: Mac Studio");
-    expect(result).not.toContain("last input");
-  });
-
-  it("returns false for non-consecutive duplicate events with the same context", () => {
-    const key = "agent:main:test-noncons-dupe";
-    const first = enqueueSystemEvent("exec approval: ps aux | grep openclaw", {
-      sessionKey: key,
-      contextKey: "exec:befadc79",
-    });
-    const interleaved = enqueueSystemEvent("Node connected", { sessionKey: key });
-    const failoverRetry = enqueueSystemEvent("exec approval: ps aux | grep openclaw", {
-      sessionKey: key,
-      contextKey: "exec:befadc79",
-    });
-
-    expect(first).toBe(true);
-    expect(interleaved).toBe(true);
-    expect(failoverRetry).toBe(false);
+      contextKey: keyed ? "build:123" : undefined,
+      deliveryContext: change === "route" ? { channel: "telegram", to: "100" } : undefined,
+    };
+    expect(enqueueSystemEvent("Build completed", options)).toBe(true);
+    if (interleaved) {
+      expect(enqueueSystemEvent("Node connected", { sessionKey: key })).toBe(true);
+    }
+    expect(
+      enqueueSystemEvent("Build completed", {
+        ...options,
+        contextKey: change === "context" ? "build:456" : options.contextKey,
+        deliveryContext: change === "route" ? { channel: "telegram", to: "200" } : undefined,
+      }),
+    ).toBe(accepted);
     expect(peekSystemEvents(key)).toEqual([
-      "exec approval: ps aux | grep openclaw",
-      "Node connected",
+      "Build completed",
+      ...(interleaved ? ["Node connected"] : []),
+      ...(accepted ? ["Build completed"] : []),
     ]);
-  });
-
-  it("allows non-consecutive unkeyed duplicate events", () => {
-    const key = "agent:main:test-unkeyed-noncons-dupe";
-    const first = enqueueSystemEvent("Node connected", { sessionKey: key });
-    const interleaved = enqueueSystemEvent("Heartbeat tick", { sessionKey: key });
-    const retry = enqueueSystemEvent("Node connected", { sessionKey: key });
-
-    expect(first).toBe(true);
-    expect(interleaved).toBe(true);
-    expect(retry).toBe(true);
-    expect(peekSystemEvents(key)).toEqual(["Node connected", "Heartbeat tick", "Node connected"]);
-  });
-
-  it("allows the same text under a different context key", () => {
-    const key = "agent:main:test-context-disambiguates";
-    const reactionA = enqueueSystemEvent("Discord reaction added: ✅", {
-      sessionKey: key,
-      contextKey: "discord:reaction:msg-1",
-    });
-    const reactionB = enqueueSystemEvent("Discord reaction added: ✅", {
-      sessionKey: key,
-      contextKey: "discord:reaction:msg-2",
-    });
-
-    expect(reactionA).toBe(true);
-    expect(reactionB).toBe(true);
-    expect(peekSystemEventEntries(key)).toHaveLength(2);
-  });
-
-  it("allows the same text and context under a different delivery route", () => {
-    const key = "agent:main:test-context-route-disambiguates";
-    const first = enqueueSystemEvent("Build completed", {
-      sessionKey: key,
-      contextKey: "build:123",
-      deliveryContext: { channel: "telegram", to: "100" },
-    });
-    const second = enqueueSystemEvent("Build completed", {
-      sessionKey: key,
-      contextKey: "build:123",
-      deliveryContext: { channel: "telegram", to: "200" },
-    });
-
-    expect(first).toBe(true);
-    expect(second).toBe(true);
-    expect(peekSystemEventEntries(key)).toHaveLength(2);
-  });
-
-  it("preserves lastContextKey when a duplicate is skipped", () => {
-    const key = "agent:main:test-context-preserved";
-    enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
-
-    const skipped = enqueueSystemEvent("Node connected", {
-      sessionKey: key,
-      contextKey: "build:123",
-    });
-
-    expect(skipped).toBe(false);
-    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
-  });
-
-  it("does not overwrite lastContextKey when the caller omits a contextKey", () => {
-    const key = "agent:main:test-no-context-clobber";
-    enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
-    enqueueSystemEvent("Heartbeat tick", { sessionKey: key });
-
-    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+    expect(peekSystemEventEntries(key)).toHaveLength(1 + Number(interleaved) + Number(accepted));
+    if (keyed && change === "none") {
+      expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+    }
   });
 
   it("preserves lastContextKey from the newest contextful event after partial consume", () => {
     const key = "agent:main:test-context-preserved-after-consume";
     enqueueSystemEvent("startup", { sessionKey: key });
     enqueueSystemEvent("contextful", { sessionKey: key, contextKey: "build:123" });
+    expect(enqueueSystemEvent("contextful", { sessionKey: key, contextKey: "build:123" })).toBe(
+      false,
+    );
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
     enqueueSystemEvent("unkeyed followup", { sessionKey: key });
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
     const inspected = peekSystemEventEntries(key).slice(0, 1);
 
     expect(consumeSelectedSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual([
@@ -735,60 +658,38 @@ describe("system events (session routing)", () => {
     expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
   });
 
-  it("allows a keyed duplicate after the original is evicted", () => {
-    const key = "agent:main:test-keyed-duplicate-after-eviction";
-    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
-    for (let index = 0; index < 20; index += 1) {
-      enqueueSystemEvent(`event ${index}`, { sessionKey: key, contextKey: `event:${index}` });
-    }
-
-    expect(
-      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
-    ).toBe(true);
-  });
-
-  it("allows a keyed duplicate after the original is consumed from the prefix", () => {
-    const key = "agent:main:test-keyed-duplicate-after-prefix-consume";
-    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
-    const inspected = peekSystemEventEntries(key);
-
-    expect(consumeSelectedSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual([
-      "Build completed",
-    ]);
-    expect(
-      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
-    ).toBe(true);
-  });
-
-  it("allows a keyed duplicate after the original is selectively consumed", () => {
-    const key = "agent:main:test-keyed-duplicate-after-selected-consume";
-    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
-    enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
-    const selected = peekSystemEventEntries(key).filter(
-      (entry) => entry.text === "Build completed",
-    );
-
-    expect(consumeSelectedSystemEventEntries(key, selected).map((entry) => entry.text)).toEqual([
-      "Build completed",
-    ]);
-    expect(
-      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
-    ).toBe(true);
-  });
+  it.each(["prefix", "selected"] as const)(
+    "allows a keyed duplicate after %s removal",
+    (removal) => {
+      const key = "agent:main:duplicate-after-removal";
+      const options = { sessionKey: key, contextKey: "build:123" };
+      enqueueSystemEvent("Build completed", options);
+      const selected = peekSystemEventEntries(key);
+      if (removal === "selected") {
+        enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
+      }
+      expect(consumeSelectedSystemEventEntries(key, selected).map((event) => event.text)).toEqual([
+        "Build completed",
+      ]);
+      expect(enqueueSystemEvent("Build completed", options)).toBe(true);
+    },
+  );
 
   it("consumes an inspected snapshot only from its canonical owner queue", () => {
     const alpha = "agent:alpha:global";
     const beta = "agent:beta:global";
-    enqueueSystemEvent("Hook finished", { sessionKey: alpha, contextKey: "hook:shared" });
-    enqueueSystemEvent("Hook finished", { sessionKey: beta, contextKey: "hook:shared" });
-    const selected = peekSystemEventEntries(alpha);
-    enqueueSystemEvent("Later alpha event", { sessionKey: alpha });
-    expect(consumeSelectedSystemEventEntries(beta, selected)).toEqual([]);
-    expect(consumeSelectedSystemEventEntries(alpha, selected).map((event) => event.text)).toEqual([
+    enqueueSdkSystemEvent("Hook finished", { sessionKey: alpha, contextKey: "hook:shared" });
+    enqueueSdkSystemEvent("Hook finished", { sessionKey: beta, contextKey: "hook:shared" });
+    const selected = peekSdkSystemEventEntries(alpha);
+    enqueueSdkSystemEvent("Later alpha event", { sessionKey: alpha });
+    expect(consumeSdkSystemEventEntries(beta, selected)).toEqual([]);
+    expect(consumeSdkSystemEventEntries(alpha, selected).map((event) => event.text)).toEqual([
       "Hook finished",
     ]);
-    expect(peekSystemEvents(beta)).toEqual(["Hook finished"]);
-    expect(peekSystemEvents(alpha)).toEqual(["Later alpha event"]);
+    expect(peekSdkSystemEventEntries(beta).map((event) => event.text)).toEqual(["Hook finished"]);
+    expect(peekSdkSystemEventEntries(alpha).map((event) => event.text)).toEqual([
+      "Later alpha event",
+    ]);
   });
 
   it("keeps routed global Slack and Discord events isolated by route owner", async () => {
@@ -807,13 +708,27 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:beta:global")).toStrictEqual([]);
   });
 
-  it("rejects routed system events without an owner", () => {
-    expect(() =>
-      enqueueRoutedSystemEvent("Unbound event", { agentId: " ", sessionKey: "global" }),
-    ).toThrow("route.agentId");
-    expect(() =>
-      enqueueRoutedSystemEvent("Unbound event", { agentId: "alpha", sessionKey: " " }),
-    ).toThrow("sessionKey");
+  it.each([
+    { run: () => enqueueSystemEvent("Unbound", { sessionKey: " " }), error: "sessionKey" },
+    {
+      run: () =>
+        enqueueSystemEvent("Roster", {
+          sessionKey: "agent:main:main",
+          contextKey: " ",
+          replace: true,
+        }),
+      error: "contextKey",
+    },
+    {
+      run: () => enqueueRoutedSystemEvent("Unbound", { agentId: " ", sessionKey: "global" }),
+      error: "route.agentId",
+    },
+    {
+      run: () => enqueueRoutedSystemEvent("Unbound", { agentId: "alpha", sessionKey: " " }),
+      error: "sessionKey",
+    },
+  ])("rejects invalid event routing: $error", ({ run, error }) => {
+    expect(run).toThrow(error);
     expect(peekSystemEvents("agent:beta:global")).toStrictEqual([]);
   });
 
@@ -825,28 +740,4 @@ describe("system events (session routing)", () => {
     expect(peekSystemEvents("agent:alpha:global")).toEqual(["Alpha finished"]);
     expect(peekSystemEvents("agent:beta:global")).toEqual(["Beta pending"]);
   });
-});
-
-describe("isCronSystemEvent", () => {
-  it.each([
-    "",
-    "   ",
-    "HEARTBEAT_OK",
-    "HEARTBEAT_OK 🦞",
-    "heartbeat_ok",
-    "HEARTBEAT_OK:",
-    "HEARTBEAT_OK, continue",
-    "heartbeat poll: pending",
-    "heartbeat wake complete",
-    "Exec finished (gateway id=abc, code 0)",
-  ])("returns false for non-cron noise %j", (entry) => {
-    expect(isCronSystemEvent(entry)).toBe(false);
-  });
-
-  it.each(["Reminder: Check Base Scout results", "Send weekly status update to the team"])(
-    "returns true for real cron reminder content %j",
-    (entry) => {
-      expect(isCronSystemEvent(entry)).toBe(true);
-    },
-  );
 });

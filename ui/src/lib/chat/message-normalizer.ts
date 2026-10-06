@@ -6,6 +6,7 @@ import {
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
@@ -162,9 +163,7 @@ export function resolveMessageSenderLabel(
 }
 
 export function isToolResultMessage(message: unknown): boolean {
-  const m = asOptionalRecord(message);
-  const role = typeof m?.role === "string" ? m.role.toLowerCase() : "";
-  return role === "toolresult" || role === "tool_result";
+  return isToolResultContentType(asOptionalRecord(message)?.role);
 }
 
 export function isStandaloneToolMessageForDisplay(message: unknown): boolean {
@@ -365,13 +364,22 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+function stripMessageDisplayMetadata(
+  items: MessageContentItem[],
+  role: string,
+): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripInboundMetadata(item.text) };
+      return {
+        ...item,
+        text:
+          role.toLowerCase() === "user"
+            ? stripUserEnvelopeForDisplay(item.text)
+            : stripInboundMetadata(item.text),
+      };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -409,9 +417,8 @@ function expandTextContent(
         type: "attachment",
         attachment: {
           url: segment.url,
-          kind: inferred.kind,
-          label: inferred.label,
-          mimeType: inferred.mimeType,
+          ...inferred,
+          ...(inferred.kind === "audio" && audioAsVoice ? { isVoiceNote: true } : {}),
         },
       });
       continue;
@@ -435,14 +442,7 @@ function expandTextContent(
     });
   }
 
-  const content = mergeAdjacentTextItems(
-    parts.map((item) => {
-      if (item.type === "attachment" && item.attachment.kind === "audio" && audioAsVoice) {
-        return Object.assign({}, item, { attachment: { ...item.attachment, isVoiceNote: true } });
-      }
-      return item;
-    }),
-  );
+  const content = mergeAdjacentTextItems(parts);
 
   return {
     content:
@@ -455,7 +455,14 @@ function expandTextContent(
   };
 }
 
+const normalizedMessages = new WeakMap<object, NormalizedMessage>();
+
 export function normalizeMessage(message: unknown): NormalizedMessage {
+  const original = asOptionalRecord(message);
+  const cached = original && normalizedMessages.get(original);
+  if (cached) {
+    return cached;
+  }
   const m =
     asOptionalRecord(projectChatWorkContextForDisplay(projectImportedMessageForDisplay(message))) ??
     {};
@@ -590,10 +597,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
-  content = stripMessageDisplayMetadata(content);
+  content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
 
-  return {
+  const normalized: NormalizedMessage = {
     role,
     content,
     timestamp,
@@ -603,7 +610,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     ...(sender ? { sender } : {}),
     ...(sourceClients.length ? { sourceClients } : {}),
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
-    ...(replyPreviewText
+    ...(replyPreviewText || replyPreviewSender
       ? {
           replyPreview: {
             text: replyPreviewText,
@@ -613,4 +620,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
+  // Retained and live messages are immutable snapshots. Missing timestamps
+  // still resolve against the current clock on each call.
+  if (original && asFiniteNumber(m.timestamp) !== undefined) {
+    normalizedMessages.set(original, normalized);
+  }
+  return normalized;
 }

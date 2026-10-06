@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
@@ -17,7 +19,7 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { createBackgroundWorkOwner } from "../process/background-work.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -29,13 +31,10 @@ import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-cli
 function normalizePluginSubagentRunRuntime(
   value: unknown,
 ): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const harness = typeof record.harness === "string" ? record.harness.trim() : "";
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const record = asOptionalRecord(value);
+  const harness = normalizeOptionalString(record?.harness);
+  const provider = normalizeOptionalString(record?.provider);
+  const model = normalizeOptionalString(record?.model);
   return harness && provider && model ? { harness, provider, model } : undefined;
 }
 
@@ -122,13 +121,8 @@ function assertPluginSubagentModelAllowed(
   }
 }
 
-function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
-
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
+  return hasGatewayAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
 export function canTrustedOfficialPluginRequestScopes(params: {
@@ -350,10 +344,7 @@ export function createGatewaySubagentRuntime(
         params.completionDelivery,
       );
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,
@@ -451,9 +442,7 @@ export function createGatewaySubagentRuntime(
       return { runId, sessionKey, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethodInProcess<
-        Omit<AgentWaitResult, "status"> & { status?: string }
-      >(
+      const payload = await dispatchGatewayMethodInProcess<AgentWaitResult>(
         "agent.wait",
         {
           runId: params.runId,
@@ -461,16 +450,9 @@ export function createGatewaySubagentRuntime(
         },
         { resolveGatewayContext },
       );
-      const { status: rawStatus, error, ...metadata } = payload;
-      let status = rawStatus;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && error?.trim().toLowerCase() === "completed") {
-        status = "ok";
-      }
-      if (status !== "ok" && status !== "error" && status !== "timeout" && status !== "pending") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${rawStatus}`);
-      }
+      const { status: waitStatus, error, ...metadata } = payload;
+      const status =
+        waitStatus === "error" && error?.trim().toLowerCase() === "completed" ? "ok" : waitStatus;
       return {
         ...metadata,
         status,
@@ -480,14 +462,11 @@ export function createGatewaySubagentRuntime(
     getSessionMessages,
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
+            ...(!hasGatewayAdminScope(scope?.client)
               ? {
                   forceSyntheticClient: true,
                   syntheticScopes: [ADMIN_SCOPE],

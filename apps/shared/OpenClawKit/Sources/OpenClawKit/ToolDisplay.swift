@@ -2,16 +2,14 @@ import Foundation
 
 public struct ToolDisplaySummary: Sendable, Equatable {
     public let name: String
-    public let emoji: String
+    public let icon: String
     public let title: String
     public let label: String
     public let verb: String?
     public let detail: String?
 
     public var detailLine: String? {
-        var parts: [String] = []
-        if let verb, !verb.isEmpty { parts.append(verb) }
-        if let detail, !detail.isEmpty { parts.append(detail) }
+        let parts = [self.verb, self.detail].compactMap(\.self).filter { !$0.isEmpty }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
@@ -26,7 +24,7 @@ public enum ToolDisplayRegistry {
     }
 
     private struct ToolDisplaySpec: Decodable {
-        let emoji: String?
+        let icon: String?
         let title: String?
         let label: String?
         let detailKeys: [String]?
@@ -41,20 +39,37 @@ public enum ToolDisplayRegistry {
 
     private static let config: ToolDisplayConfig = loadConfig()
 
+    /// Presentation only; invocation identity and stored tool names stay raw.
+    public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        guard name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+              let arguments = args?.dictionaryValue,
+              let id = arguments["id"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !id.isEmpty
+        else { return (name, args) }
+
+        let displayName = id.replacingOccurrences(
+            of: #"^(?:openclaw|mcp|client):[^:]+:(.+)$"#,
+            with: "$1",
+            options: .regularExpression)
+        return (displayName, AnyCodable(arguments["args"]?.dictionaryValue ?? [:]))
+    }
+
     public static func resolve(name: String?, args: AnyCodable?, meta: String? = nil) -> ToolDisplaySummary {
-        let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
+        let call = self.displayCall(name: name, args: args)
+        let args = call.args
+        let trimmedName = call.name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
         let key = trimmedName.lowercased()
         let spec = self.config.tools?[key]
         let fallback = self.config.fallback
 
-        let emoji = spec?.emoji ?? fallback?.emoji ?? "🧩"
+        let icon = spec?.icon ?? fallback?.icon ?? "puzzle"
         let title = spec?.title ?? self.titleFromName(trimmedName)
         let label = spec?.label ?? trimmedName
 
         let actionRaw = self.valueForKeyPath(args, path: "action") as? String
         let action = actionRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
         let actionSpec = action.flatMap { spec?.actions?[$0] }
-        let verb = self.normalizeVerb(actionSpec?.label ?? action)
+        let verb = (actionSpec?.label ?? action)?.trimmedNonEmpty?.replacingOccurrences(of: "_", with: " ")
 
         var detail: String?
         if key == "read" {
@@ -68,7 +83,7 @@ public enum ToolDisplayRegistry {
 
         return ToolDisplaySummary(
             name: trimmedName,
-            emoji: emoji,
+            icon: icon,
             title: title,
             label: label,
             verb: verb,
@@ -76,15 +91,13 @@ public enum ToolDisplayRegistry {
     }
 
     private static func loadConfig() -> ToolDisplayConfig {
-        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json") else {
+        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let config = try? JSONDecoder().decode(ToolDisplayConfig.self, from: data)
+        else {
             return self.defaultConfig()
         }
-        do {
-            let data = try Data(contentsOf: url)
-            return try JSONDecoder().decode(ToolDisplayConfig.self, from: data)
-        } catch {
-            return self.defaultConfig()
-        }
+        return config
     }
 
     private static func locateResourceBundle() -> Bundle {
@@ -131,7 +144,7 @@ public enum ToolDisplayRegistry {
         ToolDisplayConfig(
             version: 1,
             fallback: ToolDisplaySpec(
-                emoji: "🧩",
+                icon: "puzzle",
                 title: nil,
                 label: nil,
                 detailKeys: [
@@ -172,12 +185,6 @@ public enum ToolDisplayRegistry {
             .joined(separator: " ")
     }
 
-    private static func normalizeVerb(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        return trimmed.replacingOccurrences(of: "_", with: " ")
-    }
-
     private static func readDetail(_ args: AnyCodable?) -> String? {
         guard let path = valueForKeyPath(args, path: "path") as? String else { return nil }
         let offsetAny = self.valueForKeyPath(args, path: "offset")
@@ -194,20 +201,12 @@ public enum ToolDisplayRegistry {
     }
 
     private static func firstValue(_ args: AnyCodable?, keys: [String]) -> String? {
-        for key in keys {
-            if let value = valueForKeyPath(args, path: key),
-               let rendered = renderValue(value)
-            {
-                return rendered
-            }
-        }
-        return nil
+        keys.lazy.compactMap { self.valueForKeyPath(args, path: $0).flatMap(self.renderValue) }.first
     }
 
     private static func renderValue(_ value: Any) -> String? {
         if let str = value as? String {
-            let trimmed = str.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { return nil }
+            guard let trimmed = str.trimmedNonEmpty else { return nil }
             let first = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
             if first.count > 160 { return String(first.prefix(157)) + "…" }
             return first

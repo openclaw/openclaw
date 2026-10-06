@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { WorkerOptions } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -26,6 +28,8 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "./session-accessor.js";
+import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
+import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 
 const archiveHook = vi.hoisted(() => ({ afterMaterialize: undefined as (() => void) | undefined }));
@@ -39,6 +43,62 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
       const result = await actual.materializeSessionStateDeletePlans(...args);
       archiveHook.afterMaterialize?.();
       return result;
+    },
+  };
+});
+
+const nativeAdmission = vi.hoisted<{
+  current?: {
+    databasePath: string;
+    mode: "integrity" | "historical-check";
+    armed: boolean;
+    held: boolean;
+    checks: SharedArrayBuffer;
+    release: SharedArrayBuffer;
+    entered: () => void;
+  };
+}>(() => ({}));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      private readonly admissionProbe: typeof nativeAdmission.current;
+
+      constructor(filename: string | URL, options: WorkerOptions = {}) {
+        const probe = nativeAdmission.current;
+        super(
+          filename,
+          probe
+            ? withWorkerSqliteIntegrityCounter(
+                options,
+                probe.checks,
+                probe.mode === "integrity" ? probe.release : undefined,
+                probe.databasePath,
+              )
+            : options,
+        );
+        this.admissionProbe = probe;
+      }
+
+      override emit(event: string | symbol, ...args: unknown[]): boolean {
+        const message = args[0];
+        if (
+          this.admissionProbe?.mode === "integrity" &&
+          event === "message" &&
+          args.length === 1 &&
+          isRecord(message) &&
+          Object.keys(message).length === 2 &&
+          message.type === "test-integrity-check" &&
+          (message.phase === "checking" || message.phase === "checked")
+        ) {
+          if (message.phase === "checking") {
+            this.admissionProbe.entered();
+          }
+          return true;
+        }
+        return super.emit(event, ...args);
+      }
     },
   };
 });
@@ -60,6 +120,7 @@ afterEach(async () => {
     release();
   }
   await Promise.allSettled(pending.splice(0));
+  nativeAdmission.current = undefined;
   archiveHook.afterMaterialize = undefined;
   await logging.flushLogger();
   logging.resetLogger();
@@ -96,9 +157,30 @@ function fixture() {
   return { scope, databaseOptions };
 }
 
-function observeColdAdmission(databasePath: string) {
+function observeColdAdmission(
+  databasePath: string,
+  mode: "integrity" | "historical-check" = "integrity",
+) {
   const entered = createDeferred();
-  const release = createDeferred();
+  const hostRelease = createDeferred();
+  const nativeRelease = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const probe = {
+    databasePath: fs.realpathSync(databasePath),
+    mode,
+    armed: false,
+    held: false,
+    checks: new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+    release: nativeRelease,
+    entered: () => entered.resolve(),
+  };
+  nativeAdmission.current = probe;
+  const release = {
+    resolve() {
+      hostRelease.resolve();
+      Atomics.store(new Int32Array(nativeRelease), 0, 1);
+      Atomics.notify(new Int32Array(nativeRelease), 0);
+    },
+  };
   releases.push(() => release.resolve());
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
@@ -124,71 +206,106 @@ function observeColdAdmission(databasePath: string) {
   });
   vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
     const work = realIntegrity(...args);
-    if (args[0] !== databasePath) {
+    if (args[0] !== databasePath || mode !== "integrity") {
       return work;
     }
     entered.resolve();
-    return Promise.all([work, release.promise]).then(() => undefined);
+    return Promise.all([work, hostRelease.promise]).then(() => undefined);
   });
-  return { entered, release, parentChecks: () => parentChecks };
+  if (mode === "historical-check") {
+    const withWorker = reclamationWorker.withSqliteReclamationWorker;
+    vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+      (options, claim, run, assertCurrent, signal) =>
+        withWorker(
+          options,
+          claim,
+          async (worker) => {
+            const execute = worker.run.bind(worker);
+            const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+              if (
+                !probe.armed ||
+                probe.held ||
+                params.plan.databaseOptions.path !== probe.databasePath ||
+                params.plan.kind !== "deletion-plan" ||
+                params.plan.planning.operation !== "check"
+              ) {
+                return execute(params);
+              }
+              return execute({
+                ...params,
+                withWriteAdmission: (performWrite, diagnostics) =>
+                  params.withWriteAdmission(async (...admissionArgs) => {
+                    const [refusal] = admissionArgs;
+                    if (!refusal && !probe.held) {
+                      probe.held = true;
+                      entered.resolve();
+                      await hostRelease.promise;
+                    }
+                    return performWrite(...admissionArgs);
+                  }, diagnostics),
+              });
+            });
+            try {
+              return await run(worker);
+            } finally {
+              spy.mockRestore();
+            }
+          },
+          assertCurrent,
+          signal,
+        ),
+    );
+  }
+  return {
+    entered,
+    release,
+    parentChecks: () => parentChecks,
+    armHistoricalCheck: () => {
+      probe.armed = true;
+    },
+  };
 }
 
-it.each(["delete", "artifact cleanup"] as const)(
-  "keeps cold %s preparation asynchronous inside its writer FIFO",
-  async (operation) => {
-    const f = fixture();
-    const admission = observeColdAdmission(f.databaseOptions.path);
-    const work =
-      operation === "delete"
-        ? own(
-            deleteSessionEntryLifecycle({
-              storePath: f.scope.storePath,
-              target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-              archiveTranscript: false,
-            }),
-          )
-        : own(
-            cleanupSessionLifecycleArtifactsCore({
-              storePath: f.scope.storePath,
-              sessionKeySegmentPrefix: "cleanup-admission-",
-              transcriptContentMarker: "unused-marker",
-              archiveRemovedEntryTranscripts: false,
-              orphanTranscriptMinAgeMs: 0,
-            }),
-          );
-    await yieldToEventLoop();
-    expect(admission.parentChecks()).toBe(0);
-    expect(
-      await Promise.race([
-        admission.entered.promise.then(() => true),
-        work.then(
-          () => false,
-          () => false,
-        ),
-      ]),
-    ).toBe(true);
-    let followingWriterEntered = false;
-    const following = own(
-      runExclusiveSqliteSessionWrite(
-        f.databaseOptions,
-        async () => {
-          followingWriterEntered = true;
-        },
-        "session.transcript.batch",
+it("keeps cold delete preparation asynchronous inside its writer FIFO", async () => {
+  const f = fixture();
+  const admission = observeColdAdmission(f.databaseOptions.path);
+  const work = own(
+    deleteSessionEntryLifecycle({
+      storePath: f.scope.storePath,
+      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
+      archiveTranscript: false,
+    }),
+  );
+  await yieldToEventLoop();
+  expect(admission.parentChecks()).toBe(0);
+  expect(
+    await Promise.race([
+      admission.entered.promise.then(() => true),
+      work.then(
+        () => false,
+        () => false,
       ),
-    );
-    await yieldToEventLoop();
-    expect(followingWriterEntered).toBe(false);
-    expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
-    admission.release.resolve();
-    await expect(work).resolves.toMatchObject(
-      operation === "delete" ? { deleted: true } : { removedEntries: 1 },
-    );
-    await following;
-    expect(followingWriterEntered).toBe(true);
-    expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
-  },
-);
+    ]),
+  ).toBe(true);
+  let followingWriterEntered = false;
+  const following = own(
+    runExclusiveSqliteSessionWrite(
+      f.databaseOptions,
+      async () => {
+        followingWriterEntered = true;
+      },
+      "session.transcript.batch",
+    ),
+  );
+  await yieldToEventLoop();
+  expect(followingWriterEntered).toBe(false);
+  expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
+  admission.release.resolve();
+  await expect(work).resolves.toMatchObject({ deleted: true });
+  await following;
+  expect(followingWriterEntered).toBe(true);
+  expect(loadSessionEntryReadOnly(f.scope)).toBeUndefined();
+});
 
 it.each(["cold", "warm"] as const)(
   "keeps no-op lifecycle cleanup read-only across a %s ordinary-session fleet",
@@ -205,33 +322,31 @@ it.each(["cold", "warm"] as const)(
     const paths = new Set(fleet.map((store) => store.path));
     const opened = vi.spyOn(sqlite, "openNodeSqliteDatabase");
     const inspected = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
-    for (let boot = 0; boot < 2; boot++) {
-      if (admission === "cold") {
-        await closeOpenClawAgentDatabasesAsync();
-        closeOpenClawAgentDatabasesForTest();
-      }
-      opened.mockClear();
-      inspected.mockClear();
-      for (const { scope, entry } of fleet) {
-        await expect(
-          cleanupSessionLifecycleArtifactsCore({
-            agentId: scope.agentId,
-            storePath: scope.storePath,
-            sessionKeySegmentPrefix: "dreaming-",
-            transcriptContentMarker: "dreaming-marker",
-            orphanTranscriptMinAgeMs: 0,
-          }),
-        ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
-        expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
-      }
-      expect(
-        opened.mock.calls.filter(
-          ([pathname, options]) =>
-            typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
-        ),
-      ).toEqual([]);
-      expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
+    if (admission === "cold") {
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
     }
+    opened.mockClear();
+    inspected.mockClear();
+    for (const { scope, entry } of fleet) {
+      await expect(
+        cleanupSessionLifecycleArtifactsCore({
+          agentId: scope.agentId,
+          storePath: scope.storePath,
+          sessionKeySegmentPrefix: "dreaming-",
+          transcriptContentMarker: "dreaming-marker",
+          orphanTranscriptMinAgeMs: 0,
+        }),
+      ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
+      expect(loadSessionEntryReadOnly(scope)).toMatchObject(entry);
+    }
+    expect(
+      opened.mock.calls.filter(
+        ([pathname, options]) =>
+          typeof pathname === "string" && paths.has(pathname) && options?.readOnly !== true,
+      ),
+    ).toEqual([]);
+    expect(inspected.mock.calls.filter(([pathname]) => paths.has(pathname))).toEqual([]);
   },
 );
 
@@ -290,7 +405,7 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
 });
 
-it("keeps a warm lifecycle owner synchronous without another integrity child", async () => {
+it("reuses warm lifecycle integrity proof without another validation", async () => {
   const f = fixture();
   openOpenClawAgentDatabase(f.databaseOptions);
   const admission = observeColdAdmission(f.databaseOptions.path);
@@ -371,7 +486,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
       message: { role: "user", content: "current content" },
     },
   );
-  const admission = observeColdAdmission(f.databaseOptions.path);
+  const admission = observeColdAdmission(f.databaseOptions.path, "historical-check");
   archiveHook.afterMaterialize = () => {
     archiveHook.afterMaterialize = undefined;
     closeCachedOpenClawAgentDatabase(openOpenClawAgentDatabase(f.databaseOptions), {
@@ -379,6 +494,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
     });
     invalidateOpenClawAgentDatabaseValidation(f.databaseOptions.path);
     clearOpenClawAgentIntegrityVerification(f.databaseOptions.path, f.databaseOptions.env);
+    admission.armHistoricalCheck();
   };
   const work = own(
     deleteSessionEntryLifecycle({
@@ -396,6 +512,7 @@ it("keeps historical preparation asynchronous after materialization evicts its p
       ),
     ]),
   ).toBe(true);
+  await yieldToEventLoop();
   expect(admission.parentChecks()).toBe(0);
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "current" });
   admission.release.resolve();

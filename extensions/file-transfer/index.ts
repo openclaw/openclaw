@@ -35,6 +35,7 @@ function createLazyTool(
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.stat",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -82,6 +83,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "file.create",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     duplex: true,
@@ -114,6 +116,7 @@ export default definePluginEntry({
     for (const kind of ["memory", "skills"] as const) {
       api.registerNodeHostCommand({
         command: `workspace.${kind}`,
+        hasActiveWork: () => false,
         cap: "file",
         dangerous: true,
         duplex: true,

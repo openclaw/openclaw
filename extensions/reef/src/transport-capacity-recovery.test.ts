@@ -124,8 +124,8 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
       ["alice", "carol"],
       2,
     );
-    await stores.delivered.add("occupied-1");
-    await stores.delivered.add("occupied-2");
+    await stores.delivered.confirm("occupied-1");
+    await stores.delivered.confirm("occupied-2");
     const inbox = connect();
 
     // Both entries reach ingress, but capacity blocks confirmation and cursor progress.
@@ -154,7 +154,7 @@ describe("Reef capacity-parked delivery recovery (production connection path)", 
       ["alice"],
       1,
     );
-    await stores.delivered.add("occupied");
+    await stores.delivered.confirm("occupied");
     await connect().drain();
     expect(onIngress).toHaveBeenCalledTimes(1);
     expect(relay.acknowledge).not.toHaveBeenCalled();

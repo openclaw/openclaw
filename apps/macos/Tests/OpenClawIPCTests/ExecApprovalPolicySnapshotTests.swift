@@ -21,7 +21,7 @@ struct ExecApprovalPolicySnapshotTests {
     }
 
     @Test
-    func `portable snapshot round trips canonical policy semantics`() {
+    func `portable snapshot import preserves canonical policy semantics`() {
         let snapshot = ExecApprovalPolicySnapshot(
             security: .allowlist,
             ask: .onMiss,
@@ -35,19 +35,18 @@ struct ExecApprovalPolicySnapshotTests {
                     argPattern: "^ok$"),
             ])
 
-        let portable = snapshot.portable
-
-        #expect(portable.security == .allowlist)
-        #expect(portable.ask == .onMiss)
-        #expect(portable.askFallback == .deny)
-        #expect(portable.autoAllowSkills)
-        #expect(portable.allowlistRules == [
-            OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/usr/bin/tool"),
-            OpenClawSystemRunApprovalPolicySnapshot.Rule(
-                pattern: "/usr/bin/tool",
-                argPattern: "^ok$",
-                source: .allowAlways),
-        ])
+        let portable = OpenClawSystemRunApprovalPolicySnapshot(
+            security: .allowlist,
+            ask: .onMiss,
+            askFallback: .deny,
+            autoAllowSkills: true,
+            allowlistRules: [
+                OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/usr/bin/tool"),
+                OpenClawSystemRunApprovalPolicySnapshot.Rule(
+                    pattern: "/usr/bin/tool",
+                    argPattern: "^ok$",
+                    source: .allowAlways),
+            ])
         #expect(snapshot == ExecApprovalPolicySnapshot(portable: portable))
     }
 
@@ -87,7 +86,21 @@ struct ExecApprovalPolicySnapshotTests {
             OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/ä"),
             OpenClawSystemRunApprovalPolicySnapshot.Rule(pattern: "/é"),
         ])
-        #expect(ExecApprovalPolicySnapshot(portable: portable).portable == portable)
+        #expect(ExecApprovalPolicySnapshot(portable: portable) == ExecApprovalPolicySnapshot(
+            security: .allowlist,
+            ask: .onMiss,
+            askFallback: .deny,
+            autoAllowSkills: false,
+            allowlist: [
+                ExecAllowlistEntry(pattern: "/"),
+                ExecAllowlistEntry(pattern: "/", argPattern: "A"),
+                ExecAllowlistEntry(pattern: "/", argPattern: "é"),
+                ExecAllowlistEntry(pattern: "/A"),
+                ExecAllowlistEntry(pattern: "/A", source: "allow-always"),
+                ExecAllowlistEntry(pattern: "/e\u{0301}"),
+                ExecAllowlistEntry(pattern: "/ä"),
+                ExecAllowlistEntry(pattern: "/é"),
+            ]))
     }
 
     private static func snapshot(source: String?) -> ExecApprovalPolicySnapshot {

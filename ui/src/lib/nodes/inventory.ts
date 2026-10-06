@@ -11,6 +11,7 @@ import {
   normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
+import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.js";
 import type {
   NodeListNode,
   NodeWorkerBundleStatus,
@@ -19,7 +20,6 @@ import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
-type NodeWorkerSlots = NonNullable<NodeListNode["workerSlots"]>;
 
 const hostStatsSchema = z
   .object({
@@ -41,7 +41,6 @@ const hostStatsSchema = z
         stats.diskAvailableBytes <= stats.diskTotalBytes),
   );
 
-/** Typed projection of one raw `node.list` row. */
 type NodeListEntry = NodeListNode & {
   caps: string[];
   commands: string[];
@@ -86,28 +85,6 @@ const NODE_APPROVAL_STATES: ReadonlySet<string> = new Set([
   "unapproved",
 ]);
 
-function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const keys = Object.keys(value);
-  const total = value.total;
-  const available = value.available;
-  return keys.length === 2 &&
-    keys.includes("total") &&
-    keys.includes("available") &&
-    typeof total === "number" &&
-    typeof available === "number" &&
-    Number.isSafeInteger(total) &&
-    Number.isSafeInteger(available) &&
-    total >= 1 &&
-    total <= 1_024 &&
-    available >= 0 &&
-    available <= total
-    ? { total, available }
-    : undefined;
-}
-
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -146,7 +123,7 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
-    workerSlots: parseWorkerSlots(raw.workerSlots),
+    workerSlots: parseWorkerCapacity(raw.workerSlots) ?? undefined,
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
     hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
@@ -181,12 +158,10 @@ function buildEntry(
     roles.push("node");
   }
   const operatorLabel = normalizeOptionalString(device?.operatorLabel);
-  const displayName =
-    normalizeOptionalString(device?.displayName) ?? normalizeOptionalString(node?.displayName);
+  const displayName = normalizeOptionalString(device?.displayName) ?? node?.displayName;
   const clientId = normalizeOptionalString(device?.clientId) ?? node?.clientId;
   return {
     id,
-    // Display precedence: operator label, then client display name, then client id, then device id.
     name: operatorLabel ?? displayName ?? clientId ?? id,
     displayName,
     clientId,
@@ -225,12 +200,12 @@ function buildEntry(
 }
 
 function groupKey(entry: DeviceInventoryEntry): string {
-  const name = entry.displayName?.trim().toLowerCase();
+  const name = entry.displayName?.toLowerCase();
   if (name) {
     return `name:${name}`;
   }
-  const clientId = entry.clientId?.trim().toLowerCase();
-  const clientMode = entry.clientMode?.trim().toLowerCase();
+  const clientId = entry.clientId?.toLowerCase();
+  const clientMode = entry.clientMode?.toLowerCase();
   if (clientId || clientMode) {
     return `client:${clientId ?? ""}:${clientMode ?? ""}`;
   }
@@ -243,25 +218,11 @@ function entryRecency(entry: DeviceInventoryEntry): number {
 }
 
 function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
-function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
-  const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
-}
-
-/** Joins paired devices with node catalog rows and groups duplicate pairings. */
 export function buildDeviceInventory(params: {
   paired: PairedDevice[];
   nodes: Array<Record<string, unknown>>;
@@ -324,7 +285,10 @@ export function buildDeviceInventory(params: {
       duplicates: sorted.slice(1),
     });
   }
-  return groups.toSorted(compareGroups);
+  return groups.toSorted((left, right) => {
+    const order = compareEntries(left.primary, right.primary);
+    return order !== 0 ? order : left.name.localeCompare(right.name);
+  });
 }
 
 /**
@@ -353,7 +317,6 @@ export function listStaleInventoryEntries(groups: DeviceInventoryGroup[]): Devic
   );
 }
 
-/** Returns the Gateway self beacon, when present in the current snapshot. */
 export function findGatewayPresence(presence: PresenceEntry[]): PresenceEntry | undefined {
   return presence.find((entry) => normalizeOptionalString(entry.mode)?.toLowerCase() === "gateway");
 }
@@ -399,7 +362,6 @@ export function listUnpairedPresence(
   });
 }
 
-/** Which pairing stores a removal must touch for this entry. */
 export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
   removeNode: boolean;
   removeDevice: boolean;

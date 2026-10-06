@@ -18,13 +18,7 @@ import {
 } from "./bot-message-dispatch-session.js";
 import { createTelegramDispatchStatus } from "./bot-message-dispatch-status.js";
 import { runTelegramDispatchTurn } from "./bot-message-dispatch-turn.js";
-import {
-  findModelInCatalog,
-  loadPreparedModelCatalog,
-  modelSupportsVision,
-  resolveAgentDir,
-  resolveDefaultModelForAgent,
-} from "./bot-message-dispatch.agent.runtime.js";
+import { resolveAgentDir } from "./bot-message-dispatch.agent.runtime.js";
 import {
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
@@ -44,28 +38,10 @@ import {
 } from "./bot/native-quote.js";
 import { resolveTelegramRichMessages, resolveTelegramTableMode } from "./rich-messages-config.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
+import { resolveStickerVisionSupport } from "./sticker-vision.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
-
-async function resolveStickerVisionSupport(
-  cfg: DispatchTelegramMessageParams["cfg"],
-  agentId: string,
-) {
-  try {
-    const catalog = await loadPreparedModelCatalog({
-      config: cfg,
-      agentId,
-      agentDir: resolveAgentDir(cfg, agentId),
-      readOnly: true,
-    });
-    const defaultModel = resolveDefaultModelForAgent({ cfg, agentId });
-    const entry = findModelInCatalog(catalog, defaultModel.provider, defaultModel.model);
-    return entry ? modelSupportsVision(entry) : false;
-  } catch {
-    return false;
-  }
-}
 
 function includeStickerDescription(params: {
   body: string | undefined;
@@ -174,10 +150,10 @@ async function prepareTelegramSticker(params: {
     return;
   }
   const agentDir = resolveAgentDir(params.cfg, context.route.agentId);
-  const stickerSupportsVision = await resolveStickerVisionSupport(
-    params.cfg,
-    context.route.agentId,
-  );
+  const stickerSupportsVision = await resolveStickerVisionSupport({
+    cfg: params.cfg,
+    agentId: context.route.agentId,
+  });
   const description =
     sticker.cachedDescription ||
     (await describeStickerImage({
@@ -256,6 +232,7 @@ function scheduleDmTopicLabel(params: {
       const label = await generateTopicLabel({
         userMessage,
         prompt: autoTopicConfig.prompt,
+        maxLength: 128,
         cfg: params.cfg,
         agentId: context.route.agentId,
         agentDir: resolveAgentDir(params.cfg, context.route.agentId),
@@ -321,19 +298,14 @@ export const dispatchTelegramMessage = async (
   const isDispatchSuperseded = () => turnAdoptionLifecycle?.abortSignal?.aborted === true;
   const turnConfig = {
     ...dispatchParams,
+    ...quote,
     allowProviderPreview,
     chunkMode: resolveChunkMode(cfg, "telegram", dispatchContext.route.accountId),
     context: dispatchContext,
     dispatchStartedAt,
-    draftReplyToMessageId: quote.draftReplyToMessageId,
     isSuperseded: isDispatchSuperseded,
     loadFreshSessionEntry,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, dispatchContext.route.agentId),
-    replyQuoteByMessageId: quote.replyQuoteByMessageId,
-    replyQuoteEntities: quote.replyQuoteEntities,
-    replyQuoteMessageId: quote.replyQuoteMessageId,
-    replyQuotePosition: quote.replyQuotePosition,
-    replyQuoteText: quote.replyQuoteText,
     resolvedReasoningLevel,
     richMessages,
     statusReactionController: status.controller,

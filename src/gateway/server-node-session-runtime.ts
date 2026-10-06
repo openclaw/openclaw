@@ -78,11 +78,7 @@ export function createGatewayNodeSessionRuntime(params: {
         { dropIfSlow: true },
       );
     }
-    if (change.availabilityChanged) {
-      params.broadcast("sessions.changed", { reason: "runner-availability" }, { dropIfSlow: true });
-    }
   });
-  const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const sessionEventSubscribers = params.sessionEventSubscribers;
   const sessionMessageSubscribers = params.sessionMessageSubscribers;
   const nodeSendEvent = (opts: {
@@ -167,7 +163,6 @@ export function createGatewayNodeSessionRuntime(params: {
   return {
     nodeRegistry,
     nodeWorkerSupervisorTransport,
-    nodePresenceTimers,
     sessionEventSubscribers,
     sessionMessageSubscribers,
     nodeHasSessionSubscribers: nodeSubscriptions.hasSubscribers,

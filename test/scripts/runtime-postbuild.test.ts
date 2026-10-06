@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
 import {
   copyStaticExtensionAssets,
   copyStaticExtensionAssetsToRuntimeOverlay,
@@ -19,8 +20,12 @@ import {
   type UpdateCompatibilityInventory,
   type UpdateCompatibilityRelease,
 } from "../../scripts/lib/update-compat-chunks.mts";
-import { buildUpdateConfigRuntimeAlias } from "../../scripts/lib/update-config-runtime-compat.mts";
 import {
+  buildUpdateConfigRuntimeAlias,
+  isUpdateConfigRuntimeAlias,
+} from "../../scripts/lib/update-config-runtime-compat.mts";
+import {
+  listCoreRuntimePostBuildOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
@@ -42,6 +47,7 @@ import {
 
 const { createTempDir } = createScriptTestHarness();
 const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const nodeRunnerFixture = `export { resolveNodeRunner } from ${JSON.stringify(new URL("../../src/cli/update-cli/node-runner.ts", import.meta.url).href)};\n`;
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   let statError: unknown;
@@ -90,6 +96,54 @@ async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
 }
 
 describe("runtime postbuild static assets", () => {
+  it("closes private CLI diagnostic imports without adding public-build companions", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-cli-");
+    writeUpdateCompatibilityBuildFixture(rootDir);
+    const companions = [
+      "cli-process-diagnostics.test-support.cjs",
+      "cli-process-tree.test-support.cjs",
+    ];
+    await fs.mkdir(path.join(rootDir, "src/cli"), { recursive: true });
+    for (const fileName of companions) {
+      await fs.copyFile(
+        path.join(MODULE_ROOT, "src/cli", fileName),
+        path.join(rootDir, "src/cli", fileName),
+      );
+    }
+    const params = {
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    };
+    runRuntimePostBuild(params);
+    for (const fileName of companions) {
+      await expectPathMissing(path.join(rootDir, "dist", fileName));
+    }
+    await fs.mkdir(path.join(rootDir, "dist/plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "dist/plugin-sdk/test-env.js"),
+      'export * from "../test-env-fixture.mjs";\n',
+    );
+    await fs.writeFile(
+      path.join(rootDir, "dist/test-env-fixture.mjs"),
+      companions.map((fileName) => `new URL("./${fileName}", import.meta.url);`).join("\n"),
+    );
+    runRuntimePostBuild(params);
+    const files = fsSync.readdirSync(path.join(rootDir, "dist")).map((name) => `dist/${name}`);
+    expect(
+      collectPackageDistImportErrors({
+        files: files.filter(
+          (name) => name.endsWith(".cjs") || name === "dist/test-env-fixture.mjs",
+        ),
+        readText: (file: string) => fsSync.readFileSync(path.join(rootDir, file), "utf8"),
+      }),
+    ).toEqual([]);
+    for (const fileName of companions) {
+      await fs.unlink(path.join(rootDir, "dist", fileName));
+      expect(listCoreRuntimePostBuildOutputs({ rootDir })).toContain(`dist/${fileName}`);
+    }
+  });
+
   it("copies bundled hook metadata without replacing compiled handlers", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
     writeUpdateCompatibilityBuildFixture(rootDir);
@@ -131,8 +185,6 @@ describe("runtime postbuild static assets", () => {
     `);
 
     expect(payload.outputs).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
@@ -367,6 +419,9 @@ describe("runtime postbuild static assets", () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
     await writeExportHtmlBuildFixture(rootDir);
     writeUpdateCompatibilityBuildFixture(rootDir);
+    const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+    await fs.mkdir(path.dirname(runner), { recursive: true });
+    await fs.writeFile(runner, nodeRunnerFixture);
     runRuntimePostBuild({
       cwd: rootDir,
       env: {
@@ -395,7 +450,7 @@ describe("runtime postbuild static assets", () => {
     const bridge = await import(
       pathToFileURL(path.join(rootDir, "dist", "shared-Y6bNiw2w.js")).href
     );
-    expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+    expect(bridge.resolveNodeRunner()).toBe(process.execPath);
   });
 
   it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
@@ -751,7 +806,6 @@ describe("runtime postbuild static assets", () => {
       path.join(distDir, "install.runtime-Aaa111.mjs"),
       [
         "export const scanPackageInstallSource = true;",
-        "export const scanFileInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",
@@ -999,7 +1053,6 @@ describe("runtime postbuild static assets", () => {
       path.join(distDir, "install.runtime-Aaa111.mjs"),
       [
         "export const scanPackageInstallSource = true;",
-        "export const scanFileInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",
@@ -1077,6 +1130,7 @@ describe("runtime postbuild static assets", () => {
 
   it("keeps the 2026.9.1 Git updater restart import loadable after dist replacement", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-old-updater-");
+    await fs.writeFile(path.join(rootDir, "package.json"), '{"type":"module"}');
     const distDir = path.join(rootDir, "dist");
     const ownerPath = path.join(distDir, "update-command-service-command.mjs");
     await fs.mkdir(distDir, { recursive: true });
@@ -1099,6 +1153,9 @@ describe("runtime postbuild static assets", () => {
           "const rootDir = process.argv[1];",
           'const owner = await import(pathToFileURL(path.join(rootDir, "dist/update-command-service-command.mjs")).href);',
           'await fs.rm(path.join(rootDir, "dist"), { recursive: true, force: true });',
+          'const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");',
+          "await fs.mkdir(path.dirname(runner), { recursive: true });",
+          `await fs.writeFile(runner, ${JSON.stringify(nodeRunnerFixture)});`,
           "writeLegacyCliExitCompatChunks({ rootDir });",
           "process.stdout.write(await owner.restart());",
         ].join("\n"),
@@ -1114,11 +1171,14 @@ describe("runtime postbuild static assets", () => {
     "preserves the old updater node-runner ABI through %s",
     async (chunk) => {
       const rootDir = createTempDir("openclaw-runtime-postbuild-");
+      const runner = path.join(rootDir, "dist/cli/update-cli/node-runner.js");
+      await fs.mkdir(path.dirname(runner), { recursive: true });
+      await fs.writeFile(runner, nodeRunnerFixture);
 
       writeLegacyCliExitCompatChunks({ rootDir });
 
       const bridge = await import(pathToFileURL(path.join(rootDir, "dist", chunk)).href);
-      expect(bridge.resolveNodeRunner()).toBe(process.versions.bun ? "node" : process.execPath);
+      expect(bridge.resolveNodeRunner()).toBe(process.execPath);
     },
   );
 });
@@ -1226,41 +1286,108 @@ describe("previous release update compatibility", () => {
     return { root, inventory };
   }
 
-  it.each(["generated", "changed delegation", "missing source region"])(
-    "traces only verified delegating config aliases (%s)",
+  it.each([
+    "generated",
+    "historical",
+    "historical changed delegation",
+    "historical changed binding",
+    "historical changed target",
+    "changed delegation",
+    "missing source region",
+  ])("traces only verified delegating config aliases (%s)", (variant) => {
+    const facade =
+      'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
+    let alias = variant.startsWith("historical")
+      ? fsSync.readFileSync(
+          path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.5.txt"),
+          "utf8",
+        )
+      : buildUpdateConfigRuntimeAlias(
+          "io.runtime-abcdefgh.mjs",
+          parser.parseSourceFile("facade.mjs", facade),
+        );
+    if (variant.endsWith("changed delegation")) {
+      alias = alias.replace("return runtime[name]", "return undefined");
+    } else if (variant === "historical changed binding") {
+      alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+    } else if (variant === "historical changed target") {
+      alias = alias.replace('"./io.runtime-abcdefgh.mjs"', '"./"');
+      // Verify the alias owner independently of ModuleGraph's target-name guard.
+      expect(
+        isUpdateConfigRuntimeAlias(
+          alias,
+          "io.runtime-abcdefgh.mjs",
+          parser.parseSourceFile("facade.mjs", facade),
+        ),
+      ).toBe(false);
+    }
+    const record = () =>
+      recordImportedFixture('(await import("./io.runtime.js"))', {
+        "io.runtime.js": alias,
+        "io.runtime-abcdefgh.mjs": facade,
+        "extra.mjs": "//#region src/config/extra.ts\nexport const targetOnly = true;\n",
+        "config-abcdefgh.mjs": [
+          'throw new Error("The recorder must not execute release code");',
+          ...(variant === "missing source region" ? [] : ["//#region src/config/io.ts"]),
+          "export function createConfigIO() {}",
+          "export function readConfigFileSnapshot() {}",
+        ].join("\n"),
+      });
+    if (variant !== "generated" && variant !== "historical") {
+      expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
+      return;
+    }
+    expect(record().inventory.releases[0]?.chunks).toMatchObject([
+      {
+        path: "io.runtime.js",
+        exports: ["createConfigIO", "readConfigFileSnapshot"].map((exported) => ({
+          exported,
+          origin: { module: "src/config/io.ts", symbol: exported },
+        })),
+      },
+    ]);
+  });
+
+  it.each(["exact", "changed delegation", "changed binding", "changed target"])(
+    "traces only the exact shipped 2026.9.8 config alias (%s)",
     (variant) => {
       const facade =
-        'export { createConfigIO, readConfigFileSnapshot } from "./config-abcdefgh.mjs";\nexport * from "./extra.mjs";\n';
-      const alias = buildUpdateConfigRuntimeAlias(
-        "io.runtime-abcdefgh.mjs",
-        parser.parseSourceFile("facade.mjs", facade),
+        'export { createConfigIO, readConfigFileSnapshot, readSourceConfigBestEffort } from "./config-abcdefgh.mjs";\n';
+      let alias = fsSync.readFileSync(
+        path.join(MODULE_ROOT, "test/fixtures/update-config-runtime-alias-2026.9.8.txt"),
+        "utf8",
       );
+      if (variant === "changed delegation") {
+        alias = alias.replace("return runtime[name]", "return undefined");
+      } else if (variant === "changed binding") {
+        alias = alias.replace('select("createConfigIO")', 'select("readConfigFileSnapshot")');
+      } else if (variant === "changed target") {
+        alias = alias.replace('"./io.runtime-BNEtkwm5.mjs"', '"./"');
+      }
       const record = () =>
         recordImportedFixture('(await import("./io.runtime.js"))', {
-          "io.runtime.js":
-            variant === "changed delegation"
-              ? alias.replace("return runtime[name]", "return undefined")
-              : alias,
-          "io.runtime-abcdefgh.mjs": facade,
-          "extra.mjs": "//#region src/config/extra.ts\nexport const targetOnly = true;\n",
+          "io.runtime.js": alias,
+          "io.runtime-BNEtkwm5.mjs": facade,
           "config-abcdefgh.mjs": [
-            'throw new Error("The recorder must not execute release code");',
-            ...(variant === "missing source region" ? [] : ["//#region src/config/io.ts"]),
+            "//#region src/config/io.ts",
             "export function createConfigIO() {}",
             "export function readConfigFileSnapshot() {}",
+            "export function readSourceConfigBestEffort() {}",
           ].join("\n"),
         });
-      if (variant !== "generated") {
+      if (variant !== "exact") {
         expect(record).toThrow("Cannot trace io.runtime.js export createConfigIO");
         return;
       }
       expect(record().inventory.releases[0]?.chunks).toMatchObject([
         {
           path: "io.runtime.js",
-          exports: ["createConfigIO", "readConfigFileSnapshot"].map((exported) => ({
-            exported,
-            origin: { module: "src/config/io.ts", symbol: exported },
-          })),
+          exports: ["createConfigIO", "readConfigFileSnapshot", "readSourceConfigBestEffort"].map(
+            (exported) => ({
+              exported,
+              origin: { module: "src/config/io.ts", symbol: exported },
+            }),
+          ),
         },
       ]);
     },
@@ -1840,6 +1967,41 @@ describe("previous release update compatibility", () => {
     const current = await import(pathToFileURL(path.join(root, "dist/worker.runtime.js")).href);
     expect(current.x()).toBe("node");
     expect(current.y()).toBe("npm");
+  });
+
+  it("retains published cleanup-scope imports after package replacement", () => {
+    const target = "runtime-cleanup-abcdefgh.mjs";
+    const { root, inventory } = recordImportedFixture(
+      `(await import("./${target}")).runCliDisposerAfterPending()`,
+      {
+        [target]:
+          '//#region src/cli/runtime-cleanup.ts\nexport function runCliDisposerAfterPending() { return "old"; }\n',
+      },
+      undefined,
+      "src/cli/runtime-cleanup-scope.ts",
+    );
+    fsSync.unlinkSync(path.join(root, "dist", target));
+    write(
+      root,
+      "dist/current.mjs",
+      '//#region src/cli/runtime-cleanup.ts\nfunction runCliDisposerAfterPending() { return "current"; } export { runCliDisposerAfterPending as cleanup };\n',
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const result = childProcess.execFileSync(
+      testNodeExecPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import { unlinkSync } from "node:fs"; import { fileURLToPath } from "node:url"; const scope = await import(process.argv[1]); unlinkSync(fileURLToPath(process.argv[1])); console.log(await scope.restart());',
+        pathToFileURL(path.join(root, "dist/command.js")).href,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.trim()).toBe("current");
   });
 
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {

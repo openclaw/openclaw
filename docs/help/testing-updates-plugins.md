@@ -118,6 +118,8 @@ runs the published `openclaw@2026.9.4` updater against the candidate.
 A legacy-plugin case returns from its command while a child keeps running,
 then proves that a missing idle-work callback blocks activation both during
 that work and after the child finishes.
+A default-plugin node, with no plugin restriction or node command allowlist,
+must activate the prepared update while idle.
 
 Use a new artifact directory outside the source checkout for every run, or omit
 it to create a fresh temporary directory. The scenario retains `observations.json`
@@ -130,7 +132,7 @@ behavior; it does not establish Windows or macOS activation coverage. See
 
 The Docker lanes are the product-level proof. They install or update a real
 package inside Linux containers and assert behavior through CLI commands,
-Gateway startup, HTTP probes, RPC status, and filesystem state.
+Gateway startup, HTTP checks, RPC status, and filesystem state.
 
 Use focused lanes while iterating:
 
@@ -166,13 +168,13 @@ Important lanes:
 - `test:docker:published-upgrade-survivor` first installs the latest stable release,
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
-  probes `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
+  checks `/healthz`, `/readyz`, and RPC status. The baseline recipe configures
   Anthropic, Google Gemini, and OpenAI through env-referenced API keys, keeping
   OpenAI as the agents' primary model.
 - `test:docker:update-restart-auth` installs the candidate package, starts a
   managed token-auth Gateway, unsets caller gateway auth env for
   `openclaw update --yes --json`, and requires the candidate update command to
-  restart the Gateway before the normal probes.
+  restart the Gateway before the normal checks.
 - `test:docker:update-migration` is the cleanup-heavy published-update lane. It
   installs the latest stable release by default, starts from a configured
   Discord/Telegram-style user state, seeds package-local plugin dependency debris
@@ -210,9 +212,12 @@ pnpm test:docker:published-upgrade-survivor
 
 Source-pinned tarball runs of `base` and `sqlite-volume` verify the candidate
 commit before the update and compare the installed application payload with the
-frozen tarball afterward, before candidate probes. This distinguishes different
+frozen tarball afterward, before candidate checks. This distinguishes different
 builds with the same version string. npm still owns dependency reification;
 manual tarball runs without a selected source SHA retain their existing contract.
+These generic scenarios do not require a worker-cell baseline identity artifact.
+After the update, missing or unreadable tarballs and installed payloads fail with
+the corresponding candidate identity diagnostic before any candidate checks run.
 
 Useful published-upgrade survivor variants:
 
@@ -229,7 +234,7 @@ OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.7.1-2 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=sqlite-volume \
 pnpm test:docker:published-upgrade-survivor
 
-OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.6.34 \
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=openclaw@2026.8.33 \
 OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=legacy-operator-state \
 pnpm test:docker:published-upgrade-survivor
 
@@ -247,6 +252,22 @@ Available scenarios: `base`, `acpx-openclaw-tools-bridge`, `feishu-channel`,
 fixtures but excludes the expensive `sqlite-volume` scenario. Use
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=far-reaching` to include it.
 
+The opt-in `backup-schedule` scenario uses the published `openclaw@2026.9.7`
+CLI to initialize a Git backup repository, enable its Gateway-owned 24-hour
+schedule, and record one Git backup and one archive backup. The published updater
+installs the source-pinned candidate tarball. After non-interactive Doctor and
+Gateway startup, the scenario checks the original schedule declaration and argv,
+both old ledger rows through `backup.status`, the status backup line, Doctor
+errors, and HTTP readiness. It also requires that `storage.locations` stays
+absent and the Cloudflare plugin stays inactive. This manual/release scenario
+is excluded from aggregate aliases and per-PR CI.
+
+```bash
+OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS=openclaw@2026.9.7 \
+OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=backup-schedule \
+pnpm test:docker:published-upgrade-survivor
+```
+
 The `custom-plugin-siblings` scenario starts from published 2026.9.4 or later
 with an enabled custom memory plugin importing `../shared/value.mjs` from both
 its runtime entry and Doctor config-repair contract. It runs the published
@@ -260,7 +281,7 @@ Those default release runs pin this scenario to the published 2026.9.4 driver,
 including when the source candidate still reports version 2026.9.4; other
 scenarios retain their existing baseline selection.
 
-The opt-in `projects-doctor`, `projects-startup-migration`, and `taskflow-restoration` scenarios require the exact
+The opt-in `projects-doctor` and `projects-startup-migration` scenarios require the exact
 published `openclaw@2026.9.4` baseline and a frozen candidate tarball. They use
 isolated state, manual restart, and no live providers or registry companion fixtures;
 none runs through `reported-issues` or `far-reaching`. They verify the original
@@ -289,12 +310,6 @@ candidate `commit`, `agentSchema`, and `operations.prepare`/`operations.open`
 triples of compiled basename, exact export symbol, and SHA-256. The snapshot
 preparer and SQLite opener must match the installed candidate payload; the file
 is mounted read-only. This scenario uses no remote repository or model turn.
-`taskflow-restoration` preserves three terminal tasks and two flows, starts a fresh
-candidate Gateway, exercises awaited task SDK reads through a synthetic local plugin,
-and reads two task pages on the same Gateway connection. Complete task, delivery,
-and flow records are checked again after Gateway shutdown. The taskflow cell covers
-terminal persisted state; it does not exercise active task recovery or provider work.
-
 The opt-in `channel-owner-policy` scenario uses the same pinned `openclaw@2026.9.4`
 published-driver and candidate-package checks. It seeds an existing
 `operator.channelPolicy` JSON specimen in the published database's machine-state
@@ -342,7 +357,7 @@ For this scenario, the baseline updater must replace its running managed Gateway
 the harness checks process replacement and configured authentication. Cron owners
 are queried immediately after that first update, before any consent repair can
 conceal an incomplete migration. The default local `manual` mode passes
-`--no-restart` and starts the candidate for probes, so it does not prove an
+`--no-restart` and starts the candidate for checks, so it does not prove an
 updater-owned restart. Both modes require a clean `doctor --lint --json` report.
 
 Schema snapshots record both published `userVersion` and applied `contentVersion`
@@ -357,7 +372,7 @@ opens databases read-only and never triggers migrations or publication. See
 The before snapshot also records the baseline's configured agent roster and
 agent-scoped legacy specimens, including session rows, transcript and trajectory
 files, trajectory pointers, and skill-prompt blobs. Model catalogs and unrelated
-per-agent artifacts are outside this observer's session-migration scope. Before candidate probes or
+per-agent artifacts are outside this observer's session-migration scope. Before candidate checks or
 agent turns, each agent with existing SQLite or legacy session history must have
 a store at the candidate agent schema. The observer verifies imported session
 identities and transcript events, completed archive receipts and retained source
@@ -375,7 +390,7 @@ pass; it never permits a failed schema repair.
 
 Other scenarios keep their existing success assertions. Their deliberately
 injected legacy files can prevent the baseline from starting before an update;
-the updater must migrate those fixtures before the candidate probes. The lane
+the updater must migrate those fixtures before the candidate checks. The lane
 does not pre-repair or skip those older migration specimens.
 
 `auth-profile-v2026-7-2-beta-5` is explicitly selectable outside those aggregate
@@ -425,7 +440,7 @@ idempotent Doctor pass is 60 seconds; override it with
 The `Update Migration` workflow runs weekly and supports manual dispatch. Its
 default `supported-lines` baseline set resolves npm dist-tags and published
 versions at run time: `latest`, the previous stable release, `extended-stable`
-when that tag exists, and the supported floor `2026.6.34`. Duplicate versions
+when that tag exists, and the supported floor `2026.8.33`. Duplicate versions
 run once. It updates each baseline to the selected `package_ref` artifact
 (`main` by default), exercising plugin cleanup and legacy operator state.
 Leave `baselines` blank to use that default. For an explicit historical replay

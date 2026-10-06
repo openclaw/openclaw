@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -75,7 +74,7 @@ internal fun HealthLogsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Health"),
     subtitle = nativeString("Gateway status, phone node readiness, and recent log stream."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Health.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -146,7 +145,7 @@ private fun GatewayLogDetailSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Log Entry"),
     subtitle = nativeString("Readable gateway log detail."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Health.icon,
     onBack = onBack,
   ) {
     SettingsMetricPanel(
@@ -157,21 +156,17 @@ private fun GatewayLogDetailSettingsScreen(
           SettingsMetric(nativeString("Subsystem"), entry.subsystem ?: nativeString("Unknown")),
         ),
     )
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = nativeString("Message"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = nativeString("Message"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = entry.message, style = ClawTheme.type.body, color = ClawTheme.colors.text)
     }
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(
-          text = entry.raw.takeUtf16Safe(4_000),
-          style = ClawTheme.type.caption,
-          color = ClawTheme.colors.textMuted,
-        )
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(
+        text = entry.raw.takeUtf16Safe(4_000),
+        style = ClawTheme.type.caption,
+        color = ClawTheme.colors.textMuted,
+      )
     }
   }
 }
@@ -195,9 +190,7 @@ private fun GatewayLogsPanel(
       }
     }
     if (summary.entries.isEmpty()) {
-      ClawPanel {
-        Text(text = nativeString("No recent log entries."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = nativeString("No recent log entries."))
     } else {
       ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
         ClawSeparatedColumn(items = summary.entries.takeLast(12), dividerColor = ClawTheme.colors.border) { entry ->

@@ -250,7 +250,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
         await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
         await fs.writeFile(path.join(proposalDir, supportPath), proposedSupport);
       }
-      seedLegacyV15ProposalRows(testState.env, [
+      await seedLegacyV15ProposalRows(testState.env, [
         { record: created.record, workspaceDir, claimReleasedTime: null },
         { record: pending, workspaceDir, claimReleasedTime: null },
       ]);
@@ -429,7 +429,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       await fs.mkdir(path.join(proposalDir, "references"), { recursive: true });
       await fs.writeFile(path.join(proposalDir, pending.draftFile), draft);
       await fs.writeFile(path.join(proposalDir, supportPath), supportContent);
-      seedLegacyV15ProposalRows(testState.env, [
+      await seedLegacyV15ProposalRows(testState.env, [
         { record: pending, workspaceDir, claimReleasedTime: null },
       ]);
       await prepareOpenClawStateDatabaseSchema({ env: testState.env });
@@ -512,7 +512,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
     });
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), claims[0]!.content);
-    seedLegacyV15ProposalRows(
+    await seedLegacyV15ProposalRows(
       testState.env,
       claims.map(({ record, agentId }) => ({
         record,
@@ -584,7 +584,7 @@ describe("doctor Workshop relocation ownership and commit boundaries", () => {
       }
       const active = childClaim ? claims : [claims[0]!];
       const ordered = childFirst ? active.toReversed() : active;
-      seedLegacyV15ProposalRows(
+      await seedLegacyV15ProposalRows(
         testState.env,
         ordered.map(({ record, agentId, workspaceDir: sourceWorkspace }) => ({
           record,

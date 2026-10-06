@@ -93,7 +93,7 @@ export function isCodexTurnAbortMarkerNotification(
   }
   const text = extractRawResponseItemText(item).trim();
   const currentPromptTexts = [options.currentPromptText, ...(options.currentPromptTexts ?? [])]
-    .filter(isNonEmptyString)
+    .filter((prompt): prompt is string => typeof prompt === "string" && prompt.length > 0)
     .map((prompt) => prompt.trim());
   if (role === "user" && currentPromptTexts.includes(text)) {
     return false;
@@ -158,8 +158,4 @@ export function readRawResponseToolCallId(
     default:
       return undefined;
   }
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
 }

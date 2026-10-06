@@ -15,7 +15,6 @@ import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
 import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -80,7 +79,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import kotlinx.coroutines.CancellationException
 import kotlin.math.abs
@@ -141,7 +139,7 @@ internal fun SidebarSectionTitle(
 ) {
   Text(
     text = label,
-    style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+    style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
     color = palette.muted,
     modifier = modifier.semantics { heading() }.padding(horizontal = 12.dp, vertical = 6.dp),
     maxLines = 1,
@@ -185,7 +183,7 @@ internal fun SidebarCollapsibleHeader(
     iconContent?.invoke()
     Text(
       text = label,
-      style = ClawTheme.type.body.copy(fontSize = 13.sp),
+      style = ClawTheme.type.body,
       color = palette.text,
       modifier = Modifier.weight(1f),
       maxLines = 1,
@@ -229,27 +227,19 @@ internal fun SidebarNavigationRow(
   onMove: (Int) -> Boolean,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
-  val thresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-  val haptic = LocalHapticFeedback.current
   val currentOnMove by rememberUpdatedState(onMove)
-  val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
   val pinStateDescription =
     pinned?.let { nativeString(if (it) "Pinned" else "Not pinned") }
   val moveUpLabel = nativeString("Move up")
   val moveDownLabel = nativeString("Move down")
-  var dragOffset by remember(destination) { mutableFloatStateOf(0f) }
-  var dragging by remember(destination) { mutableStateOf(false) }
-  var dragGeneration by remember(destination) { mutableLongStateOf(0L) }
-  val visualDragging = dragging && dragGeneration == rowHost.generation
-  val finishDrag = {
-    dragOffset = 0f
-    if (dragging) {
-      dragging = false
-      currentOnDragActiveChange(false)
-    }
-  }
 
-  SidebarDragDecoration(visualDragging, dragOffset) {
+  SidebarRowDrag(
+    dragKey = destination,
+    rowHost = rowHost,
+    onDragCommit = { onMove(it) },
+    onDragActiveChange = onDragActiveChange,
+    commitOnRelease = false,
+  ) { visualDragging, dragModifier ->
     NavigationDrawerItem(
       label = {
         Row(
@@ -292,28 +282,7 @@ internal fun SidebarNavigationRow(
                 if (canMoveUp) add(CustomAccessibilityAction(moveUpLabel) { currentOnMove(-1) })
                 if (canMoveDown) add(CustomAccessibilityAction(moveDownLabel) { currentOnMove(1) })
               }
-          }.pointerInput(destination, thresholdPx) {
-            detectSidebarRowDrag(
-              rowHost = rowHost,
-              onDragStart = { generation ->
-                dragOffset = 0f
-                dragGeneration = generation
-                dragging = true
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                currentOnDragActiveChange(true)
-              },
-              onDragEnd = finishDrag,
-              onDragCancel = finishDrag,
-            ) { change, dragAmount ->
-              change.consume()
-              dragOffset += dragAmount.y
-              if (abs(dragOffset) >= thresholdPx) {
-                val direction = if (dragOffset < 0f) -1 else 1
-                currentOnMove(direction)
-                dragOffset -= direction * thresholdPx
-              }
-            }
-          },
+          }.then(dragModifier),
       shape = RoundedCornerShape(10.dp),
       colors =
         NavigationDrawerItemDefaults.colors(
@@ -446,14 +415,14 @@ internal fun SidebarSessionRow(
     Column(modifier = Modifier.weight(1f)) {
       Text(
         text = sessionPresentationTitle(session) { session.key },
-        style = ClawTheme.type.body.copy(fontSize = 13.sp),
+        style = ClawTheme.type.body,
         color = palette.text,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
       )
       Text(
-        text = attention?.status ?: sidebarSessionSubtitle(session, sessionStateDescription),
-        style = ClawTheme.type.caption.copy(fontSize = 11.sp),
+        text = attention?.status ?: sessionListSubtitle(session, fallback = sessionSourceLabel(session.key), activeRunLabel = sessionStateDescription),
+        style = ClawTheme.type.caption,
         color = palette.muted,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -490,52 +459,13 @@ internal fun SidebarRowSurface(
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
   content: @Composable RowScope.() -> Unit,
 ) {
-  val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
-  val haptic = LocalHapticFeedback.current
-  val currentOnDragCommit by rememberUpdatedState(onDragCommit)
-  val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
-  var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
-  var dragging by remember(dragKey) { mutableStateOf(false) }
-  var dragGeneration by remember(dragKey) { mutableLongStateOf(0L) }
-  val visualDragging = dragging && dragGeneration == (rowHost?.generation ?: 0L)
-  val cancelDrag = {
-    dragOffset = 0f
-    if (dragging) {
-      dragging = false
-      currentOnDragActiveChange(false)
-    }
-  }
-  val finishDrag = {
-    val commit = currentOnDragCommit
-    if (commit != null && abs(dragOffset) >= dragThresholdPx) {
-      commit(if (dragOffset < 0f) -1 else 1)
-    }
-    cancelDrag()
-  }
-  val dragModifier =
-    if (!enabled || onDragCommit == null) {
-      Modifier
-    } else {
-      Modifier.pointerInput(dragKey, dragThresholdPx) {
-        detectSidebarRowDrag(
-          rowHost = rowHost,
-          onDragStart = { generation ->
-            dragOffset = 0f
-            dragGeneration = generation
-            dragging = true
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            currentOnDragActiveChange(true)
-          },
-          onDragEnd = finishDrag,
-          onDragCancel = cancelDrag,
-        ) { change, dragAmount ->
-          change.consume()
-          dragOffset += dragAmount.y
-        }
-      }
-    }
-
-  SidebarDragDecoration(visualDragging, dragOffset) {
+  SidebarRowDrag(
+    dragKey = dragKey,
+    rowHost = rowHost,
+    enabled = enabled,
+    onDragCommit = onDragCommit,
+    onDragActiveChange = onDragActiveChange,
+  ) { visualDragging, dragModifier ->
     Row(
       modifier =
         Modifier
@@ -573,11 +503,65 @@ internal fun SidebarRowSurface(
 }
 
 @Composable
-private fun SidebarDragDecoration(
-  visualDragging: Boolean,
-  dragOffset: Float,
-  content: @Composable BoxScope.() -> Unit,
+private fun SidebarRowDrag(
+  dragKey: Any?,
+  rowHost: SidebarRowHost?,
+  enabled: Boolean = true,
+  onDragCommit: ((Int) -> Unit)?,
+  onDragActiveChange: (Boolean) -> Unit,
+  commitOnRelease: Boolean = true,
+  content: @Composable (visualDragging: Boolean, dragModifier: Modifier) -> Unit,
 ) {
+  val dragThresholdPx = with(LocalDensity.current) { 48.dp.toPx() }
+  val haptic = LocalHapticFeedback.current
+  val currentOnDragCommit by rememberUpdatedState(onDragCommit)
+  val currentOnDragActiveChange by rememberUpdatedState(onDragActiveChange)
+  var dragOffset by remember(dragKey) { mutableFloatStateOf(0f) }
+  var dragging by remember(dragKey) { mutableStateOf(false) }
+  var dragGeneration by remember(dragKey) { mutableLongStateOf(0L) }
+  val cancelDrag = {
+    dragOffset = 0f
+    if (dragging) {
+      dragging = false
+      currentOnDragActiveChange(false)
+    }
+  }
+  val finishDrag = {
+    val commit = currentOnDragCommit
+    if (commitOnRelease && commit != null && abs(dragOffset) >= dragThresholdPx) {
+      commit(if (dragOffset < 0f) -1 else 1)
+    }
+    cancelDrag()
+  }
+  val dragModifier =
+    if (!enabled || onDragCommit == null) {
+      Modifier
+    } else {
+      Modifier.pointerInput(dragKey, dragThresholdPx) {
+        detectSidebarRowDrag(
+          rowHost = rowHost,
+          onDragStart = { generation ->
+            dragOffset = 0f
+            dragGeneration = generation
+            dragging = true
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            currentOnDragActiveChange(true)
+          },
+          onDragEnd = finishDrag,
+          onDragCancel = cancelDrag,
+        ) { change, dragAmount ->
+          change.consume()
+          dragOffset += dragAmount.y
+          if (!commitOnRelease && abs(dragOffset) >= dragThresholdPx) {
+            val direction = if (dragOffset < 0f) -1 else 1
+            currentOnDragCommit?.invoke(direction)
+            dragOffset -= direction * dragThresholdPx
+          }
+        }
+      }
+    }
+
+  val visualDragging = dragging && dragGeneration == (rowHost?.generation ?: 0L)
   Box(
     modifier =
       Modifier
@@ -590,7 +574,7 @@ private fun SidebarDragDecoration(
           shadowElevation = if (visualDragging) 10.dp.toPx() else 0f
         },
   ) {
-    content()
+    content(visualDragging, dragModifier)
     if (visualDragging) {
       HorizontalDivider(
         color = ClawTheme.colors.primary,
@@ -637,15 +621,3 @@ private suspend fun PointerInputScope.detectSidebarRowDrag(
     }
   }
 }
-
-internal fun sidebarSessionSubtitle(
-  session: ChatSessionEntry,
-  activeRunLabel: String?,
-  nowMs: Long = System.currentTimeMillis(),
-): String =
-  sessionListSubtitle(
-    session = session,
-    fallback = sessionSourceLabel(session.key),
-    nowMs = nowMs,
-    activeRunLabel = activeRunLabel,
-  )

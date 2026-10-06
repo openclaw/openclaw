@@ -13,6 +13,7 @@ import { sessionCreatorProfileId } from "../../config/sessions/session-entry-pro
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createUsageAggregateAccumulator,
   UNKNOWN_USAGE_CREATOR_KEY,
@@ -30,6 +31,14 @@ import {
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  prepareSessionMutationFacts,
+  SessionMutationFactsUnavailableError,
+} from "../session-sharing-preparation.js";
+import {
+  prepareProjectedSessionSharing,
+  prepareSessionSharingProfiles,
+} from "../session-sharing-read.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
@@ -54,7 +63,7 @@ import {
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveSessionUsageFileOrRespond(
+async function resolveSessionUsageFileOrRespond(
   params: { key?: unknown; agentId?: unknown } | undefined,
   detail: "timeseries" | "logs",
   respond: RespondFn,
@@ -78,10 +87,11 @@ function resolveSessionUsageFileOrRespond(
     respond(false, undefined, sessionOwner.error);
     return null;
   }
-  let resolved: NonNullable<ReturnType<typeof resolveSessionUsageTarget>> | undefined;
+  let resolved: Awaited<ReturnType<typeof resolveSessionUsageTarget>>;
   try {
-    resolved = resolveSessionUsageTarget(key, config, sessionOwner.agentId);
+    resolved = await resolveSessionUsageTarget(key, config, sessionOwner.agentId);
   } catch {
+    getAsyncWorkSignal()?.throwIfAborted();
     resolved = undefined;
   }
   if (!resolved) {
@@ -246,7 +256,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
-    const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
+    const limit = p.limit ?? 50;
     const includeContextWeight = p.includeContextWeight ?? false;
     const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
@@ -332,7 +342,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             includeUntimestamped,
             dayBucket,
           });
-          loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
+          await loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
 
           for (const [entryIndex, { entry: merged, creator }] of matchedEntries.entries()) {
             const agentId = merged.agentId;
@@ -397,10 +407,72 @@ export const usageHandlers: GatewayRequestHandlers = {
       }
       throw err;
     }
-    respond(true, result, undefined);
+    const contextReads = new Map<
+      SessionUsageEntry,
+      Awaited<ReturnType<typeof prepareSessionMutationFacts>>
+    >();
+    try {
+      // Cached reports are data, not authority. Retain current sharing through response publication.
+      for (const session of result.sessions) {
+        if (!session.hasContextWeight || !session.agentId) {
+          continue;
+        }
+        try {
+          contextReads.set(
+            session,
+            await prepareSessionMutationFacts({
+              cfg: context.getRuntimeConfig(),
+              sessionKey: session.key,
+              agentId: session.agentId,
+            }),
+          );
+        } catch (error) {
+          if (!(error instanceof SessionMutationFactsUnavailableError)) {
+            throw error;
+          }
+        }
+      }
+      const profiles = await prepareSessionSharingProfiles(client ?? null);
+      const currentConfig = context.getRuntimeConfig();
+      const { entryFilter: currentFilter } = prepareProjectedSessionSharing({
+        cfg: currentConfig,
+        client: client ?? null,
+        profiles,
+        isMember: () => false,
+      });
+      const sessions = result.sessions.map((session) => {
+        if (!session.hasContextWeight) {
+          return session;
+        }
+        try {
+          const current = contextReads.get(session)?.readCurrent(currentConfig).target.entry;
+          if (
+            current &&
+            current.sessionId === session.sessionId &&
+            (!currentFilter || currentFilter(session.key, current))
+          ) {
+            return session;
+          }
+        } catch (error) {
+          if (!(error instanceof SessionMutationFactsUnavailableError)) {
+            throw error;
+          }
+        }
+        return {
+          ...session,
+          hasContextWeight: false,
+          contextWeight: includeContextWeight ? null : undefined,
+        };
+      });
+      respond(true, { ...result, sessions }, undefined);
+    } finally {
+      for (const read of contextReads.values()) {
+        read.release();
+      }
+    }
   },
   "sessions.usage.timeseries": async ({ respond, params, context }) => {
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "timeseries",
       respond,
@@ -409,11 +481,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, key, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, key, agentId, sessionId, sessionFile } = resolved;
 
     const timeseries = await loadSessionUsageTimeSeries({
       sessionId,
-      sessionEntry: entry,
       sessionFile,
       config,
       agentId,
@@ -437,7 +508,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         ? Math.min(params.limit, 1000)
         : 200;
 
-    const resolved = resolveSessionUsageFileOrRespond(
+    const resolved = await resolveSessionUsageFileOrRespond(
       params,
       "logs",
       respond,
@@ -446,11 +517,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { config, entry, agentId, sessionId, sessionFile } = resolved;
+    const { config, agentId, sessionId, sessionFile } = resolved;
 
     const logs = await loadSessionLogs({
       sessionId,
-      sessionEntry: entry,
       sessionFile,
       config,
       agentId,

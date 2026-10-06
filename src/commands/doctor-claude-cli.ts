@@ -1,4 +1,3 @@
-/** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -19,11 +18,19 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
+import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../plugins/public-surface-loader.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
 
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
+
+type ClaudeCliDiscoveryApi = {
+  resolveClaudeTerminalExecutable: (
+    env: NodeJS.ProcessEnv,
+    options: { pathStrategy: "direct" },
+  ) => { executable: string } | undefined;
+};
 
 function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): boolean {
   const result = spawnSync(commandPath, ["auth", "status", "--json"], {
@@ -120,7 +127,6 @@ type ClaudeCliWorkspaceTarget = {
 function resolveClaudeCliWorkspaceTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  homeDir?: string;
   workspaceDir?: string;
 }): ClaudeCliWorkspaceTarget[] {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
@@ -132,7 +138,6 @@ function resolveClaudeCliWorkspaceTargets(params: {
         : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
     const projectDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
-      homeDir: params.homeDir,
     });
     return {
       agentId,
@@ -144,27 +149,17 @@ function resolveClaudeCliWorkspaceTargets(params: {
   });
 }
 
-/**
- * Emits Claude CLI health diagnostics for every agent currently routed through the CLI backend.
- *
- * The optional deps let tests inject the CLI status probe, PATH resolution, and workspace roots.
- */
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {
     noteFn?: typeof note;
-    env?: NodeJS.ProcessEnv;
-    homeDir?: string;
-    isAuthenticated?: (commandPath: string, env: NodeJS.ProcessEnv) => boolean;
-    resolveCommandPath?: (command: string, env?: NodeJS.ProcessEnv) => string | undefined;
     workspaceDir?: string;
   },
 ) {
-  const env = deps?.env ?? process.env;
+  const env = process.env;
   const workspaceTargets = resolveClaudeCliWorkspaceTargets({
     cfg,
     env,
-    homeDir: deps?.homeDir,
     workspaceDir: deps?.workspaceDir,
   });
   if (workspaceTargets.length === 0) {
@@ -173,18 +168,23 @@ export function noteClaudeCliHealth(
 
   const backend = resolveCliBackendConfig(CLAUDE_CLI_PROVIDER, cfg);
   const command = backend?.config.command ?? "claude";
-  const resolveCommandPath =
-    deps?.resolveCommandPath ??
-    ((rawCommand: string, nextEnv?: NodeJS.ProcessEnv) =>
-      resolveExecutablePath(rawCommand, { env: nextEnv }));
-  const commandPath = resolveCommandPath(command, env);
+  const commandOnPath = resolveExecutablePath(command, { env });
+  // Update workers can skip PATH bootstrap; native-install discovery stays with the plugin.
+  const claudeApi =
+    command === "claude"
+      ? loadBundledPluginPublicArtifactModuleFromCandidatesSync<ClaudeCliDiscoveryApi>({
+          dirName: "anthropic",
+          artifactCandidates: ["cli-auth-api.js"],
+        })
+      : null;
+  const commandPath = claudeApi
+    ? claudeApi.resolveClaudeTerminalExecutable(env, { pathStrategy: "direct" })?.executable
+    : commandOnPath;
   const authEnv = { ...env };
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
   }
-  const authenticated = commandPath
-    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, authEnv)
-    : false;
+  const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -198,6 +198,8 @@ export function noteClaudeCliHealth(
     fixHints.push(
       "- Fix: install Claude CLI on PATH for the gateway user; custom executable paths belong in a CLI backend plugin registration.",
     );
+  } else if (!commandOnPath) {
+    lines.push(`- Binary: found at ${shortenHomePath(commandPath)} (not on service PATH).`);
   }
 
   if (commandPath && !authenticated) {

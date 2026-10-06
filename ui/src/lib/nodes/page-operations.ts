@@ -1,7 +1,7 @@
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
   ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
@@ -31,8 +31,6 @@ export type ExecSecurity = ExecApprovalsResolvedDefaults["security"];
 export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
-
-export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
 
 type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
@@ -79,7 +77,6 @@ type NodesState = NodesRequestState & {
   nodesQueuedRefresh: QueuedRefresh;
   nodes: Array<Record<string, unknown>>;
   lastError: string | null;
-  chatError?: string | null;
 };
 
 type DevicesState = NodesRequestState & {
@@ -97,7 +94,6 @@ type ExecApprovalsState = NodesRequestState & {
   execApprovalsForm: ExecApprovalsFile | null;
   execApprovalsSelectedAgent: string | null;
   lastError: string | null;
-  chatError?: string | null;
 };
 
 export type DevicesPageDataState = NodesState & DevicesState & ExecApprovalsState;
@@ -150,7 +146,6 @@ export async function loadNodes(state: NodesState, opts?: { quiet?: boolean }) {
   state.nodesLoading = true;
   if (!opts?.quiet) {
     state.lastError = null;
-    state.chatError = null;
   }
   const generation = state.requestGeneration;
   try {
@@ -212,38 +207,38 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   }
 }
 
-// Device results belong to the captured connection; node pairing refreshes the current inventory.
-async function runDevicePairingRequest(
+// Persist accepted mutations before fencing their captured connection's view refresh.
+async function runDeviceMutation<T>(
   state: DevicesState,
-  requestId: string,
-  method: "device.pair.approve" | "device.pair.reject",
-) {
+  mutate: (client: GatewayRequestClient) => Promise<T>,
+): Promise<T | null> {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
+    return null;
   }
   const generation = state.requestGeneration;
   try {
-    await client.request(method, { requestId });
+    const result = await mutate(client);
     if (isCurrentNodesRequest(state, client, generation)) {
       await loadDevices(state);
     }
+    return result;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = formatUiError(err);
     }
+    return null;
   }
 }
 
-export function approveDevicePairing(state: DevicesState, requestId: string) {
-  return runDevicePairingRequest(state, requestId, "device.pair.approve");
+export async function approveDevicePairing(state: DevicesState, requestId: string) {
+  await runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId }));
 }
 
-export function rejectDevicePairing(state: DevicesState, requestId: string) {
-  return runDevicePairingRequest(state, requestId, "device.pair.reject");
+export async function rejectDevicePairing(state: DevicesState, requestId: string) {
+  await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
 }
 
-/** Entry removal request resolved from the unified inventory row. */
 export type InventoryRemovalRequest = {
   id: string;
   name: string;
@@ -278,17 +273,25 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
-export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+// Inventory mutations refresh the current connection, including after failed partial removals.
+async function runInventoryMutation(
+  state: InventoryState,
+  mutate: (client: GatewayRequestClient) => Promise<unknown>,
+) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
   }
   try {
-    await removeInventoryEntryRpc(client, entry);
+    await mutate(client);
     await reloadInventory(state);
   } catch (err) {
     await reloadInventory(state, { error: formatUiError(err) });
   }
+}
+
+export function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+  return runInventoryMutation(state, (client) => removeInventoryEntryRpc(client, entry));
 }
 
 export async function removeStaleInventoryEntries(
@@ -344,28 +347,14 @@ export async function renameDevice(
   }
 }
 
-async function runNodePairingRequest(
-  state: InventoryState,
-  requestId: string,
-  method: "node.pair.approve" | "node.pair.reject",
-) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    await state.client.request(method, { requestId });
-    await reloadInventory(state);
-  } catch (err) {
-    await reloadInventory(state, { error: formatUiError(err) });
-  }
-}
-
 export function approveNodePairingRequest(state: InventoryState, requestId: string) {
-  return runNodePairingRequest(state, requestId, "node.pair.approve");
+  return runInventoryMutation(state, (client) =>
+    client.request("node.pair.approve", { requestId }),
+  );
 }
 
 export function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  return runNodePairingRequest(state, requestId, "node.pair.reject");
+  return runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId }));
 }
 
 /**
@@ -392,7 +381,7 @@ function classifyRotationOutcome(
   payload: unknown,
   requested: { deviceId: string; role: string },
 ): RotatedDeviceTokenOutcome {
-  const result = isRecord(payload) ? payload : undefined;
+  const result = asOptionalRecord(payload);
   const scopes = result?.scopes;
   const rotatedAtMs = result?.rotatedAtMs;
   const identified =
@@ -421,17 +410,11 @@ function classifyRotationOutcome(
   );
 }
 
-/** Rotates a device token and returns what the Gateway did with the replacement. */
 export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ): Promise<RotatedDeviceTokenOutcome | null> {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return null;
-  }
-  const generation = state.requestGeneration;
-  try {
+  return runDeviceMutation(state, async (client) => {
     const { gatewayUrl, ...requestParams } = params;
     const res = await client.request<{
       token?: string;
@@ -455,28 +438,15 @@ export async function rotateDeviceToken(
         });
       }
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
     return outcome;
-  } catch (err) {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
-    }
-    return null;
-  }
+  });
 }
 
 export async function revokeDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  const generation = state.requestGeneration;
-  try {
+  await runDeviceMutation(state, async (client) => {
     const { gatewayUrl, ...requestParams } = params;
     await client.request("device.token.revoke", requestParams);
     const identity = await loadOrCreateDeviceIdentity();
@@ -489,14 +459,7 @@ export async function revokeDeviceToken(
         role: requestParams.role,
       });
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
-  } catch (err) {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
-    }
-  }
+  });
 }
 
 function resolveExecApprovalsRpc(
@@ -524,7 +487,6 @@ export async function loadExecApprovals(
   }
   state.execApprovalsLoading = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     const rpc = resolveExecApprovalsRpc(target);
@@ -575,7 +537,6 @@ export async function saveExecApprovals(
   }
   state.execApprovalsSaving = true;
   state.lastError = null;
-  state.chatError = null;
   const generation = state.requestGeneration;
   try {
     if (isNativeExecApprovalsSnapshot(state.execApprovalsSnapshot)) {

@@ -1,4 +1,4 @@
-import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.js";
+import { hasLocalWorkspaceProjectionInDatabase } from "../../gateway/worker-environments/local-workspace-store.kernel.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
@@ -10,32 +10,31 @@ import {
   WORKTREE_RECORD_COLUMNS,
   worktreeGcRevision,
 } from "./registry-read.kernel.js";
-import type { ManagedWorktreeRecord } from "./types.js";
-
-export type WorktreeRetirementOperations = {
-  "worktrees.deferCleanup": {
-    input: { observed: ManagedWorktreeRecord; reason: string | null };
-    output: boolean;
-  };
-  "worktrees.retireMissing": {
-    input: {
-      observed: Pick<
-        ManagedWorktreeRecord,
-        "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-      >;
-      removedAt: number;
-    };
-    output: { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" };
-  };
-};
+import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
+import type { ManagedWorktreeRecord, WorktreeRemovalDeferral } from "./types.js";
 
 export function deferWorktreeCleanupInWorker(
-  { observed, reason }: WorktreeRetirementOperations["worktrees.deferCleanup"]["input"],
+  {
+    observed,
+    reason,
+    retry,
+    removalToken,
+  }: {
+    observed: ManagedWorktreeRecord;
+    reason: string | null;
+    retry?: WorktreeRemovalDeferral;
+    removalToken?: string;
+  },
   options: OpenClawStateDatabaseOptions,
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      if (removalToken) {
+        assertWorktreeRegistryPredicates(db, [
+          { kind: "removal-claim", id: observed.id, token: removalToken },
+        ]);
+      }
       const current = getRegistryWorktreeInDatabase(db, observed.id);
       const revision = worktreeGcRevision(observed);
       if (!current || current.removedAt !== undefined || worktreeGcRevision(current) !== revision) {
@@ -46,7 +45,8 @@ export function deferWorktreeCleanupInWorker(
         getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
           .updateTable("worktrees")
           .set({
-            gc_protection_json: reason === null ? null : JSON.stringify({ revision, reason }),
+            gc_protection_json:
+              reason === null ? null : JSON.stringify({ revision, reason, retry }),
           })
           .where("id", "=", observed.id),
       );
@@ -59,9 +59,18 @@ export function deferWorktreeCleanupInWorker(
 }
 
 export function retireMissingWorktreeInWorker(
-  { observed, removedAt }: WorktreeRetirementOperations["worktrees.retireMissing"]["input"],
+  {
+    observed,
+    removedAt,
+  }: {
+    observed: Pick<
+      ManagedWorktreeRecord,
+      "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
+    >;
+    removedAt: number;
+  },
   options: OpenClawStateDatabaseOptions,
-): WorktreeRetirementOperations["worktrees.retireMissing"]["output"] {
+): { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" } {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });

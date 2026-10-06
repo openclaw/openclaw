@@ -1,14 +1,15 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./config-doctor-api.js";
 import { MSTeamsConfigSchema } from "./src/config-schema.js";
 import { msteamsDoctor } from "./src/doctor.js";
 import { resolveMSTeamsLegacyWebhook } from "./src/webhook-route.js";
 
 describe("Microsoft Teams Gateway webhook migration", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
   it("migrates an explicit port and streaming aliases into accepted channel config", () => {
     const old = {
-      enabled: true,
       webhook: { port: 3978, path: "/teams/events" },
       streamMode: "block",
     };
@@ -18,6 +19,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
       cfg: { channels: { msteams: old } },
     });
     const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
+    expect(channel.enabled).toBeUndefined();
     expect(channel.webhook).toEqual({ path: "/teams/events" });
     expect(channel.legacyWebhook).toEqual({ port: 3978 });
     expect(channel.streaming?.mode).toBe("block");
@@ -27,13 +29,17 @@ describe("Microsoft Teams Gateway webhook migration", () => {
   });
 
   it.each([
-    { setting: undefined, endpoint: { port: 3978 }, note: "compatibility port 3978" },
+    { setting: undefined, endpoint: undefined, note: "no compatibility listener is configured" },
     {
       setting: { port: 44978, host: "127.0.0.1" },
       endpoint: { port: 44978, host: "127.0.0.1" },
       note: "compatibility port 44978",
     },
-    { setting: false as const, endpoint: undefined, note: "compatibility listener is disabled" },
+    {
+      setting: false as const,
+      endpoint: undefined,
+      note: "no compatibility listener is configured",
+    },
   ])("keeps runtime and Doctor aligned for $setting", ({ setting, endpoint, note }) => {
     const cfg: OpenClawConfig = {
       gateway: { port: 19001 },
@@ -42,6 +48,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     const migrated = normalizeCompatibilityConfig({ cfg });
     expect(migrated.changes).toEqual([]);
     const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
+    expect(channel.enabled).toBeUndefined();
     expect(resolveMSTeamsLegacyWebhook(channel)).toEqual(endpoint);
     const notes = msteamsDoctor.runConfigSequence({
       cfg,
@@ -51,7 +58,9 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     const message = notes.infoNotes?.join(" ");
     expect(message).toContain("19002/teams/events");
     expect(message).toContain(note);
-    expect(message).toContain("channels.msteams.legacyWebhook=false");
+    if (endpoint) {
+      expect(message).toContain("remove the channels.msteams.legacyWebhook pin");
+    }
   });
 
   it("keeps the canonical endpoint and removes an empty legacy webhook object", () => {
@@ -76,8 +85,26 @@ describe("Microsoft Teams Gateway webhook migration", () => {
     const migrated = normalizeCompatibilityConfig({ cfg: { channels: { msteams: old } } });
     const channel = MSTeamsConfigSchema.parse(migrated.config.channels?.msteams);
     expect(channel.legacyWebhook).toBe(false);
+    expect(channel.enabled).toBeUndefined();
     expect(channel.webhook).toEqual({ path: "/teams/events" });
     expect(resolveMSTeamsLegacyWebhook(channel)).toBeUndefined();
+  });
+
+  it("defers unseen service credentials without turning environment credentials into config", () => {
+    vi.stubEnv("MSTEAMS_AUTH_TYPE", undefined);
+    vi.stubEnv("MSTEAMS_APP_ID", undefined);
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", undefined);
+    vi.stubEnv("MSTEAMS_TENANT_ID", undefined);
+    const cfg: OpenClawConfig = {};
+    expect(normalizeCompatibilityConfig({ cfg }).historicalWebhookAccountIds).toBeNull();
+
+    vi.stubEnv("MSTEAMS_APP_ID", "synthetic-app");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "synthetic-password");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "synthetic-tenant");
+    const migrated = normalizeCompatibilityConfig({ cfg });
+    expect(migrated.historicalWebhookAccountIds).toEqual([undefined]);
+    expect(migrated.config).toEqual({});
+    expect(migrated.changes).toEqual([]);
   });
 
   it.each([
@@ -102,9 +129,7 @@ describe("Microsoft Teams Gateway webhook migration", () => {
       expect(warning).toContain(`${path}?tenant=one ${reason}`);
       expect(warning).toContain("18789/api/messages");
       expect(warning).toContain(
-        legacyWebhook === false
-          ? "cannot receive Teams callbacks"
-          : "Compatibility port 3978 continues",
+        legacyWebhook ? "Compatibility port 3978 continues" : "cannot receive Teams callbacks",
       );
     }
   });

@@ -168,17 +168,22 @@ export async function prepareChatHistorySessionRead({
         // Excluded metadata can refuse a read, never authorize transcript delivery.
         if (excludedEntry) {
           if (authorizeSharing({ ...current, entry: excludedEntry }, read)) {
-            respondChatHistoryUnavailable(
-              method,
-              respond,
-              "session changed while reading history; reload the conversation",
-            );
+            // Only a row the projection now serves changed mid-read; one it still omits stays unserved.
+            if (current.entry) {
+              respondChatHistoryUnavailable(
+                method,
+                respond,
+                "session changed while reading history; reload the conversation",
+              );
+            } else {
+              respond(false, undefined, hiddenSessionNotFound(current.canonicalKey));
+            }
           }
           return undefined;
         }
       }
       const currentEntry = current.entry;
-      // Task history separately validates its retained transcript; its live run may advance.
+      // Cron history separately validates its retained transcript; its live session may advance.
       if (
         entry &&
         (!currentEntry ||
@@ -245,7 +250,7 @@ export async function prepareChatHistorySessionRead({
             respondChatHistoryUnavailable(
               method,
               respond,
-              "task transcript changed while reading history",
+              "retained transcript changed while reading history",
             );
             return;
           }
@@ -264,7 +269,7 @@ export async function prepareChatHistorySessionRead({
             respondChatHistoryUnavailable(
               method,
               respond,
-              "task session changed while reading history",
+              "retained session changed while reading history",
             );
             return;
           }

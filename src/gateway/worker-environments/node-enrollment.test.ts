@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import { ensureDevicePairSetupBootstrapToken } from "../../infra/device-bootstrap.js";
 import { decodePairingSetupCode } from "../../pairing/setup-code.js";
+import * as processExec from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -15,14 +16,21 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createArtifactTransferHttpCallback } from "./artifact-transfer-http.js";
+import {
+  classifyWorkerBootstrapArtifactTransferPath,
+  WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH,
+} from "../gateway-http-route-contracts.js";
+import {
+  createArtifactTransferHttpCallback,
+  handleArtifactTransferHttpRequest,
+} from "./artifact-transfer-http.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 import { createWorkerNodeEnrollmentManager } from "./node-enrollment.js";
 import { createWorkerEnvironmentStore, type WorkerEnvironmentStore } from "./store.js";
-import { handleWorkerBootstrapArtifactTransferHttpRequest } from "./worker-bootstrap-artifact-transfer-http.js";
 import { createWorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
 vi.mock("../../infra/device-bootstrap.js", () => ({
+  revokeDeviceBootstrapToken: vi.fn(async () => ({ removed: true })),
   ensureDevicePairSetupBootstrapToken: vi.fn(async ({ setupId }: { setupId: string }) => ({
     status: "pending",
     token: "bootstrap-token",
@@ -130,6 +138,7 @@ describe("worker node enrollment", () => {
         "export const recovery = true;",
       ),
       fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
+      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
       fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
@@ -171,29 +180,45 @@ describe("worker node enrollment", () => {
   });
 
   it.each([
-    "127.42.0.1",
-    "localhost",
-    "169.254.10.2",
-    "0.0.0.0",
-    "[::]",
-    "[::ffff:0.0.0.0]",
-    "[64:ff9b::0.0.0.0]",
-    "[fe80::1]",
-    "[febf::1]",
-  ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
-    const prepareArtifact = vi.fn(async () => artifact());
-    const manager = createManager({
-      getConfig: () => createConfig(`http://${host}:19821`),
-      prepareArtifact,
-    });
+    ...[
+      "127.42.0.1",
+      "localhost",
+      "169.254.10.2",
+      "0.0.0.0",
+      "[::]",
+      "[::ffff:0.0.0.0]",
+      "[64:ff9b::0.0.0.0]",
+      "[fe80::1]",
+      "[febf::1]",
+    ].map((host) => ({
+      host,
+      config: createConfig(`http://${host}:19821`),
+      source: "plugins.entries.device-pair.config.publicUrl",
+    })),
+    {
+      host: "127.0.0.1",
+      config: {
+        gateway: { ...createConfig().gateway, publicOrigin: "http://127.0.0.1:19821" },
+      },
+      source: "gateway.publicOrigin",
+    },
+  ])(
+    "rejects unreachable cloud Gateway host $host from $source before preparing artifacts",
+    async ({ host, config, source }) => {
+      const prepareArtifact = vi.fn(async () => artifact());
+      const manager = createManager({
+        getConfig: () => config,
+        prepareArtifact,
+      });
 
-    await expect(manager.prepare(await createRequested())).rejects.toThrow(
-      new Error(
-        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
-      ),
-    );
-    expect(prepareArtifact).not.toHaveBeenCalled();
-  });
+      await expect(manager.prepare(await createRequested())).rejects.toThrow(
+        new Error(
+          `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from ${source}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+        ),
+      );
+      expect(prepareArtifact).not.toHaveBeenCalled();
+    },
+  );
 
   it("releases requested-state preflight artifact custody without aborting its caller", async () => {
     const record = await createRequested();
@@ -282,6 +307,33 @@ describe("worker node enrollment", () => {
       }
     },
   );
+
+  it("sizes grants and download authority for the actual artifacts", async () => {
+    const record = await createProvisioning();
+    let transferNow = 0;
+    let tarballBytes = 1;
+    transfer = createWorkerBootstrapArtifactTransferService({ now: () => transferNow });
+    const manager = createManager({
+      prepareArtifact: async () => ({ ...artifact(), tarballBytes }),
+    });
+    for (const { bytes, enrollmentMs, runtimeMs } of [
+      { bytes: 1, enrollmentMs: 45 * 60_000, runtimeMs: 45 * 60_000 },
+      { bytes: 200_000_000, enrollmentMs: 61 * 60_000 + 40_000, runtimeMs: 88 * 60_000 + 20_000 },
+      { bytes: 250_000_000, enrollmentMs: 68 * 60_000 + 20_000, runtimeMs: 95 * 60_000 },
+    ]) {
+      tarballBytes = bytes;
+      const runtime = await manager.prepareRuntime(record, { ...bundle(), tarballBytes });
+      expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
+      transferNow += runtimeMs - 1;
+      for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
+        expect(
+          transfer.authorize({ token: download.token, artifactKey: download.sha256 }),
+        ).toBeDefined();
+      }
+      const enrollment = await manager.begin(record);
+      expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
+    }
+  });
 
   it("grants artifact access before enrollment without creating a setup identity or credential", async () => {
     const record = await createProvisioning();
@@ -379,7 +431,9 @@ describe("worker node enrollment", () => {
     });
     const callback = createArtifactTransferHttpCallback(transfer);
     const server = http.createServer((req, res) => {
-      void handleWorkerBootstrapArtifactTransferHttpRequest({
+      void handleArtifactTransferHttpRequest({
+        classifyPath: classifyWorkerBootstrapArtifactTransferPath,
+        routePrefix: `${WORKER_BOOTSTRAP_ARTIFACT_TRANSFER_PATH}/artifacts/`,
         req,
         res,
         clientIp: "127.0.0.1",
@@ -499,20 +553,24 @@ describe("worker node enrollment", () => {
   it.each(
     [
       {
-        name: "uses gateway.publicOrigin when the plugin has no pairing override",
+        name: "prefers shared publicOrigin over Tailscale for cloud enrollment",
         modes: ["connect"],
         config: {
           ...createConfig(),
-          gateway: { ...createConfig().gateway, tls: { enabled: true } },
-        },
+          gateway: {
+            ...createConfig().gateway,
+            tls: { enabled: true },
+            tailscale: { mode: "serve" },
+          },
+        } satisfies OpenClawConfig,
         expectedUrl: "wss://gateway.example.test",
         expectedFingerprint: undefined,
       },
       {
-        name: "prefers the device-pair plugin publicUrl over gateway.publicOrigin",
+        name: "preserves the cloud pairing publicUrl path ahead of gateway.publicOrigin",
         modes: ["connect"],
-        config: createConfig(PLUGIN_PUBLIC_URL),
-        expectedUrl: PLUGIN_PUBLIC_URL,
+        config: createConfig(`${PLUGIN_PUBLIC_URL}/extra`),
+        expectedUrl: `${PLUGIN_PUBLIC_URL}/extra`,
         expectedFingerprint: undefined,
       },
       {
@@ -544,6 +602,9 @@ describe("worker node enrollment", () => {
       },
     ].flatMap(({ modes, ...testCase }) => modes.map((mode) => ({ mode, ...testCase }))),
   )("$name ($mode)", async ({ config, expectedUrl, expectedFingerprint, mode }) => {
+    const discover = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockRejectedValue(new Error("Unexpected endpoint discovery"));
     const record = await createProvisioning(mode === "resume" ? "existing-node" : undefined);
     const manager = createManager({
       getConfig: () => config,
@@ -551,6 +612,7 @@ describe("worker node enrollment", () => {
     });
 
     const enrollment = await manager.begin(record);
+    expect(discover).not.toHaveBeenCalled();
 
     expect(enrollment.mode).toBe(mode);
     if (enrollment.mode === "connect") {
@@ -561,7 +623,7 @@ describe("worker node enrollment", () => {
       expect(enrollment.deviceId).toBe("existing-node");
     }
     expect(enrollment.nodeBootstrap).toMatchObject({
-      url: `${expectedUrl.replace(/^wss:/u, "https:")}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
+      url: `${new URL(expectedUrl.replace(/^wss:/u, "https:")).origin}/__openclaw__/worker-bootstrap/artifacts/${artifact().tarballSha256}`,
       sha256: artifact().tarballSha256,
       bytes: 1,
       openclawVersion: "2026.8.1",
@@ -640,6 +702,7 @@ describe("worker node enrollment", () => {
         token: setup.bootstrapToken,
         deviceId: "paired-cloud-node",
         completedAtMs: 1_100,
+        admitsCloudWorkerSetup: manager.admitsNodeSetupCompletion,
       });
       expect(store.get(record.environmentId)).toMatchObject({
         nodeSetupId: enrollment.setupId,

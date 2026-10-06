@@ -4,14 +4,15 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
-import { isSystemOwnedCronPayloadKind } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
+  assertCronTimeoutSupported,
   parseCronCommandArgv,
   parseCronCommandEnv,
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
+  parseCronThinkingOption,
 } from "./shared.js";
 import { parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
@@ -20,7 +21,7 @@ const assignIf = (
   target: Record<string, unknown>,
   key: string,
   value: unknown,
-  shouldAssign: boolean,
+  shouldAssign = value !== undefined,
 ) => {
   if (shouldAssign) {
     target[key] = value;
@@ -127,25 +128,17 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const hasScriptSpecificPayloadField =
     Boolean(scriptPath) || scriptTimeoutSeconds !== undefined || scriptToolBudget !== undefined;
   if (hasTimeoutSeconds && hasScriptSpecificPayloadField) {
-    throw new CronCliError("Use --script-timeout-seconds for script jobs, not --timeout-seconds.");
+    assertCronTimeoutSupported("script");
   }
   if (hasTimeoutSeconds && hasSystemEventPatch) {
-    throw new CronCliError("--timeout-seconds is not supported for systemEvent jobs.");
+    assertCronTimeoutSupported("systemEvent");
   }
   let timeoutOnlyPayloadKind: "agentTurn" | "command" | undefined;
   if (hasTimeoutSeconds && !hasCommandSpecificPayloadField && !hasAgentTurnSpecificPayloadField) {
     const existingJob = await loadExistingJob();
     const existingKind = existingJob.payload.kind;
-    if (existingKind === "script") {
-      throw new CronCliError(
-        "Use --script-timeout-seconds for script jobs, not --timeout-seconds.",
-      );
-    }
-    if (
-      existingKind === "systemEvent" ||
-      isSystemOwnedCronPayloadKind(existingKind) ||
-      isSystemMonitorDeclaration(existingJob.declarationKey)
-    ) {
+    assertCronTimeoutSupported(existingKind);
+    if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
       throw new CronCliError(`--timeout-seconds is not supported for ${existingKind} jobs.`);
     }
     timeoutOnlyPayloadKind = existingKind;
@@ -191,17 +184,13 @@ export async function resolveCronEditPayloadDeliveryPatch(
   } else if (hasAgentTurnPatch) {
     payload = { kind: "agentTurn" };
     assignIf(payload, "message", String(opts.message), typeof opts.message === "string");
-    if (opts.clearModel) {
-      payload.model = null;
-    } else {
-      assignIf(payload, "model", model, Boolean(model));
-    }
+    assignIf(payload, "model", opts.clearModel ? null : model);
     assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
     assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
     if (opts.clearThinking) {
       payload.thinking = null;
     } else {
-      assignIf(payload, "thinking", thinking, Boolean(thinking));
+      assignIf(payload, "thinking", parseCronThinkingOption(thinking), Boolean(thinking));
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");
@@ -213,20 +202,15 @@ export async function resolveCronEditPayloadDeliveryPatch(
     assignIf(payload, "env", parseCronCommandEnv(opts.commandEnv), opts.commandEnv !== undefined);
     assignIf(payload, "input", opts.commandInput, hasCommandInput);
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
-    assignIf(
-      payload,
-      "noOutputTimeoutSeconds",
-      noOutputTimeoutSeconds,
-      noOutputTimeoutSeconds !== undefined,
-    );
-    assignIf(payload, "outputMaxBytes", outputMaxBytes, outputMaxBytes !== undefined);
+    assignIf(payload, "noOutputTimeoutSeconds", noOutputTimeoutSeconds);
+    assignIf(payload, "outputMaxBytes", outputMaxBytes);
   } else if (hasScriptPatch) {
     payload = { kind: "script" };
     if (scriptPath) {
       payload.script = await readCronPayloadScript(scriptPath);
     }
-    assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds, scriptTimeoutSeconds !== undefined);
-    assignIf(payload, "toolBudget", scriptToolBudget, scriptToolBudget !== undefined);
+    assignIf(payload, "timeoutSeconds", scriptTimeoutSeconds);
+    assignIf(payload, "toolBudget", scriptToolBudget);
   }
   if (payload) {
     if (opts.clearTools) {

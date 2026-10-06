@@ -17,6 +17,8 @@ export type CliTimeoutContext = {
   observedActivity: boolean;
   activeToolCount: number;
   backgroundTaskCount: number;
+  /** Native compaction (or similar backend maintenance) is running: silent but busy. */
+  compactionActive?: boolean;
 };
 
 export type FallbackAttemptRecord = {

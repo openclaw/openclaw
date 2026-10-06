@@ -1,4 +1,7 @@
 // Stores and broadcasts agent lifecycle and streaming events.
+import { isDefinitiveRunLifecycle } from "@openclaw/normalization-core/agent-run-terminal-outcome";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
@@ -16,7 +19,7 @@ import {
   resetAgentRunRegistryForTest,
   rotateAgentRunRegistryLifecycleGeneration,
 } from "./agent-run-registry.js";
-import type { AgentRunContext } from "./agent-run-registry.types.js";
+import type { AgentRunContext, AgentRunEventState } from "./agent-run-registry.types.js";
 import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 /** Payload for approval requests and their later resolution events. */
@@ -73,6 +76,7 @@ export type AgentEventPayload = {
 
 /** Gateway-only routing metadata stamped onto events after public input validation. */
 export type AgentEventRuntimePayload = AgentEventPayload & {
+  readonly admitLifecyclePublication?: () => boolean;
   readonly controlUiVisible?: boolean;
   readonly contextClaimId?: string;
   readonly deliverySessionKey?: string;
@@ -92,7 +96,7 @@ type AgentEventRegistration = {
 type AgentEventListeners = Map<AgentEventListener, AgentEventRegistration>;
 
 type AgentEventState = {
-  seqByRun: Map<string, number>;
+  runs: Map<string, AgentRunEventState>;
   listeners: AgentEventListeners;
   runListeners: Map<string, AgentEventListeners>;
   nextListenerId: number;
@@ -114,7 +118,7 @@ const AGENT_EVENT_ROUTING_FIELDS = [
 function getAgentEventState(): AgentEventState {
   // Lifecycle owners can register before an importing runtime chunk finishes initialization.
   return resolveGlobalSingleton<AgentEventState>(Symbol.for("openclaw.agentEvents.state"), () => ({
-    seqByRun: new Map<string, number>(),
+    runs: new Map(),
     listeners: new Map(),
     runListeners: new Map(),
     nextListenerId: 0,
@@ -124,7 +128,7 @@ function getAgentEventState(): AgentEventState {
 }
 
 registerAgentRunSequenceResetHandler((runId) => {
-  getAgentEventState().seqByRun.delete(runId);
+  getAgentEventState().runs.delete(runId);
 });
 
 /** Runs one execution with immutable ownership inherited by every emitted stream event. */
@@ -137,6 +141,48 @@ export function withAgentRunLifecycleGeneration<T>(lifecycleGeneration: string, 
   // run id replaces only its own binding. Neither scope retains live authority.
   const routingByRun = new Map(parent?.routingByRun);
   return storage.run({ lifecycleGeneration, onceByRun, routingByRun }, run);
+}
+
+type AgentTerminalEventData = Record<string, unknown> & { phase: "end" | "error" };
+
+/** Reserves client terminal publication without advancing execution settlement. */
+export function reserveAgentTerminalEvent(
+  identity: Omit<AgentEventPayload, "seq" | "ts" | "stream" | "data">,
+): (data: AgentTerminalEventData) => void {
+  const { runId } = identity;
+  const context = getAgentRunContext(runId);
+  return withAgentRunLifecycleGeneration(captureAgentRunLifecycleGeneration(runId), () => {
+    if (context) {
+      recordAgentEventRouting(runId, context);
+    }
+    const resolved = resolveAgentEventRouting(identity);
+    if (!resolved) {
+      return () => {};
+    }
+    const state = getAgentEventState();
+    const runState = resolved.routing?.eventState ?? state.runs.get(runId) ?? { seq: 0 };
+    const publication = Symbol("agent terminal publication");
+    runState.terminalPublication ??= publication;
+    if (!state.runs.has(runId)) {
+      state.runs.set(runId, runState);
+    }
+    const storage = getAgentEventExecutionContext();
+    const scope = storage.getStore()!;
+    let pending = true;
+    return (data: AgentTerminalEventData) => {
+      if (pending) {
+        pending = false;
+        storage.run(scope, () =>
+          dispatchAgentEvent(
+            { ...identity, stream: "lifecycle", data },
+            undefined,
+            undefined,
+            publication,
+          ),
+        );
+      }
+    };
+  });
 }
 
 /** Shares one operation across fallback attempts that belong to the same admitted run. */
@@ -209,12 +255,128 @@ export function rotateAgentEventLifecycleGeneration(): string {
   return lifecycleGeneration;
 }
 
-function enrichAgentEvent(
-  state: AgentEventState,
+// Preserve the former activity window and the native worker identifier bound.
+const MAX_EXECUTION_ACTIVITY_ITEMS = 64;
+const MAX_EXECUTION_ACTIVITY_ID_LENGTH = 256;
+const MAX_EXECUTION_TOOL_NAME_LENGTH = 120;
+
+function activityId(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const id = value.trim();
+  return id && id.length <= MAX_EXECUTION_ACTIVITY_ID_LENGTH ? id : undefined;
+}
+
+function recordExecutionActivity(
+  context: AgentRunContext,
   event: Omit<AgentEventPayload, "seq" | "ts">,
+): void {
+  if (
+    (event.sessionKey && context.sessionKey && event.sessionKey !== context.sessionKey) ||
+    (event.sessionId && context.sessionId && event.sessionId !== context.sessionId)
+  ) {
+    return;
+  }
+  const { stream, data } = event;
+  if (stream === "lifecycle" && (data.phase === "end" || data.phase === "error")) {
+    context.executionActivity = undefined;
+    return;
+  }
+  const approval = stream === "execution" && isRecord(data.approval) ? data.approval : undefined;
+  const approvalId = activityId(
+    approval?.id ?? (stream === "lifecycle" ? data.approvalId : undefined),
+  );
+  const approvalState =
+    approval?.state ??
+    (data.phase === "waiting-approval"
+      ? "pending"
+      : data.phase === "approval-resolved"
+        ? "resolved"
+        : undefined);
+  if (approvalId && (approvalState === "pending" || approvalState === "resolved")) {
+    const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+    if (approvalState === "pending" && !activity.pendingApprovalIds.includes(approvalId)) {
+      if (activity.pendingApprovalIds.length < MAX_EXECUTION_ACTIVITY_ITEMS) {
+        activity.pendingApprovalIds.push(approvalId);
+      } else {
+        // Unrepresented approvals cannot be mistaken for a fully resumed run.
+        activity.approvalOverflow = true;
+      }
+    } else if (approvalState === "resolved") {
+      activity.pendingApprovalIds = activity.pendingApprovalIds.filter((id) => id !== approvalId);
+    }
+    return;
+  }
+  if (
+    stream === "execution" &&
+    (data.state === "running" || data.state === "waiting" || data.state === "unknown")
+  ) {
+    const sourceId = activityId(data.sourceId);
+    const previous = context.executionActivity?.execution;
+    if (data.invalidate === true && (!sourceId || previous?.sourceId !== sourceId)) {
+      return;
+    }
+    const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+    const id = activityId(data.executionId);
+    if (
+      data.state === "unknown" ||
+      (sourceId && previous?.sourceId !== sourceId) ||
+      (id && previous?.id !== id)
+    ) {
+      activity.tools = [];
+    }
+    const kind = isRecord(data.wait) ? data.wait.kind : undefined;
+    const wait =
+      kind === "approval" ||
+      kind === "user_input" ||
+      kind === "agent_messages" ||
+      kind === "children"
+        ? kind
+        : "external";
+    activity.execution = {
+      state: data.state,
+      sourceId: sourceId ?? previous?.sourceId,
+      id: id ?? previous?.id,
+      ...(data.state === "waiting" ? { wait } : {}),
+    };
+    return;
+  }
+  if (stream !== "tool") {
+    return;
+  }
+  const toolCallId = activityId(data.toolCallId);
+  if (!toolCallId) {
+    return;
+  }
+  const existing = context.executionActivity;
+  if (data.phase === "result" || data.phase === "end") {
+    if (existing) {
+      existing.tools = existing.tools.filter((tool) => tool.id !== toolCallId);
+    }
+    return;
+  }
+  if (data.phase !== "start" || typeof data.name !== "string" || !data.name.trim()) {
+    return;
+  }
+  const activity = (context.executionActivity ??= { tools: [], pendingApprovalIds: [] });
+  const tool = {
+    id: toolCallId,
+    name: truncateUtf16Safe(data.name.trim(), MAX_EXECUTION_TOOL_NAME_LENGTH),
+  };
+  const index = activity.tools.findIndex((current) => current.id === toolCallId);
+  if (index >= 0) {
+    activity.tools[index] = tool;
+  } else if (activity.tools.length < MAX_EXECUTION_ACTIVITY_ITEMS) {
+    activity.tools.push(tool);
+  }
+}
+
+function resolveAgentEventRouting(
+  event: Pick<AgentEventPayload, "runId" | "lifecycleGeneration">,
   claimId?: string,
   expectedContext?: AgentRunContext,
-): AgentEventRuntimePayload | undefined {
+) {
   const currentLifecycleGeneration = getAgentRunLifecycleGeneration();
   const owners = getAgentRunContextOwnership(event.runId);
   if (claimId !== undefined) {
@@ -249,9 +411,6 @@ function enrichAgentEvent(
   if (ownedLifecycleGeneration && ownedLifecycleGeneration !== currentLifecycleGeneration) {
     return undefined;
   }
-  if (hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
-    return undefined;
-  }
   const record = scope?.routingByRun?.get(event.runId);
   const captured =
     record?.routing.lifecycleGeneration === ownedLifecycleGeneration ? record : undefined;
@@ -260,6 +419,22 @@ function enrichAgentEvent(
     return undefined;
   }
   const routing = context ?? captured?.routing;
+  return { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration };
+}
+
+function enrichAgentEvent(
+  state: AgentEventState,
+  event: Omit<AgentEventPayload, "seq" | "ts">,
+  claimId?: string,
+  expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
+): AgentEventRuntimePayload | undefined {
+  const resolved = resolveAgentEventRouting(event, claimId, expectedContext);
+  if (!resolved || hasInvalidLifecycleStartTimestamp(event.stream, event.data)) {
+    return undefined;
+  }
+  const { context, routing, capturedOwner, ownedLifecycleGeneration, currentLifecycleGeneration } =
+    resolved;
   if (event.stream === "lifecycle" && event.data.phase === "model") {
     if (!context || (claimId === undefined && (expectedContext ?? capturedOwner) !== context)) {
       return undefined;
@@ -278,6 +453,7 @@ function enrichAgentEvent(
       return undefined;
     }
   }
+  const runState = routing?.eventState ?? state.runs.get(event.runId) ?? { seq: 0 };
   let data = event.data;
   if (routing && event.stream === "lifecycle") {
     if (routing.completionSource) {
@@ -299,10 +475,12 @@ function enrichAgentEvent(
   if (context) {
     recordAgentEventRouting(event.runId, context);
   }
-  const nextSeq = (state.seqByRun.get(event.runId) ?? 0) + 1;
-  state.seqByRun.set(event.runId, nextSeq);
+  const nextSeq = Math.max(runState.seq, state.runs.get(event.runId)?.seq ?? 0) + 1;
+  runState.seq = nextSeq;
+  state.runs.set(event.runId, runState);
   if (context) {
     context.lastActiveAt = Date.now();
+    recordExecutionActivity(context, event);
   }
   const isControlUiVisible = routing?.isControlUiVisible ?? true;
   const eventSessionKey =
@@ -340,6 +518,27 @@ function enrichAgentEvent(
     seq: nextSeq,
     ts: Date.now(),
   };
+  if (event.stream === "lifecycle") {
+    // A listener can synchronously emit a terminal before this event reaches the publisher.
+    // Internal settlement observers consume the event without claiming publication.
+    const publication = reservedPublication ?? Symbol("agent lifecycle publication");
+    let consumed = false;
+    Object.defineProperty(enriched, "admitLifecyclePublication", {
+      value: () => {
+        if (
+          consumed ||
+          (runState.terminalPublication && runState.terminalPublication !== publication)
+        ) {
+          return false;
+        }
+        consumed = true;
+        if (isDefinitiveRunLifecycle({ phase: data.phase, data })) {
+          runState.terminalPublication = publication;
+        }
+        return true;
+      },
+    });
+  }
   if (lifecycleGeneration) {
     // Persistence needs restart ownership, but agent events are also spread into
     // public payloads. Keep the internal generation readable without serializing it.
@@ -413,9 +612,10 @@ function dispatchAgentEvent(
   event: Omit<AgentEventPayload, "seq" | "ts">,
   claimId?: string,
   expectedContext?: AgentRunContext,
+  reservedPublication?: symbol,
 ): boolean {
   const state = getAgentEventState();
-  const enriched = enrichAgentEvent(state, event, claimId, expectedContext);
+  const enriched = enrichAgentEvent(state, event, claimId, expectedContext, reservedPublication);
   if (!enriched) {
     return false;
   }
@@ -478,7 +678,7 @@ export function emitAgentAuditEvent(event: Omit<AgentEventPayload, "seq" | "ts">
     if ((phase === "end" || phase === "error") && !getAgentRunContext(event.runId)) {
       // Private synthetic runs bypass public terminal cleanup. Release sequence state only
       // after synchronous audit listeners consume the terminal event and its final ordering.
-      state.seqByRun.delete(event.runId);
+      state.runs.delete(event.runId);
     }
   }
 }
@@ -533,7 +733,7 @@ export function onAgentAuditEvent(listener: (evt: AgentEventPayload) => void) {
 /** Clears agent event state; test suites with a live Gateway can preserve its listeners. */
 export function resetAgentEventsForTest(options?: { preserveListeners?: boolean }) {
   const state = getAgentEventState();
-  state.seqByRun.clear();
+  state.runs.clear();
   resetAgentRunRegistryForTest();
   if (!options?.preserveListeners) {
     state.listeners.clear();

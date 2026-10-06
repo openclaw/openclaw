@@ -93,6 +93,17 @@ async function mountRetainedPage(sessionKey: string, ...warmSessionKeys: string[
   return { navigation, page, paneFor, panes };
 }
 
+function navigationIntent(
+  sessionKey: string,
+  face: "chat" | "dashboard" = "chat",
+  commit = () => true,
+) {
+  return new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+    cancelable: true,
+    detail: { commit, face, sessionKey },
+  });
+}
+
 describe("chat page retained sessions", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -105,6 +116,104 @@ describe("chat page retained sessions", () => {
     document.body.replaceChildren();
     localStorage.clear();
     vi.unstubAllGlobals();
+  });
+
+  it.each(["web", "visible"] as const)(
+    "suspends once per effective %s presentation transition",
+    async (mode) => {
+      const page = new ChatPage();
+      const { context } = setNavigationContext(page);
+      const presentation = { visible: true, active: true };
+      let notify = () => {};
+      if (mode !== "web") {
+        Object.assign(context, {
+          nativeConversation: {
+            presentation,
+            subscribe(listener: () => void) {
+              notify = listener;
+              return () => {};
+            },
+          },
+        });
+      }
+      page.data = { sessionKey: "agent:main:main" };
+      document.body.append(page);
+      await page.updateComplete;
+      const owner = page as unknown as {
+        retainedSessions: { suspend(): void };
+      };
+      const suspend = vi.spyOn(owner.retainedSessions, "suspend");
+      const present = async (value: boolean) => {
+        if (mode === "web") {
+          page.presented = value;
+        } else {
+          presentation[mode] = value;
+          notify();
+        }
+        await page.updateComplete;
+      };
+      try {
+        await present(false);
+        for (let update = 0; update < 3; update++) {
+          page.requestUpdate();
+          await page.updateComplete;
+        }
+        expect(suspend).toHaveBeenCalledTimes(1);
+        await present(true);
+        await present(false);
+        expect(suspend).toHaveBeenCalledTimes(2);
+      } finally {
+        suspend.mockRestore();
+      }
+    },
+  );
+
+  it("keeps inactive native conversations visible and synchronizes routes selected while hidden", async ({
+    onTestFinished,
+  }) => {
+    const previousHref = window.location.href;
+    const previousState: unknown = window.history.state;
+    onTestFinished(() => window.history.replaceState(previousState, "", previousHref));
+    vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", {
+      platform: "macos",
+      formFactor: "desktop",
+      surface: "conversation",
+    });
+    const page = new ChatPage();
+    const navigation = setNavigationContext(page);
+    const presentation = { visible: true, active: false };
+    let notify = () => {};
+    Object.assign(navigation.context, {
+      nativeConversation: {
+        presentation,
+        subscribe(listener: () => void) {
+          notify = listener;
+          return () => {};
+        },
+      },
+    });
+    page.data = { sessionKey: "agent:main:main", agentId: "main" };
+    window.history.replaceState({}, "", "/chat/main");
+    document.body.append(page);
+    await page.updateComplete;
+    expect(page.querySelector<RenderedPane>("openclaw-chat-pane")?.presented).toBe(true);
+    presentation.visible = false;
+    notify();
+    await page.updateComplete;
+    window.history.replaceState({}, "", "/chat/research/next");
+    page.data = { sessionKey: "agent:research:next", agentId: "research" };
+    await page.updateComplete;
+    presentation.visible = true;
+    notify();
+    await page.updateComplete;
+    expect(navigation.setAgent).toHaveBeenLastCalledWith("research", { background: true });
+    const pane = page.querySelector<RenderedPane>(".chat-pane-cache__pane--visible");
+    expect(pane?.presented).toBe(true);
+    expect(pane?.onPaneSessionChange?.("p1", "agent:research:forked")).toBe(true);
+    expect(navigation.navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/research/forked" }),
+    );
   });
 
   it("keeps route ownership on the selected split pane while dock input is active", async () => {
@@ -256,43 +365,54 @@ describe("chat page retained sessions", () => {
     expect(paneFor("agent:main:e")).toBe(paneE);
   });
 
-  it("parks pane activity and ignores session commands while another page is presented", async () => {
-    const { page, paneFor, navigation } = await mountRetainedPage("agent:main:a", "agent:main:b");
-    const paneB = paneFor("agent:main:b");
-    page.presented = false;
-    await page.updateComplete;
-    navigation.navigate.mockClear();
-    navigation.context.gateway.setSessionKey = vi.fn();
-    expect(paneB?.isConnected).toBe(true);
-    expect(paneB?.active).toBe(false);
-    expect(paneB?.presented).toBe(false);
-    expect(paneB?.hasAttribute("inert")).toBe(true);
+  it.each(["page", "pane"] as const)(
+    "rejects navigation and face changes from a hidden %s",
+    async (hidden) => {
+      const { page, paneFor, navigation } = await mountRetainedPage("agent:main:a", "agent:main:b");
+      const paneB = paneFor(hidden === "page" ? "agent:main:b" : "agent:main:a");
+      if (hidden === "page") {
+        page.presented = false;
+        await page.updateComplete;
+      }
+      navigation.navigate.mockClear();
+      navigation.patch.mockClear();
+      navigation.context.gateway.setSessionKey = vi.fn();
+      expect(paneB?.isConnected).toBe(true);
+      expect(paneB?.active).toBe(false);
+      expect(paneB?.presented).toBe(false);
+      expect(paneB?.hasAttribute("inert")).toBe(true);
 
-    const intent = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-      cancelable: true,
-      detail: { commit: () => true, face: "chat", sessionKey: "agent:main:a" },
-    });
-    window.dispatchEvent(intent);
-    expect(intent.defaultPrevented).toBe(false);
-    const command = new CustomEvent(UI_COMMAND_EVENT, {
-      cancelable: true,
-      detail: { command: { kind: "navigate", sessionKey: "agent:main:a" } },
-    });
-    window.dispatchEvent(command);
-    expect(command.defaultPrevented).toBe(false);
-    expect(paneB?.onPaneSessionChange?.(paneB.paneId, "agent:main:a")).toBe(false);
-    paneB?.onFaceChange?.(paneB.paneId, "agent:main:b", "dashboard");
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    expect(navigation.patch).not.toHaveBeenCalled();
-    expect(navigation.context.gateway.setSessionKey).not.toHaveBeenCalled();
+      if (hidden === "page") {
+        const intent = navigationIntent("agent:main:a");
+        window.dispatchEvent(intent);
+        expect(intent.defaultPrevented).toBe(false);
+        const command = new CustomEvent(UI_COMMAND_EVENT, {
+          cancelable: true,
+          detail: { command: { kind: "navigate", sessionKey: "agent:main:a" } },
+        });
+        window.dispatchEvent(command);
+        expect(command.defaultPrevented).toBe(false);
+      }
+      expect(paneB?.onPaneSessionChange?.(paneB.paneId, "agent:main:stale-result")).toBe(false);
+      paneB?.onFaceChange?.(paneB.paneId, paneB.sessionKey, "dashboard");
+      expect(navigation.navigate).not.toHaveBeenCalled();
+      expect(navigation.patch).not.toHaveBeenCalled();
+      expect(navigation.context.gateway.setSessionKey).not.toHaveBeenCalled();
 
-    page.presented = true;
-    await page.updateComplete;
-    expect(paneFor("agent:main:b")).toBe(paneB);
-    expect(paneB?.active).toBe(true);
-    expect(paneB?.presented).toBe(true);
-    expect(paneB?.hasAttribute("inert")).toBe(false);
-  });
+      expect(page.data.sessionKey).toBe("agent:main:b");
+      if (hidden === "pane") {
+        page.remove();
+        expect(navigation.chatAttachmentHandoff.clearPane).not.toHaveBeenCalled();
+        return;
+      }
+      page.presented = true;
+      await page.updateComplete;
+      expect(paneFor("agent:main:b")).toBe(paneB);
+      expect(paneB?.active).toBe(true);
+      expect(paneB?.presented).toBe(true);
+      expect(paneB?.hasAttribute("inert")).toBe(false);
+    },
+  );
 
   it.each([
     { retainedSessionKey: "main", routeSessionKey: "agent:main:main" },
@@ -338,6 +458,7 @@ describe("chat page retained sessions", () => {
   );
 
   it.each([
+    { routeSessionKey: "agent:main:main", paneSessionKey: "main", consumed: true },
     { routeSessionKey: "agent:main:main", paneSessionKey: "" },
     { routeSessionKey: "agent:main:main", paneSessionKey: "global" },
     { routeSessionKey: "agent:main:main", paneSessionKey: "agent:research:main" },
@@ -349,16 +470,13 @@ describe("chat page retained sessions", () => {
       routeSessionKey: "agent:ops:signal:group:AbC123=",
       paneSessionKey: "agent:ops:signal:group:abc123=",
     },
-  ])("never sends a route draft to a different session", ({ routeSessionKey, paneSessionKey }) => {
-    expect(
-      routeDraft({ sessionKey: routeSessionKey, draft: "private draft" }, null, paneSessionKey),
-    ).toBeUndefined();
-  });
-
-  it("never replays a consumed route draft through an equivalent main alias", () => {
-    const data = { sessionKey: "agent:main:main", draft: "already delivered" };
-    expect(routeDraft(data, data, "main")).toBeUndefined();
-  });
+  ])(
+    "rejects misdirected or consumed route drafts (%j)",
+    ({ routeSessionKey, paneSessionKey, consumed }) => {
+      const data = { sessionKey: routeSessionKey, draft: "private draft" };
+      expect(routeDraft(data, consumed ? data : null, paneSessionKey)).toBeUndefined();
+    },
+  );
 
   it("hands route-owned focus to the final page across pane replacement", async () => {
     const sourcePage = new ChatPage();
@@ -419,23 +537,6 @@ describe("chat page retained sessions", () => {
     }
   });
 
-  it("rejects navigation and face changes from a hidden retained session", async () => {
-    const { navigation, page, paneFor } = await mountRetainedPage("agent:main:a", "agent:main:b");
-    const paneA = paneFor("agent:main:a");
-    navigation.navigate.mockClear();
-    navigation.patch.mockClear();
-
-    expect(paneA?.onPaneSessionChange?.("p1", "agent:main:stale-result")).toBe(false);
-    paneA?.onFaceChange?.("p1", "agent:main:a", "dashboard");
-
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    expect(navigation.patch).not.toHaveBeenCalled();
-    expect(page.data.sessionKey).toBe("agent:main:b");
-
-    page.remove();
-    expect(navigation.chatAttachmentHandoff.clearPane).not.toHaveBeenCalled();
-  });
-
   it("rejects a pane callback while a newer browser route is loading", async () => {
     const { navigation, page } = await mountRetainedPage("main");
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
@@ -472,10 +573,7 @@ describe("chat page retained sessions", () => {
       expect(paneB?.routeFace).toBe(targetFace);
       expect(paneB?.dashboardExpanded).toBe(true);
 
-      const intent = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-        cancelable: true,
-        detail: { commit: () => true, face: targetFace, sessionKey: "agent:main:b" },
-      });
+      const intent = navigationIntent("agent:main:b", targetFace);
       window.dispatchEvent(intent);
 
       expect(intent.defaultPrevented).toBe(true);
@@ -491,12 +589,7 @@ describe("chat page retained sessions", () => {
       expect(paneA?.active).toBe(true);
       expect(paneB?.active).toBe(false);
 
-      window.dispatchEvent(
-        new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-          cancelable: true,
-          detail: { commit: () => true, face: sourceFace, sessionKey: "agent:main:a" },
-        }),
-      );
+      window.dispatchEvent(navigationIntent("agent:main:a", sourceFace));
       expect(paneA?.classList.contains("chat-pane-cache__pane--visible")).toBe(true);
       expect(paneA?.presented).toBe(true);
       expect(paneA?.hasAttribute("inert")).toBe(false);
@@ -504,22 +597,12 @@ describe("chat page retained sessions", () => {
       expect(paneB?.presented).toBe(false);
       expect(paneB?.hasAttribute("inert")).toBe(true);
 
-      window.dispatchEvent(
-        new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-          cancelable: true,
-          detail: { commit: () => true, face: targetFace, sessionKey: "agent:main:b" },
-        }),
-      );
+      window.dispatchEvent(navigationIntent("agent:main:b", targetFace));
       window.dispatchEvent(new PopStateEvent("popstate"));
       expect(paneA?.presented).toBe(true);
       expect(paneB?.presented).toBe(false);
 
-      window.dispatchEvent(
-        new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-          cancelable: true,
-          detail: { commit: () => true, face: targetFace, sessionKey: "agent:main:b" },
-        }),
-      );
+      window.dispatchEvent(navigationIntent("agent:main:b", targetFace));
       page.data = { sessionKey: "agent:main:b", face: targetFace };
       await page.updateComplete;
       await page.updateComplete;
@@ -533,24 +616,8 @@ describe("chat page retained sessions", () => {
     },
   );
 
-  it("evicts a deleted inactive retained session without redirecting the active pane", async () => {
-    const { navigation, page, paneFor, panes } = await mountRetainedPage(
-      "agent:main:a",
-      "agent:main:b",
-    );
-    const paneA = paneFor("agent:main:a");
-    navigation.navigate.mockClear();
-
-    paneA?.onSessionDeleted?.("p1", "agent:main:a", "agent:main:main");
-    await page.updateComplete;
-
-    expect(panes().some((pane) => pane.sessionKey === "agent:main:a")).toBe(false);
-    expect(navigation.navigate).not.toHaveBeenCalled();
-    expect(page.data.sessionKey).toBe("agent:main:b");
-  });
-
   it("reuses a deleted middle position without replacing survivors or changing eviction recency", async () => {
-    const { page, paneFor, panes } = await mountRetainedPage(
+    const { navigation, page, paneFor, panes } = await mountRetainedPage(
       "agent:main:a",
       "agent:main:b",
       "agent:main:c",
@@ -559,8 +626,12 @@ describe("chat page retained sessions", () => {
     const paneB = paneFor("agent:main:b");
     const paneC = paneFor("agent:main:c");
 
+    navigation.navigate.mockClear();
     paneB?.onSessionDeleted?.("p1", "agent:main:b", "agent:main:main");
     await page.updateComplete;
+    expect(panes().some((pane) => pane.sessionKey === "agent:main:b")).toBe(false);
+    expect(navigation.navigate).not.toHaveBeenCalled();
+    expect(page.data.sessionKey).toBe("agent:main:c");
     await showSession(page, "agent:main:d");
 
     expect(paneB?.isConnected).toBe(false);
@@ -591,12 +662,7 @@ describe("chat page retained sessions", () => {
       const paneA = paneFor("agent:main:a");
       const paneB = paneFor("agent:main:b");
 
-      window.dispatchEvent(
-        new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-          cancelable: true,
-          detail: { commit: () => true, face: "chat", sessionKey: "agent:main:b" },
-        }),
-      );
+      window.dispatchEvent(navigationIntent("agent:main:b"));
       expect(paneA?.presented).toBe(true);
       expect(paneA?.hasAttribute("inert")).toBe(true);
       expect(paneB?.presented).toBe(false);
@@ -711,20 +777,10 @@ describe("chat page retained sessions", () => {
     const commitB = vi.fn(() => true);
     const commitC = vi.fn(() => true);
 
-    window.dispatchEvent(
-      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-        cancelable: true,
-        detail: { commit: commitB, face: "chat", sessionKey: "agent:main:b" },
-      }),
-    );
+    window.dispatchEvent(navigationIntent("agent:main:b", "chat", commitB));
     frames.get(1)?.(0);
     const staleSecondFrame = frames.get(2);
-    window.dispatchEvent(
-      new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-        cancelable: true,
-        detail: { commit: commitC, face: "chat", sessionKey: "agent:main:c" },
-      }),
-    );
+    window.dispatchEvent(navigationIntent("agent:main:c", "chat", commitC));
     staleSecondFrame?.(16);
     frames.get(3)?.(16);
     const disposedSecondFrame = frames.get(4);

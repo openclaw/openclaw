@@ -7,10 +7,11 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "Control UI Stop response ownership" });
 
 suite.define(() => {
-  it.each(["current", "replacement", "button", "command"] as const)(
+  it.each(["current", "replacement", "button", "command", "deferred save"] as const)(
     "keeps a delayed Stop response with its original run (%s)",
     async (scenario) => {
-      const saveWarning = scenario === "button" || scenario === "command";
+      const saveWarning =
+        scenario === "button" || scenario === "command" || scenario === "deferred save";
       const pageOptions = {
         viewport: { width: 1200, height: 800 },
         ...(saveWarning
@@ -83,8 +84,17 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.abort", {
             aborted: true,
             runIds: [runId],
-            warning: notice,
+            ...(scenario === "deferred save" ? {} : { warning: notice }),
           });
+          if (scenario === "deferred save") {
+            await gateway.emitGatewayEvent("chat", {
+              sessionKey,
+              runId,
+              state: "error",
+              errorMessage: notice,
+              stopReason: "aborted-partial-persistence-failed",
+            });
+          }
         } else {
           await gateway.rejectDeferred("chat.abort", { code: "UNAVAILABLE", message: notice });
         }

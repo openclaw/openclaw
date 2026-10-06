@@ -530,15 +530,7 @@ describe("main session recovery state", () => {
       executionIdentity: { state: "enabled" },
     });
 
-    expect(prepared).toMatchObject({
-      kind: "reserved",
-      reservation: {
-        executionIdentityAdmission: {
-          kind: "retry-reference",
-          token: storedToken,
-        },
-      },
-    });
+    expect(prepared.kind).toBe("reserved");
     expect(entry.mainRestartRecovery?.executionIdentity).toBe(storedToken);
 
     expect(

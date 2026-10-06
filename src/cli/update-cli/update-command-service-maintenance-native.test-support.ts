@@ -74,7 +74,6 @@ vi.mock("./update-command-package.js", () => ({
     await params.beforeActivate?.();
     return { status: "ok", mode: "npm", root: params.root, steps: [], durationMs: 0 };
   },
-  preparePackageDoctorContext: () => undefined,
 }));
 vi.mock("../../infra/update-global.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-global.js")>()),
@@ -82,6 +81,8 @@ vi.mock("../../infra/update-global.js", async (original) => ({
 }));
 vi.mock("./update-execution.runtime.js", async () => ({
   executeMutableUpdate: (await import("./update-command-execution.js")).executeMutableUpdate,
+  createUpdateCommandExecutionGuards: (await import("./update-command-execution-guards.js"))
+    .createUpdateCommandExecutionGuards,
   restoreFailedUpdateDatabases: (await import("./update-command-database-backup.js"))
     .restoreFailedUpdateDatabases,
   createUpdateCommandFinalizationFence: (await import("./update-command-recovery.js"))
@@ -163,7 +164,8 @@ export async function runNativeMaintenanceUpdate(
     packageUpdateNodeRunner: undefined,
     devTarget: undefined,
   });
-  command.finish.mockReset().mockImplementation(async ({ result }) => {
+  command.finish.mockReset().mockImplementation(async ({ result }, options) => {
+    await options?.beforeFinalization?.();
     if (result.status === "error") {
       throw new Error(`${result.reason}: ${result.steps.at(-1)?.stderrTail}`);
     }

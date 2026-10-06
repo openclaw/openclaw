@@ -1,4 +1,3 @@
-/** Composes queued admission, canonical execution, accounting, and delivery. */
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
@@ -31,6 +30,10 @@ import {
 } from "./queue.js";
 import { isFollowupRunAborted, type QueuedFollowupReplyBatch } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import {
+  isReplyOperationStalledBeforeOutput,
+  STALLED_TURN_NOTICE_TEXT,
+} from "./stalled-turn-recovery.js";
 
 type FollowupDrainDisposition =
   | { kind: "consumed" }
@@ -80,7 +83,6 @@ function resolveFollowupCompletion(
   return { kind: "completed", ...stopReason };
 }
 
-/** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(
   initialDefaults: FollowupRunnerParams,
 ): (queued: FollowupRun) => Promise<void> {
@@ -94,6 +96,20 @@ export function createFollowupRunner(
     withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () => executeFollowup(queued), {
       inheritRequestScope: false,
     });
+  const deliverProgress = async (
+    turn: AdmittedFollowupTurn,
+    payloads: ReplyPayload[],
+    kind: "tool" | "block",
+  ) => {
+    await deliverFollowupDecision({
+      decision: { kind: "deliver", payloads },
+      turn,
+      defaults,
+      runId: turn.runId,
+      runFollowup,
+      kind,
+    });
+  };
   const executeFollowup = async (queued: FollowupRun): Promise<void> => {
     let disposition: FollowupDrainDisposition = { kind: "retry", error: undefined };
     let operation: ReplyOperation | undefined;
@@ -126,14 +142,7 @@ export function createFollowupRunner(
           ) {
             admissionNotices.push(payload);
           } else {
-            await deliverFollowupDecision({
-              decision: { kind: "deliver", payloads: [payload] },
-              turn,
-              defaults,
-              runId: turn.runId,
-              runFollowup,
-              kind: "block",
-            });
+            await deliverProgress(turn, [payload], "block");
           }
         },
       });
@@ -157,31 +166,19 @@ export function createFollowupRunner(
       const execution = await executeFollowupTurn({
         turn,
         defaults,
-        onToolResult: async (payload, identity) => {
-          await deliverFollowupDecision({
-            decision: { kind: "deliver", payloads: [payload] },
-            turn,
-            defaults,
-            runId: identity.runId,
-            runFollowup,
-            kind: "tool",
-          });
-        },
-        onCompactionNoticePayload: async (payload, identity) => {
-          await deliverFollowupDecision({
-            decision: { kind: "deliver", payloads: [payload] },
-            turn,
-            defaults,
-            runId: identity.runId,
-            runFollowup,
-            kind: "block",
-          });
-        },
+        onToolResult: (payload) => deliverProgress(turn, [payload], "tool"),
+        onCompactionNoticePayload: (payload) => deliverProgress(turn, [payload], "block"),
       });
       // A closed execution result is terminal queue work. Commit consumption
       // before accounting/delivery so their failures cannot replay model or tool effects.
       disposition = { kind: "consumed" };
-      completion = resolveFollowupCompletion(execution.execution.outcome);
+      completion =
+        turn.queued.stalledTurnRecovery === true &&
+        isReplyOperationStalledBeforeOutput(turn.operation)
+          ? // A watchdog stall is a failure, not a user cancel: source owners
+            // surface its last-resort notice through their terminal error.
+            { kind: "failed", error: STALLED_TURN_NOTICE_TEXT }
+          : resolveFollowupCompletion(execution.execution.outcome);
       try {
         await execution.progress.drain();
       } catch (error) {
@@ -201,14 +198,7 @@ export function createFollowupRunner(
         turn.sendPolicy === "allow" &&
         turn.queued.currentInboundEventKind !== "room_event"
       ) {
-        await deliverFollowupDecision({
-          decision: { kind: "deliver", payloads: admissionNotices },
-          turn,
-          defaults,
-          runId: turn.runId,
-          runFollowup,
-          kind: "block",
-        });
+        await deliverProgress(turn, admissionNotices, "block");
       }
       if (
         execution.execution.outcome.kind === "settled" &&
@@ -219,6 +209,7 @@ export function createFollowupRunner(
       const accounting = await accountFollowupTurn({ turn, defaults, execution });
       const deliveryOpts = {
         ...defaults.opts,
+        resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
         commentaryPayloadsEnabled: execution.commentaryPayloadsEnabled,
       };
       const decision = await resolveFollowupDeliveryDecision({
@@ -320,10 +311,8 @@ export function createFollowupRunner(
       }
       if (disposition.kind === "consumed") {
         completeFollowupRunLifecycle(queued);
-        if (admittedRunId) {
-          clearAgentRunContext(admittedRunId);
-        }
-      } else if (disposition.kind === "retry" && admittedRunId) {
+      }
+      if (disposition.kind !== "deferred" && admittedRunId) {
         clearAgentRunContext(admittedRunId);
       }
       operation?.complete();

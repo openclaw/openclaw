@@ -118,6 +118,8 @@ it.each([
         );
         if (reconnects) {
           expect(runtime.peekCatalog()?.diagnostics?.[0]?.message).toBe("expired HTTP session");
+          expect(runtime.peekCatalog()?.tools).toEqual([]);
+          expect(runtime.peekCatalog()?.servers).toEqual({});
         } else {
           expect(runtime.peekCatalog()?.diagnostics).toBeUndefined();
         }

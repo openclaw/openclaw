@@ -3,6 +3,7 @@
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
+import { createApplicationConfigCapability } from "../../app/config.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { renderIdentitySection } from "./identity-section.ts";
 
@@ -37,6 +38,29 @@ function createProps(overrides: Partial<IdentitySectionProps> = {}): IdentitySec
 }
 
 describe("renderIdentitySection", () => {
+  it("hides upload controls while preserving avatar display and name editing", () => {
+    const base = createApplicationConfigCapability({ resourceBasePath: "" });
+    const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+    const props = createProps({ config, displayName: "Ada" });
+    const container = document.createElement("div");
+    render(renderIdentitySection(props), container);
+    const input = container.querySelector<HTMLInputElement>('input[type="file"]')!;
+    config.current.uploadsEnabled = false;
+    Object.defineProperty(input, "files", { value: [new File(["avatar"], "avatar.png")] });
+    input.dispatchEvent(new Event("change"));
+    expect(props.onAvatarSelect).not.toHaveBeenCalled();
+    render(renderIdentitySection(props), container);
+    expect(container.querySelector('input[type="file"]')).toBeNull();
+    expect(container.querySelector(".identity-avatar-control button")).toBeNull();
+    expect(container.querySelector("openclaw-viewer-avatar")).not.toBeNull();
+    expect(
+      container.querySelector<HTMLInputElement>(".identity-name-control input")?.disabled,
+    ).toBe(false);
+    container
+      .querySelector(".identity-name-control")
+      ?.dispatchEvent(new SubmitEvent("submit", { cancelable: true }));
+    expect(props.onSaveDisplayName).toHaveBeenCalledOnce();
+  });
   afterEach(() => {
     document.body.replaceChildren();
     setAvatarGatewayOrigin(null);

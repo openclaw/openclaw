@@ -7,6 +7,7 @@ import {
   validateSessionDiscussionOpenParams,
   validateSessionDiscussionOpenResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { getSessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
 import { maybeGenerateSessionTitle } from "../dashboard-session-title.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -14,6 +15,7 @@ import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
 import { hasExplicitSessionName } from "../session-title-state.js";
 import { formatForLog } from "../ws-log.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { measureSessionCollaborationPhase } from "./sessions-collaboration-diagnostics.js";
 import { loadAccessorSessionEntryForGatewayTarget } from "./sessions-shared.js";
 import type {
   GatewayRequestContext,
@@ -59,20 +61,13 @@ async function maybeGenerateTitleBeforeDiscussionOpen(params: {
       );
       return false;
     });
-    let timeout: NodeJS.Timeout | undefined;
-    let persisted: boolean;
     // Late titles remain owned by generation; discussion open bounds only its wait.
-    try {
-      persisted = await Promise.race([
-        observedTitleRequest,
-        new Promise<boolean>((resolve) => {
-          timeout = setTimeout(() => resolve(false), DISCUSSION_TITLE_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      clearTimeout(timeout);
-    }
+    const persisted = await raceWithTimeout(
+      observedTitleRequest,
+      DISCUSSION_TITLE_TIMEOUT_MS,
+      () => false,
+      { ref: false },
+    );
     if (persisted) {
       // Mirror the dashboard first-turn path so session lists learn the new
       // title immediately instead of on their next full refresh.
@@ -131,7 +126,9 @@ function sessionDiscussionHandler(operation: "info" | "open"): GatewayRequestHan
           agentId: requestedAgent.agentId,
           sessionKey: params.sessionKey,
         });
-        const result = await provider[operation]({ sessionKey, agentId: requestedAgent.agentId });
+        const result = await measureSessionCollaborationPhase(`${method}.provider`, () =>
+          provider[operation]({ sessionKey, agentId: requestedAgent.agentId }),
+        );
         if (!validateResult(result)) {
           respond(
             false,

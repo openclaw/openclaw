@@ -16,11 +16,12 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
-  enqueueSystemEvent,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { registerShortTermPromotionDreaming } from "./dreaming.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
@@ -104,6 +105,7 @@ type CronHarnessOptions = {
 };
 type DreamingPluginApi = Parameters<typeof registerShortTermPromotionDreaming>[0];
 type DreamingPluginApiTestDouble = DreamingPluginApi & {
+  scheduler: ReturnType<typeof createTestPluginServiceScheduler>;
   logger: ReturnType<typeof createLogger>;
   on: ReturnType<typeof vi.fn>;
   registerService: ReturnType<typeof vi.fn<DreamingPluginApi["registerService"]>>;
@@ -245,6 +247,7 @@ function createDreamingTestContext(
     }),
     logger,
     on: onMock,
+    scheduler: createTestPluginServiceScheduler(),
     registerService: vi.fn<DreamingPluginApi["registerService"]>(),
   };
   Object.assign(api.runtime, params.runtime);
@@ -252,10 +255,7 @@ function createDreamingTestContext(
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-  return mock.mock.calls.map((call) => {
-    const message = call[0];
-    return typeof message === "string" ? message : "";
-  });
+  return mock.mock.calls.map(([message]) => (typeof message === "string" ? message : ""));
 }
 
 function expectLogContains(mock: { mock: { calls: unknown[][] } }, expected: string): void {
@@ -267,11 +267,7 @@ function expectLogNotContains(mock: { mock: { calls: unknown[][] } }, expected: 
 }
 
 function requireAddCall(harness: { addCalls: CronAddInput[] }, index: number): CronAddInput {
-  const call = harness.addCalls[index];
-  if (!call) {
-    throw new Error(`expected cron add call ${index}`);
-  }
-  return call;
+  return expectDefined(harness.addCalls[index], `expected cron add call ${index}`);
 }
 
 function requireAgentTurnPayload(
@@ -293,16 +289,11 @@ function expectCronSchedule(
   expect(schedule?.tz).toBe(tz);
 }
 
-function getBeforeAgentReplyHandler(
-  onMock: ReturnType<typeof vi.fn>,
-): (
-  event: { cleanedBody: string },
-  ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
-) => Promise<unknown> {
-  const call = onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply");
-  if (!call) {
-    throw new Error("before_agent_reply hook was not registered");
-  }
+function getBeforeAgentReplyHandler(onMock: ReturnType<typeof vi.fn>) {
+  const call = expectDefined(
+    onMock.mock.calls.find(([eventName]) => eventName === "before_agent_reply"),
+    "before_agent_reply hook was not registered",
+  );
   return call[1] as (
     event: { cleanedBody: string },
     ctx: { agentId?: string; trigger?: string; workspaceDir?: string; sessionKey?: string },
@@ -320,19 +311,26 @@ async function triggerDreamingServiceStart(
   api: DreamingPluginApiTestDouble,
   ctx: { config: OpenClawConfig; workspaceDir?: string; getCron?: () => unknown },
 ): Promise<void> {
-  await getDreamingService(api).start({
+  const context = {
     ...ctx,
     stateDir: ".",
     logger: api.logger,
-  } as OpenClawPluginServiceContext);
+  } as OpenClawPluginServiceContext;
+  await getDreamingService(api).start({ ...context, scheduler: api.scheduler });
 }
 
 async function triggerDreamingServiceStop(api: DreamingPluginApiTestDouble): Promise<void> {
-  await getDreamingService(api).stop?.({
-    config: api.config,
-    stateDir: ".",
-    logger: api.logger,
-  });
+  api.scheduler.beginClose();
+  try {
+    await getDreamingService(api).stop?.({
+      config: api.config,
+      stateDir: ".",
+      logger: api.logger,
+      scheduler: api.scheduler,
+    });
+  } finally {
+    await api.scheduler.stop();
+  }
 }
 
 function registerShortTermPromotionDreamingForTest(api: DreamingPluginApiTestDouble): void {
@@ -393,7 +391,7 @@ describe("dreaming service reconciliation", () => {
     const runtimeCurrentConfig = vi.fn(() =>
       createDreamingConfig(
         { enabled: true, frequency: "15 4 * * *", timezone: "UTC", limit: 0 },
-        { agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] } },
+        { agents: { entries: { main: { workspace: workspaceDir } } } },
       ),
     );
     const { api, harness, logger } = createDreamingTestContext({
@@ -1169,7 +1167,7 @@ describe("dreaming service reconciliation", () => {
         ({
           agents: {
             defaults: { workspace: workspaceDir },
-            list: [{ id: "main", default: true, workspace: workspaceDir }],
+            entries: { main: { workspace: workspaceDir } },
           },
         }) as OpenClawConfig,
     );

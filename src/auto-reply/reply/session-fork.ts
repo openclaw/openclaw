@@ -1,13 +1,16 @@
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
-  forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
   resolveSessionParentForkDecision,
   type ForkSessionEntryFromParentTargetParams,
   type ForkSessionEntryFromParentTargetResult,
   type SessionParentForkDecision,
 } from "../../config/sessions/session-accessor.js";
-import { prepareSessionForkTranscript } from "../../config/sessions/session-accessor.sqlite-parent-session.js";
+import {
+  forkSessionEntryFromParentTargetWithPatch,
+  prepareSessionForkTranscript,
+} from "../../config/sessions/session-accessor.sqlite-parent-session.js";
+import type { ParentForkEntryPatch } from "../../config/sessions/session-parent-fork.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -18,6 +21,7 @@ import {
 export { MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE } from "../../sessions/model-overrides.js";
 
 type ParentForkDecisionParams = {
+  parentSessionKey?: string;
   parentEntry: SessionEntry;
   agentId?: string;
   config?: OpenClawConfig;
@@ -40,10 +44,8 @@ type ForkSessionFromParentParams = {
 };
 
 type ForkSessionEntryFromParentParams = Omit<ForkSessionFromParentParams, "parentEntry"> &
-  Pick<
-    ForkSessionEntryFromParentTargetParams,
-    "fallbackEntry" | "patch" | "skipForkWhen" | "skipPatch" | "decisionSkipPatch"
-  > & {
+  Pick<ForkSessionEntryFromParentTargetParams, "fallbackEntry"> & {
+    entryPatch?: ParentForkEntryPatch;
     parentStoreKeys?: readonly string[];
     sessionStoreKeys?: readonly string[];
   };
@@ -65,6 +67,7 @@ export async function resolveParentForkDecision(
   assertModelSelectionUnlocked(params.parentEntry, MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
   return await resolveSessionParentForkDecision({
     parentEntry: params.parentEntry,
+    parentSessionKey: params.parentSessionKey,
     storePath: resolveParentForkStorePath(params),
   });
 }
@@ -108,18 +111,14 @@ function normalizeForkTarget(params: { canonicalKey: string; storeKeys?: readonl
   canonicalKey: string;
   storeKeys: string[];
 } {
-  const keys = new Set<string>();
-  const remember = (value: string) => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      keys.add(trimmed);
-    }
+  return {
+    canonicalKey: params.canonicalKey,
+    storeKeys: [
+      ...new Set(
+        [params.canonicalKey, ...(params.storeKeys ?? [])].map((key) => key.trim()).filter(Boolean),
+      ),
+    ],
   };
-  remember(params.canonicalKey);
-  for (const key of params.storeKeys ?? []) {
-    remember(key);
-  }
-  return { canonicalKey: params.canonicalKey, storeKeys: [...keys] };
 }
 
 /**
@@ -130,22 +129,21 @@ export async function forkSessionEntryFromParent(
   params: ForkSessionEntryFromParentParams,
 ): Promise<ForkSessionEntryFromParentTargetResult> {
   const storePath = resolveParentForkStorePath(params);
-  return await forkSessionEntryFromParentTarget({
-    agentId: params.agentId,
-    commitGuard: params.commitGuard,
-    decisionSkipPatch: params.decisionSkipPatch,
-    fallbackEntry: params.fallbackEntry,
-    parentTarget: normalizeForkTarget({
-      canonicalKey: params.parentSessionKey,
-      storeKeys: params.parentStoreKeys,
-    }),
-    patch: params.patch,
-    sessionTarget: normalizeForkTarget({
-      canonicalKey: params.sessionKey,
-      storeKeys: params.sessionStoreKeys,
-    }),
-    skipForkWhen: params.skipForkWhen,
-    skipPatch: params.skipPatch,
-    storePath,
-  });
+  return await forkSessionEntryFromParentTargetWithPatch(
+    {
+      agentId: params.agentId,
+      commitGuard: params.commitGuard,
+      fallbackEntry: params.fallbackEntry,
+      parentTarget: normalizeForkTarget({
+        canonicalKey: params.parentSessionKey,
+        storeKeys: params.parentStoreKeys,
+      }),
+      sessionTarget: normalizeForkTarget({
+        canonicalKey: params.sessionKey,
+        storeKeys: params.sessionStoreKeys,
+      }),
+      storePath,
+    },
+    params.entryPatch,
+  );
 }

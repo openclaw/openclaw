@@ -34,6 +34,16 @@ describe("Mattermost server thread recovery through the post handler", () => {
   let beforeResponse: ((url: string) => Promise<void>) | undefined;
   let responseStatus: number;
 
+  function holdResponse() {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    beforeResponse = async () => {
+      entered.resolve();
+      await release.promise;
+    };
+    return { entered, release };
+  }
+
   beforeEach(async () => {
     setMattermostRuntime(createPluginRuntimeMock());
     dispatch.mockReset();
@@ -212,60 +222,58 @@ describe("Mattermost server thread recovery through the post handler", () => {
       recover,
       turn,
       rotate,
+      remove: () =>
+        deleteSessionEntry({
+          agentId: "main",
+          storePath: cfg.session?.store,
+          sessionKey,
+        }),
     };
   }
 
-  it.each(["fetch", "authorization"] as const)(
-    "discards a session reset during %s without another inbound ensure",
-    async (phase) => {
-      const f = await setup(phase === "authorization" ? "direct" : "channel");
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      if (phase === "fetch") {
-        beforeResponse = async () => {
-          entered.resolve();
-          await release.promise;
-        };
-      } else {
-        f.monitor.account.config.dmPolicy = "pairing";
+  it("discards a session reset during fetch without another inbound ensure", async () => {
+    const f = await setup("channel");
+    const { entered, release } = holdResponse();
+    const pending = f.recover(f.turn);
+    await entered.promise;
+    await f.rotate();
+    release.resolve();
+    expect((await pending).current).toBe(false);
+    expect(f.histories.size).toBe(0);
+  });
+
+  it("rejects same-session rotation and deletion during recovered-history authorization", async () => {
+    const f = await setup("direct");
+    f.monitor.account.config.dmPolicy = "pairing";
+    // Hold authorization's deadline; the separate deadline case exercises real elapsed time.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+    try {
+      for (const remove of [false, true]) {
+        const entered = createDeferred<void>();
+        const release = createDeferred<void>();
         f.monitor.pairing.readAllowFromStore = async () => {
           entered.resolve();
           await release.promise;
           return ["trusted"];
         };
+        const pending = f.recover(f.turn);
+        try {
+          await entered.promise;
+          if (remove) {
+            await f.remove();
+          } else {
+            await f.rotate("stored-session", "rotated-generation");
+          }
+          release.resolve();
+          expect((await pending).current).toBe(false);
+          expect(f.histories.size).toBe(0);
+        } finally {
+          release.resolve();
+          await pending;
+        }
       }
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      await f.rotate();
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
-    },
-  );
-
-  it("rejects same-session lifecycle rotation and deletion while fetching", async () => {
-    const f = await setup("channel");
-    for (const remove of [false, true]) {
-      const entered = createDeferred<void>();
-      const release = createDeferred<void>();
-      beforeResponse = async () => {
-        entered.resolve();
-        await release.promise;
-      };
-      const pending = f.recover(f.turn);
-      await entered.promise;
-      if (remove) {
-        await deleteSessionEntry({
-          agentId: "main",
-          storePath: f.monitor.cfg.session?.store,
-          sessionKey: f.sessionKey,
-        });
-      } else {
-        await f.rotate("stored-session", "rotated-generation");
-      }
-      release.resolve();
-      expect((await pending).current).toBe(false);
-      expect(f.histories.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
@@ -274,12 +282,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     f.monitor.groupPolicy = "allowlist";
     f.monitor.account.config.groupAllowFrom = ["trusted"];
     const handler = createMattermostPostHandler(f.monitor);
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const { entered, release } = holdResponse();
     const pending = handler(posts[2]! as never, { data: { sender_name: "trusted" } });
     await entered.promise;
     for (let index = 0; index < 3; index++) {
@@ -314,15 +317,15 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const f = await setup("channel");
     const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
     posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    const { entered, release } = holdResponse();
     const first = f.handler(newer as never, { data: { sender_name: "trusted" } });
     await entered.promise;
+    const olderReady = createDeferred<void>();
+    vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
+      olderReady.resolve();
+    });
     const older = f.handler(posts[2]! as never, { data: { sender_name: "trusted" } });
+    await olderReady.promise;
     release.resolve();
     await Promise.all([first, older]);
     const context = dispatch.mock.calls.find(
@@ -337,17 +340,8 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("discards in-flight missing-session recovery when storage materializes", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    beforeResponse = async () => {
-      entered.resolve();
-      await release.promise;
-    };
+    await f.remove();
+    const { entered, release } = holdResponse();
     const pending = f.recover(f.turn);
     await entered.promise;
     await f.rotate();
@@ -360,11 +354,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("does not adopt a completed missing-session success across an unobserved reset", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
+    await f.remove();
     await f.recover(f.turn);
     createChannelHistoryWindow({ historyMap: f.histories }).clear({
       historyKey: f.sessionKey,
@@ -465,11 +455,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
 
   it("preserves cooldown and three-attempt budget across pending session materialization", async () => {
     const f = await setup("channel");
-    await deleteSessionEntry({
-      agentId: "main",
-      storePath: f.monitor.cfg.session?.store,
-      sessionKey: f.sessionKey,
-    });
+    await f.remove();
     vi.useFakeTimers({ toFake: ["Date"] });
     responseStatus = 503;
     await f.recover(f.turn);

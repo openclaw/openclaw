@@ -1,4 +1,3 @@
-// Implements identity metadata updates for configured agents.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -18,7 +17,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,7 +61,6 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-/** Update an agent identity from flags or workspace identity markdown. */
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -71,8 +69,9 @@ export async function agentsSetIdentityCommand(
   if (!writeSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(writeSnapshot.snapshot.sourceConfig)
-    .config as OpenClawConfig;
+  const cfg = applyImplicitAgentRosterDefaults(
+    writeSnapshot.snapshot.sourceConfig,
+  ) as OpenClawConfig;
 
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
@@ -198,17 +197,16 @@ export async function agentsSetIdentityCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
-  if (committedIdentity.name) {
-    runtime.log(`Name: ${sanitizeTerminalText(committedIdentity.name)}`);
-  }
-  if (committedIdentity.theme) {
-    runtime.log(`Theme: ${sanitizeTerminalText(committedIdentity.theme)}`);
-  }
-  if (committedIdentity.emoji) {
-    runtime.log(`Emoji: ${sanitizeTerminalText(committedIdentity.emoji)}`);
-  }
-  if (committedIdentity.avatar) {
-    runtime.log(`Avatar: ${sanitizeTerminalText(committedIdentity.avatar)}`);
+  for (const [field, label] of [
+    ["name", "Name"],
+    ["theme", "Theme"],
+    ["emoji", "Emoji"],
+    ["avatar", "Avatar"],
+  ] as const) {
+    const value = committedIdentity[field];
+    if (value) {
+      runtime.log(`${label}: ${sanitizeTerminalText(value)}`);
+    }
   }
   runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
   if (locatorDiffers && workspaceLocatorDir) {

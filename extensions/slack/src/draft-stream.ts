@@ -12,19 +12,6 @@ import { sendMessageSlack } from "./send.js";
 
 const DEFAULT_THROTTLE_MS = 1000;
 
-type SlackDraftStream = {
-  update: (update: SlackDraftStreamUpdate) => void;
-  flush: () => Promise<void>;
-  clear: (options?: { preserveHumanReplies?: boolean }) => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  forceNewMessage: () => void;
-  dropDetachedMessages: () => Promise<void>;
-  finalizeMessage: (messageId: string, editFinal: () => Promise<void>) => Promise<boolean>;
-  messageId: () => string | undefined;
-  channelId: () => string | undefined;
-};
-
 type SlackDraftStreamUpdate =
   | string
   | {
@@ -60,7 +47,7 @@ export function createSlackDraftStream(params: {
   send?: typeof sendMessageSlack;
   edit?: typeof editSlackMessage;
   remove?: typeof deleteSlackMessage;
-}): SlackDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? SLACK_TEXT_LIMIT, SLACK_TEXT_LIMIT);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const send = params.send ?? sendMessageSlack;
@@ -68,7 +55,6 @@ export function createSlackDraftStream(params: {
   const remove = params.remove ?? deleteSlackMessage;
 
   let streamMessage: SlackDraftMessage | undefined;
-  let streamGeneration = 0;
   let cleanupGeneration = -1;
   let untrackConversationBoundary: (() => void) | undefined;
   let lastVisibleUpdate: { text: string; blocks?: (Block | KnownBlock)[] } | undefined;
@@ -85,9 +71,6 @@ export function createSlackDraftStream(params: {
   };
 
   const sendOrEditStreamMessage = async (pending: SlackDraftStreamUpdate) => {
-    if (streamState.stopped) {
-      return;
-    }
     const update = normalizeUpdate(pending);
     const trimmed = update.text.trimEnd();
     if (!trimmed) {
@@ -107,7 +90,7 @@ export function createSlackDraftStream(params: {
       return;
     }
     lastSentKey = sentKey;
-    const generation = streamGeneration;
+    const generation = lifecycle.generation;
     try {
       if (streamMessage) {
         const message = streamMessage;
@@ -124,57 +107,57 @@ export function createSlackDraftStream(params: {
         return;
       }
       const threadTs = params.resolveThreadTs?.();
-      const pendingBoundary = params.conversationChannelId
-        ? trackSlackDraftMessage({
-            accountId: params.accountId,
-            teamId: params.eventScope?.teamId,
-            channelId: params.conversationChannelId,
-            threadTs,
-            onInterveningMessage: () => forceNewMessage("human"),
-          })
-        : undefined;
-      untrackConversationBoundary = pendingBoundary?.stop;
-      const sent = await send(params.target, trimmed, {
-        cfg: params.cfg,
-        token: params.token,
-        accountId: params.accountId,
-        threadTs,
-        identity: params.identity,
-        eventScope: params.eventScope,
-        ...(params.metadata ? { metadata: params.metadata } : {}),
-        ...(blocks ? { blocks } : {}),
-      });
-      const sentMessage = { channelId: sent.channelId, messageId: sent.messageId, generation };
-      if (generation !== streamGeneration) {
-        if (sent.channelId && sent.messageId) {
-          void lifecycle.retire(sentMessage, { defer: true });
-        }
-        return;
-      }
-      if (!sent.channelId || !sent.messageId) {
-        stopTrackingConversationBoundary();
-        streamState.stopped = true;
-        params.warn?.("slack stream preview stopped (missing identifiers from sendMessage)");
-        return;
-      }
-      streamMessage = sentMessage;
-      lastVisibleUpdate = { text: trimmed, ...(blocks ? { blocks } : {}) };
-      if (pendingBoundary && params.conversationChannelId === streamMessage.channelId) {
-        pendingBoundary.setMessageTs(streamMessage.messageId);
-      } else {
-        stopTrackingConversationBoundary();
-        const tracker = trackSlackDraftMessage({
+      const trackMessage = (channelId: string, messageTs?: string) =>
+        trackSlackDraftMessage({
           accountId: params.accountId,
           teamId: params.eventScope?.teamId,
-          channelId: streamMessage.channelId,
+          channelId,
           threadTs,
-          messageTs: streamMessage.messageId,
+          messageTs,
           onInterveningMessage: () => forceNewMessage("human"),
         });
-        untrackConversationBoundary = tracker.stop;
-      }
+      const pendingBoundary = params.conversationChannelId
+        ? trackMessage(params.conversationChannelId)
+        : undefined;
+      untrackConversationBoundary = pendingBoundary?.stop;
+      await lifecycle.createMessage(
+        async () => {
+          const sent = await send(params.target, trimmed, {
+            cfg: params.cfg,
+            token: params.token,
+            accountId: params.accountId,
+            threadTs,
+            identity: params.identity,
+            eventScope: params.eventScope,
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+            ...(blocks ? { blocks } : {}),
+          });
+          return sent.channelId && sent.messageId
+            ? { channelId: sent.channelId, messageId: sent.messageId, generation }
+            : undefined;
+        },
+        (sentMessage) => {
+          if (!sentMessage) {
+            stopTrackingConversationBoundary();
+            streamState.stopped = true;
+            params.warn?.("slack stream preview stopped (missing identifiers from sendMessage)");
+            return false;
+          }
+          const { channelId, messageId } = sentMessage;
+          streamMessage = sentMessage;
+          lastVisibleUpdate = { text: trimmed, ...(blocks ? { blocks } : {}) };
+          if (pendingBoundary && params.conversationChannelId === channelId) {
+            pendingBoundary.setMessageTs(messageId);
+          } else {
+            stopTrackingConversationBoundary();
+            untrackConversationBoundary = trackMessage(channelId, messageId).stop;
+          }
+          return true;
+        },
+        { defer: true },
+      );
     } catch (err) {
-      if (generation === streamGeneration) {
+      if (generation === lifecycle.generation) {
         stopTrackingConversationBoundary();
         streamState.stopped = true;
       }
@@ -216,7 +199,7 @@ export function createSlackDraftStream(params: {
   };
 
   const dropDetachedMessages = () => {
-    const generation = streamGeneration;
+    const generation = lifecycle.generation;
     return lifecycle.cleanupPending(() => {
       preserveHumanReplies = false;
       cleanupGeneration = generation;
@@ -226,9 +209,9 @@ export function createSlackDraftStream(params: {
   const discardPendingAndStopTracking = async () => {
     // A human can reply before Slack returns the pending preview's identity.
     // Reconcile that receipt before removing the conversation boundary tracker.
-    const generation = streamGeneration;
+    const generation = lifecycle.generation;
     await discardPending();
-    if (generation === streamGeneration) {
+    if (generation === lifecycle.generation) {
       stopTrackingConversationBoundary();
     }
   };
@@ -236,13 +219,13 @@ export function createSlackDraftStream(params: {
   const clear = async (options?: { preserveHumanReplies?: boolean }) => {
     // Final delivery preserves human-replied context, while failed active
     // deletions and explicit rotations remain eligible for cleanup.
-    const generation = streamGeneration;
+    const generation = lifecycle.generation;
     let clearingMessage = streamMessage;
     await lifecycle.clearWithStop(
       async () => {
-        if (generation === streamGeneration) {
+        if (generation === lifecycle.generation) {
           await discardPendingAndStopTracking();
-          if (generation === streamGeneration) {
+          if (generation === lifecycle.generation) {
             clearingMessage = streamMessage;
             clearMessageId();
           }
@@ -261,21 +244,20 @@ export function createSlackDraftStream(params: {
 
   const forceNewMessage = (reason: "turn" | "human" = "turn") => {
     stopTrackingConversationBoundary();
-    // Human boundaries change the target without reopening a stream that is
-    // closing. Only explicit admission of another turn resumes delivery.
-    if (reason === "turn") {
-      streamState.stopped = false;
-      streamGeneration += 1;
-    }
-    streamState.final = false;
     if (streamMessage && !streamMessage.retained) {
       // Slack decides whether human-replied context may be removed; the shared
       // lifecycle retains deletion custody until that decision is made.
       streamMessage.detachedByHuman = reason === "human";
       void lifecycle.retire(streamMessage, { defer: true });
     }
-    clearMessageId();
-    loop.resetPending();
+    // Human boundaries change the target without reopening a stream that is
+    // closing. Only explicit admission of another turn resumes delivery.
+    if (reason === "turn") {
+      lifecycle.reset("discard", "keep");
+    } else {
+      streamState.final = false;
+      lifecycle.resetMessage("keep");
+    }
   };
 
   const finalizeMessage = async (

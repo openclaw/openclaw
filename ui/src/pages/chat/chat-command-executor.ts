@@ -49,7 +49,7 @@ type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?: "refresh" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
+  action?: "refresh";
   /** Model-dependent tools need refreshing after a confirmed selection. */
   modelChanged?: boolean;
   /** When set, the caller should track this as the active run (enables Abort, blocks concurrent sends). */
@@ -66,9 +66,6 @@ type SlashCommandContext = {
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   isCurrent?: () => boolean;
   chatModelCatalog?: ModelCatalogEntry[];
-  modelCatalog?: ModelCatalogEntry[];
-  sessionsResult?: SessionsListResult | null;
-  sessionsResultAgentId?: string | null;
   defaultAgentId?: string;
   agentId?: string;
   ownsModelOverride?: () => boolean;
@@ -102,18 +99,20 @@ async function patchSession(
   context: SlashCommandContext,
   sessionKey: string,
   patch: Parameters<typeof patchChatCommandSessionSettings>[2],
+  success: () => Pick<SlashCommandResult, "content" | "modelChanged">,
+  failureKey: string,
   options?: Parameters<typeof patchChatCommandSessionSettings>[3],
-) {
-  const params = {
-    key: sessionKey,
-    ...selectedGlobalScope(sessionKey, context),
-    ...patch,
-  };
-  requireSessionMutationAccess(context, {
-    method: "sessions.patch",
-    params,
-  });
-  return await patchChatCommandSessionSettings(context, sessionKey, patch, options);
+): Promise<SlashCommandResult> {
+  try {
+    requireSessionMutationAccess(context, {
+      method: "sessions.patch",
+      params: { key: sessionKey, ...selectedGlobalScope(sessionKey, context), ...patch },
+    });
+    await patchChatCommandSessionSettings(context, sessionKey, patch, options);
+    return { ...success(), action: "refresh" };
+  } catch (err) {
+    return commandFailure(failureKey, err);
+  }
 }
 
 export async function executeSlashCommand(
@@ -126,39 +125,29 @@ export async function executeSlashCommand(
   switch (commandName) {
     case "help":
       return executeHelp();
-    case "new":
-      return { content: t("chat.commandResults.startingNewThread"), action: "new-session" };
-    case "reset":
-      return { content: t("chat.commandResults.resettingThread"), action: "reset" };
-    case "stop":
-      return { content: t("chat.commandResults.stoppingCurrentRun"), action: "stop" };
-    case "clear":
-      return { content: t("chat.commandResults.chatHistoryCleared"), action: "clear" };
     case "compact":
-      return await executeCompact(sessionKey, context);
+      return executeCompact(sessionKey, context);
     case "model":
-      return await executeModel(client, sessionKey, args, context);
+      return executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args, context);
+      return executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(client, sessionKey, args, context);
+      return executeFast(sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(client, sessionKey, args, context);
+      return executeVerbose(sessionKey, args, context);
     case "usage":
-      return await executeUsage(sessionKey, context);
+      return executeUsage(sessionKey, context);
     case "agents":
-      return await executeAgents(client);
+      return executeAgents(client);
     case "steer":
     case "redirect":
-      return await executeRunCommand(client, sessionKey, args, context, commandName);
+      return executeRunCommand(client, sessionKey, args, context, commandName);
     default:
       return {
         content: t("chat.commandResults.unknownCommand", { command: `/${commandName}` }),
       };
   }
 }
-
-// ── Command Implementations ──
 
 function executeHelp(): SlashCommandResult {
   const lines = [`**${t("chat.commandResults.help.availableCommands")}**\n`];
@@ -236,11 +225,8 @@ async function executeModel(
       );
       const model = session?.model || defaults?.model || "default";
       const available = models
-        .filter(
-          (entry: ModelCatalogEntry) =>
-            entry.available !== false && entry.manualSelectionAllowed !== false,
-        )
-        .map((entry: ModelCatalogEntry) => entry.id);
+        .filter((entry) => entry.available !== false && entry.manualSelectionAllowed !== false)
+        .map((entry) => entry.id);
       const lines = [t("chat.commandResults.model.current", { model: `\`${model}\`` })];
       if (available.length > 0) {
         const remaining =
@@ -251,7 +237,7 @@ async function executeModel(
           `${t("chat.commandResults.model.available", {
             models: available
               .slice(0, 10)
-              .map((m: string) => `\`${m}\``)
+              .map((m) => `\`${m}\``)
               .join(", "),
           })}${remaining}`,
         );
@@ -262,26 +248,18 @@ async function executeModel(
     }
   }
 
-  try {
-    const requestedModel = args.trim();
-    await patchSession(
-      context,
-      sessionKey,
-      {
-        model: requestedModel,
-      },
-      {
-        ownsModelOverride: context.ownsModelOverride,
-      },
-    );
-    return {
+  const requestedModel = args.trim();
+  return patchSession(
+    context,
+    sessionKey,
+    { model: requestedModel },
+    () => ({
       content: t("chat.commandResults.model.set", { model: `\`${requestedModel}\`` }),
-      action: "refresh",
       modelChanged: true,
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.model.setFailed", err);
-  }
+    }),
+    "chat.commandResults.model.setFailed",
+    { ownsModelOverride: context.ownsModelOverride },
+  );
 }
 
 async function executeThink(
@@ -313,22 +291,18 @@ async function executeThink(
   }
 
   if (isSessionDefaultDirectiveValue(rawLevel)) {
-    try {
-      await patchSession(context, sessionKey, {
-        thinkingLevel: null,
-      });
-      return {
-        content: t("chat.commandResults.thinking.reset"),
-        action: "refresh",
-      };
-    } catch (err) {
-      return commandFailure("chat.commandResults.thinking.resetFailed", err);
-    }
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: null },
+      () => ({ content: t("chat.commandResults.thinking.reset") }),
+      "chat.commandResults.thinking.resetFailed",
+    );
   }
 
   try {
     const { session, defaults } = await loadCurrentSessionState(context, sessionKey);
-    const modelCatalog = context.chatModelCatalog ?? context.modelCatalog ?? [];
+    const modelCatalog = context.chatModelCatalog ?? [];
     const level = resolveThinkingLevelInput(rawLevel, session, defaults, modelCatalog);
     if (!level) {
       return {
@@ -346,20 +320,19 @@ async function executeThink(
         }),
       };
     }
-    await patchSession(context, sessionKey, {
-      thinkingLevel: level,
-    });
-    return {
-      content: t("chat.commandResults.thinking.set", { level: `**${level}**` }),
-      action: "refresh",
-    };
+    return patchSession(
+      context,
+      sessionKey,
+      { thinkingLevel: level },
+      () => ({ content: t("chat.commandResults.thinking.set", { level: `**${level}**` }) }),
+      "chat.commandResults.thinking.setFailed",
+    );
   } catch (err) {
     return commandFailure("chat.commandResults.thinking.setFailed", err);
   }
 }
 
 async function executeVerbose(
-  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -368,7 +341,7 @@ async function executeVerbose(
 
   if (!rawLevel) {
     try {
-      const session = await loadCurrentSession(context, sessionKey);
+      const { session } = await loadCurrentSessionState(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           t("chat.commandResults.verbose.current", {
@@ -389,27 +362,16 @@ async function executeVerbose(
     };
   }
 
-  try {
-    await patchSession(context, sessionKey, {
-      verboseLevel: level,
-    });
-    return {
-      content: t("chat.commandResults.verbose.set", { level: `**${level}**` }),
-      action: "refresh",
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.verbose.setFailed", err);
-  }
-}
-
-function formatFastModeOptions(session: GatewaySessionRow | undefined): string {
-  return t("chat.commandResults.fast.options", {
-    seconds: String(session?.fastAutoOnSeconds ?? 60),
-  });
+  return patchSession(
+    context,
+    sessionKey,
+    { verboseLevel: level },
+    () => ({ content: t("chat.commandResults.verbose.set", { level: `**${level}**` }) }),
+    "chat.commandResults.verbose.setFailed",
+  );
 }
 
 async function executeFast(
-  _client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
   context: SlashCommandContext,
@@ -418,11 +380,13 @@ async function executeFast(
 
   if (!rawMode || rawMode === "status") {
     try {
-      const session = await loadCurrentSession(context, sessionKey);
+      const { session } = await loadCurrentSessionState(context, sessionKey);
       return {
         content: formatDirectiveOptions(
           resolveChatFastModeStatus(session),
-          formatFastModeOptions(session),
+          t("chat.commandResults.fast.options", {
+            seconds: String(session?.fastAutoOnSeconds ?? 60),
+          }),
         ),
       };
     } catch (err) {
@@ -431,17 +395,13 @@ async function executeFast(
   }
 
   if (isSessionDefaultDirectiveValue(rawMode)) {
-    try {
-      await patchSession(context, sessionKey, {
-        fastMode: null,
-      });
-      return {
-        content: t("chat.commandResults.fast.reset"),
-        action: "refresh",
-      };
-    } catch (err) {
-      return commandFailure("chat.commandResults.fast.resetFailed", err);
-    }
+    return patchSession(
+      context,
+      sessionKey,
+      { fastMode: null },
+      () => ({ content: t("chat.commandResults.fast.reset") }),
+      "chat.commandResults.fast.resetFailed",
+    );
   }
 
   const nextMode = normalizeChatFastModeInput(rawMode);
@@ -451,20 +411,18 @@ async function executeFast(
     };
   }
 
-  try {
-    await patchSession(context, sessionKey, {
-      fastMode: nextMode,
-    });
-    return {
+  return patchSession(
+    context,
+    sessionKey,
+    { fastMode: nextMode },
+    () => ({
       content:
         nextMode === "auto"
           ? t("chat.commandResults.fast.setAuto")
           : t(nextMode ? "chat.commandResults.fast.enabled" : "chat.commandResults.fast.disabled"),
-      action: "refresh",
-    };
-  } catch (err) {
-    return commandFailure("chat.commandResults.fast.setFailed", err);
-  }
+    }),
+    "chat.commandResults.fast.setFailed",
+  );
 }
 
 async function executeUsage(
@@ -472,8 +430,7 @@ async function executeUsage(
   context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
-    const sessions = await listSessions(context);
-    const session = resolveCurrentSession(sessions, sessionKey);
+    const { session } = await loadCurrentSessionState(context, sessionKey);
     if (!session) {
       return { content: t("chat.commandResults.usage.noActiveThread") };
     }
@@ -552,17 +509,6 @@ async function executeAgents(client: GatewayBrowserClient): Promise<SlashCommand
   }
 }
 
-function selectedAgentListScope(
-  sessionKey: string,
-  context: SlashCommandContext,
-): { agentId?: string } {
-  const parsedAgentId = parseAgentSessionKey(
-    normalizeOptionalLowercaseString(sessionKey) ?? "",
-  )?.agentId;
-  const agentId = parsedAgentId ?? normalizeOptionalLowercaseString(context.agentId);
-  return agentId ? { agentId } : {};
-}
-
 function resolveSelectedAgentId(
   sessionKey: string,
   context: SlashCommandContext,
@@ -577,49 +523,8 @@ function resolveSelectedAgentId(
   );
 }
 
-function resolveEquivalentSessionKeys(
-  currentSessionKey: string,
-  currentAgentId: string | undefined,
-): Set<string> {
-  const keys = new Set<string>([currentSessionKey]);
-  if (currentAgentId && currentAgentId !== DEFAULT_AGENT_ID) {
-    const agentMainKey = `agent:${currentAgentId}:${DEFAULT_MAIN_KEY}`;
-    const agentGlobalKey = `agent:${currentAgentId}:global`;
-    if (currentSessionKey === agentMainKey || currentSessionKey === agentGlobalKey) {
-      keys.add("global");
-    }
-  }
-  if (currentAgentId === DEFAULT_AGENT_ID) {
-    const canonicalDefaultMain = `agent:${DEFAULT_AGENT_ID}:main`;
-    if (currentSessionKey === DEFAULT_MAIN_KEY) {
-      keys.add(canonicalDefaultMain);
-    } else if (currentSessionKey === canonicalDefaultMain) {
-      keys.add(DEFAULT_MAIN_KEY);
-    }
-  }
-  return keys;
-}
-
 function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\n${t("chat.commandResults.options", { options })}`;
-}
-
-async function listSessions(
-  context: SlashCommandContext,
-  options?: Parameters<SessionCapability["list"]>[0],
-): Promise<SessionsListResult> {
-  const result = await context.sessions.list(options);
-  if (!result) {
-    throw new Error(t("chat.commandResults.sessionUnavailable"));
-  }
-  return result;
-}
-
-async function loadCurrentSession(
-  context: SlashCommandContext,
-  sessionKey: string,
-): Promise<GatewaySessionRow | undefined> {
-  return (await loadCurrentSessionState(context, sessionKey)).session;
 }
 
 async function loadCurrentSessionState(
@@ -629,49 +534,24 @@ async function loadCurrentSessionState(
   session: GatewaySessionRow | undefined;
   defaults: SessionsListResult["defaults"] | undefined;
 }> {
-  const sessions = await listSessions(context, selectedAgentListScope(sessionKey, context));
-  return resolveCommandSessionState(context, sessionKey, sessions);
-}
-
-function resolveCommandSessionState(
-  context: SlashCommandContext,
-  sessionKey: string,
-  sessions: SessionsListResult,
-): {
-  session: GatewaySessionRow | undefined;
-  defaults: SessionsListResult["defaults"] | undefined;
-} {
   const selectedAgentId = resolveSelectedAgentId(sessionKey, context);
+  const { session } = await context.sessions.describe({
+    key: sessionKey,
+    agentId: selectedAgentId,
+  });
+  assertCurrentSlashCommand(context);
   const defaultAgentId =
     normalizeOptionalLowercaseString(context.defaultAgentId) ?? DEFAULT_AGENT_ID;
-  const cachedAgentId = normalizeOptionalLowercaseString(context.sessionsResultAgentId);
-  const cachedSession =
-    context.sessionsResult && selectedAgentId && cachedAgentId === selectedAgentId
-      ? resolveCurrentSession(context.sessionsResult, sessionKey)
-      : undefined;
-  return {
-    session: resolveCurrentSession(sessions, sessionKey) ?? cachedSession,
-    // sessions.list scopes rows by agent, but its defaults remain global.
-    defaults:
-      !selectedAgentId || selectedAgentId === defaultAgentId ? sessions.defaults : undefined,
-  };
-}
-
-function resolveCurrentSession(
-  sessions: SessionsListResult | undefined,
-  sessionKey: string,
-): GatewaySessionRow | undefined {
-  const normalizedSessionKey = normalizeOptionalLowercaseString(sessionKey);
-  const currentAgentId =
-    parseAgentSessionKey(normalizedSessionKey ?? "")?.agentId ??
-    (normalizedSessionKey === DEFAULT_MAIN_KEY ? DEFAULT_AGENT_ID : undefined);
-  const aliases = normalizedSessionKey
-    ? resolveEquivalentSessionKeys(normalizedSessionKey, currentAgentId)
-    : new Set<string>();
-  return sessions?.sessions?.find((session: GatewaySessionRow) => {
-    const key = normalizeOptionalLowercaseString(session.key);
-    return key ? aliases.has(key) : false;
-  });
+  if (session || (selectedAgentId && selectedAgentId !== defaultAgentId)) {
+    return { session: session ?? undefined, defaults: undefined };
+  }
+  // Before the default agent's first session exists, commands still expose its defaults.
+  const listed = await context.sessions.list({ agentId: selectedAgentId, limit: 1 });
+  assertCurrentSlashCommand(context);
+  if (!listed) {
+    throw new Error(t("chat.commandResults.sessionUnavailable"));
+  }
+  return { session: undefined, defaults: listed.defaults };
 }
 
 async function loadModelCommandState(
@@ -679,15 +559,14 @@ async function loadModelCommandState(
   context: SlashCommandContext,
   sessionKey: string,
 ) {
-  const modelCatalog = context.chatModelCatalog ?? context.modelCatalog;
+  const modelCatalog = context.chatModelCatalog;
   const agentId = resolveSelectedAgentId(sessionKey, context);
-  const [sessions, models] = await Promise.all([
-    listSessions(context, selectedAgentListScope(sessionKey, context)),
+  const [state, models] = await Promise.all([
+    loadCurrentSessionState(context, sessionKey),
     modelCatalog
       ? Promise.resolve(modelCatalog)
       : loadModelCatalog(client, { agentId, sessionKey }).then((result) => result.models),
   ]);
-  const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
     ...state,
     models,

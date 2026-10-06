@@ -3,7 +3,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
+import { CHAT_WORK_CONTEXT_DETAIL_LIMITS, CHAT_WORK_CONTEXT_LIMITS } from "../chat-work-context.js";
 import {
   CHAT_HISTORY_MAX_ENTRIES,
   CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
@@ -91,6 +91,7 @@ export const ChatInputReceiptsSchema = Type.Array(
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
       state: Type.Literal("pending"),
       queued: Type.Optional(Type.Literal(true)),
+      cancelled: Type.Optional(Type.Literal(true)),
     }),
     closedObject({
       runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
@@ -123,12 +124,15 @@ export const AgentActivityItemSchema = closedObject({
       Type.Literal("completed"),
       Type.Literal("failed"),
       Type.Literal("blocked"),
+      Type.Literal("skipped"),
     ]),
   ),
   name: Type.Optional(Type.String()),
   meta: Type.Optional(Type.String()),
   commandBearing: Type.Optional(Type.Boolean()),
   toolCallId: Type.Optional(Type.String()),
+  // The history page has no matching result; this is not a terminal receipt.
+  unpairedCall: Type.Optional(Type.Boolean()),
   startedAt: Type.Optional(Type.Number()),
   endedAt: Type.Optional(Type.Number()),
   error: Type.Optional(Type.String()),
@@ -180,6 +184,12 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 export const ChatMetadataParamsSchema = Object.assign(
   closedObject({
     agentId: Type.Optional(NonEmptyString),
+    includeModels: Type.Optional(
+      Type.Boolean({
+        description:
+          "Include model and account selection metadata (default true). Set false when reading models.list separately.",
+      }),
+    ),
     authProfileId: Type.Optional(
       Type.String({
         minLength: 1,
@@ -233,7 +243,11 @@ export const ChatMessageGetParamsSchema = closedObject({
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_000_000 })),
 });
 
-/** Result envelope for single-message lookup, including the stable miss/visibility reason. */
+/**
+ * Single-message lookup result. History messages also carry this envelope as
+ * `__openclaw.replyToMessage`: a display preview capped at 500 chars per field
+ * and 8 KiB, or an unavailable reason. It never changes the persisted transcript.
+ */
 export const ChatMessageGetResultSchema = closedObject({
   ok: Type.Boolean(),
   message: Type.Optional(Type.Unknown()),
@@ -290,6 +304,20 @@ const ChatWorkContextSchema = closedObject({
   workspace: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.workspace })),
   file: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.file })),
   selection: Type.Optional(Type.String({ maxLength: CHAT_WORK_CONTEXT_LIMITS.selection })),
+  detail: Type.Optional(
+    Type.Record(
+      // TypeBox's default key pattern skips newlines; every field must validate its value.
+      Type.String({ pattern: "^[\\s\\S]*$" }),
+      Type.String({ maxLength: CHAT_WORK_CONTEXT_DETAIL_LIMITS.value }),
+      {
+        maxProperties: CHAT_WORK_CONTEXT_DETAIL_LIMITS.fields,
+        propertyNames: Type.String({
+          minLength: 1,
+          maxLength: CHAT_WORK_CONTEXT_DETAIL_LIMITS.key,
+        }),
+      },
+    ),
+  ),
 });
 
 /** User-to-agent send request; idempotency key lets clients safely retry transport failures. */
@@ -302,7 +330,9 @@ export const ChatSendParamsSchema = closedObject({
   workContext: Type.Optional(ChatWorkContextSchema),
   intent: Type.Optional(ChatSendIntentSchema),
   thinking: Type.Optional(Type.String()),
-  fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  fastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
   // One-turn override for auto fast-mode cutoff seconds.
   fastAutoOnSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
   // One-turn override for active-run queue admission.
@@ -337,6 +367,7 @@ export const ChatAbortParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   preserveSideRuns: Type.Optional(Type.Boolean()),
+  discardPendingInput: Type.Optional(Type.Boolean()),
 });
 
 /** Inserts an operator-visible synthetic message into an existing chat transcript. */

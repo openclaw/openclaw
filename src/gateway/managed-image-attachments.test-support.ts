@@ -33,6 +33,11 @@ export async function createPngDataUrl(width: number, height: number): Promise<s
   return `data:image/png;base64,${buffer.toString("base64")}`;
 }
 
+export async function writeSource(sourcePath: string, body: string | Buffer) {
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, body);
+}
+
 export async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.access(targetPath);
@@ -76,7 +81,7 @@ export async function createManagedOutgoingImageBlocks(params: ManagedOutgoingIm
 export async function createManagedOutgoingImageBlocksWithoutHostSql(
   params: ManagedOutgoingImageTestParams,
 ) {
-  const queries = observeHostDataSql({ ...process.env, OPENCLAW_STATE_DIR: params.stateDir });
+  const queries = observeHostDataSql();
   try {
     const blocks = await createManagedOutgoingImageBlocks(params);
     expect(queries.queries).toEqual([]);

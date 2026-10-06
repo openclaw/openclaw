@@ -1,6 +1,3 @@
-/**
- * Prepares Google prompt-cache payloads for embedded-agent stream calls.
- */
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -47,13 +44,8 @@ type CacheRetention = "short" | "long";
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 type GooglePromptCacheSessionManager = {
-  appendCustomEntry(customType: string, data?: unknown): void | Promise<void>;
+  appendCustomEntryAsync(customType: string, data?: unknown): Promise<void>;
   getEntries(): CustomEntryLike[];
-};
-type GooglePromptCacheModel = Model & {
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  provider: string;
 };
 type GooglePromptCacheContext = Parameters<StreamFn>[1];
 type GooglePromptCacheOptions = Parameters<StreamFn>[2];
@@ -84,17 +76,12 @@ type GooglePromptCacheEntry = {
 type PrepareGooglePromptCacheStreamFnParams = {
   apiKey?: string;
   extraParams?: Record<string, unknown>;
-  model: GooglePromptCacheModel;
+  model: Model;
   modelId: string;
   provider: string;
   sessionManager: GooglePromptCacheSessionManager;
   signal?: AbortSignal;
   streamFn: StreamFn | undefined;
-};
-
-type GooglePromptCacheDeps = {
-  buildGuardedFetch?: typeof buildGuardedModelFetch;
-  now?: () => number;
 };
 
 function resolveExplicitCachedContent(
@@ -163,7 +150,7 @@ async function appendGooglePromptCacheEntry(
   entry: GooglePromptCacheEntry,
 ): Promise<void> {
   try {
-    await sessionManager.appendCustomEntry(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
+    await sessionManager.appendCustomEntryAsync(GOOGLE_PROMPT_CACHE_CUSTOM_TYPE, entry);
   } catch (err) {
     if (err instanceof SessionTranscriptWriterClaimReboundError) {
       throw err;
@@ -197,32 +184,13 @@ function readGooglePromptCacheName(value: unknown): string | null {
   }
 }
 
-function convertManagedGoogleTools(tools: NonNullable<GooglePromptCacheContext["tools"]>) {
-  if (tools.length === 0) {
-    return undefined;
-  }
-  return [
-    {
-      functionDeclarations: sortPromptCacheToolsByName(tools).map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        parametersJsonSchema: tool.parameters,
-      })),
-    },
-  ];
-}
-
 function mapManagedGoogleToolChoice(
   choice: unknown,
 ): { mode: "AUTO" | "NONE" | "ANY"; allowedFunctionNames?: string[] } | undefined {
   if (!choice) {
     return undefined;
   }
-  if (
-    typeof choice === "object" &&
-    choice !== null &&
-    (choice as { type?: unknown }).type === "function"
-  ) {
+  if (typeof choice === "object" && (choice as { type?: unknown }).type === "function") {
     const functionName = (choice as { function?: { name?: unknown } }).function?.name;
     return typeof functionName === "string"
       ? { mode: "ANY", allowedFunctionNames: [functionName] }
@@ -243,7 +211,17 @@ function buildManagedGooglePromptCacheConfig(
   context: GooglePromptCacheContext,
   options: GooglePromptCacheOptions,
 ) {
-  const tools = context.tools?.length ? convertManagedGoogleTools(context.tools) : undefined;
+  const tools = context.tools?.length
+    ? [
+        {
+          functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
+            name: tool.name,
+            description: tool.description,
+            parametersJsonSchema: tool.parameters,
+          })),
+        },
+      ]
+    : undefined;
   const toolChoice = tools
     ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
     : undefined;
@@ -295,7 +273,7 @@ function buildGooglePromptCacheHeaders(params: {
   apiKey: string;
   baseUrl: string;
   headers?: Record<string, string>;
-  model: GooglePromptCacheModel;
+  model: Model;
 }): Record<string, string> | undefined {
   const authHeaders = resolveGooglePromptCacheAuthHeaders({
     apiKey: params.apiKey,
@@ -322,7 +300,7 @@ async function requestGooglePromptCache(
     cacheRetention: CacheRetention;
     fetchImpl: typeof fetch;
     headers?: Record<string, string>;
-    model: GooglePromptCacheModel;
+    model: Model;
     now: number;
     signal?: AbortSignal;
   } & (
@@ -387,44 +365,38 @@ async function requestGooglePromptCache(
   }
 }
 
-async function ensureGooglePromptCache(
-  params: {
-    apiKey: string;
-    cacheRetention: CacheRetention;
-    model: GooglePromptCacheModel;
-    provider: string;
-    cacheConfigDigest?: string;
-    sessionManager: GooglePromptCacheSessionManager;
-    signal?: AbortSignal;
-    systemPrompt: string;
-    tools?: unknown;
-    toolConfig?: unknown;
-  },
-  deps: GooglePromptCacheDeps,
-): Promise<string | null> {
+async function ensureGooglePromptCache(params: {
+  apiKey: string;
+  cacheRetention: CacheRetention;
+  model: Model;
+  provider: string;
+  cacheConfigDigest?: string;
+  sessionManager: GooglePromptCacheSessionManager;
+  signal?: AbortSignal;
+  systemPrompt: string;
+  tools?: unknown;
+  toolConfig?: unknown;
+}): Promise<string | null> {
   const baseUrl = normalizeGoogleApiBaseUrl(params.model.baseUrl);
-  const now = asDateTimestampMs(deps.now?.() ?? Date.now());
+  const now = asDateTimestampMs(Date.now());
   if (now === undefined) {
     return null;
   }
-  const systemPromptDigest = sha256Hex(params.systemPrompt);
-  const matchKey = stableStringify({
+  const cacheIdentity = {
     provider: params.provider,
     modelId: params.model.id,
     modelApi: params.model.api,
     baseUrl,
-    systemPromptDigest,
+    systemPromptDigest: sha256Hex(params.systemPrompt),
     cacheConfigDigest: params.cacheConfigDigest,
-  });
-  const latestEntry = readLatestGooglePromptCacheEntry(params.sessionManager, matchKey);
+  };
+  const latestEntry = readLatestGooglePromptCacheEntry(
+    params.sessionManager,
+    stableStringify(cacheIdentity),
+  );
   const entryMetadata = {
     timestamp: now,
-    provider: params.provider,
-    modelId: params.model.id,
-    modelApi: params.model.api,
-    baseUrl,
-    systemPromptDigest,
-    cacheConfigDigest: params.cacheConfigDigest,
+    ...cacheIdentity,
     cacheRetention: params.cacheRetention,
   };
 
@@ -435,7 +407,7 @@ async function ensureGooglePromptCache(
     return null;
   }
 
-  const fetchImpl = (deps.buildGuardedFetch ?? buildGuardedModelFetch)(params.model);
+  const fetchImpl = buildGuardedModelFetch(params.model);
   const requestOptions = {
     apiKey: params.apiKey,
     baseUrl,
@@ -503,15 +475,12 @@ async function ensureGooglePromptCache(
 
 export async function prepareGooglePromptCacheStreamFn(
   params: PrepareGooglePromptCacheStreamFnParams,
-  deps: GooglePromptCacheDeps = {},
 ): Promise<StreamFn | undefined> {
-  if (!params.streamFn) {
-    return undefined;
-  }
-  if (resolveExplicitCachedContent(params.extraParams)) {
-    return undefined;
-  }
-  if (!isGooglePromptCacheEligible({ modelApi: params.model.api, modelId: params.modelId })) {
+  if (
+    !params.streamFn ||
+    resolveExplicitCachedContent(params.extraParams) ||
+    !isGooglePromptCacheEligible({ modelApi: params.model.api, modelId: params.modelId })
+  ) {
     return undefined;
   }
   const resolvedRetention = resolveCacheRetention(
@@ -538,21 +507,16 @@ export async function prepareGooglePromptCacheStreamFn(
       return inner(model, context, options);
     }
     const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
-    const cachedContent = await ensureGooglePromptCache(
-      {
-        apiKey,
-        cacheConfigDigest: cacheConfig.cacheConfigDigest,
-        cacheRetention: resolvedRetention,
-        model: params.model,
-        provider: params.provider,
-        sessionManager: params.sessionManager,
-        signal: params.signal,
-        systemPrompt,
-        tools: cacheConfig.tools,
-        toolConfig: cacheConfig.toolConfig,
-      },
-      deps,
-    );
+    const cachedContent = await ensureGooglePromptCache({
+      apiKey,
+      ...cacheConfig,
+      cacheRetention: resolvedRetention,
+      model: params.model,
+      provider: params.provider,
+      sessionManager: params.sessionManager,
+      signal: params.signal,
+      systemPrompt,
+    });
     if (!cachedContent) {
       log.debug(
         `google prompt cache unavailable for ${params.provider}/${params.modelId}; continuing without cachedContent`,

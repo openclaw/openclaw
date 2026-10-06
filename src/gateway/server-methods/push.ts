@@ -1,9 +1,4 @@
-// Push gateway methods send APNs/web-push test notifications and manage web
-// push subscriptions/VAPID public-key access for UI clients.
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -19,8 +14,6 @@ import {
   clearApnsRegistrationIfCurrent,
   loadApnsRegistration,
   normalizeApnsEnvironment,
-  resolveApnsAuthConfigFromEnv,
-  resolveApnsRelayConfigFromEnv,
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
@@ -44,10 +37,16 @@ import {
   setWebPushSubscriptionPreferences,
   type BoundWebPushSubscription,
 } from "../../infra/push-web.js";
-import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { prepareUserProfileSelectionAuthority } from "../../state/user-channel-identity-operations.js";
+import {
+  getCanonicalUserPreferences,
+  setCanonicalUserPreferences,
+} from "../../state/user-preferences.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
+import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers, GatewayRequestHandlerOptions } from "./types.js";
@@ -108,7 +107,8 @@ function createWebPushRequestGuard(options: PushRequestOptions) {
     return currentProfileId;
   };
   return {
-    assertCurrent,
+    authority,
+    assertPolicyCurrent,
     prepareMutation: (): WebPushMutationGuard => {
       assertCurrent();
       if (authority.family === "native-compatibility") {
@@ -147,12 +147,26 @@ type AuthorizedWebPushSubscription = {
 function withAuthorizedWebPushSubscription<T>(
   endpoint: string,
   options: PushRequestOptions,
-  start: (authorized: AuthorizedWebPushSubscription) => T,
+  prepare: (
+    authorized: AuthorizedWebPushSubscription,
+  ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
 ) {
   const { client, respond } = options;
   const requester = createWebPushRequestGuard(options);
   const deviceId = normalizeOptionalString(client?.connect.device?.id);
-  return withBoundWebPushSubscriptionByEndpoint({ endpoint }, (subscription) => {
+  const profileReference = client?.authenticatedUserProfile?.profileId;
+  const assertRequesterCurrent = () => {
+    if (requester.authority.family === "worker") {
+      requester.authority.assertWorkerCurrent();
+    } else {
+      requester.authority.assertCurrent();
+    }
+    requester.assertPolicyCurrent();
+    if (client?.authenticatedUserProfile?.profileId !== profileReference) {
+      throw new Error("Web Push requester profile changed");
+    }
+  };
+  return withBoundWebPushSubscriptionByEndpoint({ endpoint }, async (subscription) => {
     if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
       respond(
         false,
@@ -161,12 +175,20 @@ function withAuthorizedWebPushSubscription<T>(
       );
       return undefined;
     }
-    const currentProfileId = client?.authenticatedUserProfile?.profileId
-      ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
+    assertRequesterCurrent();
+    const profile = profileReference
+      ? await prepareUserProfileSelectionAuthority(profileReference)
       : undefined;
-    const subscriptionProfileId = subscription.userProfileId
-      ? resolveUserProfileId(subscription.userProfileId)
-      : undefined;
+    assertRequesterCurrent();
+    const owner =
+      subscription.userProfileId === profileReference
+        ? profile
+        : subscription.userProfileId
+          ? await prepareUserProfileSelectionAuthority(subscription.userProfileId)
+          : undefined;
+    assertRequesterCurrent();
+    const currentProfileId = profile?.profileId;
+    const subscriptionProfileId = owner?.profileId;
     if (
       (subscription.userProfileId && !subscriptionProfileId) ||
       (client?.authenticatedUserProfile?.profileId && !currentProfileId) ||
@@ -180,30 +202,22 @@ function withAuthorizedWebPushSubscription<T>(
       return undefined;
     }
     const assertCurrent = () => {
-      const profileId = requester.assertCurrent();
-      const currentSubscriptionProfileId = subscription.userProfileId
-        ? resolveUserProfileId(subscription.userProfileId)
-        : undefined;
-      if (
-        (subscription.userProfileId && !currentSubscriptionProfileId) ||
-        currentSubscriptionProfileId !== profileId
-      ) {
+      assertRequesterCurrent();
+      if ((profile && !profile.isCurrent()) || (owner && !owner.isCurrent())) {
         throw new Error("Web Push subscription owner changed");
       }
-      return profileId;
+      requester.authority.expectedProfileBinding?.assertMatchesResolvedProfile(currentProfileId);
+      return currentProfileId;
     };
     assertCurrent();
-    return {
-      start: () =>
-        start({
-          subscription,
-          assertCurrent,
-          prepareMutation: (): WebPushMutationGuard => {
-            const guard = requester.prepareMutation();
-            return guard.family === "native-compatibility" ? { ...guard, assertCurrent } : guard;
-          },
-        }),
-    };
+    return prepare({
+      subscription,
+      assertCurrent,
+      prepareMutation: (): WebPushMutationGuard => {
+        const guard = requester.prepareMutation();
+        return guard.family === "native-compatibility" ? { ...guard, assertCurrent } : guard;
+      },
+    });
   });
 }
 
@@ -213,7 +227,7 @@ export const pushHandlers = {
       return;
     }
 
-    const nodeId = normalizeStringifiedOptionalString(params.nodeId) ?? "";
+    const nodeId = normalizeOptionalString(params.nodeId) ?? "";
     if (!nodeId) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "nodeId required"));
       return;
@@ -237,50 +251,17 @@ export const pushHandlers = {
       }
 
       const overrideEnvironment = normalizeApnsEnvironment(params.environment);
-      const result =
+      const transport = await resolveNodePushTransport(
         registration.transport === "direct"
-          ? await (async () => {
-              // Direct registrations require local APNs signing material at
-              // send time; relay registrations must not touch those secrets.
-              const auth = await resolveApnsAuthConfigFromEnv(process.env);
-              if (!auth.ok) {
-                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, auth.error));
-                return null;
-              }
-              return await sendApnsAlert({
-                registration: {
-                  ...registration,
-                  environment: overrideEnvironment ?? registration.environment,
-                },
-                nodeId,
-                title,
-                body,
-                auth: auth.value,
-              });
-            })()
-          : await (async () => {
-              // Relay registrations carry a grant from the node, so the gateway
-              // only needs relay config plus the origin bound at registration.
-              const relay = resolveApnsRelayConfigFromEnv(
-                process.env,
-                context.getRuntimeConfig().gateway,
-                { registrationRelayOrigin: registration.relayOrigin },
-              );
-              if (!relay.ok) {
-                respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, relay.error));
-                return null;
-              }
-              return await sendApnsAlert({
-                registration,
-                nodeId,
-                title,
-                body,
-                relayConfig: relay.value,
-              });
-            })();
-      if (!result) {
+          ? { ...registration, environment: overrideEnvironment ?? registration.environment }
+          : registration,
+        registration.transport === "relay" ? context.getRuntimeConfig() : undefined,
+      );
+      if (!transport.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, transport.error));
         return;
       }
+      const result = await sendApnsAlert({ ...transport.transport, nodeId, title, body });
       if (
         shouldClearStoredApnsRegistration({
           registration,
@@ -375,22 +356,25 @@ export const pushHandlers = {
     await respondUnavailableOnThrow(respond, async () => {
       await withAuthorizedWebPushSubscription(params.endpoint, options, (authorized) => {
         const { subscription } = authorized;
-        return clearBoundWebPushSubscription({
-          endpoint: params.endpoint,
-          expectedDeviceId: subscription.deviceId,
-          expectedUserProfileId: subscription.userProfileId,
-          guard: authorized.prepareMutation(),
-        }).then((removed) => {
-          if (!removed) {
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
-            );
-            return;
-          }
-          respond(true, { removed }, undefined);
-        });
+        return {
+          start: () =>
+            clearBoundWebPushSubscription({
+              endpoint: params.endpoint,
+              expectedDeviceId: subscription.deviceId,
+              expectedUserProfileId: subscription.userProfileId,
+              guard: authorized.prepareMutation(),
+            }).then((removed) => {
+              if (!removed) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
+                );
+                return;
+              }
+              respond(true, { removed }, undefined);
+            }),
+        };
       });
     });
   },
@@ -407,15 +391,19 @@ export const pushHandlers = {
     ) {
       return;
     }
-    await withAuthorizedWebPushSubscription(params.endpoint, options, (authorized) => {
+    await withAuthorizedWebPushSubscription(params.endpoint, options, async (authorized) => {
       const { subscription } = authorized;
       const currentProfileId = authorized.assertCurrent();
       const storedUser = currentProfileId
-        ? getUserPreferences(currentProfileId, [WEB_PUSH_USER_PREFERENCES_KEY])[
-            WEB_PUSH_USER_PREFERENCES_KEY
-          ]
+        ? await getCanonicalUserPreferences(currentProfileId, [WEB_PUSH_USER_PREFERENCES_KEY])
         : undefined;
-      const user = normalizeWebPushNotificationPreferences(storedUser);
+      authorized.assertCurrent();
+      if (currentProfileId && storedUser?.profileId !== currentProfileId) {
+        throw new Error("Web Push requester profile changed");
+      }
+      const user = normalizeWebPushNotificationPreferences(
+        storedUser?.entries[WEB_PUSH_USER_PREFERENCES_KEY],
+      );
       respond(
         true,
         {
@@ -429,6 +417,7 @@ export const pushHandlers = {
         },
         undefined,
       );
+      return undefined;
     });
   },
 
@@ -444,7 +433,7 @@ export const pushHandlers = {
     ) {
       return;
     }
-    await withAuthorizedWebPushSubscription(params.endpoint, options, (authorized) => {
+    await withAuthorizedWebPushSubscription(params.endpoint, options, async (authorized) => {
       const { subscription } = authorized;
       const currentProfileId = authorized.assertCurrent();
       if (!hasValidWebPushQuietHoursTimeZone(params.preferences)) {
@@ -468,51 +457,64 @@ export const pushHandlers = {
           return undefined;
         }
         const preferences = normalizeWebPushNotificationPreferences(params.preferences);
-        const result = setUserPreferences(currentProfileId, {
-          [WEB_PUSH_USER_PREFERENCES_KEY]: preferences,
-        });
-        if (!result.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+        const recipients = await prepareUserProfileCatalog();
+        try {
+          authorized.assertCurrent();
+          const result = await setCanonicalUserPreferences(
+            currentProfileId,
+            { [WEB_PUSH_USER_PREFERENCES_KEY]: preferences },
+            { assertCurrent: authorized.assertCurrent },
           );
+          authorized.assertCurrent();
+          if (!result?.ok) {
+            respond(
+              false,
+              undefined,
+              errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+            );
+            return undefined;
+          }
+          respond(true, { scope: "user", preferences }, undefined);
+          const connIds = context.getClientConnIds?.((connectedClient) => {
+            const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+            return Boolean(
+              connectedProfileId &&
+              recipients.readCurrentIdentity(connectedProfileId)?.profileId === currentProfileId,
+            );
+          });
+          if (connIds?.size) {
+            context.broadcastToConnIds(
+              "users.prefs.changed",
+              { profileId: currentProfileId, keys: [WEB_PUSH_USER_PREFERENCES_KEY] },
+              connIds,
+            );
+          }
           return undefined;
+        } finally {
+          recipients.release();
         }
-        respond(true, { scope: "user", preferences }, undefined);
-        const connIds = context.getClientConnIds?.((connectedClient) => {
-          const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
-          return Boolean(
-            connectedProfileId && resolveUserProfileId(connectedProfileId) === currentProfileId,
-          );
-        });
-        if (connIds?.size) {
-          context.broadcastToConnIds(
-            "users.prefs.changed",
-            { profileId: currentProfileId, keys: [WEB_PUSH_USER_PREFERENCES_KEY] },
-            connIds,
-          );
-        }
-        return undefined;
       }
       const preferences = normalizeWebPushDevicePreferences(params.preferences);
-      return setWebPushSubscriptionPreferences({
-        endpoint: params.endpoint,
-        preferences,
-        expectedDeviceId: subscription.deviceId,
-        expectedUserProfileId: subscription.userProfileId,
-        guard: authorized.prepareMutation(),
-      }).then((updated) => {
-        if (!updated) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
-          );
-          return;
-        }
-        respond(true, { scope: "device", preferences }, undefined);
-      });
+      return {
+        start: () =>
+          setWebPushSubscriptionPreferences({
+            endpoint: params.endpoint,
+            preferences,
+            expectedDeviceId: subscription.deviceId,
+            expectedUserProfileId: subscription.userProfileId,
+            guard: authorized.prepareMutation(),
+          }).then((updated) => {
+            if (!updated) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"),
+              );
+              return;
+            }
+            respond(true, { scope: "device", preferences }, undefined);
+          }),
+      };
     });
   },
 

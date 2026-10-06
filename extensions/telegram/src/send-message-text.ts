@@ -111,9 +111,7 @@ export function createTelegramTextSender(config: {
     alreadyUsed: boolean,
   ) => {
     const thread = buildThreadParams(shouldIncludeReply(index, count, alreadyUsed));
-    return Object.keys(thread).length || (finalPart && replyMarkup)
-      ? { ...thread, ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}) }
-      : undefined;
+    return { ...thread, ...(finalPart && replyMarkup ? { reply_markup: replyMarkup } : {}) };
   };
 
   const createTextDelivery = (context: string, beforeFirstAccepted?: () => Promise<void>) => {

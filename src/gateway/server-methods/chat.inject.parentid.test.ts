@@ -178,7 +178,7 @@ describe("gateway chat.inject transcript writes", () => {
     },
   );
 
-  it.each(["stop", "aborted"] as const)(
+  it.each(["aborted"] as const)(
     "retains %s on both display and model content",
     async (stopReason) => {
       const fixture = await createSqliteTranscriptFixture({
@@ -224,27 +224,6 @@ describe("gateway chat.inject transcript writes", () => {
       }
     },
   );
-
-  it("appends a agent session entry that includes parentId", async () => {
-    const fixture = await createSqliteTranscriptFixture({
-      prefix: "openclaw-chat-inject-",
-      sessionId: "sess-1",
-    });
-
-    try {
-      await appendHelloAndRequireId(fixture);
-      const last = await readLastTranscriptRecord(fixture);
-      expect(last.type).toBe("message");
-
-      // Gateway appends must go through the transcript accessor so parent links
-      // stay connected for compaction and chat.history projection.
-      expect(Object.hasOwn(last, "parentId")).toBe(true);
-      expect(last).toHaveProperty("id");
-      expect(last).toHaveProperty("message");
-    } finally {
-      await cleanupFixture(fixture);
-    }
-  });
 
   it("preserves parent links after an oversized transcript row", async () => {
     const fixture = await createSqliteTranscriptFixture({

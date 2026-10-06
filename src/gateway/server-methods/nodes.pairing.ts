@@ -39,22 +39,6 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-t
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function broadcastRemovedNodePairing(params: {
-  context: Pick<GatewayRequestContext, "broadcast">;
-  nodeId: string;
-}) {
-  params.context.broadcast(
-    "node.pair.resolved",
-    {
-      requestId: "",
-      nodeId: params.nodeId,
-      decision: "removed",
-      ts: Date.now(),
-    },
-    { dropIfSlow: true },
-  );
-}
-
 function emitNodePairingDeniedSecurityEvent(params: {
   authz: DeviceManagementAuthz;
   nodeId: string;
@@ -158,30 +142,18 @@ async function removePairedDeviceBackedNode(params: {
   }
 
   const authz = resolveDeviceManagementAuthz(params.client, nodeId);
-  if (deniesCrossDeviceManagement(authz)) {
-    params.context.logGateway.warn(
-      `node pairing removal denied node=${nodeId} reason=device-ownership-mismatch`,
-    );
-    emitNodeRoleRemovalSecurityEvent({
-      authz,
-      deviceId: nodeId,
-      reason: "device-ownership-mismatch",
-    });
-    return { status: "denied", message: "node pairing removal denied" };
-  }
   // Mirror device.pair.remove: the admin requirement for mixed-role rows only
   // applies to device-token self-service callers (callerDeviceId set). Shared-auth
   // / CLI operators holding operator.pairing manage pairings on others' behalf and
   // are allowed to remove non-operator (e.g. node) rows without operator.admin.
-  if (authz.callerDeviceId && !authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)) {
-    params.context.logGateway.warn(
-      `node pairing removal denied node=${nodeId} reason=role-management-requires-admin`,
-    );
-    emitNodeRoleRemovalSecurityEvent({
-      authz,
-      deviceId: nodeId,
-      reason: "role-management-requires-admin",
-    });
+  const reason = deniesCrossDeviceManagement(authz)
+    ? "device-ownership-mismatch"
+    : authz.callerDeviceId && !authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)
+      ? "role-management-requires-admin"
+      : undefined;
+  if (reason) {
+    params.context.logGateway.warn(`node pairing removal denied node=${nodeId} reason=${reason}`);
+    emitNodeRoleRemovalSecurityEvent({ authz, deviceId: nodeId, reason });
     return { status: "denied", message: "node pairing removal denied" };
   }
 
@@ -400,7 +372,16 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       try {
         clearRemovedNodeRuntimeState({ nodeId: deviceBacked.nodeId, context });
         await reconcileRevokedDeviceWorker(context, deviceBacked.nodeId);
-        broadcastRemovedNodePairing({ nodeId: deviceBacked.nodeId, context });
+        context.broadcast(
+          "node.pair.resolved",
+          {
+            requestId: "",
+            nodeId: deviceBacked.nodeId,
+            decision: "removed",
+            ts: Date.now(),
+          },
+          { dropIfSlow: true },
+        );
         respond(true, { nodeId: deviceBacked.nodeId }, undefined);
       } finally {
         // Preserve response-first shutdown on success, while guaranteeing the

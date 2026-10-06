@@ -3,6 +3,47 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  talkPage: {
+    intro: "Configure realtime voice providers, models, and speaker voices.",
+    voiceSection: {
+      title: "Realtime voice",
+      description:
+        "Continuous speech conversations with your agent. The pickers below write talk.realtime settings; the full form further down covers everything else.",
+    },
+    status: {
+      title: "Status",
+      ready: "Ready",
+      notReady: "Not configured",
+      unavailable: "Unavailable",
+      unavailableHint: "Connect to the Gateway to check realtime voice readiness.",
+      activeProvider: "Active provider: {provider}",
+      noProvider: "No realtime voice provider is configured yet.",
+    },
+    provider: {
+      title: "Provider",
+      description: "Auto picks the first provider with working credentials.",
+      auto: "Auto",
+    },
+    model: {
+      title: "Model",
+      description: "Realtime voice model for browser Talk sessions.",
+      default: "Provider default",
+      defaultNamed: "Default ({model})",
+    },
+    voice: {
+      title: "Speaker voice",
+      description: "Voice used for spoken replies. GPT-Live locks the voice once a call starts.",
+      default: "Provider default",
+      unsupported: "unsupported",
+      unsupportedDefault:
+        "This saved voice is unavailable for the selected route. Provider default will be used.",
+    },
+    gptLive: {
+      title: "GPT-Live",
+      hint: "Released browser/Gateway-owned WebRTC tries OAuth first and falls back to a Platform API key. Direct backend sockets and unlisted or private routes require Platform API-key access. Delegated work can be steered while running and requires exact spoken confirmation for high-impact actions.",
+      ready: "Ready",
+    },
+  },
   configForm: {
     sections: {
       env: {
@@ -409,6 +450,9 @@ const enSettings = {
       creating: "Building: creating",
       uncertain: "Paused: uncertain",
       noImage: "No image",
+      coldOnly: "Cold only",
+      captureUnsupportedHint:
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",
@@ -639,6 +683,8 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
@@ -867,7 +913,7 @@ const enSettings = {
       controlUiCommit: "Control UI commit",
       builtAt: "Built",
       installedAt: "Installed",
-      installedAtUnknown: "Unknown · recorded after the next successful update",
+      installedAtUnknown: "Unknown",
       lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
@@ -963,6 +1009,10 @@ const enSettings = {
       launchAtLogin: "Launch at login",
       launchAtLoginUnavailable:
         "Launch at login requires a bundled app without an active app profile.",
+      keepGatewayRunning: "Keep OpenClaw running when the app is closed",
+      keepGatewayRunningHint:
+        "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
+      keepGatewayRunningFailed: "Could not change Gateway hosting.",
       quickChat: "Quick Chat enabled",
       quickChatHint:
         "Show a floating composer for quick messages, summoned with a global shortcut.",
@@ -1320,7 +1370,6 @@ const enSettings = {
       agentQuestion: "Agent question",
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
-      backgroundTaskFailed: "Background task failed",
       lockScreenDetail: "Lock-screen detail",
       lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
       private: "Private",
@@ -1411,6 +1460,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      openLinksExternally: "Open links outside OpenClaw",
+      openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
+      openLinksExternallyStorage: "Saved in this browser only.",
       collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",
@@ -1734,6 +1786,7 @@ const enSettings = {
 export const registerSettingsEnglish = Object.assign(
   () => {
     Object.assign(en.agentTools, enSettings.agentTools);
+    Object.assign(en.talkPage, enSettings.talkPage);
     Object.assign(en.configForm.sections, enSettings.configForm.sections);
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;

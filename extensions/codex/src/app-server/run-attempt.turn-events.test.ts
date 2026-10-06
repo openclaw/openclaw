@@ -44,75 +44,55 @@ async function startAttempt(
 }
 
 describe("runCodexAppServerAttempt", () => {
-  it("bounds restored plan state after compaction", async () => {
-    const { harness, run } = await startAttempt();
-    await harness.notify({
-      method: "turn/plan/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        explanation: "e".repeat(10_000),
-        plan: Array.from({ length: 100 }, (_, index) => ({
-          step: `${index}: ${"x".repeat(2_000)}`,
-          status: index === 0 ? "inProgress" : "pending",
-        })),
-      },
-    });
-    await harness.notify(
-      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
-    );
+  it.each([false, true])(
+    "continues after bounded plan restoration (failure: %s)",
+    async (fails) => {
+      const { harness, run } = await startAttempt(async (method) => {
+        if (fails && method === "thread/inject_items") {
+          throw new Error("injected test failure");
+        }
+        return undefined;
+      });
+      await harness.notify({
+        method: "turn/plan/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          explanation: "e".repeat(10_000),
+          plan: Array.from({ length: 100 }, (_, index) => ({
+            step: `${index}: ${"x".repeat(2_000)}`,
+            status: index === 0 ? "inProgress" : "pending",
+          })),
+        },
+      });
+      await harness.notify(
+        itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+      );
+      await harness.notify(
+        itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+      );
 
-    const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
-    const text = (
-      request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
-    )?.items?.[0]?.content?.[0]?.text;
-    expect(text).toBeDefined();
-    const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
-    const payload = JSON.parse(payloadText) as {
-      markdown?: string;
-      plan: Array<{ step: string; status: string }>;
-    };
-    expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
-    expect(Buffer.byteLength(payload.markdown ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
-    expect(payload.plan.length).toBeLessThanOrEqual(50);
-    expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
-    expect(payload.plan[0]?.status).toBe("in_progress");
+      const request = harness.requests.find((entry) => entry.method === "thread/inject_items");
+      const text = (
+        request?.params as { items?: Array<{ content?: Array<{ text?: string }> }> } | undefined
+      )?.items?.[0]?.content?.[0]?.text;
+      expect(text).toBeDefined();
+      const payloadText = text?.slice((text?.indexOf("\n") ?? -1) + 1) ?? "";
+      const payload = JSON.parse(payloadText) as {
+        markdown?: string;
+        plan: Array<{ step: string; status: string }>;
+      };
+      expect(Buffer.byteLength(payloadText, "utf8")).toBeLessThanOrEqual(32 * 1024);
+      expect(Buffer.byteLength(payload.markdown ?? "", "utf8")).toBeLessThanOrEqual(2 * 1024);
+      expect(payload.plan.length).toBeLessThanOrEqual(50);
+      expect(payload.plan.every((step) => Buffer.byteLength(step.step, "utf8") <= 512)).toBe(true);
+      expect(payload.plan[0]?.status).toBe("in_progress");
 
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
-  });
-
-  it("continues the turn when restoring plan state after compaction fails", async () => {
-    const { harness, run } = await startAttempt(async (method) => {
-      if (method === "thread/inject_items") {
-        throw new Error("injected test failure");
-      }
-      return undefined;
-    });
-    await harness.notify({
-      method: "turn/plan/updated",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        explanation: "Keep working",
-        plan: [{ step: "Finish safely", status: "inProgress" }],
-      },
-    });
-    await harness.notify(
-      itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
-    );
-    await harness.notify(
-      itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
-    );
-    expect(harness.requests.map((request) => request.method)).toContain("thread/inject_items");
-
-    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    const result = await run;
-    expect(readAttemptTerminal(result).promptError).toBeNull();
-  });
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+      expect(readAttemptTerminal(result).promptError).toBeNull();
+    },
+  );
 });
 
 describe("runCodexAppServerAttempt native lifecycle", () => {

@@ -1,8 +1,3 @@
-/**
- * HTML visibility sanitizers for web_fetch.
- *
- * Removes hidden or invisible content before readable-text extraction.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -37,7 +32,6 @@ const HIDDEN_STYLE_PATTERNS = (
   return [new RegExp(`(?:^|;)\\s*${escapedProp}\\s*:\\s*([^;]+)`, "i"), valuePattern] as const;
 });
 
-// Class names associated with visually hidden content
 const HIDDEN_CLASS_NAMES = new Set([
   "sr-only",
   "visually-hidden",
@@ -78,7 +72,6 @@ function isStyleHidden(style: string): boolean {
     }
   }
 
-  // width:0 + height:0 + overflow:hidden
   const width = style.match(/(?:^|;)\s*width\s*:\s*([^;]+)/i);
   const height = style.match(/(?:^|;)\s*height\s*:\s*([^;]+)/i);
   const overflow = style.match(/(?:^|;)\s*overflow\s*:\s*([^;]+)/i);

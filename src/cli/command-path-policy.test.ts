@@ -167,7 +167,7 @@ describe("command-path-policy", () => {
   });
 
   it("keeps gateway control RPCs on core-only config validation", () => {
-    for (const subcommand of ["call", "restart", "suspend", "resume"]) {
+    for (const subcommand of ["call", "suspend", "resume"]) {
       expectResolvedPolicy(["gateway", subcommand], {
         configGuard: "validate",
         networkProxy: "bypass",
@@ -432,13 +432,6 @@ describe("command-path-policy", () => {
       ensureCliPath: false,
       networkProxy: "bypass",
     });
-    for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
-      expectResolvedPolicy(commandPath, {
-        configGuard: "skip",
-        ensureCliPath: false,
-        networkProxy: "bypass",
-      });
-    }
     for (const commandPath of [
       ["plugins", "install"],
       ["plugins", "inspect"],
@@ -508,6 +501,13 @@ describe("command-path-policy", () => {
       ensureCliPath: false,
       networkProxy: "bypass",
     });
+  });
+
+  it("does not retain startup exemptions for the retired Tasks command", () => {
+    for (const commandPath of [["tasks"], ["tasks", "list"], ["tasks", "audit"]]) {
+      expectResolvedPolicy(commandPath, {});
+      expect(resolveCliNetworkProxyPolicy(["node", "openclaw", ...commandPath])).toBe("default");
+    }
   });
 
   it("defaults unknown command paths to network proxy routing", () => {

@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { createAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
@@ -32,7 +33,6 @@ import {
   resolveEmbeddedRunLaneTimeoutMs,
   resolveEmbeddedRunSessionLanePolicy,
   shouldNoteLaneWait,
-  withEmbeddedRunLaneTimeout,
 } from "./lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { claimAgentSessionWriter } from "./session-bootstrap.js";
@@ -212,39 +212,39 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     if (reason instanceof Error) {
       throw reason;
     }
-    const abortError =
-      reason !== undefined
-        ? new Error("Operation aborted", { cause: reason })
-        : new Error("Operation aborted");
-    abortError.name = "AbortError";
-    throw abortError;
+    throw createAbortError(
+      "Operation aborted",
+      reason === undefined ? undefined : { cause: reason },
+    );
   };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,
     allowPendingGlobalAdmissionHeartbeat = false,
-  ) =>
-    withEmbeddedRunLaneTimeout(
-      {
-        ...opts,
-        taskIdentity,
-        abortSignal,
-        // Only the outer session lease may count queued global admission as
-        // progress; an admitted global task must still time out when it stalls.
-        taskTimeoutProgressAtMs: () =>
-          allowPendingGlobalAdmissionHeartbeat && pendingGlobalLaneAdmissions > 0
-            ? Date.now()
-            : laneTaskProgressAtMs,
-        taskTimeoutSubscribe: (onDeadline) => {
-          laneTaskDeadlineSubscribers.add(onDeadline);
-          onDeadline(laneTaskDeadline);
-          return () => laneTaskDeadlineSubscribers.delete(onDeadline);
-        },
-        taskTimeoutAbortSignal: abortSignal,
-        taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
-        taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
-      },
-      laneTaskTimeoutMs,
-    );
+  ): CommandQueueEnqueueOptions => ({
+    ...opts,
+    taskTimeoutMs: opts?.taskTimeoutMs !== undefined ? opts.taskTimeoutMs : laneTaskTimeoutMs,
+    taskIdentity,
+    sessionTarget: {
+      agentId: options.getParams().agentId,
+      sessionKey: options.getParams().sessionKey,
+      sessionId: options.getParams().sessionId,
+    },
+    abortSignal,
+    // Only the outer session lease may count queued global admission as
+    // progress; an admitted global task must still time out when it stalls.
+    taskTimeoutProgressAtMs: () =>
+      allowPendingGlobalAdmissionHeartbeat && pendingGlobalLaneAdmissions > 0
+        ? Date.now()
+        : laneTaskProgressAtMs,
+    taskTimeoutSubscribe: (onDeadline) => {
+      laneTaskDeadlineSubscribers.add(onDeadline);
+      onDeadline(laneTaskDeadline);
+      return () => laneTaskDeadlineSubscribers.delete(onDeadline);
+    },
+    taskTimeoutAbortSignal: abortSignal,
+    taskTimeoutAbortGraceMs: EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+    taskTimeoutReleaseSignal: laneTaskReleaseController.signal,
+  });
   const withRunLaneWait = (opts?: CommandQueueEnqueueOptions) => {
     const params = options.getParams();
     if (!opts?.onWait && !params.onLaneWait) {

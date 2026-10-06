@@ -6,6 +6,30 @@ import { isRecord } from "./record-coerce.js";
 type JsonSchemaObject = Record<string, unknown>;
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
+/** Decode a local URI fragment before recognizing or splitting its JSON Pointer. */
+export function decodeLocalSchemaRefFragment(ref: string): string | undefined {
+  if (!ref.startsWith("#")) {
+    return undefined;
+  }
+  try {
+    return decodeURIComponent(ref.slice(1));
+  } catch {
+    return undefined;
+  }
+}
+
+export function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+/** Encoded slashes separate tokens; ~1 remains inside a single token. */
+export function parseLocalSchemaRefPointer(ref: string): string[] | undefined {
+  const fragment = decodeLocalSchemaRefFragment(ref);
+  return fragment?.startsWith("/")
+    ? fragment.slice(1).split("/").map(decodeJsonPointerSegment)
+    : undefined;
+}
+
 /** Validation details shared by the TypeBox schema and value compilers. */
 export type TypeBoxValidationError = {
   keyword?: string;
@@ -63,23 +87,27 @@ const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
   "dependentSchemas",
+  "dependencies",
   "patternProperties",
   "properties",
 ]);
 const schemaValueKeywords = new Set([
   "additionalItems",
   "additionalProperties",
+  "allOf",
+  "anyOf",
   "contains",
   "else",
   "if",
   "items",
   "not",
+  "oneOf",
+  "prefixItems",
   "propertyNames",
   "then",
   "unevaluatedItems",
   "unevaluatedProperties",
 ]);
-const schemaArrayKeywords = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
 const schemaResourceKeywords = new Set([
   "$anchor",
   "$defs",
@@ -96,12 +124,21 @@ type NormalizationOptions = {
   format?: "annotation";
 };
 
-function normalizeSchemaMap(value: unknown, options: NormalizationOptions): unknown {
+function normalizeSchemaMap(
+  value: unknown,
+  options: NormalizationOptions,
+  preserveStringArrays: boolean,
+): unknown {
   if (!isRecord(value)) {
     return value;
   }
   return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [key, normalizeJsonSchemaNode(entry, options)]),
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      preserveStringArrays && isStringArray(entry)
+        ? entry
+        : normalizeJsonSchemaNode(entry, options),
+    ]),
   );
 }
 
@@ -126,18 +163,6 @@ function repairJsonSchemaPatternForUnicodeRegExp(pattern: string): string {
     return match;
   });
   return compilesUnicodePattern(repaired) ? repaired : pattern;
-}
-
-function normalizeSchemaDependencies(value: unknown, options: NormalizationOptions): unknown {
-  if (!isRecord(value)) {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, entry]) => [
-      key,
-      isStringArray(entry) ? entry : normalizeJsonSchemaNode(entry, options),
-    ]),
-  );
 }
 
 function normalizePatternProperties(
@@ -231,12 +256,9 @@ function normalizeJsonSchemaNode(schema: unknown, options: NormalizationOptions)
           return [key, normalizePatternProperties(value, options)];
         }
         if (schemaMapKeywords.has(key)) {
-          return [key, normalizeSchemaMap(value, options)];
+          return [key, normalizeSchemaMap(value, options, key === "dependencies")];
         }
-        if (key === "dependencies") {
-          return [key, normalizeSchemaDependencies(value, options)];
-        }
-        if (schemaValueKeywords.has(key) || schemaArrayKeywords.has(key)) {
+        if (schemaValueKeywords.has(key)) {
           return [key, normalizeJsonSchemaNode(value, options)];
         }
         return [key, value];

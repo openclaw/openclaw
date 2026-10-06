@@ -4,6 +4,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import {
+  comparePackageUpdateVersions,
   readInstalledPackageManifest,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
@@ -25,7 +26,11 @@ import {
   copyPluginInstallTransactionRequest,
   withPluginInstallTransactions,
 } from "./install-transaction.js";
-import { PLUGIN_INSTALL_ERROR_CODE, resolvePluginInstallDir } from "./install.js";
+import {
+  installPluginFromNpmSpec,
+  PLUGIN_INSTALL_ERROR_CODE,
+  resolvePluginInstallDir,
+} from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { ManagedPluginLifecycleError } from "./management-lifecycle-error.js";
 import type { PackageManifest } from "./manifest.js";
@@ -40,8 +45,6 @@ import {
   buildDryRunPluginUpdateOutcome,
   buildPluginUpdateVersionOutcome,
   formatClawHubInstallFailure,
-  formatGitInstallFailure,
-  formatMarketplaceInstallFailure,
   formatNpmInstallFailure,
   readClawHubTrustErrorCode,
   runPluginUpdateAttempt,
@@ -53,7 +56,6 @@ import {
 } from "./update-attempt.js";
 import { preparePluginUpdateCapabilityConsent } from "./update-capability-consent.js";
 import {
-  createTrackedNpmUpdateInstaller,
   resolveRecordedClawHubPackage,
   runPluginUpdateWithClawHubLease,
 } from "./update-claw-lifecycle.js";
@@ -67,16 +69,14 @@ import {
   reconcileDuplicateNpmPluginAliases,
   stageDuplicateNpmPluginAlias,
 } from "./update-duplicate-aliases.js";
+import { prepareNpmPluginUpdateMetadata } from "./update-npm-metadata.js";
 import {
   expectedIntegrityForNpmUpdate,
-  isBundledVersionNewer,
   isNpmMetadataCompatibleWithCurrentHost,
   isPluginInstallRecordUpdateSource,
   isTrustedSourceLinkedOfficialNpmUpdate,
   resolveClawHubUpdateSpecs,
   resolveNpmUpdateTarget,
-  resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate,
-  shouldBypassTrustedOfficialUnchangedNpmCheck,
   shouldSkipUnchangedNpmInstall,
   type PluginUpdateOutcome,
   type PluginUpdateSummary,
@@ -124,9 +124,6 @@ async function runInstalledPluginUpdate(
   let next = params.config;
   let changed = false;
   let ranNpmInstaller = false;
-  const installNpmSpecForUpdate = createTrackedNpmUpdateInstaller(() => {
-    ranNpmInstaller = true;
-  });
   const recordSkippedOutcome = (pluginId: string, message: string) => {
     outcomes.push({ pluginId, status: "skipped", message });
   };
@@ -263,6 +260,10 @@ async function runInstalledPluginUpdate(
         : record.source === "clawhub"
           ? clawhubSpecs?.installSpec
           : record.spec;
+    let npmMetadata: Parameters<typeof installPluginFromNpmSpec>[0]["npmMetadata"] =
+      npmSpecs?.npmResolution && effectiveSpec
+        ? { spec: effectiveSpec, metadata: npmSpecs.npmResolution }
+        : undefined;
     // Keep catalog integrity bound to its exact spec through probing, never to overrides or channels.
     const catalogExpectedIntegrity =
       trustedOfficialNpmInstall && effectiveSpec === trustedOfficialNpmInstall.npmSpec
@@ -301,7 +302,7 @@ async function runInstalledPluginUpdate(
       if (
         bundledSource?.version &&
         record.version &&
-        isBundledVersionNewer(bundledSource.version, record.version)
+        comparePackageUpdateVersions(bundledSource.version, record.version) > 0
       ) {
         logger.warn?.(
           `Skipping "${pluginId}" update: bundled version ${bundledSource.version} is newer than the installed ${record.source} version ${record.version}. ` +
@@ -418,41 +419,19 @@ async function runInstalledPluginUpdate(
             timeoutMs: params.timeoutMs,
           });
       if (metadataResult.ok) {
-        const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
-          {
-            metadata: metadataResult.metadata,
-            spec: effectiveSpec!,
-            trustedSourceLinkedOfficialInstall,
-          },
-        );
-        const trustedPrereleaseFallback = trustedSourceLinkedOfficialInstall
-          ? await resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate({
-              metadata: metadataResult.metadata,
-              spec: effectiveSpec!,
-              timeoutMs: params.timeoutMs,
-            })
-          : undefined;
-        const expectedIntegrityMetadata =
-          trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
-        expectedIntegrity =
-          catalogExpectedIntegrity ??
-          expectedIntegrityForNpmUpdate({
-            effectiveSpec,
-            metadata: expectedIntegrityMetadata,
-            record,
-            trustedSourceLinkedOfficialInstall,
-          });
-        if (
-          !catalogExpectedIntegrity &&
-          (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata) ||
-            (bypassTrustedOfficialUnchangedNpmCheck && !trustedPrereleaseFallback))
-        ) {
-          expectedIntegrity = undefined;
-        }
+        const prepared = await prepareNpmPluginUpdateMetadata({
+          spec: effectiveSpec!,
+          metadata: metadataResult.metadata,
+          record,
+          trustedSourceLinkedOfficialInstall,
+          catalogExpectedIntegrity,
+          timeoutMs: params.timeoutMs,
+        });
+        npmMetadata = prepared.npmMetadata;
+        expectedIntegrity = prepared.expectedIntegrity;
         if (
           currentVersion &&
-          !bypassTrustedOfficialUnchangedNpmCheck &&
-          isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
+          prepared.unchangedEligible &&
           !(await auditDeclaredOpenClawHostDependency({
             packageDir: installPath,
             packageName: pluginId,
@@ -516,6 +495,7 @@ async function runInstalledPluginUpdate(
           config: params.config,
           dryRun: params.dryRun === true,
           effectiveSpec,
+          npmMetadata,
           extensionsDir,
           timeoutMs: params.timeoutMs,
           workTimeoutMs: params.workTimeoutMs,
@@ -525,7 +505,9 @@ async function runInstalledPluginUpdate(
           clawhubSpecs,
           trustedSourceLinkedOfficialInstall,
           expectedReplacementPluginId: replacementPluginId,
-          installNpmSpecForUpdate,
+          onNpmInstall: () => {
+            ranNpmInstaller = true;
+          },
           logger,
           onIntegrityDrift: params.onIntegrityDrift,
         }),
@@ -557,7 +539,7 @@ async function runInstalledPluginUpdate(
       continue;
     }
 
-    const { result, activeClawHubInstallSpec, channelFallbackSuffix, resultSource } = attempt;
+    const { result, activeClawHubInstallSpec, channelFallbackSuffix } = attempt;
     if (!result.ok) {
       if (
         record.source === "clawhub" &&
@@ -580,16 +562,16 @@ async function runInstalledPluginUpdate(
         continue;
       }
       const phase = params.dryRun ? "check" : "update";
-      const code = resultSource === "npm" && "code" in result ? result.code : undefined;
+      const code = record.source === "npm" && "code" in result ? result.code : undefined;
       const message =
-        resultSource === "npm"
+        record.source === "npm"
           ? formatNpmInstallFailure({
               pluginId,
               spec: effectiveSpec!,
               phase,
               result,
             })
-          : resultSource === "clawhub"
+          : record.source === "clawhub"
             ? formatClawHubInstallFailure({
                 pluginId,
                 spec: activeClawHubInstallSpec ?? `clawhub:${record.clawhubPackage!}`,
@@ -597,19 +579,8 @@ async function runInstalledPluginUpdate(
                 error: result.error,
               })
             : record.source === "git"
-              ? formatGitInstallFailure({
-                  pluginId,
-                  spec: effectiveSpec!,
-                  phase,
-                  error: result.error,
-                })
-              : formatMarketplaceInstallFailure({
-                  pluginId,
-                  marketplaceSource: record.marketplaceSource!,
-                  marketplacePlugin: record.marketplacePlugin!,
-                  phase,
-                  error: result.error,
-                });
+              ? `Failed to ${phase} ${pluginId}: ${result.error} (git ${effectiveSpec}).`
+              : `Failed to ${phase} ${pluginId}: ${result.error} (marketplace plugin ${record.marketplacePlugin} from ${record.marketplaceSource}).`;
       await recordNpmFailure(message, code);
       continue;
     }
@@ -641,14 +612,14 @@ async function runInstalledPluginUpdate(
 
     const nextVersion = result.version ?? (await readInstalledPackageVersion(result.targetDir));
     let installRecord: PluginInstallRecord;
-    if (resultSource === "npm") {
+    if (record.source === "npm") {
       const npmResult = result as NpmPluginUpdateSuccess;
       installRecord = {
         source: "npm",
         spec: recordSpec,
         ...buildNpmResolutionInstallFields(npmResult.npmResolution),
       };
-    } else if (resultSource === "clawhub") {
+    } else if (record.source === "clawhub") {
       const clawhubResult = result as ClawHubPluginUpdateSuccess;
       installRecord = {
         ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),

@@ -5,24 +5,11 @@ import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-ru
 import { ServiceInspectionError } from "./service-inspection-error.js";
 import { inspectServiceProcessMembershipSync } from "./service-process-membership.js";
 
-function hasNativeLaunchdServiceLabel(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
-    (value) => normalizeOptionalString(value) === label,
-  );
-}
-
 /** Environment hints for launchd identity; inherited markers do not prove ancestry. */
 export function isCurrentProcessLaunchdServiceLabel(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return hasNativeLaunchdServiceLabel(label, env) || hasOpenClawServiceMarker(label, env);
-}
-
-function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolean {
   // Detached update/restart handoffs keep OPENCLAW_LAUNCHD_LABEL as the service
   // identity to manage while running outside the job, so the configured label
   // alone never proves membership: a restart that trusted it would schedule a
@@ -30,9 +17,12 @@ function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolea
   // Managed wrappers inject the service marker; trust it when launchd's own
   // label variables are absent or renamed by the host environment.
   return (
-    normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
-    normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
-    Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND))
+    [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME].some(
+      (value) => normalizeOptionalString(value) === label,
+    ) ||
+    (normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL) === label &&
+      normalizeOptionalString(env.OPENCLAW_SERVICE_MARKER) === "openclaw" &&
+      Boolean(normalizeOptionalString(env.OPENCLAW_SERVICE_KIND)))
   );
 }
 

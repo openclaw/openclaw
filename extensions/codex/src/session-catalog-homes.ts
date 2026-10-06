@@ -34,7 +34,7 @@ type CatalogHomeCandidate = {
 
 type CatalogGeneration = {
   config: OpenClawConfig;
-  assertCurrent(): void;
+  assertCurrent: () => void;
   pluginConfig: unknown;
   agentIds?: string[];
   agentDirs: Map<string, string>;
@@ -214,7 +214,7 @@ export function createCodexCatalogHomeResolver(params: {
       const sourceHomeId = codexCatalogHomeIdFromCanonicalPath(candidate.codexHome);
       const primary = homes.length === 0;
       homes.push({
-        assertCurrent: snapshot.assertCurrent.bind(snapshot),
+        assertCurrent: snapshot.assertCurrent,
         sourceHomeId,
         hostId: primary
           ? CODEX_LOCAL_SESSION_HOST_ID
@@ -297,7 +297,7 @@ export function createCodexCatalogHomeResolver(params: {
         env,
       });
       return {
-        assertCurrent: snapshot.assertCurrent.bind(snapshot),
+        assertCurrent: snapshot.assertCurrent,
         sourceHomeId: codexCatalogHomeIdFromCanonicalPath(codexHome),
         codexHome,
         localSessionsRoot: path.join(codexHome, "sessions"),

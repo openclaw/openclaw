@@ -38,7 +38,10 @@ export type CodexThreadPromptContext = Pick<
 
 export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
-  options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
+  options: {
+    dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeOnlyEnabled?: boolean;
+  } = {},
 ): string {
   const deferredToolNames = new Set<string>();
   let screenToolName: string | undefined;
@@ -96,6 +99,7 @@ export function buildDeveloperInstructions(
   }).join("\n");
   const delegationGuidanceAvailable =
     params.disableTools !== true &&
+    params.toolsAllow?.length !== 0 &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
@@ -105,7 +109,9 @@ export function buildDeveloperInstructions(
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
     deferredToolNames.size > 0 || nativeDelegationAvailable
-      ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+      ? options.nativeCodeModeOnlyEnabled === true
+        ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
+        : "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have."
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",

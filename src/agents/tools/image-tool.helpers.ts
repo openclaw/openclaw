@@ -54,30 +54,21 @@ function isImageReasoningFallbackSignature(value: unknown): boolean {
   return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
 }
 
-/** Detects provider responses that contain only reasoning blocks and no usable image text. */
 export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
   if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
     return false;
   }
-  let checkedBlocks = 0;
-  for (const block of message.content) {
-    checkedBlocks += 1;
-    if (checkedBlocks > MAX_IMAGE_REASONING_FALLBACK_BLOCKS) {
-      break;
-    }
+  return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
     if (!block || typeof block !== "object") {
-      continue;
+      return false;
     }
     const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
-    if (
+    return (
       record.type === "thinking" &&
       typeof record.thinking === "string" &&
       isImageReasoningFallbackSignature(record.thinkingSignature)
-    ) {
-      return true;
-    }
-  }
-  return false;
+    );
+  });
 }
 
 /** Decodes a base64 image data URL with optional decoded-size protection. */
@@ -111,7 +102,6 @@ export function decodeDataUrl(
   return { buffer, mimeType, kind: "image" };
 }
 
-/** Extracts assistant text or throws a provider/model-specific image failure. */
 export function coerceImageAssistantText(params: {
   message: AssistantMessage;
   provider: string;
@@ -133,7 +123,6 @@ export function coerceImageAssistantText(params: {
   throw new Error(`Image model returned no text (${params.provider}/${params.model}).`);
 }
 
-/** Reads imageModel defaults from config into the shared tool model config shape. */
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);
 }
@@ -151,18 +140,15 @@ function modelIdMatchesProviderlessRef(params: {
   modelId: string;
   ref: string;
 }): boolean {
-  const candidates = new Set([params.modelId]);
+  const candidates = [params.modelId];
   const slash = params.modelId.indexOf("/");
   if (slash > 0 && normalizeProviderId(params.modelId.slice(0, slash)) === params.provider) {
-    candidates.add(params.modelId.slice(slash + 1));
+    candidates.push(params.modelId.slice(slash + 1));
   }
   const normalizedRef = normalizeLowercaseStringOrEmpty(params.ref);
-  for (const candidate of candidates) {
-    if (candidate === params.ref || normalizeLowercaseStringOrEmpty(candidate) === normalizedRef) {
-      return true;
-    }
-  }
-  return false;
+  return candidates.some(
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedRef,
+  );
 }
 
 function findConfiguredImageModelMatches(params: { cfg?: OpenClawConfig; ref: string }): string[] {
@@ -214,7 +200,6 @@ function resolveProviderlessConfiguredImageModelRef(params: {
   );
 }
 
-/** Resolves providerless configured image model refs against configured provider models. */
 export function resolveConfiguredImageModelRefs(params: {
   cfg?: OpenClawConfig;
   imageModelConfig: ImageModelConfig;
@@ -239,7 +224,6 @@ export function resolveConfiguredImageModelRefs(params: {
   };
 }
 
-/** Returns the configured vision-capable model for a provider, if present. */
 export function resolveProviderVisionModelFromConfig(params: {
   cfg?: OpenClawConfig;
   provider: string;

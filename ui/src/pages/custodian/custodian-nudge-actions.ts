@@ -1,6 +1,6 @@
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import {
-  reconcileCustodianEventNudge,
+  classifyCustodianHealthNudge,
   shouldConsumeNudge,
   type CustodianEventNudge,
   type CustodianSendOutcome,
@@ -11,7 +11,6 @@ interface CustodianNudgeOwner {
   eventNudge: CustodianEventNudge | null;
   eventNudgePending: CustodianEventNudge | null;
   eventNudgeClosed: boolean;
-  channelOnboardingNudgeClosed: boolean;
   readonly sensitive: boolean;
   readonly activeVariant: CustodianSessionVariant;
   hasUnresolvedQuestion(): boolean;
@@ -23,11 +22,9 @@ export function receiveEventNudge(owner: CustodianNudgeOwner, event: GatewayEven
   if (owner.activeVariant !== "caretaker" || owner.eventNudgeClosed) {
     return;
   }
-  [owner.eventNudge, owner.eventNudgePending] = reconcileCustodianEventNudge(
-    owner.eventNudge,
-    owner.eventNudgePending,
-    event,
-  );
+  if (event.event === "health") {
+    owner.eventNudge = classifyCustodianHealthNudge(event.payload);
+  }
   owner.requestNudgeUpdate();
 }
 
@@ -50,24 +47,4 @@ export async function sendEventNudge(owner: CustodianNudgeOwner): Promise<void> 
 export function dismissEventNudge(owner: CustodianNudgeOwner): void {
   [owner.eventNudge, owner.eventNudgeClosed] = [null, true];
   owner.requestNudgeUpdate();
-}
-
-export function dismissChannelOnboardingNudge(
-  owner: CustodianNudgeOwner,
-  replace: () => void,
-): void {
-  owner.channelOnboardingNudgeClosed = true;
-  owner.requestNudgeUpdate();
-  replace();
-}
-
-export function openChannelsFromOnboarding(
-  owner: CustodianNudgeOwner,
-  revokeNavigationAuthority: () => void,
-  navigate: () => void,
-): void {
-  owner.channelOnboardingNudgeClosed = true;
-  revokeNavigationAuthority();
-  owner.requestNudgeUpdate();
-  navigate();
 }

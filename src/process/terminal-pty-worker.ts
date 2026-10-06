@@ -1,10 +1,11 @@
 import { decodeTerminalPtyControl, type TerminalPtyEvent } from "./terminal-pty-protocol.js";
-import { spawnTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
+import { prepareTerminalPty, spawnTerminalPty, type TerminalPtyHandle } from "./terminal-pty.js";
 
 let pty: TerminalPtyHandle | undefined;
 let starting = false;
 let parentLost = false;
 let finished = false;
+let authorizeLaunch: (() => void) | undefined;
 
 function report(message: TerminalPtyEvent, done?: () => void): void {
   if (!process.connected) {
@@ -45,7 +46,7 @@ process.on("message", (raw: unknown) => {
     finish({ type: "error", message: "Invalid terminal host message" });
     return;
   }
-  if (message.type === "start") {
+  if (message.type === "start" || message.type === "prepare") {
     if (starting || parentLost) {
       return;
     }
@@ -57,7 +58,26 @@ process.on("message", (raw: unknown) => {
       });
       return;
     }
-    void spawnTerminalPty(message.params).then(
+    const startup =
+      message.type === "prepare"
+        ? prepareTerminalPty(message.params).then(
+            (launch) =>
+              new Promise<TerminalPtyHandle>((resolve, reject) => {
+                authorizeLaunch = () => {
+                  try {
+                    if (parentLost || finished) {
+                      throw new Error("Terminal host retired before launch");
+                    }
+                    resolve(launch());
+                  } catch (error) {
+                    reject(error instanceof Error ? error : new Error(String(error)));
+                  }
+                };
+                report({ type: "prepared" });
+              }),
+          )
+        : spawnTerminalPty(message.params);
+    void startup.then(
       (handle) => {
         pty = handle;
         pty.onData((data) => {
@@ -75,6 +95,10 @@ process.on("message", (raw: unknown) => {
       (error: unknown) =>
         finish({ type: "error", message: error instanceof Error ? error.message : String(error) }),
     );
+  } else if (message.type === "launch") {
+    const launch = authorizeLaunch;
+    authorizeLaunch = undefined;
+    launch?.();
   } else if (message.type === "input") {
     pty?.write("data" in message ? message.data : Buffer.from(message.dataBase64, "base64"));
   } else if (message.type === "resize") {

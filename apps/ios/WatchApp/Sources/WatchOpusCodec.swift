@@ -37,17 +37,7 @@ final class WatchOpusCodec {
         }
         let output = AVAudioCompressedBuffer(
             format: self.opusFormat, packetCapacity: 1, maximumPacketSize: self.encoder.maximumOutputPacketSize)
-        var supplied = false
-        var error: NSError?
-        let result = self.encoder.convert(to: output, error: &error) { _, status in
-            guard !supplied else { status.pointee = .noDataNow
-                return nil
-            }
-            supplied = true
-            status.pointee = .haveData
-            return pcm
-        }
-        if let error { throw error }
+        let result = try self.encoder.convert(pcm, to: output)
         guard result != .error
         else { throw WatchRealtimeMediaError.unavailable(String(localized: "Voice encoding failed.")) }
         guard output.packetCount == 1 else { return nil }
@@ -69,10 +59,20 @@ final class WatchOpusCodec {
         guard let output = AVAudioPCMBuffer(pcmFormat: self.pcmFormat, frameCapacity: 5760) else {
             throw WatchRealtimeMediaError.unavailable(String(localized: "Voice playback could not allocate audio."))
         }
+        let result = try self.decoder.convert(input, to: output)
+        guard result != .error
+        else { throw WatchRealtimeMediaError.unavailable(String(localized: "Voice decoding failed.")) }
+        return output
+    }
+}
+
+extension AVAudioConverter {
+    func convert(_ input: AVAudioBuffer, to output: AVAudioBuffer) throws -> AVAudioConverterOutputStatus {
         var supplied = false
         var error: NSError?
-        let result = self.decoder.convert(to: output, error: &error) { _, status in
-            guard !supplied else { status.pointee = .noDataNow
+        let result = self.convert(to: output, error: &error) { _, status in
+            guard !supplied else {
+                status.pointee = .noDataNow
                 return nil
             }
             supplied = true
@@ -80,8 +80,6 @@ final class WatchOpusCodec {
             return input
         }
         if let error { throw error }
-        guard result != .error
-        else { throw WatchRealtimeMediaError.unavailable(String(localized: "Voice decoding failed.")) }
-        return output
+        return result
     }
 }

@@ -33,19 +33,11 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
+  for (const message of messages) {
     const content = message.content;
     if (typeof content === "string") {
       items.push({
@@ -105,9 +97,7 @@ export function convertAnthropicMessagesToResponsesInput(params: {
       items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
     // A tool-result-only turn has no user message: it continues the active turn.
-    for (const item of [...toolUseItems, ...toolResultItems]) {
-      items.push(item);
-    }
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }
@@ -120,24 +110,11 @@ type ExtractedAssistantOutput = {
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
 
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
 export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
-  const adaptedIds = new Map<string, string>();
-  const adaptId = (id: string) => {
-    if (isNativeAnthropicToolUseId(id)) {
-      return id;
-    }
-    const existing = adaptedIds.get(id);
-    if (existing) {
-      return existing;
-    }
-    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-    adaptedIds.set(id, adapted);
-    return adapted;
-  };
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
   const adaptItem = (item: Record<string, unknown>) => {
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
@@ -241,6 +218,18 @@ export function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMessageResponse>) {
+  return {
+    type: "message_start",
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: message.usage.input_tokens, output_tokens: 0 },
+    },
+  };
+}
+
 export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
   return {
     type: "error",
@@ -273,24 +262,13 @@ export function buildAnthropicThinkingErrorResponse(params: {
 export function buildAnthropicThinkingErrorStreamEvents(params: {
   model: string;
 }): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
   return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
+    buildAnthropicMessageStart(
+      buildAnthropicMessageResponse({
+        model: params.model,
+        extracted: { text: "", toolCalls: [] },
+      }),
+    ),
     {
       type: "content_block_start",
       index: 0,
@@ -342,20 +320,7 @@ export function buildAnthropicMessageStreamEvents(
   message: ReturnType<typeof buildAnthropicMessageResponse>,
   failure?: QaMockProviderFailure,
 ): AnthropicStreamEvent[] {
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        ...message,
-        content: [],
-        stop_reason: null,
-        usage: {
-          input_tokens: message.usage.input_tokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
+  const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
   for (const [index, block] of message.content.entries()) {
     events.push({
       type: "content_block_start",

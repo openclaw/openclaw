@@ -1,7 +1,11 @@
 // Covers channel approval handler bootstrap lifecycle.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout, createDeferred } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createRuntimeChannel } from "../plugins/runtime/runtime-channel.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { startChannelApprovalHandlerBootstrap } from "./approval-handler-bootstrap.js";
 import { createApprovalNativeRuntimeAdapterStubs } from "./approval-handler.test-helpers.js";
 import { ExecApprovalChannelRuntimeTerminalStartError } from "./exec-approval-channel-runtime.js";
@@ -21,9 +25,17 @@ vi.mock("./approval-handler-runtime.js", async () => {
 });
 
 describe("startChannelApprovalHandlerBootstrap", () => {
+  let clock: ReturnType<typeof createGatewaySchedulerClock>;
+  let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+
   beforeEach(() => {
     createChannelApprovalHandlerFromCapability.mockReset();
-    vi.useRealTimers();
+    clock = createGatewaySchedulerClock();
+    scheduler = createTestGatewayScheduler(clock.clock);
+  });
+
+  afterEach(async () => {
+    await scheduler.stop();
   });
 
   const flushTransitions = async () => {
@@ -57,6 +69,7 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     logger?: unknown;
   }) =>
     startChannelApprovalHandlerBootstrap({
+      scheduler,
       plugin: createApprovalPlugin(),
       cfg: {} as never,
       accountId: "default",
@@ -102,13 +115,8 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     createChannelApprovalHandlerFromCapability.mockReturnValue(new Promise(() => {}));
     registerApprovalContext(channelRuntime);
 
-    const result = await withTestTimeout(
-      startTestBootstrap({ channelRuntime }).then((cleanup) => ({ cleanup })),
-      50,
-      "timed out waiting for approval bootstrap",
-    );
-
-    await result.cleanup();
+    const cleanup = await startTestBootstrap({ channelRuntime });
+    await cleanup();
   });
 
   it("does not start a handler after the runtime context is unregistered mid-boot", async () => {
@@ -175,12 +183,13 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
-  it("retries registered-context startup failures until the handler starts", async () => {
-    vi.useFakeTimers();
+  it("retries a registered-context startup failure once after sleep", async () => {
     const channelRuntime = createRuntimeChannel();
     const start = vi.fn().mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
     const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation(() => failed.resolve());
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -188,11 +197,12 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const cleanup = await startTestBootstrap({ channelRuntime, logger });
 
     registerApprovalContext(channelRuntime);
-    await flushTransitions();
+    await failed.promise;
 
     expect(start).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flushTransitions();
+    clock.setTime(60_000);
+    await clock.wake();
+    await clock.wake();
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
     expect(start).toHaveBeenCalledTimes(2);
@@ -205,12 +215,13 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   });
 
   it("defers retryable gateway readiness startup failures without terminal error logs", async () => {
-    vi.useFakeTimers();
     const channelRuntime = createRuntimeChannel();
     const readinessError = new Error("gateway event loop readiness timeout");
     const start = vi.fn().mockRejectedValueOnce(readinessError).mockResolvedValueOnce(undefined);
     const stop = vi.fn().mockResolvedValue(undefined);
     const logger = createLogger();
+    const deferred = createDeferred();
+    logger.warn.mockImplementation(() => deferred.resolve());
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start, stop })
       .mockResolvedValueOnce({ start, stop });
@@ -218,18 +229,16 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const cleanup = await startTestBootstrap({ channelRuntime, logger });
 
     registerApprovalContext(channelRuntime);
-    await flushTransitions();
+    await deferred.promise;
 
     expect(start).toHaveBeenCalledTimes(1);
-    await flushTransitions();
     expect(logger.error).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledOnce();
     expect(logger.warn).toHaveBeenCalledWith(
       "native approval handler deferred until gateway readiness recovers: gateway readiness unavailable before approval handler start",
     );
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flushTransitions();
+    await clock.advanceBy(1_000);
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(2);
     expect(start).toHaveBeenCalledTimes(2);
@@ -238,7 +247,6 @@ describe("startChannelApprovalHandlerBootstrap", () => {
   });
 
   it("does not retry terminal native approval startup failures", async () => {
-    vi.useFakeTimers();
     const channelRuntime = createRuntimeChannel();
     const terminalError = new ExecApprovalChannelRuntimeTerminalStartError({
       code: 1008,
@@ -248,14 +256,15 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     const start = vi.fn().mockRejectedValue(terminalError);
     const stop = vi.fn().mockResolvedValue(undefined);
     const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation(() => failed.resolve());
     createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
 
     const cleanup = await startTestBootstrap({ channelRuntime, logger });
 
     registerApprovalContext(channelRuntime);
-    await flushTransitions();
-    await vi.advanceTimersByTimeAsync(3_000);
-    await flushTransitions();
+    await failed.promise;
+    await clock.advanceBy(3_000);
 
     expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
     expect(start).toHaveBeenCalledTimes(1);
@@ -267,30 +276,99 @@ describe("startChannelApprovalHandlerBootstrap", () => {
     await cleanup();
   });
 
+  it.each(["unregister", "cleanup"] as const)("cancels a pending retry on %s", async (action) => {
+    const channelRuntime = createRuntimeChannel();
+    const start = vi.fn().mockRejectedValue(new Error("boom"));
+    const stop = vi.fn().mockResolvedValue(undefined);
+    const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation(() => failed.resolve());
+    createChannelApprovalHandlerFromCapability.mockResolvedValue({ start, stop });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+    const lease = registerApprovalContext(channelRuntime);
+    await failed.promise;
+
+    if (action === "unregister") {
+      lease.dispose();
+    } else {
+      await cleanup();
+    }
+    await clock.advanceBy(1_000);
+
+    expect(createChannelApprovalHandlerFromCapability).toHaveBeenCalledTimes(1);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    await cleanup();
+    lease.dispose();
+  });
+
+  it("joins an in-flight retry on scheduler shutdown without starting its retired handler", async () => {
+    const channelRuntime = createRuntimeChannel();
+    const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation(() => failed.resolve());
+    const retryStarted = createDeferred();
+    const runtime = createDeferred<{
+      start: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+    }>();
+    createChannelApprovalHandlerFromCapability
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockImplementationOnce(() => {
+        retryStarted.resolve();
+        return runtime.promise;
+      });
+
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
+    const lease = registerApprovalContext(channelRuntime);
+    await failed.promise;
+    const retry = clock.advanceBy(1_000);
+    await retryStarted.promise;
+
+    let stopped = false;
+    const stopping = scheduler.stop().then(() => {
+      stopped = true;
+    });
+    await cleanup();
+    expect(stopped).toBe(false);
+
+    const start = vi.fn().mockResolvedValue(undefined);
+    const stop = vi.fn().mockResolvedValue(undefined);
+    runtime.resolve({ start, stop });
+    await Promise.all([retry, stopping]);
+
+    expect(stopped).toBe(true);
+    expect(start).not.toHaveBeenCalled();
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(scheduler.nextWakeAtMs).toBeNull();
+    lease.dispose();
+  });
+
   it("does not let a stale retry stop a newer active handler", async () => {
-    vi.useFakeTimers();
     const channelRuntime = createRuntimeChannel();
     const firstStart = vi.fn().mockRejectedValueOnce(new Error("boom"));
     const firstStop = vi.fn().mockResolvedValue(undefined);
     const secondStart = vi.fn().mockResolvedValue(undefined);
     const secondStop = vi.fn().mockResolvedValue(undefined);
+    const logger = createLogger();
+    const failed = createDeferred();
+    logger.error.mockImplementation(() => failed.resolve());
     createChannelApprovalHandlerFromCapability
       .mockResolvedValueOnce({ start: firstStart, stop: firstStop })
       .mockResolvedValueOnce({ start: secondStart, stop: secondStop })
       .mockResolvedValueOnce({ start: secondStart, stop: secondStop });
 
-    const cleanup = await startTestBootstrap({ channelRuntime });
+    const cleanup = await startTestBootstrap({ channelRuntime, logger });
 
     registerApprovalContext(channelRuntime, { ok: "first" });
-    await flushTransitions();
+    await failed.promise;
     expect(firstStart).toHaveBeenCalledTimes(1);
 
     registerApprovalContext(channelRuntime, { ok: "second" });
     await flushTransitions();
     expect(secondStart).toHaveBeenCalledTimes(1);
 
-    await vi.advanceTimersByTimeAsync(1_000);
-    await flushTransitions();
+    await clock.advanceBy(1_000);
 
     expect(firstStop).toHaveBeenCalledTimes(1);
     expect(secondStart).toHaveBeenCalledTimes(1);

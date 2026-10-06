@@ -1,6 +1,7 @@
 import type { Chat, Message } from "grammy/types";
-import { firstDefined } from "openclaw/plugin-sdk/allow-from";
+import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type {
   OpenClawConfig,
   DmPolicy,
@@ -17,12 +18,10 @@ import {
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import {
-  isSenderAllowed,
   normalizeAllowFrom,
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
-import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
 import {
@@ -44,6 +43,7 @@ import {
 import type { TelegramGetChat } from "./types.js";
 
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
+export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
 export type {
   TelegramForwardedContext,
@@ -77,19 +77,11 @@ function cacheTelegramForumFlag(chatId: string | number, isForum: boolean, nowMs
     telegramForumFlagByChatId.delete(cacheKey);
     return;
   }
-  if (
-    !telegramForumFlagByChatId.has(cacheKey) &&
-    telegramForumFlagByChatId.size >= TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS
-  ) {
-    const oldestKey = telegramForumFlagByChatId.keys().next().value;
-    if (oldestKey !== undefined) {
-      telegramForumFlagByChatId.delete(oldestKey);
-    }
-  }
   telegramForumFlagByChatId.set(cacheKey, {
     expiresAtMs,
     isForum,
   });
+  pruneMapToMaxSize(telegramForumFlagByChatId, TELEGRAM_FORUM_FLAG_CACHE_MAX_CHATS);
 }
 
 export function getCachedTelegramForumFlag(
@@ -329,11 +321,7 @@ async function isTelegramDmAllowedByConfiguredAllowFrom(params: {
   });
   const normalizedAllowFrom = normalizeAllowFrom(expandedAllowFrom);
   return (
-    normalizedAllowFrom.hasEntries &&
-    isSenderAllowed({
-      allow: normalizedAllowFrom,
-      senderId: params.senderId,
-    })
+    normalizedAllowFrom.hasEntries && isSenderIdAllowed(normalizedAllowFrom, params.senderId, true)
   );
 }
 
@@ -541,10 +529,6 @@ export function buildGroupLabel(msg: Message, chatId: number | string, messageTh
     return `${title} id:${chatId}${topicSuffix}`;
   }
   return `group:${chatId}${topicSuffix}`;
-}
-
-export function resolveTelegramReplyId(raw?: string): number | undefined {
-  return normalizeTelegramReplyToMessageId(raw);
 }
 
 export type TelegramReplyTarget = {

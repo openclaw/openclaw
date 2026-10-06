@@ -3,6 +3,7 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
   isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
@@ -32,7 +33,6 @@ import {
   normalizeContentType,
   resolveMSTeamsMediaKind,
   resolveAttachmentFetchPolicy,
-  resolveRequestUrl,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {
@@ -244,7 +244,6 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -395,7 +394,6 @@ export async function downloadMSTeamsGraphMedia(params: {
             url: requestUrl,
             policy,
             fetchFn,
-            fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
             requestInit: {
               ...init,
               headers,
@@ -449,7 +447,6 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       fetchFn: params.fetchFn,
-      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       deadline: params.deadline,
       preserveFilenames: params.preserveFilenames,

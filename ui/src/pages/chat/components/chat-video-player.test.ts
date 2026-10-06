@@ -140,7 +140,11 @@ describe("ChatVideoPlayer", () => {
     expect(player.querySelector("video")).toBe(video);
     expect(video?.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
     const pause = vi.spyOn(video!, "pause").mockImplementation(() => {});
-    player.querySelector<HTMLButtonElement>(".chat-assistant-attachment-card__expand")?.click();
+    const expand = player.querySelector<HTMLButtonElement>(
+      ".chat-assistant-attachment-card__expand",
+    )!;
+    onExpand.mockImplementation(() => expect(document.activeElement).toBe(expand));
+    expand.click();
     expect(pause).toHaveBeenCalledOnce();
     expect(onExpand).toHaveBeenCalledWith(
       "/__openclaw__/assistant-media?source=clip.avi&mediaTicket=ticket&playback=1",

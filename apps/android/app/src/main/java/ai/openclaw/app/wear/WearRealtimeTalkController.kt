@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
-import ai.openclaw.app.node.asObjectOrNull
 import ai.openclaw.app.node.asStringOrNull
+import ai.openclaw.app.node.parseJsonParamsObject
 import ai.openclaw.app.voice.RealtimeAgentCoordinator
 import ai.openclaw.app.voice.RealtimeAgentSession
 import ai.openclaw.app.voice.requestPhoneRealtimeSessionWithLanguageFallback
@@ -31,7 +31,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -41,13 +40,9 @@ import kotlinx.serialization.json.put
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
-private data class WearRealtimeOutputMessage(
-  val type: WearRealtimeAudioFrameType,
-  val payload: ByteArray,
-)
-
 private class WearRealtimeOutputQueue(
-  val messages: Channel<WearRealtimeOutputMessage>,
+  // A null entry clears output; every other entry is PCM owned by this queue.
+  val messages: Channel<ByteArray?>,
   var retainedAudioBytes: Int = 0,
 )
 
@@ -62,7 +57,6 @@ internal fun chunkWearRealtimeOutput(
 ): List<ByteArray> {
   require(maxFrameBytes > 0 && maxFrameBytes % PCM_16_BYTES == 0)
   require(payload.size % PCM_16_BYTES == 0)
-  if (payload.isEmpty()) return emptyList()
   return buildList {
     var offset = 0
     while (offset < payload.size) {
@@ -109,7 +103,6 @@ internal class WearRealtimeTalkController(
   private val onSnapshot: (WearRealtimeTalkSnapshot) -> Unit = {},
   private val onForceCloseWatchChannel: (WearRealtimeAttemptOwner) -> Unit = {},
 ) {
-  private val json = Json { ignoreUnknownKeys = true }
   private val lifecycleMutex = Mutex()
   private val lifecycleStateLock = Any()
   private val lifecycleGeneration = AtomicLong()
@@ -202,16 +195,26 @@ internal class WearRealtimeTalkController(
 
       val payload =
         try {
-          requestRealtimeSession(sessionKey, language)
+          requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
+            requestGateway(
+              "talk.session.create",
+              buildJsonObject {
+                put("sessionKey", JsonPrimitive(sessionKey))
+                put("mode", JsonPrimitive("realtime"))
+                put("transport", JsonPrimitive("gateway-relay"))
+                put("brain", JsonPrimitive("agent-consult"))
+                if (requestedLanguage != null) put("language", JsonPrimitive(requestedLanguage))
+              }.toString(),
+              SESSION_CREATE_TIMEOUT_MILLIS,
+            )
+          }
         } catch (err: Throwable) {
           synchronized(lifecycleStateLock) {
             if (!startIsStale()) fail(err.message ?: "Unable to start Real-Time Talk", expectedOwner = owner)
           }
           return@withLock false
         }
-      val root =
-        runCatching { json.parseToJsonElement(payload).asObjectOrNull() }
-          .getOrNull()
+      val root = parseJsonParamsObject(payload)
       val createdSessionId =
         root
           ?.get("relaySessionId")
@@ -260,69 +263,26 @@ internal class WearRealtimeTalkController(
       true
     }
 
-  private suspend fun requestRealtimeSession(
-    sessionKey: String,
-    language: String?,
-  ): String =
-    requestPhoneRealtimeSessionWithLanguageFallback(language) { requestedLanguage ->
-      requestGateway(
-        "talk.session.create",
-        buildSessionCreateParams(sessionKey, requestedLanguage).toString(),
-        SESSION_CREATE_TIMEOUT_MILLIS,
-      )
-    }
-
-  private fun buildSessionCreateParams(
-    sessionKey: String,
-    language: String?,
-  ) = buildJsonObject {
-    put("sessionKey", JsonPrimitive(sessionKey))
-    put("mode", JsonPrimitive("realtime"))
-    put("transport", JsonPrimitive("gateway-relay"))
-    put("brain", JsonPrimitive("agent-consult"))
-    if (language != null) {
-      put("language", JsonPrimitive(language))
-    }
-  }
-
   suspend fun stop(
     nodeId: String? = null,
     attemptId: String? = null,
   ): Boolean =
     lifecycleMutex.withLock {
-      var accepted = false
       val closingSession =
         synchronized(lifecycleStateLock) {
           if (nodeId != null && attemptId != null) rememberCanceledAttemptLocked(nodeId, attemptId)
           val owner = activeOwner
           val identityMatches =
-            when {
-              owner != null -> {
-                (nodeId == null || owner.nodeId == nodeId) &&
-                  (attemptId == null || owner.attemptId == attemptId)
-              }
-
-              nodeId != null && attemptId != null -> {
-                true
-              }
-
-              nodeId == null && attemptId == null -> {
-                true
-              }
-
-              else -> {
-                false
-              }
+            if (owner != null) {
+              (nodeId == null || owner.nodeId == nodeId) &&
+                (attemptId == null || owner.attemptId == attemptId)
+            } else {
+              (nodeId == null) == (attemptId == null)
             }
-          if (!identityMatches) {
-            null
-          } else {
-            accepted = true
-            sessionId.also { resetLocked() }
-          }
+          if (!identityMatches) return@withLock false
+          sessionId.also { resetLocked() }
         }
-      if (!accepted) return@withLock false
-      if (!closingSession.isNullOrBlank()) {
+      if (closingSession != null) {
         runCatching { closeGatewaySession(closingSession) }
       }
       true
@@ -335,7 +295,7 @@ internal class WearRealtimeTalkController(
           if (activeOwner != owner) return@withLock false
           sessionId.also { resetLocked() }
         }
-      if (!closingSession.isNullOrBlank()) {
+      if (closingSession != null) {
         scope.launch { runCatching { closeGatewaySession(closingSession) } }
       }
       true
@@ -398,11 +358,7 @@ internal class WearRealtimeTalkController(
     event: String,
     payloadJson: String?,
   ) {
-    if (payloadJson.isNullOrBlank()) return
-    val obj =
-      runCatching { json.parseToJsonElement(payloadJson).asObjectOrNull() }
-        .getOrNull()
-        ?: return
+    val obj = parseJsonParamsObject(payloadJson) ?: return
     if (event == "chat") {
       handleChatEvent(obj)
       return
@@ -450,7 +406,7 @@ internal class WearRealtimeTalkController(
           fail("Invalid Watch audio frame", expectedOwner = owner, expectedSessionId = currentSessionId)
           return
         }
-        if (!enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.OUTPUT_PCM, bytes)) {
+        if (!enqueueOutput(owner, currentSessionId, bytes)) {
           return
         }
         updateActiveStateIfCurrent(
@@ -462,7 +418,7 @@ internal class WearRealtimeTalkController(
       }
 
       "clear" -> {
-        enqueueOutput(owner, currentSessionId, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
+        enqueueOutput(owner, currentSessionId, null)
       }
 
       "mark" -> {
@@ -477,8 +433,6 @@ internal class WearRealtimeTalkController(
       "toolCall" -> {
         handleToolCallEvent(owner, currentSessionId, obj)
       }
-
-      "toolResult" -> {}
 
       "error" -> {
         fail(
@@ -579,7 +533,7 @@ internal class WearRealtimeTalkController(
     owner: WearRealtimeAttemptOwner,
     activeSessionId: String,
   ) {
-    val messages = Channel<WearRealtimeOutputMessage>(capacity = OUTPUT_QUEUE_CAPACITY)
+    val messages = Channel<ByteArray?>(capacity = OUTPUT_QUEUE_CAPACITY)
     val queue = WearRealtimeOutputQueue(messages)
     synchronized(outputQueueLock) { outputQueue.also { outputQueue = queue } }
       ?.messages
@@ -587,42 +541,34 @@ internal class WearRealtimeTalkController(
     outputJob?.cancel()
     outputJob =
       scope.launch {
-        for (message in messages) {
+        for (audio in messages) {
           var delivered = false
           try {
             if (!isCurrent(owner, activeSessionId)) continue
-            when (message.type) {
-              WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-                delivered = true
-                for (chunk in chunkWearRealtimeOutput(message.payload)) {
-                  if (!isCurrentOutput(owner, activeSessionId)) {
-                    delivered = false
-                    break
-                  }
-                  sendWatchFrame(owner, message.type, chunk)
-                  if (!isCurrentOutput(owner, activeSessionId)) {
-                    delivered = false
-                    break
-                  }
-                  playbackEndsAtMillis =
-                    advanceWearRealtimePlaybackDeadline(
-                      currentEndsAtMillis = playbackEndsAtMillis,
-                      deliveredAtMillis = SystemClock.elapsedRealtime(),
-                      audioByteCount = chunk.size,
-                    )
-                }
+            if (audio == null) {
+              sendWatchFrame(owner, WearRealtimeAudioFrameType.CLEAR_OUTPUT, byteArrayOf())
+              delivered = isCurrentOutput(owner, activeSessionId)
+            } else {
+              delivered = true
+              for (chunk in chunkWearRealtimeOutput(audio)) {
                 if (!isCurrentOutput(owner, activeSessionId)) {
                   delivered = false
+                  break
                 }
+                sendWatchFrame(owner, WearRealtimeAudioFrameType.OUTPUT_PCM, chunk)
+                if (!isCurrentOutput(owner, activeSessionId)) {
+                  delivered = false
+                  break
+                }
+                playbackEndsAtMillis =
+                  advanceWearRealtimePlaybackDeadline(
+                    currentEndsAtMillis = playbackEndsAtMillis,
+                    deliveredAtMillis = SystemClock.elapsedRealtime(),
+                    audioByteCount = chunk.size,
+                  )
               }
-
-              WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-                sendWatchFrame(owner, message.type, message.payload)
-                delivered = isCurrentOutput(owner, activeSessionId)
-              }
-
-              WearRealtimeAudioFrameType.INPUT_PCM -> {
-                error("Phone cannot emit Watch input audio")
+              if (!isCurrentOutput(owner, activeSessionId)) {
+                delivered = false
               }
             }
           } catch (err: Throwable) {
@@ -634,33 +580,25 @@ internal class WearRealtimeTalkController(
             )
             break
           } finally {
-            if (message.type == WearRealtimeAudioFrameType.OUTPUT_PCM) {
+            if (audio != null) {
               synchronized(outputQueueLock) {
                 queue.retainedAudioBytes =
-                  (queue.retainedAudioBytes - message.payload.size).coerceAtLeast(0)
+                  (queue.retainedAudioBytes - audio.size).coerceAtLeast(0)
               }
             }
           }
           if (!delivered) continue
-          when (message.type) {
-            WearRealtimeAudioFrameType.OUTPUT_PCM -> {
-              schedulePlaybackIdle(owner, activeSessionId)
-            }
-
-            WearRealtimeAudioFrameType.CLEAR_OUTPUT -> {
-              playbackEndsAtMillis = 0L
-              playbackIdleJob?.cancel()
-              updateActiveStateIfCurrent(
-                owner = owner,
-                sessionId = activeSessionId,
-                status = WearRealtimeTalkStatus.LISTENING,
-                statusText = "Listening",
-              )
-            }
-
-            WearRealtimeAudioFrameType.INPUT_PCM -> {
-              error("Phone cannot emit Watch input audio")
-            }
+          if (audio != null) {
+            schedulePlaybackIdle(owner, activeSessionId)
+          } else {
+            playbackEndsAtMillis = 0L
+            playbackIdleJob?.cancel()
+            updateActiveStateIfCurrent(
+              owner = owner,
+              sessionId = activeSessionId,
+              status = WearRealtimeTalkStatus.LISTENING,
+              statusText = "Listening",
+            )
           }
         }
       }
@@ -677,19 +615,18 @@ internal class WearRealtimeTalkController(
   private fun enqueueOutput(
     owner: WearRealtimeAttemptOwner,
     activeSessionId: String,
-    type: WearRealtimeAudioFrameType,
-    payload: ByteArray,
+    audio: ByteArray?,
   ): Boolean {
     val accepted =
       synchronized(outputQueueLock) {
         if (!isCurrent(owner, activeSessionId)) return@synchronized false
         val queue = outputQueue ?: return@synchronized false
-        val audioBytes = payload.size.takeIf { type == WearRealtimeAudioFrameType.OUTPUT_PCM } ?: 0
+        val audioBytes = audio?.size ?: 0
         if (audioBytes > OUTPUT_QUEUE_BYTE_CAPACITY - queue.retainedAudioBytes) {
           return@synchronized false
         }
         queue.retainedAudioBytes += audioBytes
-        queue.messages.trySend(WearRealtimeOutputMessage(type, payload)).isSuccess.also { sent ->
+        queue.messages.trySend(audio).isSuccess.also { sent ->
           if (!sent) queue.retainedAudioBytes -= audioBytes
         }
       }
@@ -699,9 +636,8 @@ internal class WearRealtimeTalkController(
         expectedOwner = owner,
         expectedSessionId = activeSessionId,
       )
-      return false
     }
-    return true
+    return accepted
   }
 
   private fun startAppendLoop(
@@ -759,14 +695,12 @@ internal class WearRealtimeTalkController(
         while (SystemClock.elapsedRealtime() < playbackEndsAtMillis) {
           delay(20L)
         }
-        if (isCurrent(owner, activeSessionId)) {
-          updateActiveStateIfCurrent(
-            owner = owner,
-            sessionId = activeSessionId,
-            status = WearRealtimeTalkStatus.LISTENING,
-            statusText = "Listening",
-          )
-        }
+        updateActiveStateIfCurrent(
+          owner = owner,
+          sessionId = activeSessionId,
+          status = WearRealtimeTalkStatus.LISTENING,
+          statusText = "Listening",
+        )
       }
   }
 
@@ -891,9 +825,8 @@ internal class WearRealtimeTalkController(
         if (expectedOwner != null && activeOwner != expectedOwner) return
         if (expectedSessionId != null && sessionId != expectedSessionId) return
         Log.w(TAG, message)
-        val currentSession = sessionId
         val currentOwner = activeOwner
-        closingSession = currentSession
+        closingSession = sessionId
         realtimeAgentCoordinator.resetTransport()
         setSnapshot(
           _snapshot.value.copy(
@@ -909,7 +842,7 @@ internal class WearRealtimeTalkController(
         conversation = emptyList()
         currentOwner
       }
-    closingSession?.takeIf(String::isNotBlank)?.let { session ->
+    closingSession?.let { session ->
       scope.launch { runCatching { closeGatewaySession(session) } }
     }
     closingOwner?.let(onForceCloseWatchChannel)

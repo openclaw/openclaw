@@ -1,4 +1,3 @@
-// Maintains plugin manifest lookup tables for discovery and runtime planning.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -49,6 +48,7 @@ import {
 } from "./plugin-cache-files.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { normalizePluginPolicyId } from "./plugin-policy-id.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
@@ -68,16 +68,10 @@ function rejectCaseFoldedIdCollisions(
   records: readonly PluginManifestRecord[],
   diagnostics: PluginDiagnostic[],
 ): PluginManifestRecord[] {
-  const recordsByPolicyId = new Map<string, PluginManifestRecord[]>();
-  for (const record of records) {
-    const policyId = normalizePluginPolicyId(record.id);
-    const matches = recordsByPolicyId.get(policyId) ?? [];
-    matches.push(record);
-    recordsByPolicyId.set(policyId, matches);
-  }
-
   const rejected = new Set<PluginManifestRecord>();
-  for (const [policyId, matches] of recordsByPolicyId) {
+  for (const [policyId, matches] of groupPluginRecords(records, (record) =>
+    normalizePluginPolicyId(record.id),
+  )) {
     const declaredIds = [...new Set(matches.map((record) => record.id))].toSorted();
     if (declaredIds.length < 2) {
       continue;
@@ -104,12 +98,13 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
     return;
   }
-  const configuredEntry = params.normalized?.entries[params.record.id];
+  const policyId = normalizePluginPolicyId(params.record.id);
+  const configuredEntry = params.normalized?.entries[policyId];
   if (
     params.normalized?.enabled === false ||
     configuredEntry?.enabled === false ||
-    params.normalized?.deny.includes(params.record.id) ||
-    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+    params.normalized?.deny.includes(policyId) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(policyId))
   ) {
     return;
   }
@@ -220,29 +215,23 @@ function isIntentionalInstalledBundledDuplicate(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
-  const leftIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.left,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  const rightIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.right,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
   return (
-    (leftIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.left, env: params.env }) &&
-      params.right.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
-    (rightIsInstalled &&
-      !isStaleForeignBundledPin({ candidate: params.right, env: params.env }) &&
-      params.left.origin === "bundled" &&
-      !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
+    [
+      [params.left, params.right],
+      [params.right, params.left],
+    ] as const
+  ).some(
+    ([installed, bundled]) =>
+      matchesInstalledPluginRecord({
+        pluginId: params.pluginId,
+        candidate: installed,
+        config: params.config,
+        env: params.env,
+        installRecords: params.installRecords,
+      }) &&
+      !isStaleForeignBundledPin({ candidate: installed, env: params.env }) &&
+      bundled.origin === "bundled" &&
+      !isBundledPluginInsideDevSourceRoot({ rootDir: bundled.rootDir, env: params.env }),
   );
 }
 
@@ -427,6 +416,7 @@ export function buildPluginManifestRegistry(
       ) {
         diagnostics.push({
           level: "warn",
+          configDisposition: "preserve",
           pluginId: effectivePluginId,
           source: packageManifestSource,
           message: `plugin requires plugin API ${packagePluginApiRange}, but this host is ${currentHostVersion}; skipping load (check "openclaw --version", OPENCLAW_COMPATIBILITY_HOST_VERSION, or run "openclaw doctor")`,
@@ -596,8 +586,7 @@ export function buildPluginManifestRegistry(
     }
     pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
   }
-  const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
-  return registry;
+  return { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
 }
 
 /** Load manifest metadata from the bundled/source plugin tree without consulting operator state. */

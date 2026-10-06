@@ -65,7 +65,7 @@ const mocks = vi.hoisted(() => ({
     invoke: vi.fn(async () => {}),
     handleInput: vi.fn(),
     cancel: vi.fn(),
-    cancelAll: vi.fn(),
+    cancelAll: vi.fn(async () => {}),
     tryPauseForUpdate: vi.fn(async () => true),
     resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
@@ -215,6 +215,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
         },
         workerHostingEnabled: mocks.fakeRuntimeWorkerHosting,
         preparedWorkspacesEnabled: false,
+        nativeInferenceEnabled: false,
         workerHostingDisabledReason: mocks.fakeRuntimeWorkerHostingDisabledReason,
         initialInventory: { skills: [], pluginTools: [] },
         start: (params) => {
@@ -228,7 +229,7 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 // Load after mock registration and retain local bindings for Vitest's export transform.
-const { runNodeHost } = await import("./runner.js");
+const { loadResumableNodeHostGateway, runNodeHost } = await import("./runner.js");
 const { startNodeHostMcpManager } = await import("./mcp.js");
 
 export function lastCapturedOptions(): GatewayClientOptions | undefined {
@@ -273,4 +274,4 @@ export function resetRunnerTestState() {
   });
 }
 
-export { mocks, runNodeHost, startNodeHostMcpManager };
+export { loadResumableNodeHostGateway, mocks, runNodeHost, startNodeHostMcpManager };

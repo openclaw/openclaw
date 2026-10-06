@@ -5,13 +5,14 @@ import {
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
-  collectSessionEntryLookupKeys,
   readSessionIdentitySnapshot,
   readUnchangedLifecycleTargetSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
-import { cloneSessionEntry } from "./session-accessor.sqlite-scope.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { assertSessionEntryPatchCliHistory } from "./session-entry-patch-guard.js";
+import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type SessionEntryIdentityChange = {
@@ -25,7 +26,7 @@ export function replaceSessionEntryInDatabase(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntryIdentityChange {
-  const identityKeys = collectSessionEntryLookupKeys(database, sessionKey);
+  const identityKeys = collectSessionEntryLookupKeys(sessionKey);
   const previous = readSessionIdentitySnapshot(database, identityKeys);
   writeSessionEntry(database, sessionKey, entry);
   const current = readSessionIdentitySnapshot(database, identityKeys);
@@ -46,7 +47,7 @@ export function applySessionEntryPatchInDatabase(
     options: Pick<
       SessionEntryPatchOptions,
       "consumePendingReset" | "assertCommitAllowed" | "providerReviewMutation"
-    >;
+    > & { workerGuard?: Pick<SessionEntryPatchGuard, "cliHistory"> };
   },
 ): { entry: SessionEntry; identity?: SessionEntryIdentityChange } {
   // Canonical validation belongs to the current connection, not the captured rows.
@@ -61,8 +62,13 @@ export function applySessionEntryPatchInDatabase(
     assertLifecycleTargetSnapshotUnchanged(params.prepared, fresh, params.operationLabel);
   }
   params.options.assertCommitAllowed?.();
+  assertSessionEntryPatchCliHistory(
+    database,
+    params.sessionKey,
+    params.options.workerGuard?.cliHistory,
+  );
   if (!params.next) {
-    return { entry: cloneSessionEntry(params.writeBase) };
+    return { entry: structuredClone(params.writeBase) };
   }
   // Commit reads own these entries; update callbacks only receive detached copies.
   const previous = new Map(fresh.map((row) => [row.sessionKey, row.entry]));
@@ -78,5 +84,5 @@ export function applySessionEntryPatchInDatabase(
   });
   // Identity publication borrows session and lifecycle facts owned by this canonical write.
   const current = new Map([[params.sessionKey, persisted]]);
-  return { entry: cloneSessionEntry(persisted), identity: { previous, current } };
+  return { entry: structuredClone(persisted), identity: { previous, current } };
 }

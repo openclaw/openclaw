@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
+  asPositiveSafeInteger,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -108,11 +109,6 @@ function assertSignalRecipientDelivery(
 }
 
 async function resolveSignalRpcAccountInfo(opts: SignalRpcOpts) {
-  if (!opts.cfg) {
-    throw new Error(
-      "Signal RPC account resolution requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const cfg = requireRuntimeConfig(opts.cfg, "Signal RPC account resolution");
   return resolveSignalAccount({
     cfg,
@@ -205,11 +201,7 @@ function parseSignalReplyTimestamp(raw: string | null | undefined): number | und
   if (!value || !/^\d+$/.test(value)) {
     return undefined;
   }
-  const timestamp = Number(value);
-  if (!Number.isSafeInteger(timestamp) || timestamp <= 0) {
-    return undefined;
-  }
-  return timestamp;
+  return asPositiveSafeInteger(Number(value));
 }
 
 function resolveSignalQuoteParams(opts: SignalSendOpts):

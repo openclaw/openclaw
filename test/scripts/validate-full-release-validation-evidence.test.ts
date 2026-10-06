@@ -158,6 +158,52 @@ function validate(
 }
 
 describe("full release validation evidence", () => {
+  it.each([3, 4])(
+    "rejects retained windows-node-ci advisory evidence under current strict tooling (v%s)",
+    (version) => {
+      expect(() =>
+        validate(
+          {},
+          {
+            version,
+            childRuns: { normalCi: "456" },
+            childEvidence: {
+              normalCi: {
+                runId: "456",
+                jobs: [
+                  {
+                    name: "checks-windows-node-test-2",
+                    status: "completed",
+                    conclusion: "failure",
+                    url: "https://example.invalid/windows",
+                  },
+                ],
+              },
+            },
+            advisoryJobs: [
+              {
+                class: "windows-node-ci",
+                child: "normalCi",
+                job: "checks-windows-node-test-2",
+                conclusion: "failure",
+                runId: "456",
+                url: "https://example.invalid/windows",
+              },
+            ],
+          },
+        ),
+      ).toThrow("Release manifest contains failed selected job evidence");
+    },
+  );
+
+  it.each([
+    { validationInputs: { laneWaiver: "approved" } },
+    { publishInputs: { stableSoakWaiver: "approved" } },
+    { validationInputs: { knownFlakyJobsJson: '["checks-windows-node-test-2"]' } },
+  ])("rejects retired waiver inputs before accepting direct evidence: %j", (inputs) => {
+    expect(() => validate({}, inputs)).toThrow(/waivers|knownFlakyJobsJson/u);
+  });
+
   it("keeps historical recovery outside new selection validation", () => {
     const expectedPublicationSelection = vi.fn(() => {
       throw new Error("new selection was evaluated");
@@ -182,6 +228,7 @@ describe("full release validation evidence", () => {
     "context",
     "tooling",
     "missing-publication",
+    "new-publish-without-admission",
   ])("authenticates new source-admission evidence: %s", (scenario) => {
     const selection: PublicationSelection = {
       route: "normal",
@@ -246,6 +293,9 @@ describe("full release validation evidence", () => {
         manifest,
         getWorkflowSource: () =>
           'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n' +
+          (scenario === "new-publish-without-admission"
+            ? '  FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"\n'
+            : "") +
           (scenario === "missing-publication"
             ? '  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n'
             : ""),

@@ -4,7 +4,6 @@ import ai.openclaw.wear.shared.WearRealtimeTalkEntry
 import ai.openclaw.wear.shared.WearRealtimeTalkRole
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
 import ai.openclaw.wear.shared.WearRealtimeTalkStatus
-import ai.openclaw.wear.shared.WearReplyText
 import ai.openclaw.wear.shared.WearReplyTextPage
 import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.os.SystemClock
@@ -57,7 +56,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -285,10 +283,6 @@ internal fun OpenClawWearScreens(
         state = pagerState,
         modifier = Modifier.fillMaxSize(),
         rotaryScrollableBehavior = null,
-        userScrollEnabled =
-          homePages.getOrNull(pagerState.currentPage) != WearHomePage.Voice ||
-            voicePagerState.currentPage == VOICE_HOME_MODE ||
-            voicePagerState.currentPage == VOICE_THREAD_MODE,
       ) { page ->
         when (homePages.getOrNull(page)) {
           WearHomePage.Chat -> {
@@ -363,13 +357,7 @@ internal fun OpenClawWearScreens(
           WearHomePage.Pulse -> {
             AgentPulsePage(
               snapshot = snapshot,
-              onRefresh = {
-                if (snapshot.agentPulseSupported) {
-                  onAgentPulseRefresh()
-                } else {
-                  onRefresh()
-                }
-              },
+              onRefresh = onAgentPulseRefresh,
             )
           }
 
@@ -1263,15 +1251,6 @@ private fun AgentPulsePage(
         }
       }
 
-      !snapshot.agentPulseSupported -> {
-        item {
-          EmptyPanel(
-            title = stringResource(R.string.pulse_unavailable),
-            detail = stringResource(R.string.update_required_detail),
-          )
-        }
-      }
-
       pulse == null -> {
         item {
           EmptyPanel(
@@ -1292,7 +1271,6 @@ private fun AgentPulsePage(
       }
 
       else -> {
-        item { AgentPulseTasksPanel(pulse.tasks) }
         item { AgentPulseSwarmPanel(pulse.swarm) }
         item { AgentPulseApprovalsPanel(pulse.approvals) }
         snapshot.agentPulseFailure?.let { pulseFailure ->
@@ -1306,47 +1284,6 @@ private fun AgentPulsePage(
         enabled = !snapshot.agentPulseLoading,
         onClick = onRefresh,
       )
-    }
-  }
-}
-
-@Composable
-private fun AgentPulseTasksPanel(tasks: WearAgentPulseTasks) {
-  val ready = tasks.state == WearAgentPulseTaskState.Ready
-  Panel {
-    AgentPulsePanelHeader(
-      title = stringResource(R.string.pulse_tasks),
-      status =
-        if (ready) {
-          stringResource(R.string.pulse_ready)
-        } else {
-          stringResource(R.string.pulse_unavailable)
-        },
-      statusColor =
-        if (ready) {
-          OpenClawWearTheme.colors.success
-        } else {
-          OpenClawWearTheme.colors.danger
-        },
-    )
-    if (ready) {
-      AgentPulseMetricRow(stringResource(R.string.pulse_queued), tasks.queued)
-      AgentPulseMetricRow(stringResource(R.string.pulse_running), tasks.running)
-      AgentPulseMetricRow(stringResource(R.string.pulse_completed), tasks.completed)
-      AgentPulseMetricRow(stringResource(R.string.pulse_failed), tasks.failed)
-      AgentPulseDetail(text = stringResource(R.string.pulse_task_snapshot_bounded))
-      if (tasks.activeAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_active_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
-      if (tasks.recentAtLimit == true) {
-        AgentPulseDetail(
-          text = stringResource(R.string.pulse_recent_at_limit),
-          color = OpenClawWearTheme.colors.warning,
-        )
-      }
     }
   }
 }
@@ -2023,12 +1960,10 @@ private fun MessageBubble(
           start = if (isUser) 28.dp else 12.dp,
           end = if (isUser) 12.dp else 28.dp,
         ).background(background, RoundedCornerShape(14.dp))
-        .then(
-          Modifier.border(
-            width = 1.dp,
-            color = colors.borderStrong,
-            shape = RoundedCornerShape(14.dp),
-          ),
+        .border(
+          width = 1.dp,
+          color = colors.borderStrong,
+          shape = RoundedCornerShape(14.dp),
         ).padding(horizontal = 12.dp, vertical = 9.dp),
   ) {
     Text(
@@ -2430,72 +2365,10 @@ private fun Panel(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun failureTitle(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.open_phone_app)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.selection_not_found)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.message_not_sent)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.something_went_wrong)
-    }
-  }
+private fun failureTitle(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).title)
 
 @Composable
-private fun failureDetail(failure: WearConversationFailure?): String =
-  when (failure) {
-    WearConversationFailure.PHONE_UNAVAILABLE -> {
-      stringResource(R.string.phone_unavailable_detail)
-    }
-
-    WearConversationFailure.PHONE_NOT_READY -> {
-      stringResource(R.string.phone_not_ready_detail)
-    }
-
-    WearConversationFailure.GATEWAY_OFFLINE -> {
-      stringResource(R.string.gateway_offline_detail)
-    }
-
-    WearConversationFailure.NOT_FOUND -> {
-      stringResource(R.string.refresh_and_try_again)
-    }
-
-    WearConversationFailure.ACTION_REJECTED -> {
-      stringResource(R.string.try_again)
-    }
-
-    WearConversationFailure.INCOMPATIBLE -> {
-      stringResource(R.string.update_required_detail)
-    }
-
-    WearConversationFailure.INTERNAL_ERROR,
-    null,
-    -> {
-      stringResource(R.string.try_again)
-    }
-  }
+private fun failureDetail(failure: WearConversationFailure?): String = stringResource((failure ?: WearConversationFailure.INTERNAL_ERROR).detail)
 
 private const val CHAT_FIXED_ITEM_COUNT = 2
 private const val VISIBLE_MESSAGE_COUNT = 8

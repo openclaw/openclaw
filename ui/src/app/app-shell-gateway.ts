@@ -6,6 +6,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -36,6 +37,8 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 
 export type StoredOutboxScopeHost = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
@@ -51,17 +54,10 @@ export interface ShellGatewayHost {
   routeState: ShellRouteState;
   activeSessionKey: string;
   desktopNavigationExpanded: boolean;
-  agentsListClient: GatewayBrowserClient | null;
-  agentsListSource: ApplicationContext["agents"] | null;
-  sessionKeyClient: GatewayBrowserClient | null;
-  runtimeConfigClient: GatewayBrowserClient | null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null;
   lastLocalePrefSignature: string | null;
-  previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null;
-  agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
+  recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
 }
@@ -86,6 +82,13 @@ function diffAgentRoster(
 }
 
 export class ShellGatewayOwner {
+  private agentsListClient: GatewayBrowserClient | null = null;
+  private agentsListSource: ApplicationContext["agents"] | null = null;
+  private sessionKeyClient: GatewayBrowserClient | null = null;
+  private runtimeConfigClient: GatewayBrowserClient | null = null;
+  private runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  private previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
+  private agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private runtimeConfigProfileId: string | null = null;
   private profileAppearanceSource: {
     client: GatewayBrowserClient;
@@ -104,7 +107,7 @@ export class ShellGatewayOwner {
         return;
       }
       this.host.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession(sessions.state);
+      this.host.recoverDeletedActiveSession();
       synchronizeTitle();
     };
     synchronize();
@@ -183,13 +186,12 @@ export class ShellGatewayOwner {
       invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
     }
     if (event.event === "sessions.changed") {
-      const context = this.host.context;
-      if (context) {
-        this.host.recoverDeletedActiveSession(context.sessions.state);
-      }
+      this.host.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "config.changed") {
+      // Bootstrap owns upload policy independently of an open configuration editor.
+      void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
@@ -232,11 +234,16 @@ export class ShellGatewayOwner {
     if (command.kind === "panel") {
       const sessionKey =
         commandParams.sessionKey ??
-        (command.panel === "portal" ? this.host.activeSessionKey : undefined);
+        (command.panel === "portal" || command.panel === "plugin"
+          ? this.host.activeSessionKey
+          : undefined);
       if (
         sessionKey &&
         (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
-          !isSessionRouteId(this.host.routeState.routeId))
+          !isSessionRouteId(this.host.routeState.routeId) ||
+          (command.panel === "plugin" &&
+            commandParams.agentId !== undefined &&
+            commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
         this.host.selectChatSession(sessionKey, commandParams.agentId);
       }
@@ -246,10 +253,18 @@ export class ShellGatewayOwner {
           browser: BROWSER_PANEL_TOGGLE_EVENT,
           desktop: DESKTOP_PANEL_TOGGLE_EVENT,
           portal: PORTAL_PANEL_TOGGLE_EVENT,
+          plugin: PLUGIN_PANEL_TOGGLE_EVENT,
         }[command.panel],
         {
           detail: {
             open: command.open,
+            ...(command.panel === "plugin"
+              ? {
+                  pluginId: command.pluginId,
+                  panelId: command.panelId,
+                  agentId: commandParams.agentId,
+                }
+              : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
@@ -263,7 +278,12 @@ export class ShellGatewayOwner {
         },
       );
       if (sessionKey) {
-        rememberSessionPanelToggle(command.panel, panelEvent);
+        rememberSessionPanelToggle(
+          command.panel === "plugin"
+            ? `plugin:${command.pluginId}/${command.panelId}`
+            : command.panel,
+          panelEvent,
+        );
       }
       window.dispatchEvent(panelEvent);
       return;
@@ -279,11 +299,11 @@ export class ShellGatewayOwner {
 
   scheduleAgentRosterRefresh(): void {
     // Config writes arrive in bursts; only the final authoritative roster snapshot matters.
-    if (this.host.agentRosterRefreshTimer !== null) {
-      globalThis.clearTimeout(this.host.agentRosterRefreshTimer);
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
     }
-    this.host.agentRosterRefreshTimer = globalThis.setTimeout(() => {
-      this.host.agentRosterRefreshTimer = null;
+    this.agentRosterRefreshTimer = globalThis.setTimeout(() => {
+      this.agentRosterRefreshTimer = null;
       void this.refreshAgentRoster();
     }, AGENT_ROSTER_REFRESH_DEBOUNCE_MS);
   }
@@ -319,23 +339,18 @@ export class ShellGatewayOwner {
   }
 
   synchronizeGateway(snapshot: ApplicationContext["gateway"]["snapshot"]): void {
-    const previousPhase = this.host.previousGatewayPhase;
-    this.host.previousGatewayPhase = snapshot.phase;
+    const previousPhase = this.previousGatewayPhase;
+    this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    if (context) {
-      this.host.recoverDeletedActiveSession(context.sessions.state);
-    }
+    this.host.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", async () => {
         await this.ensureRuntimeConfig(snapshot, context.runtimeConfig);
         return this.refreshProfileAppearancePrefs(context);
       });
-      if (
-        this.host.routeState.routeId &&
-        (!context.agents.state.agentsList || context.agents.state.agentsListCached)
-      ) {
+      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -353,21 +368,21 @@ export class ShellGatewayOwner {
   ): Promise<void> {
     // Config-gated sidebar routes require the snapshot before any settings page opens.
     if (snapshot.phase !== "connected" || !snapshot.client || !runtimeConfig) {
-      this.host.runtimeConfigClient = null;
+      this.runtimeConfigClient = null;
       this.runtimeConfigProfileId = null;
       this.profileAppearanceSource = null;
       return Promise.resolve();
     }
     const profileId = snapshot.selfUser?.id ?? null;
     if (
-      this.host.runtimeConfigClient === snapshot.client &&
-      this.host.runtimeConfigSource === runtimeConfig &&
+      this.runtimeConfigClient === snapshot.client &&
+      this.runtimeConfigSource === runtimeConfig &&
       this.runtimeConfigProfileId === profileId
     ) {
       return Promise.resolve();
     }
-    this.host.runtimeConfigClient = snapshot.client;
-    this.host.runtimeConfigSource = runtimeConfig;
+    this.runtimeConfigClient = snapshot.client;
+    this.runtimeConfigSource = runtimeConfig;
     this.runtimeConfigProfileId = profileId;
     flushServerUiPrefs(runtimeConfig, {
       profileId,
@@ -383,18 +398,18 @@ export class ShellGatewayOwner {
     agents = this.host.context?.agents,
   ): Promise<void> {
     if (snapshot.phase !== "connected" || !snapshot.client) {
-      this.host.agentsListClient = null;
+      this.agentsListClient = null;
       return Promise.resolve();
     }
     const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || (agents.state.agentsList && !agents.state.agentsListCached)) {
+    if (!agents || !routeId || agents.state.agentsList) {
       return Promise.resolve();
     }
-    if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {
+    if (this.agentsListClient === snapshot.client && this.agentsListSource === agents) {
       return Promise.resolve();
     }
-    this.host.agentsListClient = snapshot.client;
-    this.host.agentsListSource = agents;
+    this.agentsListClient = snapshot.client;
+    this.agentsListSource = agents;
     return agents.ensureList().then(() => undefined);
   }
 
@@ -403,13 +418,10 @@ export class ShellGatewayOwner {
     sessionKey: string;
   }): void {
     const sessionKey = snapshot.sessionKey.trim();
-    if (
-      snapshot.client === this.host.sessionKeyClient &&
-      sessionKey === this.host.activeSessionKey
-    ) {
+    if (snapshot.client === this.sessionKeyClient && sessionKey === this.host.activeSessionKey) {
       return;
     }
-    this.host.sessionKeyClient = snapshot.client;
+    this.sessionKeyClient = snapshot.client;
     if (sessionKey) {
       this.host.activeSessionKey = sessionKey;
     }
@@ -467,17 +479,17 @@ export class ShellGatewayOwner {
   }
 
   reset(): void {
-    this.host.agentsListClient = null;
-    this.host.agentsListSource = null;
-    this.host.sessionKeyClient = null;
-    this.host.runtimeConfigClient = null;
-    this.host.runtimeConfigSource = null;
+    this.agentsListClient = null;
+    this.agentsListSource = null;
+    this.sessionKeyClient = null;
+    this.runtimeConfigClient = null;
+    this.runtimeConfigSource = null;
     this.runtimeConfigProfileId = null;
     this.profileAppearanceSource = null;
-    this.host.previousGatewayPhase = null;
-    if (this.host.agentRosterRefreshTimer !== null) {
-      globalThis.clearTimeout(this.host.agentRosterRefreshTimer);
-      this.host.agentRosterRefreshTimer = null;
+    this.previousGatewayPhase = null;
+    if (this.agentRosterRefreshTimer !== null) {
+      globalThis.clearTimeout(this.agentRosterRefreshTimer);
+      this.agentRosterRefreshTimer = null;
     }
     resetServerUiPrefsSync();
   }

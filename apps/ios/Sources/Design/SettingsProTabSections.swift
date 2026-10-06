@@ -139,7 +139,10 @@ extension SettingsProTab {
             }
 
             self.gatewaySetupCard
-            self.pairedGatewaysCard
+            // Fixtures hide saved gateways, so an empty list would read as unpaired.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.pairedGatewaysCard
+            }
 
             Section {
                 SettingsDetailRow("Address", value: .verbatim(self.gatewayAddress))
@@ -187,7 +190,10 @@ extension SettingsProTab {
 
             self.agentSelectionCard
             self.deviceIdentityCard
-            self.manualGatewayCard
+            // Fixtures never load the saved manual Gateway's route, so Connect Manual would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.manualGatewayCard
+            }
             self.gatewayAdvancedCard
         }
         .font(OpenClawType.body)
@@ -916,14 +922,18 @@ extension SettingsProTab {
     var gatewayAdvancedCard: some View {
         Section {
             self.settingsToggle("Auto-connect on launch", isOn: self.$gatewayAutoConnect)
-            self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
-            self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
-            if let headersStableID = self.gatewayCustomHeadersTargetStableID {
-                NavigationLink {
-                    GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
-                } label: {
-                    Text("Custom Headers")
-                        .font(OpenClawType.body)
+            // Fixtures never load the saved manual Gateway, so a credential edit would overwrite
+            // its pair with blank fields and headers would target the wrong identity.
+            if !self.appModel.isLocalGatewayFixtureEnabled {
+                self.gatewaySecureField("Gateway Auth Token", text: self.gatewayTokenBinding)
+                self.gatewaySecureField("Gateway Password", text: self.gatewayPasswordBinding)
+                if let headersStableID = self.gatewayCustomHeadersTargetStableID {
+                    NavigationLink {
+                        GatewayCustomHeadersSettingsView(gatewayStableID: headersStableID)
+                    } label: {
+                        Text("Custom Headers")
+                            .font(OpenClawType.body)
+                    }
                 }
             }
             Button(role: .destructive) {

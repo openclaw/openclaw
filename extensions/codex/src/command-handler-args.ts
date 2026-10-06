@@ -19,7 +19,6 @@ type ParsedBindArgs = {
 type ParsedComputerUseArgs = {
   action: "status" | "install";
   overrides: Partial<CodexComputerUseConfig>;
-  hasOverrides: boolean;
   persistentIdentity: Partial<Pick<CodexComputerUseConfig, "pluginName" | "mcpServerName">>;
   help?: boolean;
 };
@@ -188,42 +187,21 @@ export function splitArgs(value: string | undefined): string[] {
 }
 
 export function parseBindArgs(args: string[]): ParsedBindArgs {
-  const parsed: ParsedBindArgs = {};
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex bind argument");
-    if (arg === "--help" || arg === "-h") {
-      parsed.help = true;
-      continue;
-    }
-    const option =
-      arg === "--cwd"
-        ? "cwd"
-        : arg === "--model"
-          ? "model"
-          : arg === "--provider" || arg === "--model-provider"
-            ? "provider"
-            : undefined;
-    if (option) {
-      const value = readRequiredOptionValue(args, index);
-      if (!value || parsed[option] !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed[option] = value;
-      index += 1;
-      continue;
-    }
-    if (!arg.startsWith("-") && !parsed.threadId) {
-      parsed.threadId = arg;
-      continue;
-    }
-    parsed.help = true;
-  }
-  parsed.threadId = normalizeOptionalString(parsed.threadId);
-  parsed.cwd = normalizeOptionalString(parsed.cwd);
-  parsed.model = normalizeOptionalString(parsed.model);
-  parsed.provider = normalizeOptionalString(parsed.provider);
-  return parsed;
+  const { parsed, values } = parseThreadArgs(
+    args,
+    new Map([
+      ["--cwd", "cwd"],
+      ["--model", "model"],
+      ["--provider", "provider"],
+      ["--model-provider", "provider"],
+    ]),
+  );
+  return {
+    ...parsed,
+    cwd: normalizeOptionalString(values.get("cwd")),
+    model: normalizeOptionalString(values.get("model")),
+    provider: normalizeOptionalString(values.get("provider")),
+  };
 }
 
 export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSessionsArgs {
@@ -268,30 +246,41 @@ export function parseCodexCliSessionsArgs(args: string[]): ParsedCodexCliSession
 }
 
 export function parseResumeArgs(args: string[]): ParsedResumeArgs {
-  const parsed: ParsedResumeArgs = {};
+  const { parsed, values } = parseThreadArgs(
+    args,
+    new Map([
+      ["--host", "host"],
+      ["--node", "host"],
+      ["--bind", "bind"],
+    ]),
+  );
+  return {
+    ...parsed,
+    ...(values.has("bind") ? { bindHere: true } : {}),
+    host: normalizeOptionalString(values.get("host")),
+  };
+}
+
+function parseThreadArgs(
+  args: string[],
+  options: ReadonlyMap<string, "cwd" | "model" | "provider" | "host" | "bind">,
+) {
+  const parsed: Pick<ParsedResumeArgs, "threadId" | "help"> = {};
+  const values = new Map<string, string>();
   for (let index = 0; index < args.length; index += 1) {
-    const arg = expectDefined(args[index], "current Codex resume argument");
+    const arg = expectDefined(args[index], "current Codex thread argument");
     if (arg === "--help" || arg === "-h") {
       parsed.help = true;
       continue;
     }
-    if (arg === "--host" || arg === "--node") {
+    const option = options.get(arg);
+    if (option) {
       const value = readRequiredOptionValue(args, index);
-      if (!value || parsed.host !== undefined) {
+      if (!value || values.has(option) || (option === "bind" && value !== "here")) {
         parsed.help = true;
         continue;
       }
-      parsed.host = value;
-      index += 1;
-      continue;
-    }
-    if (arg === "--bind") {
-      const value = readRequiredOptionValue(args, index);
-      if (value !== "here" || parsed.bindHere !== undefined) {
-        parsed.help = true;
-        continue;
-      }
-      parsed.bindHere = true;
+      values.set(option, value);
       index += 1;
       continue;
     }
@@ -302,15 +291,13 @@ export function parseResumeArgs(args: string[]): ParsedResumeArgs {
     parsed.help = true;
   }
   parsed.threadId = normalizeOptionalString(parsed.threadId);
-  parsed.host = normalizeOptionalString(parsed.host);
-  return parsed;
+  return { parsed, values };
 }
 
 export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
   const parsed: ParsedComputerUseArgs = {
     action: "status",
     overrides: {},
-    hasOverrides: false,
     persistentIdentity: {},
   };
   let sawAction = false;
@@ -343,7 +330,7 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
         parsed.help = true;
         continue;
       }
-      parsed.overrides[option] = value;
+      parsed.overrides[option] = value.trim();
       index += 1;
       continue;
     }
@@ -359,15 +346,6 @@ export function parseComputerUseArgs(args: string[]): ParsedComputerUseArgs {
       continue;
     }
     parsed.help = true;
-  }
-  const overrides = parsed.overrides;
-  parsed.overrides = {};
-  for (const key of ["marketplaceSource", "marketplacePath", "marketplaceName"] as const) {
-    const value = normalizeOptionalString(overrides[key]);
-    if (value) {
-      parsed.overrides[key] = value;
-      parsed.hasOverrides = true;
-    }
   }
   return parsed;
 }

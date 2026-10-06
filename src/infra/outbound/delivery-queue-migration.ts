@@ -56,24 +56,20 @@ const LEGACY_PREPARATION_LEASE_RENEW_MS = 30_000;
 function withLegacyPreparationLease(
   entry: LegacyQueuedDeliveryPreparation,
   ownerId: string,
-  now = Date.now(),
 ): LegacyQueuedDeliveryPreparation {
   return {
     ...entry,
     retainOnFailure: true,
     legacyPreparationOwnerId: ownerId,
-    legacyPreparationLeaseExpiresAt: now + LEGACY_PREPARATION_LEASE_MS,
+    legacyPreparationLeaseExpiresAt: Date.now() + LEGACY_PREPARATION_LEASE_MS,
   };
 }
 
-function hasActiveLegacyPreparationLease(
-  entry: LegacyQueuedDeliveryPreparation,
-  now = Date.now(),
-): boolean {
+function hasActiveLegacyPreparationLease(entry: LegacyQueuedDeliveryPreparation): boolean {
   return Boolean(
     entry.legacyPreparationOwnerId &&
     typeof entry.legacyPreparationLeaseExpiresAt === "number" &&
-    entry.legacyPreparationLeaseExpiresAt > now,
+    entry.legacyPreparationLeaseExpiresAt > Date.now(),
   );
 }
 
@@ -107,7 +103,6 @@ function buildLegacyPreparationParams(entry: LegacyQueuedDelivery, cfg: OpenClaw
     preparedMessageId: entry.preparedMessageId,
     deliveryCompletion: entry.deliveryCompletion,
     completionRetention: entry.completionRetention,
-    skipQueue: true,
   } as const;
 }
 
@@ -160,27 +155,24 @@ async function prepareLegacyEntryCheckpoint(params: {
   if (prepareForReplay) {
     let modifiersStarted = false;
     let leaseLost = false;
-    const renewLease = (): void => {
-      if (leaseLost) {
-        return;
-      }
-      const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
-      if (
-        !replacePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-          expectedEntry: sourceEntry,
-          replacementEntry: renewed,
-          stateDir: params.stateDir,
-        })
-      ) {
-        leaseLost = true;
-        return;
-      }
-      sourceEntry = renewed;
-    };
     const renewLeaseSafely = (): void => {
       try {
-        renewLease();
+        if (leaseLost) {
+          return;
+        }
+        const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
+        if (
+          !replacePendingDeliveryQueueEntry({
+            queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+            expectedEntry: sourceEntry,
+            replacementEntry: renewed,
+            stateDir: params.stateDir,
+          })
+        ) {
+          leaseLost = true;
+          return;
+        }
+        sourceEntry = renewed;
       } catch (error) {
         leaseLost = true;
         params.log.warn(
@@ -392,13 +384,11 @@ async function finalizePreparedMigration(params: {
       ...params.entry,
       cfg: params.cfg,
       payloads: acceptedPayloads,
-      skipQueue: true,
     };
     const staged = await stageQueuePayloadMedia({
       payloads: acceptedPayloads,
       mediaAccess: resolveOutboundMediaAccessForSend(
         mediaParams,
-        params.entry.channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
@@ -463,7 +453,7 @@ async function finalizePreparedMigration(params: {
     return "moved";
   } finally {
     if (!stagedArtifactsTransferred) {
-      cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
+      await cancelDeliveryQueueMediaRetention(mediaStageId, params.stateDir);
       await releaseSpoolArtifacts(stagedArtifacts, params.stateDir);
     }
   }

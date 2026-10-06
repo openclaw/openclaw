@@ -1,9 +1,9 @@
 // Owns durable outbound admission, immutable payload custody, and media staging.
 import { createRenderedMessageBatchPlan } from "../../channels/message/rendered-batch.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
-import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import { createInitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import { isDeliveryRecoveryOwnedRetry } from "../delivery-recovery.shared.js";
-import { throwSqliteLifecycleErrors } from "../sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../sqlite-lifecycle-errors.js";
 import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import {
   collectPayloadMediaSources,
@@ -121,7 +121,6 @@ export async function stageAndEnqueueOutboundDelivery(
       // reachable through the agent-scoped roots) nor read more than the send may.
       mediaAccess: resolveOutboundMediaAccessForSend(
         params,
-        channel,
         collectPayloadMediaSources(acceptedPayloads),
       ),
       maxBytes: resolveOutboundMediaMaxBytes({
@@ -196,7 +195,7 @@ export async function stageAndEnqueueOutboundDelivery(
             params.deliveryQueueStateContext,
           );
       if (!queued.created) {
-        cancelDeliveryQueueMediaRetention(
+        await cancelDeliveryQueueMediaRetention(
           staged.mediaStageId,
           stateDir,
           params.deliveryQueueStateContext,
@@ -227,7 +226,7 @@ export async function stageAndEnqueueOutboundDelivery(
     }
     const errors: unknown[] = [err];
     try {
-      cancelDeliveryQueueMediaRetention(
+      await cancelDeliveryQueueMediaRetention(
         staged.mediaStageId,
         stateDir,
         params.deliveryQueueStateContext,

@@ -10,7 +10,23 @@ title: "Approvals"
 
 # `openclaw approvals`
 
-Manage exec approvals for the **local host**, **gateway host**, or a **node host**. With no target flag, commands read/write the local approvals document in shared SQLite state. Use `--gateway` to target the gateway, or `--node <id|name|ip>` to target a specific node.
+Manage exec approvals for the **local host**, **gateway host**, or a **node host**.
+With no target flag, `get`, `set`, and allowlist edits select the local approvals
+document in shared SQLite state. If a Gateway owns that state directory, the CLI
+uses its authenticated approvals RPCs; otherwise it holds exclusive offline
+ownership through the operation. `get` participates because it can initialize
+missing state. Use `--gateway` to explicitly target the configured Gateway, or
+`--node <id|name|ip>` to target a specific node; those target contracts are unchanged.
+
+Default local routing requires the operation's
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing) and
+`operator.admin`. Missing credentials, an older Gateway, or an uncertain reply
+never falls back to a direct local write. Update or stop the owner through its
+service owner before retrying offline. After an uncertain save, inspect
+`openclaw approvals get --json` before retrying. Saves retain their snapshot-hash
+compare-and-set check; a stale hash requires reloading and reapplying the edit.
+Routing changes only the mutation transport, not what any policy or grant
+authorizes to execute.
 
 Alias: `openclaw exec-approvals`
 
@@ -280,6 +296,9 @@ controls. Check the updated preview and verify execution in a run.
 ### Synchronize local command approvals
 
 Presets (`yolo`, `cautious`, `deny-all`) apply `host`, `security`, `ask`, and `askFallback` together. `set` applies only the flags you pass; each accepted value is validated (`--host auto|sandbox|gateway|node`, `--security deny|allowlist|full`, `--ask off|on-miss|always`, `--ask-fallback deny|allowlist|full`).
+
+These commands retain their local config/policy synchronization owner. The
+automatic owner routing of `openclaw approvals` does not apply to `exec-policy`.
 
 `show`, `preset`, and `set` accept `--json` and return the requested, host, and
 effective command approval facts as one JSON object. `preset` and `set` do not

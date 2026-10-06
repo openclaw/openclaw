@@ -1,4 +1,5 @@
 import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import { resolveConfigPath } from "../../config/paths.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -21,10 +22,8 @@ import {
   revalidateUpdateDatabaseContext,
 } from "./update-command-managed-context.js";
 import { collectServiceInspectionFailureFacts } from "./update-command-result.js";
-import {
-  GatewayServiceUpdateOwnershipError,
-  type ManagedServiceRootRedirect,
-} from "./update-command-service-plan.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -41,6 +40,7 @@ type UpdateManagedServiceInspectionParams = {
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
   expectedForeground?: true;
+  assertCurrent?: () => void;
   handoffFromGateway?: Parameters<
     typeof maybeStopManagedServiceBeforeMutableUpdate
   >[0]["handoffFromGateway"];
@@ -69,6 +69,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       timeoutMs: params.timeoutMs,
       phase: "inspect",
       expectedService: params.expectedServices?.get(root),
+      assertCurrent: params.assertCurrent,
       handoffFromGateway: params.handoffFromGateway,
     }).catch((error: unknown) => {
       if (hasCommandProcessCleanupError(error)) {
@@ -147,6 +148,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
 export async function inspectUpdateDatabaseContexts(
   params: UpdateManagedServiceInspectionParams & {
     legacyConfigPlan?: LegacyConfigUpdatePlan;
+    callerLegacyConfigPlan?: LegacyConfigUpdatePlan;
     candidateAdmissionChecks?: readonly string[];
   },
 ) {
@@ -167,7 +169,10 @@ export async function inspectUpdateDatabaseContexts(
       ? []
       : [
           await captureTargetDatabaseSchemaContext(process.env, {
-            legacyConfigPlan: params.legacyConfigPlan,
+            legacyConfigPlan:
+              params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
+                ? params.callerLegacyConfigPlan
+                : params.legacyConfigPlan,
             configValidation,
           }),
         ];
@@ -194,7 +199,7 @@ export async function revalidateUpdateDatabaseContexts(
       "Database admission was not inspected.",
     );
   }
-  await inspectUpdateDatabaseContexts({
+  await inspectUpdateManagedServices({
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,

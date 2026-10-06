@@ -15,9 +15,24 @@ vi.mock("../../commands/agent.js", () => ({ agentCommandFromGatewayIngress: mock
 const privateReply = "synthetic-private-agent-reply";
 const privateDeliveryTarget = "synthetic-private-delivery-target";
 const sessionCases = [
-  { name: "ordinary", key: "agent:main:dashboard:ordinary", isIncognito: false },
-  { name: "Incognito key", key: "agent:main:dashboard:incognito-private", isIncognito: false },
-  { name: "Incognito entry", key: "agent:main:dashboard:private-entry", isIncognito: true },
+  {
+    name: "ordinary",
+    key: "agent:main:dashboard:ordinary",
+    isIncognito: false,
+    modes: ["text", "delivery error"],
+  },
+  {
+    name: "Incognito key",
+    key: "agent:main:dashboard:incognito-private",
+    isIncognito: false,
+    modes: ["text", "nested"],
+  },
+  {
+    name: "Incognito entry",
+    key: "agent:main:dashboard:private-entry",
+    isIncognito: true,
+    modes: ["json", "delivery error"],
+  },
 ] as const;
 
 beforeEach(() => {
@@ -52,14 +67,13 @@ function createDispatch(session: (typeof sessionCases)[number]) {
     cleanupAbortController: vi.fn(),
     io: { emitAcceptance: vi.fn(), emitFinal },
     context,
-    taskTrackingMode: "none" as const,
   };
 }
 
 describe.each(sessionCases)("Gateway agent diagnostic output: $name", (session) => {
   const isPrivate = session.name !== "ordinary";
 
-  it.each(["text", "nested", "json", "delivery error"] as const)(
+  it.each(session.modes)(
     "preserves the live result without persisting private %s output",
     async (mode) => {
       const params = createDispatch(session);

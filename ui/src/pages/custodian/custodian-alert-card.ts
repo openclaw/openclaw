@@ -9,6 +9,7 @@ import type {
   CustodianAlert,
   CustodianAlertAction,
 } from "../../components/custodian-alert-contract.ts";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 
@@ -54,7 +55,7 @@ export function renderCustodianAlertCard(params: {
         aria-label=${t("common.dismiss")}
         @click=${params.onDismiss}
       >
-        ×
+        ${icons.x}
       </button>
     </div>
     <ul class="custodian__alert-facts">

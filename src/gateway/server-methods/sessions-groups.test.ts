@@ -18,14 +18,19 @@ const pathMocks = vi.hoisted(() => ({
 
 vi.mock("../session-groups.js", () => ({
   deleteSessionGroup: vi.fn(),
-  listSessionGroupDefaults: groupMocks.defaults,
-  listSessionGroups: vi.fn(() => []),
-  listSidebarSectionOrder: vi.fn(() => []),
   putSessionGroups: groupMocks.put,
   renameSessionGroup: groupMocks.rename,
   SessionGroupNotEmptyError: groupMocks.NotEmpty,
   SessionGroupNotFoundError: groupMocks.NotFound,
   updateSessionGroupDefaults: groupMocks.update,
+}));
+vi.mock("../session-group-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-group-catalog.js")>()),
+  readSessionGroupCatalog: () => ({
+    groups: [],
+    defaults: groupMocks.defaults(),
+    sectionOrder: [],
+  }),
 }));
 vi.mock("../session-group-defaults-access.js", () => ({
   filterMutableSessionGroupRecords: async ({ records }: { records: () => unknown[] }) => records(),
@@ -88,7 +93,7 @@ describe("sessions.groups.put", () => {
   });
 
   it("replaces the catalog using the runtime config and authorization guards", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const names = ["Keep"];
     const sectionOrder = ["category:Keep", "ungrouped"];
     const groups = [{ name: "Keep", position: 0 }];

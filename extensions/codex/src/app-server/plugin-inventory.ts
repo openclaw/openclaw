@@ -57,8 +57,6 @@ export type CodexPluginOwnedApp = {
   id: string;
   name: string;
   accessible: boolean;
-  enabled: boolean;
-  needsAuth: boolean;
   /** Current non-read-only tool keys; absent when Codex omits tool metadata. */
   approvalOverrideToolConfigKeys?: readonly string[];
 };
@@ -68,7 +66,6 @@ type CodexPluginInventoryRecord = {
   summary: v2.PluginSummary;
   detail?: v2.PluginDetail;
   activationRequired: boolean;
-  authRequired: boolean;
   appOwnership: "proven" | "ambiguous" | "none";
   ownedAppIds: string[];
   apps: CodexPluginOwnedApp[];
@@ -91,7 +88,6 @@ type ReadCodexPluginInventoryParams = {
   configCwd?: string;
   metadataCache?: CodexPluginMetadataCache;
   nowMs?: number;
-  readPluginDetails?: boolean;
   suppressAppInventoryRefresh?: boolean;
 };
 
@@ -114,7 +110,7 @@ export async function readCodexPluginInventory(
 
   const appInventory = readCachedAppInventory(params);
   const installedPlugins = await readInstalledCodexPluginMetadata({ ...params, policy });
-  const pluginCatalogs = new Map<string, Promise<v2.PluginListResponse>>();
+  const pluginCatalogs = new Map<string | undefined, v2.PluginListResponse>();
 
   const diagnostics: CodexPluginInventoryDiagnostic[] = [];
   const records: CodexPluginInventoryRecord[] = [];
@@ -144,17 +140,13 @@ export async function readCodexPluginInventory(
       // Installed snapshots exclude uninstalled plugins. Read only the
       // explicitly configured marketplace; non-curated packages still require
       // an owner-issued install command before they can be activated.
-      const requestParams = buildPluginCatalogRequestParams(params, pluginPolicy.marketplaceName);
-      const catalogKey = JSON.stringify([
-        requestParams,
-        pluginMetadataCatalogScope(pluginPolicy.marketplaceName),
-      ]);
+      const catalogKey = pluginMetadataCatalogScope(pluginPolicy.marketplaceName);
       let catalog = pluginCatalogs.get(catalogKey);
       if (!catalog) {
-        catalog = listCodexPluginMetadata(params, pluginPolicy.marketplaceName);
+        catalog = await listCodexPluginMetadata(params, pluginPolicy.marketplaceName);
         pluginCatalogs.set(catalogKey, catalog);
       }
-      listed = await catalog;
+      listed = catalog;
       resolvedPlugin = findConfiguredMarketplacePlugin(listed, pluginPolicy);
     }
     const hasMarketplace = listed.marketplaces.some((marketplace) =>
@@ -200,16 +192,12 @@ export async function readCodexPluginInventory(
       summary,
       diagnostics,
     );
-    const ownedAppIds =
-      detail?.apps
-        .map((app) => app.id)
-        .filter(Boolean)
-        .toSorted() ?? [];
-    const appOwnership = resolveAppOwnership({
-      detail,
-      appInventory,
-      summary,
-    });
+    const ownedAppIds = detail?.apps.map((app) => app.id).filter(Boolean) ?? [];
+    const appOwnership = detail?.apps.length
+      ? "proven"
+      : appInventory?.snapshot?.apps.some((app) => app.pluginDisplayNames.includes(summary.name))
+        ? "ambiguous"
+        : "none";
     if (appOwnership === "ambiguous") {
       diagnostics.push({
         code: "app_ownership_ambiguous",
@@ -237,7 +225,6 @@ export async function readCodexPluginInventory(
       activationRequired:
         pluginPolicy.enabled &&
         (unavailableByMarketplacePolicy || !summary.installed || !summary.enabled),
-      authRequired: apps.some((app) => app.needsAuth || !app.accessible),
       appOwnership,
       ownedAppIds: Array.from(new Set([...ownedAppIds, ...apps.map((app) => app.id)])).toSorted(),
       apps,
@@ -303,13 +290,7 @@ export function resolveRecoverableCodexPluginConfigKeys(params: {
   return params.policy.pluginPolicies
     .filter(
       (pluginPolicy) =>
-        pluginPolicy.enabled &&
-        !isSettledMissingPluginPolicy({
-          pluginPolicy,
-          metadataCache: params.metadataCache,
-          appCacheKey: params.appCacheKey,
-          configCwd: params.configCwd,
-        }),
+        pluginPolicy.enabled && !isSettledMissingPluginPolicy({ ...params, pluginPolicy }),
     )
     .map((pluginPolicy) => pluginPolicy.configKey)
     .toSorted();
@@ -450,9 +431,6 @@ async function readPluginDetail(
   summary: v2.PluginSummary,
   diagnostics: CodexPluginInventoryDiagnostic[],
 ): Promise<v2.PluginDetail | undefined> {
-  if (params.readPluginDetails === false) {
-    return undefined;
-  }
   if (marketplace.remoteMarketplaceName && !summary.remotePluginId) {
     diagnostics.push({
       code: "plugin_detail_unavailable",
@@ -484,20 +462,6 @@ async function readPluginDetail(
   }
 }
 
-function resolveAppOwnership(params: {
-  detail?: v2.PluginDetail;
-  appInventory?: CodexAppInventoryCacheRead;
-  summary: v2.PluginSummary;
-}): "proven" | "ambiguous" | "none" {
-  if (params.detail && params.detail.apps.length > 0) {
-    return "proven";
-  }
-  const apps = params.appInventory?.snapshot?.apps ?? [];
-  return apps.some((app) => app.pluginDisplayNames.includes(params.summary.name))
-    ? "ambiguous"
-    : "none";
-}
-
 function resolveOwnedApps(params: {
   pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
@@ -516,7 +480,6 @@ function resolveOwnedApps(params: {
     return [];
   }
   const appInfos = params.appInventory?.snapshot?.apps ?? [];
-  const installedApps = params.appInventory?.snapshot?.installedApps ?? [];
   return detailApps
     .map((app) => {
       const info = findCodexAppById(appInfos, app.id);
@@ -525,30 +488,22 @@ function resolveOwnedApps(params: {
           id: app.id,
           name: app.name,
           accessible: false,
-          enabled: false,
-          needsAuth: true,
         };
       }
-      return Object.assign(
-        toCodexPluginOwnedAccountApp(info, findCodexAppById(installedApps, info.id)),
-        { name: app.name },
-      );
+      const ownedApp = toCodexPluginOwnedAccountApp(info);
+      ownedApp.name = app.name;
+      return ownedApp;
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
 export function toCodexPluginOwnedAccountApp(
   app: CodexAppInventorySnapshot["apps"][number],
-  installedApp: v2.InstalledApp | undefined,
 ): CodexPluginOwnedApp {
   return {
     id: app.id,
     name: app.name,
     accessible: true,
-    enabled: installedApp?.enabled ?? false,
-    // Modern plugin summaries carry no auth bit; account-authorized
-    // app/read metadata is the canonical connector access proof.
-    needsAuth: false,
     ...resolveOwnedAppApprovalOverrideKeys(app),
   };
 }
@@ -561,32 +516,24 @@ function resolveOwnedAppApprovalOverrideKeys(
     return {};
   }
   const appName = app.name.trim();
-  const appNameLower = appName.toLowerCase();
+  const prefixes = [...new Set([appName, appName.toLowerCase()])].filter(Boolean);
   // Agents: app/read includes disabled tools. Keep every non-read-only alias,
   // including collisions with read-only titles; retired names cannot authorize
   // a current tool and must not prevent the entire app from being admitted.
-  const keys = app.toolSummaries
-    .filter((tool) => !tool.isReadOnly)
-    .flatMap((tool) => resolveAppToolConfigKeys({ appName, appNameLower, tool }));
-  return { approvalOverrideToolConfigKeys: Array.from(new Set(keys)).toSorted() };
-}
-
-function resolveAppToolConfigKeys(params: {
-  appName: string;
-  appNameLower: string;
-  tool: { name: string; title?: string | null };
-}): string[] {
-  const keys = [params.tool.name];
-  if (params.tool.title) {
-    keys.push(params.tool.title);
+  const keys = new Set<string>();
+  for (const tool of app.toolSummaries) {
+    if (tool.isReadOnly) {
+      continue;
+    }
+    keys.add(tool.name);
+    if (tool.title) {
+      keys.add(tool.title);
+    }
+    for (const prefix of prefixes) {
+      keys.add(`${prefix}_${tool.name}`);
+    }
   }
-  if (params.appName) {
-    keys.push(`${params.appName}_${params.tool.name}`);
-  }
-  if (params.appNameLower && params.appNameLower !== params.appName) {
-    keys.push(`${params.appNameLower}_${params.tool.name}`);
-  }
-  return keys;
+  return { approvalOverrideToolConfigKeys: Array.from(keys).toSorted() };
 }
 
 function findPluginSummary(
@@ -612,7 +559,12 @@ function findConfiguredMarketplacePlugin(
   plugin: Pick<ResolvedCodexPluginPolicy, "marketplaceName" | "pluginName">,
 ): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
   if (plugin.marketplaceName === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME) {
-    return findWorkspaceMarketplacePlugin(listed, plugin.pluginName);
+    // Workspace display names are not unique; use the exact configured catalog id.
+    const marketplace = listed.marketplaces.find(
+      (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+    );
+    const summary = marketplace?.plugins.find((entry) => entry.id === plugin.pluginName);
+    return marketplace && summary ? { marketplace, summary } : undefined;
   }
   for (const marketplace of listed.marketplaces) {
     if (!marketplaceMatchesConfiguredName(marketplace, plugin.marketplaceName)) {
@@ -631,21 +583,8 @@ function marketplaceMatchesConfiguredName(
   configuredMarketplaceName: CodexPluginMarketplaceName,
 ): boolean {
   return isOpenAiCuratedMarketplaceName(configuredMarketplaceName)
-    ? isOpenAiCuratedMarketplace(marketplace)
+    ? isOpenAiCuratedMarketplaceName(marketplace.name)
     : marketplace.name === configuredMarketplaceName;
-}
-
-function findWorkspaceMarketplacePlugin(
-  listed: CodexPluginMarketplaceResponse,
-  pluginName: string,
-): { marketplace: v2.PluginMarketplaceEntry; summary: v2.PluginSummary } | undefined {
-  // Workspace display names are not unique; the configured pluginName is the
-  // exact catalog id returned by plugin/list.
-  const marketplace = listed.marketplaces.find(
-    (entry) => entry.name === CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-  );
-  const summary = marketplace?.plugins.find((plugin) => plugin.id === pluginName);
-  return marketplace && summary ? { marketplace, summary } : undefined;
 }
 
 function pluginNameFromPluginId(pluginId: string, marketplaceName: string): string | undefined {
@@ -669,11 +608,6 @@ export function marketplaceRef(
     ...(marketplace.path ? { path: marketplace.path } : {}),
     ...(!marketplace.path ? { remoteMarketplaceName: marketplace.name } : {}),
   };
-}
-
-/** True for any supported OpenAI curated marketplace wire name, matching Codex's own curated predicate. */
-export function isOpenAiCuratedMarketplace(marketplace: v2.PluginMarketplaceEntry): boolean {
-  return isOpenAiCuratedMarketplaceName(marketplace.name);
 }
 
 export function isOpenAiCuratedMarketplaceName(marketplaceName: string): boolean {

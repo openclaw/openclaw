@@ -1,6 +1,7 @@
 // Derives method lookup, authorization, startup, and dispatch policy from the canonical table.
 import type { OperatorScope } from "../operator-scopes.js";
-import { CORE_GATEWAY_METHOD_SPECS, type CoreGatewayMethodSpec } from "./core-descriptors.js";
+import type { CoreGatewayMethodSpec } from "./core-descriptor-types.js";
+import { CORE_GATEWAY_METHOD_SPECS } from "./core-descriptors.js";
 import { isCoreGatewayMethodProfileDependent } from "./core-profile-access.js";
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
@@ -99,6 +100,13 @@ export function createCoreGatewayMethodDescriptors(
       handler,
       owner: { kind: "core", area: "gateway" },
       scope: spec.scope,
+      ...(spec.shareKey
+        ? {
+            shareKey: spec.shareKey,
+            shareInvalidationEvents: spec.shareInvalidationEvents,
+            shareMaxAgeMs: spec.shareMaxAgeMs,
+          }
+        : {}),
       profileAccess:
         spec.sessionAccess || isCoreGatewayMethodProfileDependent(spec.name)
           ? "required"
@@ -106,6 +114,7 @@ export function createCoreGatewayMethodDescriptors(
       ...(spec.since ? { since: spec.since } : {}),
       ...(spec.advertise === false ? { advertise: false } : {}),
       ...(spec.startup === true ? { startup: "unavailable-until-sidecars" } : {}),
+      ...(spec.lifetime ? { lifetime: spec.lifetime } : {}),
       ...(spec.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
       ...(spec.description ? { description: spec.description } : {}),
       ...(spec.sessionAccess ? { sessionAccess: spec.sessionAccess } : {}),

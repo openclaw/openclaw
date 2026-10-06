@@ -12,6 +12,7 @@ import type {
   DiagnosticEventPayload,
   OpenClawPluginHttpRouteHandler,
   OpenClawPluginService,
+  OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
 import {
@@ -27,10 +28,12 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordGatewayRpcEvent } from "./service-gateway-rpc.js";
+import { recordChildProcessSpawn } from "./service-child-process.js";
 import { recordMemorySample } from "./service-memory.js";
+import { recordModelUsage } from "./service-model-usage.js";
+import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordWorkerRequest } from "./service-worker.js";
 
-const TOKEN_BUCKETS = [1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576];
 const BYTE_BUCKETS = [
   1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864, 268435456, 1073741824,
   4294967296, 17179869184,
@@ -116,67 +119,6 @@ function webhookLabels(
   };
 }
 
-function recordModelUsage(
-  store: PrometheusMetricStore,
-  evt: Extract<DiagnosticEventPayload, { type: "model.usage" }>,
-) {
-  const labels = {
-    agent: normalizeDiagnosticValue(evt.agentId),
-    channel: normalizeDiagnosticValue(evt.channel),
-    model: normalizeDiagnosticValue(evt.model),
-    provider: normalizeDiagnosticValue(evt.provider),
-  };
-  const usage = evt.usage;
-  const recordTokens = (tokenType: string, value: number | undefined) => {
-    const amount = numericValue(value);
-    if (amount === undefined || amount === 0) {
-      return;
-    }
-    store.counter(
-      "openclaw_model_tokens_total",
-      "Model tokens reported by diagnostic usage events.",
-      {
-        ...labels,
-        token_type: tokenType,
-      },
-      amount,
-    );
-    if (tokenType === "input" || tokenType === "output") {
-      store.histogram(
-        "openclaw_gen_ai_client_token_usage",
-        "GenAI token usage distribution for input and output tokens.",
-        {
-          model: labels.model,
-          provider: labels.provider,
-          token_type: tokenType,
-        },
-        amount,
-        TOKEN_BUCKETS,
-      );
-    }
-  };
-
-  recordTokens("input", usage.input);
-  recordTokens("output", usage.output);
-  recordTokens("cache_read", usage.cacheRead);
-  recordTokens("cache_write", usage.cacheWrite);
-  recordTokens("prompt", usage.promptTokens);
-  recordTokens("total", usage.total);
-
-  store.counter(
-    "openclaw_model_cost_usd_total",
-    "Estimated model cost in USD reported by diagnostic usage events.",
-    labels,
-    numericValue(evt.costUsd) ?? 0,
-  );
-  store.histogram(
-    "openclaw_model_usage_duration_seconds",
-    "Model usage event duration in seconds.",
-    labels,
-    seconds(evt.durationMs),
-  );
-}
-
 function recordDiagnosticEvent(
   store: PrometheusMetricStore,
   evt: DiagnosticEventPayload,
@@ -187,9 +129,14 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "worker.request":
+      if (metadata.trusted) {
+        recordWorkerRequest(store, evt);
+      }
+      return;
     case "diagnostic.phase.completed":
     case "gateway.rpc":
-      recordGatewayRpcEvent(store, evt, metadata);
+      recordOperationTimingEvent(store, evt, metadata);
       return;
     case "diagnostic.gc":
       store.histogram(
@@ -579,12 +526,7 @@ function recordDiagnosticEvent(
       });
       return;
     case "diagnostic.child_process.spawn":
-      store.counter(
-        "openclaw_child_process_spawn_total",
-        "Successful child launches through the shared spawn and exec owners.",
-        { family: normalizeDiagnosticValue(evt.family) },
-        numericValue(evt.count) ?? 0,
-      );
+      recordChildProcessSpawn(store, evt);
       return;
     case "diagnostic.memory.sample":
       recordMemorySample(store, evt.memory, BYTE_BUCKETS);
@@ -758,14 +700,9 @@ type PrometheusExporterHealthUpdate = {
   status: "started" | "dropped";
   reason?: "configured";
 };
-type TrustedExporterDiagnosticsBridge = {
-  emit: (event: {
-    type: "telemetry.exporter";
-    exporter: "diagnostics-prometheus";
-    signal: "metrics";
-    status: "started" | "dropped";
-    reason?: "configured";
-  }) => void;
+type TrustedExporterDiagnosticsBridge = NonNullable<
+  OpenClawPluginServiceContext["internalDiagnostics"]
+> & {
   reportExporterHealth?: (update: PrometheusExporterHealthUpdate) => void;
 };
 
@@ -773,12 +710,18 @@ export function createDiagnosticsPrometheusExporter() {
   const store = createPrometheusMetricStore();
   let unsubscribe: (() => void) | undefined;
   let internalDiagnostics: TrustedExporterDiagnosticsBridge | undefined;
-  const reportExporterHealth = (update: PrometheusExporterHealthUpdate) => {
+  const reportExporterStatus = (update: PrometheusExporterHealthUpdate) => {
     try {
       internalDiagnostics?.reportExporterHealth?.(update);
     } catch {
       // Exporter health must never affect the exporter lifecycle.
     }
+    const { transport: _transport, ...event } = update;
+    internalDiagnostics?.emit({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-prometheus",
+      ...event,
+    });
   };
 
   const service = {
@@ -818,17 +761,10 @@ export function createDiagnosticsPrometheusExporter() {
         { exclude: ["log.record"] },
         { includePrivateData: false },
       );
-      internalDiagnostics = ctx.internalDiagnostics as unknown as TrustedExporterDiagnosticsBridge;
-      reportExporterHealth({
+      internalDiagnostics = ctx.internalDiagnostics;
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
-        status: "started",
-        reason: "configured",
-      });
-      internalDiagnostics.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
         status: "started",
         reason: "configured",
       });
@@ -836,15 +772,9 @@ export function createDiagnosticsPrometheusExporter() {
     stop() {
       unsubscribe?.();
       unsubscribe = undefined;
-      reportExporterHealth({
+      reportExporterStatus({
         signal: "metrics",
         transport: "prometheus-scrape",
-        status: "dropped",
-      });
-      internalDiagnostics?.emit({
-        type: "telemetry.exporter",
-        exporter: "diagnostics-prometheus",
-        signal: "metrics",
         status: "dropped",
       });
       internalDiagnostics = undefined;

@@ -28,7 +28,6 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
       assertCurrent: () => {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-    coordinatorRuntime: { directory: "/synthetic/coordinators", keepAlive: false },
   }),
 }));
 

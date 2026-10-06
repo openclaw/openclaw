@@ -36,23 +36,9 @@ export async function* iterateSdkRunEvents(
       return event;
     }
     const chatProjection = readChatProjection(event);
-    if (chatProjection?.state === "delta") {
-      if (hasCanonicalAssistantRunEvent) {
-        return undefined;
-      }
-      const runEvent = normalizeChatProjectionEvent(
-        event,
-        chatProjection,
-        previousChatProjectionText,
-      );
-      const text = readChatProjectionText(chatProjection.payload);
-      if (text !== undefined) {
-        previousChatProjectionText = text;
-      }
-      return runEvent;
-    }
     if (chatProjection) {
-      if (terminalSource) {
+      const isDelta = chatProjection.state === "delta";
+      if (isDelta ? hasCanonicalAssistantRunEvent : terminalSource) {
         return undefined;
       }
       const runEvent = normalizeChatProjectionEvent(
@@ -60,7 +46,14 @@ export async function* iterateSdkRunEvents(
         chatProjection,
         previousChatProjectionText,
       );
-      terminalSource = { kind: "chat", eventType: runEvent.type };
+      if (isDelta) {
+        const text = readChatProjectionText(chatProjection.payload);
+        if (text !== undefined) {
+          previousChatProjectionText = text;
+        }
+      } else {
+        terminalSource = { kind: "chat", eventType: runEvent.type };
+      }
       return runEvent;
     }
     if (isAssistantRunEvent(event)) {

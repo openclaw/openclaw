@@ -53,15 +53,20 @@ async function captureDirectoryGuard(dir: string): Promise<(handle?: FileHandle)
   };
 }
 
-/** Keeps a read's original file descriptor until its enclosing host accepts the result. */
+/** Publishes guarded media; a read scope retains its descriptor until host acceptance. */
 export async function writeReadScopeMedia<T extends { id: string }>(params: {
   dir: string;
   tempPrefix: string;
-  scope: ReadScope;
+  scope?: ReadScope;
+  assertCommitAllowed?: () => void;
   durable?: boolean;
   write: (handle: FileHandle) => Promise<T>;
 }): Promise<T> {
-  params.scope.assertCurrent();
+  const assertCurrent = () => {
+    params.scope?.assertCurrent();
+    params.assertCommitAllowed?.();
+  };
+  assertCurrent();
   const assertRequestedDirectory = await captureDirectoryGuard(params.dir);
   const mediaRoot = await root(params.dir);
   const assertMediaDirectory = await captureDirectoryGuard(mediaRoot.rootReal);
@@ -74,7 +79,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
         fsSync.constants.O_NONBLOCK,
     );
     try {
-      params.scope.assertCurrent();
+      assertCurrent();
       assertRequestedDirectory();
       assertMediaDirectory(directory);
       await directory.chmod(0o700).catch(() => undefined);
@@ -85,7 +90,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       );
     }
   }
-  params.scope.assertCurrent();
+  assertCurrent();
   // Own one sibling file; cleanup must never recurse into substituted staging contents.
   const temporaryPath = buildRandomTempFilePath({
     rootDir: mediaRoot.rootReal,
@@ -104,11 +109,11 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     get key() {
       return finalId ? path.join(params.dir, finalId) : temporaryPath;
     },
-    onDelegated: (assertCurrent?: () => void) => {
+    onDelegated: (assertDelegatedCustody?: () => void) => {
       const previous = assertCustody;
       assertCustody = () => {
         previous?.();
-        assertCurrent?.();
+        assertDelegatedCustody?.();
       };
       // A native metadata commit may outlive the ordinary reply or process exit.
       if (cleanupAtExit) {
@@ -174,11 +179,11 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       })()),
   };
   try {
-    params.scope.assertCurrent();
+    assertCurrent();
     handle = await fs.open(temporaryPath, "wx", MEDIA_FILE_MODE);
     const retained = handle;
     const expected = fsSync.fstatSync(retained.fd, { bigint: true });
-    assertOwnedFile = (filePath) => {
+    const assertCreatedFile = (filePath: string) => {
       const opened = fsSync.fstatSync(retained.fd, { bigint: true });
       const current = fsSync.lstatSync(filePath, { bigint: true });
       if (
@@ -195,6 +200,13 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       ) {
         throw new FsSafeError("path-mismatch", "Media output no longer names the created file");
       }
+    };
+    assertOwnedFile = assertCreatedFile;
+    const assertPublicationAllowed = () => {
+      assertCurrent();
+      assertRequestedDirectory();
+      assertMediaDirectory();
+      assertCreatedFile(temporaryPath);
     };
     cleanupAtExit = () => {
       for (const name of [finalId, temporaryName]) {
@@ -214,11 +226,9 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       }
     };
     exitCleanups.add(cleanupAtExit);
+    assertCurrent();
     const result = await params.write(retained);
-    params.scope.assertCurrent();
-    assertRequestedDirectory();
-    assertMediaDirectory();
-    assertOwnedFile(temporaryPath);
+    assertPublicationAllowed();
     // Match sibling publication's mode finalization, including restrictive caller umasks.
     try {
       await retained.chmod(MEDIA_FILE_MODE);
@@ -228,24 +238,15 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       }
     }
     if (params.durable) {
-      params.scope.assertCurrent();
-      assertRequestedDirectory();
-      assertMediaDirectory();
-      assertOwnedFile(temporaryPath);
+      assertPublicationAllowed();
       await retained.sync();
     }
-    params.scope.assertCurrent();
-    assertRequestedDirectory();
-    assertMediaDirectory();
-    assertOwnedFile(temporaryPath);
+    assertPublicationAllowed();
     finalId = result.id;
     await mediaRoot.move(temporaryName, finalId, {
       overwrite: false,
       assertBeforeMutation: () => {
-        params.scope.assertCurrent();
-        assertRequestedDirectory();
-        assertMediaDirectory();
-        assertOwnedFile?.(temporaryPath);
+        assertPublicationAllowed();
         // Repeat the move owner's collision check after its awaited preparation.
         try {
           fsSync.lstatSync(path.join(mediaRoot.rootReal, result.id));
@@ -260,12 +261,17 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
     });
     resource.assertCurrent();
     if (params.durable) {
-      params.scope.assertCurrent();
+      assertCurrent();
       await syncDirectoryBestEffort(mediaRoot.rootReal);
-      params.scope.assertCurrent();
+      assertCurrent();
       resource.assertCurrent();
     }
-    params.scope.registerResource(resource);
+    assertCurrent();
+    if (params.scope) {
+      params.scope.registerResource(resource);
+    } else {
+      await settleChannelReadResource(resource, true);
+    }
     handedOff = true;
     return result;
   } catch (error) {

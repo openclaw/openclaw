@@ -10,6 +10,7 @@ import {
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
@@ -72,13 +73,10 @@ type NodeHostMcpClient = {
   close(): Promise<void>;
 };
 
-type NodeHostMcpTransport = {
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  connectionTimeoutMs: number;
-  requestTimeoutMs: number;
-  detachStderr?: () => void;
-};
+type NodeHostMcpTransport = Pick<
+  NonNullable<ReturnType<typeof resolveMcpTransport>>,
+  "transport" | "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
+>;
 
 type NodeHostMcpSession = NodeHostMcpTransport & {
   client: NodeHostMcpClient;
@@ -116,17 +114,7 @@ export class NodeHostMcpError extends Error {
   }
 }
 
-export type NodeHostMcpManager = {
-  descriptors: NodePluginToolDescriptor[];
-  callMcpTool(params: {
-    server: string;
-    tool: string;
-    arguments?: Record<string, unknown>;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  }): Promise<CallToolResult>;
-  close(): Promise<void>;
-};
+export type NodeHostMcpManager = Awaited<ReturnType<typeof startNodeHostMcpManager>>;
 
 type NodeHostMcpManagerDeps = {
   createClient?: (serverName: string, options: { onToolsChanged: () => void }) => NodeHostMcpClient;
@@ -135,10 +123,6 @@ type NodeHostMcpManagerDeps = {
   warn?: (message: string) => void;
   signal?: AbortSignal;
 };
-
-function defaultWarn(message: string): void {
-  console.warn(message);
-}
 
 function formatMcpError(error: unknown): string {
   return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
@@ -177,13 +161,6 @@ function reserveDescriptorName(baseName: string, usedNames: Set<string>): string
   }
 }
 
-function normalizeInputSchema(value: unknown): Record<string, unknown> {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return { type: "object", properties: {}, additionalProperties: true };
-}
-
 /** Builds provider-safe MCP descriptors in stable server/tool order. */
 function buildNodeMcpToolDescriptors(
   listedTools: ReadonlyArray<{ serverName: string; tool: Tool }>,
@@ -206,7 +183,11 @@ function buildNodeMcpToolDescriptors(
           "MCP tool",
         NODE_MCP_DESCRIPTION_MAX_CHARS,
       ),
-      parameters: normalizeInputSchema(tool.inputSchema),
+      parameters: asOptionalRecord(tool.inputSchema) ?? {
+        type: "object",
+        properties: {},
+        additionalProperties: true,
+      },
       command: NODE_MCP_TOOLS_CALL_COMMAND,
       mcp: { server: serverName, tool: toolName },
     };
@@ -268,8 +249,8 @@ async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<v
 export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
-): Promise<NodeHostMcpManager> {
-  const warn = deps.warn ?? defaultWarn;
+) {
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
   const createClient =
     deps.createClient ??
     ((_serverName, options) =>
@@ -555,7 +536,13 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params) {
+    async callMcpTool(params: {
+      server: string;
+      tool: string;
+      arguments?: Record<string, unknown>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    }) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {

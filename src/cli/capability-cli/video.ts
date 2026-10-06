@@ -4,33 +4,19 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { VideoGenerationResolution } from "../../video-generation/types.js";
+import { createEnumOptionParser } from "../../shared/enum-option.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
 
 const GENERATED_VIDEO_DOWNLOAD_TIMEOUT_MS = 120_000;
 
-function normalizeVideoResolution(raw: string | undefined): VideoGenerationResolution | undefined {
-  const normalized = raw?.trim().toUpperCase();
-  if (!normalized) {
-    return undefined;
-  }
-  if (
-    normalized === "360P" ||
-    normalized === "480P" ||
-    normalized === "540P" ||
-    normalized === "720P" ||
-    normalized === "768P" ||
-    normalized === "1080P"
-  ) {
-    return normalized;
-  }
-  throw new Error("video resolution must be one of 360P, 480P, 540P, 720P, 768P, or 1080P");
-}
+const parseVideoOption = createEnumOptionParser();
+const VIDEO_RESOLUTIONS = ["360P", "480P", "540P", "720P", "768P", "1080P"] as const;
 
 async function fetchGeneratedVideoDownload(params: {
   cfg: OpenClawConfig;
@@ -81,182 +67,13 @@ async function fetchGeneratedVideoDownload(params: {
   }
 }
 
-async function runVideoGenerate(params: {
-  prompt: string;
-  model?: string;
-  output?: string;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: VideoGenerationResolution;
-  durationSeconds?: number;
-  audio?: boolean;
-  watermark?: boolean;
-  timeoutMs?: number;
-  agent?: string;
-}) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
-  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { generateVideo } = await import("../../video-generation/runtime.js");
-  const { readResponseWithLimit } = await import("../../infra/http-body.js");
-  const { resolveGeneratedMediaMaxBytes } = await import("../../media/configured-max-bytes.js");
-  const { publishOutputFileAtomically, writeOutputAsset } = await import("../media-output.js");
-  requireProviderModelOverride(params.model);
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer video.generate",
-    targetIds: getModelsCommandSecretTargetIds(),
-  });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video.generate");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const result = await generateVideo({
-    cfg,
-    agentDir,
-    prompt: params.prompt,
-    modelOverride: params.model,
-    size: params.size,
-    aspectRatio: params.aspectRatio,
-    resolution: params.resolution,
-    durationSeconds: params.durationSeconds,
-    audio: params.audio,
-    watermark: params.watermark,
-    timeoutMs: params.timeoutMs,
-  });
-  const outputs = await Promise.all(
-    result.videos.map(async (video, index) => {
-      if (!video.buffer && !video.url) {
-        throw new Error(`Video asset at index ${index} has neither buffer nor url`);
-      }
-
-      let videoBuffer = video.buffer;
-      if (!videoBuffer && video.url) {
-        const download = await fetchGeneratedVideoDownload({
-          cfg,
-          provider: result.provider,
-          url: video.url,
-        });
-        const response = download.response;
-        try {
-          if (params.output && response.body) {
-            const mimeType = normalizeMimeType(video.mimeType);
-            const ext =
-              extensionForMime(mimeType) ||
-              path.extname(video.fileName ?? "") ||
-              path.extname(params.output);
-            const resolvedOutput = path.resolve(params.output);
-            const parsed = path.parse(resolvedOutput);
-            const filePath =
-              result.videos.length <= 1
-                ? path.join(parsed.dir, `${parsed.name}${ext}`)
-                : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
-            const size = await publishOutputFileAtomically({
-              filePath,
-              writeTemp: async (tempPath) => {
-                await pipeline(
-                  Readable.fromWeb(
-                    response.body as import("node:stream/web").ReadableStream<Uint8Array>,
-                  ),
-                  createWriteStream(tempPath, { flags: "wx" }),
-                );
-                const writtenSize = (await fs.stat(tempPath)).size;
-                if (writtenSize === 0) {
-                  throw new Error("Generated media output is empty.");
-                }
-                return writtenSize;
-              },
-            });
-            return { path: filePath, mimeType: video.mimeType, size };
-          }
-          // Bound the in-memory download; --output streams to disk. Keep signed
-          // provider URLs out of overflow errors.
-          const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
-          videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
-            onOverflow: ({ maxBytes }) =>
-              new Error(
-                `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
-              ),
-          });
-          if (videoBuffer.byteLength === 0) {
-            throw new Error("Generated media output is empty.");
-          }
-        } finally {
-          await download.release();
-        }
-      }
-
-      return await writeOutputAsset({
-        buffer: videoBuffer!,
-        mimeType: video.mimeType,
-        originalFilename: video.fileName,
-        outputPath: params.output,
-        outputIndex: index,
-        outputCount: result.videos.length,
-        subdir: "generated",
-      });
-    }),
-  );
-  return {
-    ok: true,
-    capability: "video.generate",
-    transport: "local" as const,
-    provider: result.provider,
-    model: result.model,
-    attempts: result.attempts,
-    outputs,
-  } satisfies CapabilityEnvelope;
-}
-
-async function runVideoDescribe(params: { file: string; model?: string; agent?: string }) {
-  const {
-    requireProviderModelOverride,
-    resolveCapabilityProviderAgentId,
-    resolveLocalCapabilityRuntimeConfig,
-  } = await import("./shared.js");
-  const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-  const { resolveAgentDir } = await import("../../agents/agent-scope.js");
-  const { describeVideoFile } = await import("../../media-understanding/runtime.js");
-  const cfg = await resolveLocalCapabilityRuntimeConfig({
-    commandName: "infer video.describe",
-    targetIds: getModelsCommandSecretTargetIds(),
-  });
-  const agentId = resolveCapabilityProviderAgentId(cfg, params.agent, "infer video describe");
-  const { prepareLocalCapabilityAccountSecrets } = await import("./local-account-secrets.js");
-  await prepareLocalCapabilityAccountSecrets({ cfg, agentId });
-  const agentDir = resolveAgentDir(cfg, agentId);
-  const activeModel = requireProviderModelOverride(params.model);
-  const result = await describeVideoFile({
-    filePath: path.resolve(params.file),
-    cfg,
-    agentId,
-    agentDir,
-    activeModel,
-  });
-  if (!result.text) {
-    throw new Error(`No description returned for video: ${path.resolve(params.file)}`);
-  }
-  return {
-    ok: true,
-    capability: "video.describe",
-    transport: "local" as const,
-    provider: result.provider,
-    model: result.model,
-    attempts: [],
-    outputs: [{ path: path.resolve(params.file), text: result.text, kind: "video.description" }],
-  } satisfies CapabilityEnvelope;
-}
-
 export function registerVideoCapabilityCommands(capability: Command): void {
-  const video = capability
+  const videoCommand = capability
     .command("video")
     .description("Video generation and description")
     .option("--agent <id>", "Agent whose model and auth state should be used");
 
-  video
+  videoCommand
     .command("generate")
     .description("Generate video")
     .requiredOption("--prompt <text>", "Prompt text")
@@ -276,25 +93,134 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
-        const { parseOptionalFiniteNumber, parseOptionalTimeoutMs, resolveCapabilityAgentOption } =
-          await import("./shared.js");
-        return runVideoGenerate({
-          prompt: String(opts.prompt),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          model: opts.model as string | undefined,
-          output: opts.output as string | undefined,
+        const {
+          parseOptionalTimeoutMs,
+          resolveCapabilityAgentOption,
+          requireProviderModelOverride,
+          resolveLocalCapabilityAgent,
+        } = await import("./shared.js");
+        const prompt = String(opts.prompt);
+        const agent = resolveCapabilityAgentOption(command, opts.agent);
+        const model = opts.model as string | undefined;
+        const output = opts.output as string | undefined;
+        const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
+        const durationSeconds = parseStrictFiniteNumber(opts.duration);
+        if (opts.duration !== undefined && durationSeconds === undefined) {
+          throw new Error("--duration must be a finite number");
+        }
+        const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
+        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { generateVideo } = await import("../../video-generation/runtime.js");
+        const { readResponseWithLimit } = await import("../../infra/http-body.js");
+        const { resolveGeneratedMediaMaxBytes } =
+          await import("../../media/configured-max-bytes.js");
+        const { publishOutputFileAtomically, writeOutputAsset } =
+          await import("../media-output.js");
+        requireProviderModelOverride(model);
+        const { cfg, agentDir } = await resolveLocalCapabilityAgent({
+          commandName: "infer video.generate",
+          targetIds: getModelsCommandSecretTargetIds(),
+          agent,
+        });
+        const result = await generateVideo({
+          cfg,
+          agentDir,
+          prompt,
+          modelOverride: model,
           size: opts.size as string | undefined,
           aspectRatio: opts.aspectRatio as string | undefined,
-          resolution: normalizeVideoResolution(opts.resolution as string | undefined),
-          durationSeconds: parseOptionalFiniteNumber(opts.duration, "--duration"),
+          resolution,
+          durationSeconds,
           audio: opts.audio === true ? true : undefined,
           watermark: opts.watermark === true ? true : undefined,
-          timeoutMs: parseOptionalTimeoutMs(opts.timeoutMs),
+          timeoutMs,
         });
+        const outputs = await Promise.all(
+          result.videos.map(async (video, index) => {
+            if (!video.buffer && !video.url) {
+              throw new Error(`Video asset at index ${index} has neither buffer nor url`);
+            }
+
+            let videoBuffer = video.buffer;
+            if (!videoBuffer && video.url) {
+              const download = await fetchGeneratedVideoDownload({
+                cfg,
+                provider: result.provider,
+                url: video.url,
+              });
+              const response = download.response;
+              try {
+                if (output && response.body) {
+                  const mimeType = normalizeMimeType(video.mimeType);
+                  const ext =
+                    extensionForMime(mimeType) ||
+                    path.extname(video.fileName ?? "") ||
+                    path.extname(output);
+                  const resolvedOutput = path.resolve(output);
+                  const parsed = path.parse(resolvedOutput);
+                  const filePath =
+                    result.videos.length <= 1
+                      ? path.join(parsed.dir, `${parsed.name}${ext}`)
+                      : path.join(parsed.dir, `${parsed.name}-${String(index + 1)}${ext}`);
+                  const size = await publishOutputFileAtomically({
+                    filePath,
+                    writeTemp: async (tempPath) => {
+                      await pipeline(
+                        Readable.fromWeb(
+                          response.body as import("node:stream/web").ReadableStream<Uint8Array>,
+                        ),
+                        createWriteStream(tempPath, { flags: "wx" }),
+                      );
+                      const writtenSize = (await fs.stat(tempPath)).size;
+                      if (writtenSize === 0) {
+                        throw new Error("Generated media output is empty.");
+                      }
+                      return writtenSize;
+                    },
+                  });
+                  return { path: filePath, mimeType: video.mimeType, size };
+                }
+                // Bound the in-memory download; --output streams to disk. Keep signed
+                // provider URLs out of overflow errors.
+                const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
+                videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
+                  onOverflow: ({ maxBytes }) =>
+                    new Error(
+                      `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
+                    ),
+                });
+                if (videoBuffer.byteLength === 0) {
+                  throw new Error("Generated media output is empty.");
+                }
+              } finally {
+                await download.release();
+              }
+            }
+
+            return await writeOutputAsset({
+              buffer: videoBuffer!,
+              mimeType: video.mimeType,
+              originalFilename: video.fileName,
+              outputPath: output,
+              outputIndex: index,
+              outputCount: result.videos.length,
+              subdir: "generated",
+            });
+          }),
+        );
+        return {
+          ok: true,
+          capability: "video.generate",
+          transport: "local" as const,
+          provider: result.provider,
+          model: result.model,
+          attempts: result.attempts,
+          outputs,
+        } satisfies CapabilityEnvelope;
       }),
     );
 
-  video
+  videoCommand
     .command("describe")
     .description("Describe one video file")
     .requiredOption("--file <path>", "Video file")
@@ -303,28 +229,57 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .option("--json", "Output JSON", false)
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
-        const { resolveCapabilityAgentOption } = await import("./shared.js");
-        return runVideoDescribe({
-          file: String(opts.file),
-          agent: resolveCapabilityAgentOption(command, opts.agent),
-          model: opts.model as string | undefined,
+        const {
+          requireProviderModelOverride,
+          resolveLocalCapabilityAgent,
+          resolveCapabilityAgentOption,
+        } = await import("./shared.js");
+        const file = String(opts.file);
+        const agent = resolveCapabilityAgentOption(command, opts.agent);
+        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
+        const { describeVideoFile } = await import("../../media-understanding/runtime.js");
+        const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
+          commandName: "infer video.describe",
+          targetIds: getModelsCommandSecretTargetIds(),
+          agent,
+          surface: "infer video describe",
         });
+        const activeModel = requireProviderModelOverride(opts.model as string | undefined);
+        const result = await describeVideoFile({
+          filePath: path.resolve(file),
+          cfg,
+          agentId,
+          agentDir,
+          activeModel,
+        });
+        if (!result.text) {
+          throw new Error(`No description returned for video: ${path.resolve(file)}`);
+        }
+        return {
+          ok: true,
+          capability: "video.describe",
+          transport: "local" as const,
+          provider: result.provider,
+          model: result.model,
+          attempts: [],
+          outputs: [{ path: path.resolve(file), text: result.text, kind: "video.description" }],
+        } satisfies CapabilityEnvelope;
       }),
     );
 
   registerLocalProvidersCommand(
-    video,
+    videoCommand,
     "List video generation and description providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-        await import("./shared.js");
+      const { providerHasGenericConfig } = await import("./shared.js");
+      const { resolveModelRefOverride } = await import("../../shared/model-ref-override.js");
       const { listRuntimeVideoGenerationProviders } =
         await import("../../video-generation/runtime.js");
       const { buildMediaUnderstandingRegistry } =
         await import("../../media-understanding/provider-registry.js");
-      const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
+      const selectedGenerationProvider = resolveModelRefOverride(
         resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-      );
+      ).provider;
       return {
         generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
           available: true,
@@ -350,6 +305,5 @@ export function registerVideoCapabilityCommands(capability: Command): void {
           })),
       };
     },
-    (value) => JSON.stringify(value, null, 2),
   );
 }

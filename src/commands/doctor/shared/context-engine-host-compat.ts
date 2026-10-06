@@ -1,3 +1,4 @@
+import { listModelRefsFromConfigValue } from "@openclaw/model-catalog-core/configured-model-refs";
 // Doctor checks for context engine host requirements against configured agent runtimes.
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -32,18 +33,10 @@ import { defaultSlotIdForKey } from "../../../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../../../utils.js";
 
 type HostCandidate = {
-  /** Runtime or harness id that will host an agent run. */
-  runtimeId: string;
   /** Context-engine host capability descriptor for the runtime. */
   host: ContextEngineHostSupport;
   /** Config paths that caused doctor to consider this host. */
   paths: string[];
-};
-
-type HostCompatibilityIssue = {
-  candidate: HostCandidate;
-  missingCapabilities: string[];
-  requiredCapabilities: string[];
 };
 
 type ContextEngineInfoResult =
@@ -56,31 +49,6 @@ function normalizeRuntimeId(value: unknown): string | undefined {
   }
   const normalized = normalizeEmbeddedAgentRuntime(value.trim().toLowerCase());
   return normalized || undefined;
-}
-
-function parseModelRef(value: unknown): { provider: string; modelId: string } | undefined {
-  return typeof value === "string" ? (parseModelCatalogRef(value) ?? undefined) : undefined;
-}
-
-function listModelRefs(value: unknown): string[] {
-  if (typeof value === "string" && value.trim()) {
-    return [value.trim()];
-  }
-  if (!isRecord(value)) {
-    return [];
-  }
-  const refs: string[] = [];
-  if (typeof value.primary === "string" && value.primary.trim()) {
-    refs.push(value.primary.trim());
-  }
-  if (Array.isArray(value.fallbacks)) {
-    for (const fallback of value.fallbacks) {
-      if (typeof fallback === "string" && fallback.trim()) {
-        refs.push(fallback.trim());
-      }
-    }
-  }
-  return refs;
 }
 
 function collectExplicitRuntimeRefs(
@@ -124,8 +92,11 @@ function collectSelectedModelRefs(
 ): Array<{ modelRef: string; path: string; agentId?: string }> {
   const refs: Array<{ modelRef: string; path: string; agentId?: string }> = [];
   const pushModel = (value: unknown, path: string, agentId?: string) => {
-    for (const modelRef of listModelRefs(value)) {
-      refs.push({ modelRef, path, ...(agentId ? { agentId } : {}) });
+    for (const ref of listModelRefsFromConfigValue(value)) {
+      const modelRef = ref.trim();
+      if (modelRef) {
+        refs.push({ modelRef, path, ...(agentId ? { agentId } : {}) });
+      }
     }
   };
   const pushModelMap = (models: unknown, path: string, agentId?: string) => {
@@ -158,48 +129,30 @@ function collectSelectedModelRefs(
   return refs;
 }
 
-function runtimeHostCandidate(params: {
-  cfg: OpenClawConfig;
-  runtimeId: string;
-  paths: string[];
-}): HostCandidate {
-  const runtimeId = normalizeRuntimeId(params.runtimeId) ?? params.runtimeId;
+function resolveRuntimeHost(cfg: OpenClawConfig, runtimeId: string): ContextEngineHostSupport {
   if (runtimeId === "openclaw" || runtimeId === "auto") {
-    return { runtimeId, host: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST, paths: params.paths };
+    return OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST;
   }
   if (runtimeId === "codex") {
-    return { runtimeId, host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST, paths: params.paths };
+    return CODEX_APP_SERVER_CONTEXT_ENGINE_HOST;
   }
-
   const harness = getRegisteredAgentHarness(runtimeId)?.harness;
   if (harness) {
     return {
-      runtimeId,
-      host: {
-        id: `harness:${harness.id}`,
-        label: `${harness.label} harness`,
-        capabilities: harness.contextEngineHostCapabilities ?? [],
-      },
-      paths: params.paths,
+      id: `harness:${harness.id}`,
+      label: `${harness.label} harness`,
+      capabilities: harness.contextEngineHostCapabilities ?? [],
     };
   }
-
-  const cliBackend = resolveCliBackendConfig(runtimeId, params.cfg);
-  return {
-    runtimeId,
-    host: buildGenericCliContextEngineHostSupport({
-      backendId: cliBackend?.id ?? runtimeId,
-      capabilities: cliBackend?.contextEngineHostCapabilities,
-    }),
-    paths: params.paths,
-  };
+  const cliBackend = resolveCliBackendConfig(runtimeId, cfg);
+  return buildGenericCliContextEngineHostSupport({
+    backendId: cliBackend?.id ?? runtimeId,
+    capabilities: cliBackend?.contextEngineHostCapabilities,
+  });
 }
 
 /** Collect effective agent-run host candidates from provider/model runtime policy. */
-function collectConfiguredContextEngineAgentRunHosts(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): HostCandidate[] {
+function collectConfiguredContextEngineAgentRunHosts(cfg: OpenClawConfig): HostCandidate[] {
   const runtimePaths = new Map<string, string[]>();
   const push = (runtimeId: string | undefined, path: string) => {
     if (!runtimeId) {
@@ -211,16 +164,16 @@ function collectConfiguredContextEngineAgentRunHosts(params: {
     runtimePaths.set(normalized, paths);
   };
 
-  for (const ref of collectExplicitRuntimeRefs(params.cfg)) {
+  for (const ref of collectExplicitRuntimeRefs(cfg)) {
     push(ref.runtimeId, ref.path);
   }
-  for (const model of collectSelectedModelRefs(params.cfg)) {
-    const parsed = parseModelRef(model.modelRef);
+  for (const model of collectSelectedModelRefs(cfg)) {
+    const parsed = parseModelCatalogRef(model.modelRef);
     if (!parsed) {
       continue;
     }
     const policy = resolveAgentHarnessPolicy({
-      config: params.cfg,
+      config: cfg,
       provider: parsed.provider,
       modelId: parsed.modelId,
       agentId: model.agentId,
@@ -228,9 +181,10 @@ function collectConfiguredContextEngineAgentRunHosts(params: {
     push(policy.runtime, model.path);
   }
 
-  return [...runtimePaths.entries()].map(([runtimeId, paths]) =>
-    runtimeHostCandidate({ cfg: params.cfg, runtimeId, paths }),
-  );
+  return [...runtimePaths.entries()].map(([runtimeId, paths]) => ({
+    host: resolveRuntimeHost(cfg, runtimeId),
+    paths,
+  }));
 }
 
 function selectedContextEngineSlotId(cfg: OpenClawConfig): string {
@@ -250,7 +204,11 @@ async function resolveSelectedContextEngineInfo(params: {
     return { info: { id: engineId, name: engineId }, warnings: [] };
   }
 
-  ensureContextEnginesInitialized();
+  const initializeDuringResolution =
+    getContextEngineRegistration(engineId)?.lifecycle === "runtime";
+  if (!initializeDuringResolution) {
+    await ensureContextEnginesInitialized();
+  }
   let pluginRegistry: PluginRegistry | undefined;
   let inspection: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>> | undefined;
   let engine: ContextEngine | undefined;
@@ -287,6 +245,7 @@ async function resolveSelectedContextEngineInfo(params: {
       });
       const resolve = () =>
         resolveContextEngine(params.cfg, {
+          initialize: initializeDuringResolution ? ensureContextEnginesInitialized : undefined,
           agentDir: resolveAgentDir(params.cfg, agentId, params.env),
           workspaceDir: params.cfg.agents?.defaults?.workspace
             ? resolveUserPath(params.cfg.agents.defaults.workspace, params.env)
@@ -339,26 +298,25 @@ async function resolveSelectedContextEngineInfo(params: {
   return outcome.result;
 }
 
-function collectHostCompatibilityIssues(params: {
-  info: ContextEngineInfo;
-  hosts: HostCandidate[];
-}): HostCompatibilityIssue[] {
-  return params.hosts.flatMap((candidate) => {
+function collectHostCompatibilityWarnings(
+  info: ContextEngineInfo,
+  hosts: HostCandidate[],
+): string[] {
+  return hosts.flatMap((candidate) => {
     const evaluation = evaluateContextEngineHostSupport({
-      contextEngineInfo: params.info,
+      contextEngineInfo: info,
       operation: "agent-run",
       host: candidate.host,
     });
-    if (evaluation.ok) {
-      return [];
-    }
-    return [
-      {
-        candidate,
-        missingCapabilities: evaluation.missingCapabilities,
-        requiredCapabilities: evaluation.requirements.requiredCapabilities,
-      },
-    ];
+    return evaluation.ok
+      ? []
+      : [
+          `- plugins.slots.contextEngine: context engine "${info.id}" is incompatible with ` +
+            `${candidate.host.label} (${formatPaths(candidate.paths)}). ` +
+            `Missing host capabilities: ${evaluation.missingCapabilities.join(", ")}. ` +
+            `Required capabilities: ${evaluation.requirements.requiredCapabilities.join(", ")}. ` +
+            `Host capabilities: ${formatHostCapabilities(candidate.host.capabilities)}.`,
+        ];
   });
 }
 
@@ -376,23 +334,14 @@ function formatHostCapabilities(capabilities: readonly string[]): string {
 
 function formatCompatibilityWarnings(params: {
   info: ContextEngineInfo;
-  issues: HostCompatibilityIssue[];
+  issues: string[];
   hostCount: number;
   doctorFixCommand: string;
 }): string[] {
   if (params.issues.length === 0) {
     return [];
   }
-  const lines = params.issues.map((issue) => {
-    const paths = formatPaths(issue.candidate.paths);
-    return (
-      `- plugins.slots.contextEngine: context engine "${params.info.id}" is incompatible with ` +
-      `${issue.candidate.host.label} (${paths}). ` +
-      `Missing host capabilities: ${issue.missingCapabilities.join(", ")}. ` +
-      `Required capabilities: ${issue.requiredCapabilities.join(", ")}. ` +
-      `Host capabilities: ${formatHostCapabilities(issue.candidate.host.capabilities)}.`
-    );
-  });
+  const lines = [...params.issues];
   const incompatibleAllHosts = params.issues.length === params.hostCount;
   lines.push(
     incompatibleAllHosts
@@ -412,8 +361,8 @@ export async function collectContextEngineHostCompatibilityWarnings(params: {
   if (!resolved.info) {
     return resolved.warnings;
   }
-  const hosts = collectConfiguredContextEngineAgentRunHosts(params);
-  const issues = collectHostCompatibilityIssues({ info: resolved.info, hosts });
+  const hosts = collectConfiguredContextEngineAgentRunHosts(params.cfg);
+  const issues = collectHostCompatibilityWarnings(resolved.info, hosts);
   return [
     ...resolved.warnings,
     ...formatCompatibilityWarnings({
@@ -436,8 +385,8 @@ export async function maybeRepairContextEngineHostCompatibility(params: {
     return { config: params.cfg, changes: [], warnings: resolved.warnings };
   }
 
-  const hosts = collectConfiguredContextEngineAgentRunHosts(params);
-  const issues = collectHostCompatibilityIssues({ info: resolved.info, hosts });
+  const hosts = collectConfiguredContextEngineAgentRunHosts(params.cfg);
+  const issues = collectHostCompatibilityWarnings(resolved.info, hosts);
   if (issues.length === 0) {
     return { config: params.cfg, changes: [], warnings: resolved.warnings };
   }

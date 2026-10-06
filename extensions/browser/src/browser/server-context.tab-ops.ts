@@ -1,6 +1,3 @@
-/**
- * Browser tab listing, opening, labeling, and alias management for one profile.
- */
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveBrowserNavigationProxyMode } from "./browser-proxy-mode.js";
 import {
@@ -48,7 +45,11 @@ import type {
   ProfileRuntimeState,
   ProfileContext,
 } from "./server-context.types.js";
-import { findRetainedBrowserDashboardTab, readBrowserDashboardTabs } from "./session-tab-store.js";
+import {
+  dispatchBrowserTabClose,
+  findRetainedBrowserDashboardTab,
+  readBrowserDashboardTabs,
+} from "./session-tab-store.js";
 import {
   assignTabAlias,
   assignTabAliases,
@@ -82,7 +83,6 @@ type ExtensionCdpTarget = CdpTarget & {
   tabId?: unknown;
 };
 
-/** Normalize a reported CDP WebSocket URL against the configured endpoint. */
 function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | undefined {
   if (!raw) {
     return undefined;
@@ -94,7 +94,6 @@ function normalizeWsUrl(raw: string | undefined, cdpBaseUrl: string): string | u
   }
 }
 
-/** Builds list/open/label tab operations for one resolved browser profile. */
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
@@ -254,7 +253,7 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       return;
     }
 
-    const retained = readBrowserDashboardTabs();
+    const retained = await readBrowserDashboardTabs();
     const candidates = pageTabs.filter(
       (tab) =>
         tab.targetId !== keepTargetId &&
@@ -263,14 +262,19 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     for (const tab of candidates.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
-      if (findRetainedBrowserDashboardTab(tab.targetId, profile.name)) {
-        continue;
-      }
-      await fetchOk(
-        appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
-        undefined,
-        undefined,
-        getCdpControlPolicy(),
+      await dispatchBrowserTabClose(
+        tab.targetId,
+        profile.name,
+        () => {
+          options?.signal?.throwIfAborted();
+          return fetchOk(
+            appendCdpPath(cdpHttpBase, `/json/close/${tab.targetId}`),
+            undefined,
+            undefined,
+            getCdpControlPolicy(),
+          );
+        },
+        { skipRetained: true },
       ).catch(() => {
         // best-effort cleanup only
       });

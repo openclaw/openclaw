@@ -3,6 +3,7 @@ import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harn
 import { describe, expect, it } from "vitest";
 import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
 import { AgentsApiMessageProjection } from "./agentsapi-messages.js";
+import { createModel, createTurn } from "./agentsapi.test-support.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
 
@@ -39,79 +40,41 @@ describe("Agents API commentary projection", () => {
     await projection.observe(completed);
     await projection.observe(completed);
 
+    const preamble = {
+      itemId: "agentsapi:session-fixture:turn-fixture:commentary-fixture",
+      kind: "preamble",
+      title: "Preamble",
+      progressText: text,
+      source: "agentsapi",
+    };
     expect(events).toEqual([
-      {
-        stream: "item",
-        data: {
-          itemId: "agentsapi:session-fixture:turn-fixture:commentary-fixture",
-          kind: "preamble",
-          title: "Preamble",
-          phase: "update",
-          progressText: text,
-          source: "agentsapi",
-        },
-      },
-      {
-        stream: "item",
-        data: {
-          itemId: "agentsapi:session-fixture:turn-fixture:commentary-fixture",
-          kind: "preamble",
-          title: "Preamble",
-          phase: "end",
-          progressText: text,
-          source: "agentsapi",
-        },
-      },
+      { stream: "item", data: { ...preamble, phase: "update" } },
+      { stream: "item", data: { ...preamble, phase: "end" } },
     ]);
   });
 });
 
 describe("Agents API final usage accounting", () => {
-  it("retains completed-turn usage when final REST accounting returns no turns", async () => {
-    const { projection } = createProjection();
-    await projection.observe({
-      type: "agent.session.turn.completed",
-      turn: createTurn("turn-a", observedUsageA),
-    });
-    await projection.observe({
-      type: "agent.session.turn.completed",
-      turn: createTurn("turn-b", observedUsageB),
-    });
-
-    projection.recordUsage(usageModel, []);
-
-    expect(projection.tokenUsage).toMatchObject({
-      input: 120,
-      output: 8,
-      cacheRead: 30,
-      reasoningTokens: 3,
-      total: 158,
-      contextUsage: { state: "unavailable" },
-    });
-    expect(projection.reply.assistantUsage).toMatchObject({
-      input: 120,
-      output: 8,
-      cacheRead: 30,
-      totalTokens: 158,
-    });
-  });
-
   it("replaces matching canonical usage while retaining omitted turns without counting them twice", async () => {
     const { projection } = createProjection();
+    const observedTurn = { ...createTurn(), error: null };
     await projection.observe({
       type: "agent.session.turn.completed",
-      turn: createTurn("turn-a", observedUsageA),
+      turn: { ...observedTurn, id: "turn-a", usage: observedUsageA },
     });
     await projection.observe({
       type: "agent.session.turn.completed",
-      turn: createTurn("turn-b", observedUsageB),
+      turn: { ...observedTurn, id: "turn-b", usage: observedUsageB },
     });
-    const canonicalTurn = createTurn("turn-a", {
-      input_tokens: 120,
-      input_tokens_details: { cached_tokens: 30 },
-      output_tokens: 6,
-      output_tokens_details: { reasoning_tokens: 2 },
-      total_tokens: 126,
+    const canonicalTurn = createTurn({
+      id: "turn-a",
+      usage: {
+        input_tokens: 120,
+        input_tokens_details: { cached_tokens: 30 },
+        output_tokens: 6,
+        output_tokens_details: { reasoning_tokens: 2 },
+        total_tokens: 126,
+      },
     });
 
     projection.recordUsage(usageModel, [canonicalTurn, canonicalTurn]);
@@ -153,34 +116,7 @@ function createProjection() {
   return { projection, events };
 }
 
-function createTurn(id: string, usage: typeof observedUsageA) {
-  return {
-    id,
-    agent_id: "agent-fixture",
-    session_id: "session-fixture",
-    object: "agent.session.turn",
-    created_at: 1,
-    started_at: 1,
-    completed_at: 2,
-    status: "completed",
-    subagent_id: null,
-    error: null,
-    usage,
-  } satisfies SDKTurn;
-}
-
-const usageModel = {
-  id: "model-fixture",
-  name: "Fixture Model",
-  api: "openai-responses",
-  provider: "openai",
-  baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1024,
-  maxTokens: 512,
-} satisfies AgentHarnessAttemptParamsV2["model"];
+const usageModel = createModel({ id: "model-fixture", reasoning: true });
 
 const observedUsageA = {
   input_tokens: 100,

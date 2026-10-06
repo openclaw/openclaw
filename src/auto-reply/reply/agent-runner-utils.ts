@@ -1,8 +1,8 @@
-/** Utilities for queued reply runtime config, auth, threading, and embedded run params. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveCandidateThinkingLevel } from "../../agents/thinking-runtime.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -29,6 +29,7 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -51,7 +52,6 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
-/** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return (
     selectApplicableRuntimeConfig({
@@ -62,7 +62,6 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
   );
 }
 
-/** Resolves command secrets for queued reply execution, scoped to the origin route. */
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -109,7 +108,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
@@ -119,9 +117,13 @@ export function buildThreadingToolContext(params: {
   const isRestartSentinelContinuation =
     sessionCtx.InputProvenance?.kind === "internal_system" &&
     sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  // Gateway chat IDs identify admitted runs, not messages on the inherited channel.
+  // Keep that identity in sessionCtx for recovery, but never use it as a reply target.
   const currentMessageId = isRestartSentinelContinuation
     ? sessionCtx.ReplyToId
-    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+    : isInternalMessageChannel(sessionCtx.Provider ?? sessionCtx.Surface)
+      ? undefined
+      : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const currentSourceTurnId = readChannelSourceTurnId(sessionCtx);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -181,20 +183,11 @@ export function buildThreadingToolContext(params: {
   };
 }
 
-/** Detects Bun socket-close errors that should be formatted more clearly. */
 export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
-/** Formats Bun socket-close errors for user-facing reply output. */
-export const formatBunFetchSocketError = (message: string) => {
-  const trimmed = message.trim();
-  return [
-    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
-    "```",
-    trimmed || "Unknown error",
-    "```",
-  ].join("\n");
-};
+export const formatBunFetchSocketError = () =>
+  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(
@@ -213,7 +206,6 @@ export function resolveRunThinkingLevelForFallbackCandidate(
   });
 }
 
-/** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
   run: FollowupRun["run"];
   config: OpenClawConfig;
@@ -235,14 +227,12 @@ export function resolveRunFastModeForFallbackCandidate(params: {
       : state.fastAutoOnSeconds,
   };
 }
-function buildEmbeddedContextFromTemplate(params: {
+function applyReplyRouteToTemplate(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
   sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
 }) {
-  const config = params.run.config;
-  const sessionCtx = {
+  return {
     ...params.sessionCtx,
     OriginatingChannel:
       params.replyRoute?.originatingChannel ?? params.sessionCtx.OriginatingChannel,
@@ -259,6 +249,32 @@ function buildEmbeddedContextFromTemplate(params: {
     ReplyToId: params.replyRoute?.originatingReplyToId ?? params.sessionCtx.ReplyToId,
     ReplyToMode: params.replyRoute?.originatingReplyToMode ?? params.sessionCtx.ReplyToMode,
   };
+}
+
+/**
+ * Builds message-tool threading context for the queued reply route. Embedded
+ * and CLI runtimes share it so the channel adapter decides the default thread.
+ */
+export function buildReplyRouteThreadingToolContext(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}): InternalChannelThreadingToolContext {
+  return buildThreadingToolContext({
+    sessionCtx: applyReplyRouteToTemplate(params),
+    config: params.run.config,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+}
+
+function buildEmbeddedContextFromTemplate(params: {
+  run: FollowupRun["run"];
+  replyRoute?: EmbeddedReplyRoute;
+  sessionCtx: TemplateContext;
+  hasRepliedRef: { value: boolean } | undefined;
+}) {
+  const sessionCtx = applyReplyRouteToTemplate(params);
   return {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
@@ -276,24 +292,14 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
-    memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
-    // Provider threading context for tool auto-injection
+    memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
     ...buildThreadingToolContext({
       sessionCtx,
-      config,
+      config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
     }),
     currentInboundAudio: hasInboundAudio(sessionCtx),
   };
-}
-
-function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string[] | undefined {
-  const roles = Array.isArray(value)
-    ? value
-        .map((roleId) => normalizeOptionalString(roleId))
-        .filter((roleId): roleId is string => Boolean(roleId))
-    : [];
-  return roles.length > 0 ? roles : undefined;
 }
 
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
@@ -386,7 +392,6 @@ export function mintReplyMessageActionTurnCapability(
   });
 }
 
-/** Builds execution-specific embedded run params for queued reply dispatch. */
 export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;
@@ -394,26 +399,17 @@ export async function buildEmbeddedRunExecutionParams(params: {
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
   const authProfile = resolveRunAuthProfile(params.run, params.provider);
-  const embeddedContext = buildEmbeddedContextFromTemplate({
-    run: params.run,
-    replyRoute: params.replyRoute,
-    sessionCtx: params.sessionCtx,
-    hasRepliedRef: params.hasRepliedRef,
-  });
+  const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = await buildEmbeddedRunBaseParams({
-    run: params.run,
-    provider: params.provider,
-    model: params.model,
-    runId: params.runId,
-    promptCacheKey: params.promptCacheKey,
+    ...params,
     authProfile,
-    allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   });
   return {
     embeddedContext,

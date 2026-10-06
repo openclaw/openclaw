@@ -415,9 +415,9 @@ export async function runBrowserProxyCommand(
             timeoutMs: liveResolved.remoteCdpTimeoutMs,
             ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
             signal: invocationSignal,
-            shouldClose: () => {
+            closeIfCurrent: async (dispatch) => {
               assertCurrent(profile);
-              return true;
+              return await dispatch();
             },
           })
         : { status: "ownership-mismatch" as const };

@@ -4,7 +4,7 @@ import {
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
-import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
+import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
@@ -397,6 +397,10 @@ export class GatewayProtocolClient<TPlan> {
             error: requestError,
             reconnectDelayMs: decision.reconnectDelayMs,
           };
+          if (decision.keepOpen) {
+            this.clearHandshakeTimer();
+            return;
+          }
           if (decision.stop) {
             this.stopped = true;
           }
@@ -456,8 +460,8 @@ export class GatewayProtocolClient<TPlan> {
         this.sendConnect(socket, generation);
         return;
       }
-      const seq = typeof parsed.seq === "number" ? parsed.seq : null;
-      if (seq !== null) {
+      const seq = parsed.seq;
+      if (seq !== undefined) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
           const state = asRecord(parsed.payload).state;
@@ -602,6 +606,7 @@ export class GatewayProtocolClient<TPlan> {
       const upper = Math.min(base * 1.2, ceiling);
       delayMs = Math.ceil(lower + Math.random() * (upper - lower));
     }
+    delayMs = resolveSleepDelayMs(delayMs);
     void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
@@ -616,6 +621,9 @@ export class GatewayProtocolClient<TPlan> {
           this.reconnectSignal = null;
         }
       },
+    );
+    this.invoke("reconnect scheduled", () =>
+      this.opts.onReconnectScheduled?.(delayMs, retry.signal),
     );
   }
 

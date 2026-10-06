@@ -19,17 +19,20 @@ import { collectSessionStateIdsForEntry } from "../config/sessions/session-acces
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { setCanonicalSqliteSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { preserveCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import { serializeJsonlLines } from "../config/sessions/transcript-jsonl.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveTargetSqliteOptions } from "../infra/session-sqlite-migration-readers.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../infra/session-sqlite-migration-readers.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
   collectCanonicalSessionRepairGroups,
-  listCanonicalSessionStores,
   resolveCanonicalSessionDestination,
   type CanonicalSessionCandidate,
   type CanonicalSessionCandidateFact,
@@ -53,7 +56,10 @@ function createCanonicalRepairRemoval(
   } satisfies SessionEntryLifecycleRemoval;
   return candidate.rawEntryJson === undefined
     ? removal
-    : Object.assign(removal, { expectedRawEntryJson: candidate.rawEntryJson });
+    : Object.assign(removal, {
+        expectedRawEntryJson: candidate.rawEntryJson,
+        expectedSnapshotRevision: candidate.rawSnapshotRevision,
+      });
 }
 
 export type CanonicalSessionKeyRepairReport = {
@@ -93,17 +99,23 @@ function hydrateCanonicalSessionCandidate(
     const { sessionKey: _invalidSessionKey, ...forkProvenance } = entry.forkSource;
     entry.forkSource = forkProvenance as typeof entry.forkSource;
   }
-  return {
+  const candidate = {
     agentId: fact.agentId,
     canonicalKey: fact.canonicalKey,
     entry,
     expectedEntry: loaded.entry,
     ownerEvidenceOnly: fact.ownerEvidenceOnly,
-    ...(loaded.rawEntryJson !== undefined ? { rawEntryJson: loaded.rawEntryJson } : {}),
     sessionKey: fact.sessionKey,
     sqlitePath: fact.sqlitePath,
     storePath: fact.storePath,
   };
+  return loaded.rawEntryJson !== undefined
+    ? {
+        ...candidate,
+        rawEntryJson: loaded.rawEntryJson,
+        rawSnapshotRevision: loaded.rawSnapshotRevision,
+      }
+    : candidate;
 }
 
 function hydrateCanonicalSessionCandidates(
@@ -119,10 +131,7 @@ function hydrateCanonicalSessionCandidates(
     byStore.set(key, [...(byStore.get(key) ?? []), fact]);
   }
   for (const group of byStore.values()) {
-    const first = group[0];
-    if (!first) {
-      continue;
-    }
+    const first = group[0]!;
     const entries = loadCanonicalSessionRepairEntries(
       { agentId: first.agentId, storePath: first.storePath },
       group.map((fact) => fact.inventoryFact),
@@ -132,39 +141,40 @@ function hydrateCanonicalSessionCandidates(
   return facts.map((fact) => hydrateCanonicalSessionCandidate(fact, loaded.get(fact)!));
 }
 
-function mergeCanonicalSessionEntryCandidates<T>(
-  candidates: readonly { entry: SessionEntry; preferred?: boolean; value: T }[],
-): { entry: SessionEntry; winner: T } | undefined {
-  let selected: { entry: SessionEntry; preferred: boolean; winner: T } | undefined;
+function mergeCanonicalSessionEntryCandidates(
+  candidates: readonly CanonicalSessionCandidate[],
+  destinationPath: string,
+): { entry: SessionEntry; winner: CanonicalSessionCandidate } | undefined {
+  let winner: CanonicalSessionCandidate | undefined;
+  let preferred = false;
   for (const candidate of candidates) {
     const incomingUpdatedAt =
       typeof candidate.entry.updatedAt === "number" && Number.isFinite(candidate.entry.updatedAt)
         ? candidate.entry.updatedAt
         : 0;
     const selectedUpdatedAt =
-      typeof selected?.entry.updatedAt === "number" && Number.isFinite(selected.entry.updatedAt)
-        ? selected.entry.updatedAt
+      typeof winner?.entry.updatedAt === "number" && Number.isFinite(winner.entry.updatedAt)
+        ? winner.entry.updatedAt
         : 0;
+    const incomingPreferred =
+      candidate.sqlitePath === destinationPath && candidate.sessionKey === candidate.canonicalKey;
     if (
-      !selected ||
+      !winner ||
       incomingUpdatedAt > selectedUpdatedAt ||
       (incomingUpdatedAt === selectedUpdatedAt &&
-        (candidate.preferred === true
-          ? !selected.preferred
-          : !selected.preferred &&
+        (incomingPreferred
+          ? !preferred
+          : !preferred &&
             Buffer.compare(
               Buffer.from(JSON.stringify(candidate.entry), "utf8"),
-              Buffer.from(JSON.stringify(selected.entry), "utf8"),
+              Buffer.from(JSON.stringify(winner.entry), "utf8"),
             ) > 0))
     ) {
-      selected = {
-        entry: structuredClone(candidate.entry),
-        preferred: candidate.preferred === true,
-        winner: candidate.value,
-      };
+      winner = candidate;
+      preferred = incomingPreferred;
     }
   }
-  return selected;
+  return winner ? { entry: structuredClone(winner.entry), winner } : undefined;
 }
 
 function selectCanonicalSessionCandidate(
@@ -181,23 +191,16 @@ function selectCanonicalSessionCandidate(
     env: params.env,
     sourceAgentId: first.agentId,
   });
-  const rankedCandidates = candidates
-    .toSorted((left, right) =>
-      Buffer.compare(
-        Buffer.from(`${left.sqlitePath}\0${left.sessionKey}`, "utf8"),
-        Buffer.from(`${right.sqlitePath}\0${right.sessionKey}`, "utf8"),
-      ),
-    )
-    .map((candidate) => ({
-      entry: candidate.entry,
-      preferred:
-        candidate.sqlitePath === destination.sqlitePath &&
-        candidate.sessionKey === candidate.canonicalKey,
-      value: candidate,
-    }));
-  const metadataCandidates = rankedCandidates.filter(({ value }) => !value.ownerEvidenceOnly);
+  const rankedCandidates = candidates.toSorted((left, right) =>
+    Buffer.compare(
+      Buffer.from(`${left.sqlitePath}\0${left.sessionKey}`, "utf8"),
+      Buffer.from(`${right.sqlitePath}\0${right.sessionKey}`, "utf8"),
+    ),
+  );
+  const metadataCandidates = rankedCandidates.filter((candidate) => !candidate.ownerEvidenceOnly);
   const selected = mergeCanonicalSessionEntryCandidates(
     metadataCandidates.length > 0 ? metadataCandidates : rankedCandidates,
+    destination.sqlitePath,
   );
   if (!selected) {
     return undefined;
@@ -206,8 +209,12 @@ function selectCanonicalSessionCandidate(
   // even over a newer required alias. Otherwise retain the newest required alias.
   const requiredCandidates = rankedCandidates.filter(({ entry }) => entry.sandbox === "required");
   const authoritativeStamp =
-    requiredCandidates.find(({ preferred }) => preferred)?.entry ??
-    mergeCanonicalSessionEntryCandidates(requiredCandidates)?.entry;
+    requiredCandidates.find(
+      (candidate) =>
+        candidate.sqlitePath === destination.sqlitePath &&
+        candidate.sessionKey === candidate.canonicalKey,
+    )?.entry ??
+    mergeCanonicalSessionEntryCandidates(requiredCandidates, destination.sqlitePath)?.entry;
   return {
     ...selected,
     entry: preserveCreationStamp(selected.entry, authoritativeStamp),
@@ -470,10 +477,7 @@ async function repairCanonicalSessionGroup(
     if (sqlitePath === destination.sqlitePath) {
       continue;
     }
-    const [storeCandidate] = storeCandidates;
-    if (!storeCandidate) {
-      continue;
-    }
+    const storeCandidate = storeCandidates[0]!;
     const result = await applySessionEntryLifecycleMutation({
       agentId: storeCandidate.agentId,
       allowCanonicalRepair: true,
@@ -503,10 +507,11 @@ export async function repairCanonicalSessionKeys(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<CanonicalSessionKeyRepairReport> {
   const env = params.env ?? process.env;
-  const stores = listCanonicalSessionStores({
-    cfg: params.cfg,
+  const stores = projectExistingAgentDatabaseTargets(
+    resolveAllAgentSessionStoreTargetsSync(params.cfg, { env }),
     env,
-  });
+    params.cfg,
+  );
   const archivedTranscriptDirectories = new Set<string>();
   let repairBatches = 0;
   let repairedGroups = 0;
@@ -523,10 +528,6 @@ export async function repairCanonicalSessionKeys(params: {
   const removedRows = repairGroups.reduce((total, group) => total + group.removedRows, 0);
   if (params.apply) {
     while (repairGroups.length > 0) {
-      const group = repairGroups[0];
-      if (!group) {
-        break;
-      }
       const candidateGroups = repairGroups.slice(0, CANONICAL_SESSION_REPAIR_BATCH_GROUP_LIMIT);
       const hydrated = hydrateCanonicalSessionCandidates(
         candidateGroups.flatMap((candidateGroup) => candidateGroup.candidates),

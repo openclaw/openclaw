@@ -1,8 +1,5 @@
 import Foundation
 import OpenClawKit
-#if canImport(Darwin)
-import Darwin
-#endif
 
 enum GatewayRemoteConfig {
     static let directGatewayUrlValidationMessage =
@@ -79,14 +76,7 @@ enum GatewayRemoteConfig {
             return nil
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch trimmed {
-        case AppState.RemoteTransport.direct.rawValue:
-            return .direct
-        case AppState.RemoteTransport.ssh.rawValue:
-            return .ssh
-        default:
-            return .ssh
-        }
+        return AppState.RemoteTransport(rawValue: trimmed) ?? .ssh
     }
 
     static func resolveUrlString(root: [String: Any]) -> String? {
@@ -114,12 +104,7 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTokenString(root: [String: Any]) -> String? {
-        switch self.resolveTokenValue(root: root) {
-        case let .plaintext(token):
-            token
-        case .missing, .unsupportedNonString:
-            nil
-        }
+        self.remoteString("token", root: root)
     }
 
     static func resolvePasswordString(root: [String: Any]) -> String? {
@@ -143,8 +128,6 @@ enum GatewayRemoteConfig {
         }
         let value = remote["remotePort"]
         let port: Int? = switch value {
-        case let raw as Int:
-            raw
         case let raw as NSNumber:
             raw.intValue
         case let raw as String:
@@ -193,51 +176,10 @@ enum GatewayRemoteConfig {
         let ipv6Literal = lower.hasPrefix("[") && lower.hasSuffix("]")
             ? String(lower.dropFirst().dropLast())
             : lower
-        if self.isPrivateIPv6Literal(ipv6Literal) {
+        if LoopbackHost.isPrivateIPv6Literal(ipv6Literal) {
             return true
         }
-        guard let parts = self.ipv4Parts(lower) else { return false }
-        switch (parts[0], parts[1]) {
-        case (10, _), (192, 168), (169, 254):
-            return true
-        case (172, 16...31):
-            return true
-        case (100, 64...127):
-            return true
-        default:
-            return false
-        }
-    }
-
-    private static func ipv4Parts(_ value: String) -> [Int]? {
-        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
-        guard labels.count == 4 else { return nil }
-        var parts: [Int] = []
-        parts.reserveCapacity(4)
-        for label in labels {
-            guard !label.isEmpty,
-                  label.allSatisfy(\.isNumber),
-                  let part = Int(label),
-                  part >= 0,
-                  part <= 255
-            else {
-                return nil
-            }
-            parts.append(part)
-        }
-        return parts
-    }
-
-    private static func isPrivateIPv6Literal(_ value: String) -> Bool {
-        #if canImport(Darwin)
-        var addr = in6_addr()
-        guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
-            return false
-        }
-        return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
-        #else
-        return false
-        #endif
+        return LoopbackHost.isPrivateOrTailnetIPv4Literal(lower)
     }
 
     static func defaultPort(for url: URL) -> Int? {

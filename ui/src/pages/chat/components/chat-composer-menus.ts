@@ -49,7 +49,6 @@ export function resolveComposerMenus(
     skillMenuVisible,
     slashMenuVisible,
     mentionMenuVisible: mention.open,
-    emojiMenuVisible: emoji.open,
     menuVisible: skillMenuVisible || slashMenuVisible || mention.open || emoji.open,
     activeMenuOptionId: emoji.open
       ? emoji.activeId(paneId)

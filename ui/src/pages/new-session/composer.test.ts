@@ -46,6 +46,22 @@ afterEach(() => {
 });
 
 describe("new-session submission preview", () => {
+  it("removes new-session file inputs and blocks dropped files under the Gateway upload policy", () => {
+    const context = composerContext({ client: null });
+    context.config.current.uploadsEnabled = false;
+    const { container, composer, attachmentDraft } = renderComposer({
+      context,
+      message: "Keep typing",
+    });
+    expect(container.querySelector("input[type=file]")).toBeNull();
+    expect(container.querySelector(".agent-chat__attach-menu-option")).toBeNull();
+    const drop = createDragEvent("drop", [new File(["notes"], "notes.txt")]);
+    composer.dispatchEvent(drop);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(attachmentDraft.attachments).toEqual([]);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
+  });
+
   it.each([
     { userId: "profile-alex", placement: "gutter" },
     { userId: null, placement: "footer" },
@@ -409,6 +425,36 @@ describe("new-session composer keyboard submission", () => {
     expect(event.defaultPrevented).toBe(true);
     expect(onSubmit).toHaveBeenCalledOnce();
     expect(onBackgroundSubmit).not.toHaveBeenCalled();
+  });
+
+  it("keeps an IME confirmation Enter from starting a session", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ message: "日本語の入力", onSubmit });
+    const textarea = composerTextarea(composer);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+    textarea.dispatchEvent(compositionEnd);
+    const confirmingEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      keyCode: 13,
+    });
+    Object.defineProperty(confirmingEnter, "timeStamp", { value: compositionEnd.timeStamp - 1 });
+    textarea.dispatchEvent(confirmingEnter);
+
+    expect(confirmingEnter.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+    const deliberateEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    textarea.dispatchEvent(deliberateEnter);
+    expect(deliberateEnter.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
   });
 
   it.each([

@@ -275,8 +275,9 @@ describe("flex cards", () => {
 
   it("limits action-card actions to 4", () => {
     const actions = Array.from({ length: 6 }, (_, i) => ({
-      label: `Action ${i}`,
-      action: { type: "message" as const, label: `A${i}`, text: `action${i}` },
+      type: "message" as const,
+      label: `A${i}`,
+      text: `action${i}`,
     }));
     const card = createActionCard("Title", "Body", actions);
 
@@ -498,19 +499,17 @@ describe("action label/data surrogate-safe truncation", () => {
     },
   );
 
-  it("media control postback labels count grapheme clusters", () => {
-    const card = createMediaPlayerCard({
-      title: "Track",
-      controls: {
-        play: { data: "play" },
-      },
-      extraActions: [{ label: `${"x".repeat(14)}😀`, data: "extra" }],
+  it("device control postback labels count grapheme clusters", () => {
+    const label = `${"x".repeat(17)}😀`;
+    const card = createDeviceControlCard({
+      deviceName: "Device",
+      controls: [{ label, data: "extra" }],
     });
     const extraAction = cardButtons(card.footer)
       .map((button) => button.action)
       .find((action) => action.type === "postback" && action.data === "extra");
 
-    expect(extraAction?.label).toBe(`${"x".repeat(14)}😀`);
+    expect(extraAction?.label).toBe(label);
     expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 
@@ -672,7 +671,7 @@ describe("action label/data surrogate-safe truncation", () => {
     });
   });
 
-  it("normalizes raw actions at exported flex builder boundaries", () => {
+  it("normalizes action cards and raw Flex actions at the outbound boundary", () => {
     const oversizedUri: Action = {
       type: "uri",
       label: "Open",
@@ -684,36 +683,47 @@ describe("action label/data surrogate-safe truncation", () => {
       data: "x".repeat(301),
     };
 
-    const image = createImageCard("https://e.example/image.jpg", "Image", undefined, {
-      action: oversizedUri,
-    });
-    expect((image.hero as { action?: Action }).action).toEqual(expectedUnavailableLink);
-
-    const card = createActionCard("Title", "Body", [{ label: "Open", action: oversizedPostback }]);
+    const card = createActionCard("Title", "Body", [oversizedPostback]);
     const button = (card.footer as { contents: Array<{ action: Action }> }).contents[0];
     expect(button?.action).toEqual(expectedUnavailableCallbackAction);
 
     const validLongLabel = "x".repeat(40);
     const labeledCard = createActionCard("Title", "Body", [
-      { label: validLongLabel, action: { type: "message", label: validLongLabel, text: "Open" } },
+      { type: "message", label: validLongLabel, text: "Open" },
     ]);
     const labeledButton = (labeledCard.footer as { contents: Array<{ action: Action }> })
       .contents[0];
     expect(labeledButton?.action.label).toBe(validLongLabel);
 
-    const list = createListCard("List", [{ title: "Item", action: oversizedPostback }]);
-    const listBody = (list.body as { contents: unknown[] }).contents;
-    const listBox = listBody[2] as {
-      contents: Array<{ action?: Action }>;
-    };
-    expect(listBox.contents[0]?.action).toEqual(expectedUnavailableCallbackAction);
-
-    const event = createEventCard({
-      title: "Event",
-      date: "Today",
-      action: oversizedUri,
+    const normalized = normalizeLineMessage({
+      type: "flex",
+      altText: "Image and event",
+      contents: {
+        type: "bubble",
+        hero: { type: "image", url: "https://e.example/image.jpg", action: oversizedUri },
+        body: {
+          type: "box",
+          layout: "vertical",
+          action: oversizedUri,
+          contents: [{ type: "text", text: "Event", action: oversizedPostback }],
+        },
+      },
     });
-    expect((event.body as { action?: Action }).action).toEqual(expectedUnavailableLink);
+    expect(normalized).toMatchObject({
+      contents: {
+        hero: { type: "image", url: "https://e.example/image.jpg" },
+        body: {
+          contents: [
+            { type: "text", text: "Event" },
+            {
+              type: "text",
+              text: `${expectedUnavailableLink.text}\n${expectedUnavailableCallbackAction.text}`,
+            },
+          ],
+        },
+      },
+    });
+    expect(JSON.stringify(normalized)).not.toContain('"action":');
   });
 
   it("media control cards visibly disable overlong opaque callbacks", () => {
@@ -726,11 +736,10 @@ describe("action label/data surrogate-safe truncation", () => {
         pause: { data: overlongData },
         next: { data: overlongData },
       },
-      extraActions: [{ label: "Extra", data: overlongData }],
     });
     const actions = cardButtons(card.footer).map((button) => button.action);
 
-    expect(actions).toHaveLength(5);
+    expect(actions).toHaveLength(4);
     for (const action of actions) {
       expect(action).toEqual(expectedUnavailableCallbackAction);
     }

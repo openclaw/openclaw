@@ -6,6 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderShortcutText } from "./kbd.ts";
 import { resolveSessionIconGraphic } from "./session-icon-glyph-registry.ts";
 import { renderSessionColorOptions } from "./session-menu-options.ts";
 
@@ -23,12 +24,12 @@ const SESSION_ICON_EMOJI_CHOICES = [
   "🎯",
 ] as const;
 
-function sessionEmojiPickerShortcut(): string | null {
+export function sessionEmojiPickerShortcut(): readonly string[] | null {
   const platform = globalThis.navigator?.platform ?? "";
   if (/Mac|iPhone|iPad|iPod/u.test(platform)) {
-    return "⌃⌘Space";
+    return ["⌃", "⌘", "Space"];
   }
-  return /Win/u.test(platform) ? "Win+." : null;
+  return /Win/u.test(platform) ? ["Win", "+", "."] : null;
 }
 
 type AppearancePickerProps = {
@@ -50,7 +51,6 @@ type AppearancePickerProps = {
   onBack: (event: Event) => void;
   onInput: (event: InputEvent) => void;
   onApply: (event: Event) => void;
-  onGridKeydown: (event: KeyboardEvent) => void;
 };
 
 function renderCustomSessionIconEntry(props: AppearancePickerProps) {
@@ -108,9 +108,12 @@ function renderCustomSessionIconEntry(props: AppearancePickerProps) {
       <div class="session-menu__icon-custom-hint">
         ${
           shortcut
-            ? t(props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint", {
-                shortcut,
-              })
+            ? renderShortcutText(
+                t(props.allowSvg ? "sessionsView.customIconHint" : "sessionsView.customEmojiHint", {
+                  shortcut: "{shortcut}",
+                }),
+                renderKbd(shortcut, { inline: true }),
+              )
             : t(
                 props.allowSvg
                   ? "sessionsView.customIconHintNoShortcut"
@@ -129,18 +132,18 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
       : ([...SESSION_ICON_EMOJI_CHOICES, ...SESSION_ICON_GLYPH_IDS].find(
           (icon) => icon === props.currentIcon,
         ) ?? SESSION_ICON_EMOJI_CHOICES[0]);
-  const renderChoice = (icon: string, glyph = false) => html`
+  const renderChoice = (icon: string | null, glyph = false) => html`
     <button
       type="button"
       class=${`session-menu__icon-choice${glyph ? " session-menu__icon-choice--glyph" : ""}`}
-      aria-label=${glyph ? icon : nothing}
+      aria-label=${glyph ? (icon ?? t("sessionsView.noIcon")) : nothing}
       aria-pressed=${String(props.currentIcon === icon)}
       tabindex=${icon === tabStop ? "0" : "-1"}
       ?disabled=${props.disabled}
-      title=${props.disabledReason ?? nothing}
+      title=${props.disabledReason ?? (icon === null ? t("sessionsView.noIcon") : nothing)}
       @click=${(event: MouseEvent) => props.onSelect(event, icon)}
     >
-      ${glyph ? resolveSessionIconGraphic(icon) : icon}
+      ${icon === null ? icons.circleX : glyph ? resolveSessionIconGraphic(icon) : icon}
     </button>
   `;
   return html`
@@ -151,7 +154,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         ?inert=${props.mode !== "grid"}
         role="group"
         aria-label=${t("sessionsView.setIconMenu")}
-        @keydown=${props.onGridKeydown}
+        @keydown=${handleAppearanceGridKeydown}
       >
         <div class="session-menu__icon-section-label">${t("sessionsView.iconEmojiSection")}</div>
         <div class="session-menu__icon-grid">
@@ -171,24 +174,7 @@ function renderSessionIconGrid(props: AppearancePickerProps) {
         </div>
         <div class="session-menu__icon-section-label">${t("sessionsView.iconGlyphSection")}</div>
         <div class="session-menu__icon-grid">
-          ${
-            props.clearable !== false
-              ? html`
-                  <button
-                    type="button"
-                    class="session-menu__icon-choice session-menu__icon-choice--glyph"
-                    aria-label=${t("sessionsView.noIcon")}
-                    title=${props.disabledReason ?? t("sessionsView.noIcon")}
-                    aria-pressed=${String(props.currentIcon === null)}
-                    tabindex=${tabStop === null ? "0" : "-1"}
-                    ?disabled=${props.disabled}
-                    @click=${(event: MouseEvent) => props.onSelect(event, null)}
-                  >
-                    ${icons.circleX}
-                  </button>
-                `
-              : nothing
-          }
+          ${props.clearable !== false ? renderChoice(null, true) : nothing}
           ${SESSION_ICON_GLYPH_IDS.map((icon) => renderChoice(icon, true))}
         </div>
       </div>
@@ -225,7 +211,7 @@ export function renderAppearancePicker(props: AppearancePickerProps) {
   </div>`;
 }
 
-export function handleAppearanceGridKeydown(event: KeyboardEvent) {
+function handleAppearanceGridKeydown(event: KeyboardEvent) {
   const choice = event.target;
   if (!(choice instanceof HTMLButtonElement)) {
     return;

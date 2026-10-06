@@ -1,5 +1,5 @@
 ---
-summary: "Read-only lint findings, check selection, and post-upgrade plugin probes"
+summary: "Read-only lint findings, check selection, and post-upgrade plugin checks"
 title: "Lint and post-upgrade modes"
 read_when:
   - You want a read-only health report for CI or deployment preflight
@@ -7,7 +7,7 @@ read_when:
 ---
 
 Doctor's read-only postures produce findings without changing config or state.
-This page covers lint output, check selection, and post-upgrade probes.
+This page covers lint output, check selection, and post-upgrade checks.
 
 ## Lint mode
 
@@ -24,6 +24,10 @@ Doctor retires private database readers and writers before removing inspection
 snapshots. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database
 retirement fails, Doctor reports the error and leaves the private snapshot in place.
+
+Plugin source captures use the original profile's temporary storage, outside these
+database snapshots. Their plugin-cache owner retains them until plugin inspection
+finishes, so later channel setup checks can reuse admitted native files safely.
 
 ```bash
 openclaw doctor --json
@@ -146,8 +150,8 @@ This opt-in check inspects shared credentials and each configured agent's local
 auth store, including fleets without a default agent. Shared credential problems
 are reported once; agent-specific cooldowns remain attributed to their local store.
 
-`core/doctor/runtime-tool-schemas` does not probe OAuth-backed MCP servers in read-only
-Doctor reports, including triage and update checks. A probe can rotate a refresh token
+`core/doctor/runtime-tool-schemas` does not check OAuth-backed MCP servers in read-only
+Doctor reports, including triage and update checks. A check can rotate a refresh token
 at the external server even when local state writes go to a disposable snapshot.
 Doctor reports this deferral at informational severity; use `--severity-min info` to
 display it. For servers in `mcp.servers`, run `openclaw mcp probe <name>` against the
@@ -157,9 +161,9 @@ owner. Non-OAuth MCP schema checks still run.
 
 ## Post-upgrade mode
 
-`openclaw doctor --post-upgrade` runs plugin compatibility probes for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
+`openclaw doctor --post-upgrade` runs plugin compatibility checks for chaining after a build or upgrade. Findings go to stdout; exit code is 1 if any finding has `level: "error"`. Add `--json` for a machine-readable envelope (`{ probesRun, findings }`), suitable for CI, the community `fork-upgrade` skill, and other post-upgrade smoke tooling. If the installed plugin index is missing or malformed, JSON mode still emits the envelope with a `plugin.index_unavailable` error finding.
 
-The probes also warn with `plugin.version_drift` when an enabled official plugin
+The checks also warn with `plugin.version_drift` when an enabled official plugin
 in the installed index belongs to a different release cohort than the upgraded
 OpenClaw CLI. Follow the reported plugin update command, then restart the
 Gateway. Exact npm pins receive an update command only after the registry

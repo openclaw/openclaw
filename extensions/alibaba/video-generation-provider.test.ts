@@ -252,15 +252,15 @@ describe("alibaba video generation provider", () => {
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
-  it("submits async Wan generation, polls task status, and downloads the resulting video", async () => {
+  it("animates a local image with Wan, polls task status, and downloads the resulting video", async () => {
     mockSuccessfulDashscopeVideoTask({ postJsonRequestMock, fetchWithTimeoutMock });
 
     const result = await alibabaVideoGenerationProvider.generateVideo({
       provider: "alibaba",
-      model: "wan2.6-r2v-flash",
+      model: "wan2.6-i2v",
       prompt: "animate this shot",
       cfg: {},
-      inputImages: [{ url: "https://example.com/ref.png" }],
+      inputImages: [{ buffer: Buffer.from("jpeg-bytes"), mimeType: "image/jpeg" }],
       durationSeconds: 6,
       audio: true,
       watermark: false,
@@ -272,10 +272,10 @@ describe("alibaba video generation provider", () => {
       "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis",
     );
     const body = requireRecord(request.body, "DashScope request body");
-    expect(body.model).toBe("wan2.6-r2v-flash");
+    expect(body.model).toBe("wan2.6-i2v");
     const input = requireRecord(body.input, "DashScope request input");
     expect(input.prompt).toBe("animate this shot");
-    expect(input.reference_urls).toEqual(["https://example.com/ref.png"]);
+    expect(input.img_url).toBe("data:image/jpeg;base64,anBlZy1ieXRlcw==");
     const parameters = requireRecord(body.parameters, "DashScope request parameters");
     expect(parameters.duration).toBe(6);
     expect(parameters.audio).toBe(true);

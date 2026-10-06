@@ -1,4 +1,6 @@
 import type {
+  AgentsListResult,
+  ApprovalDecision,
   CommandEntry,
   CommandsListParams,
   ModelChoice,
@@ -13,7 +15,7 @@ import type {
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionInfoDefaults } from "./tui-session-info.js";
-import type { AgentSummary, ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
+import type { SessionInfo } from "./tui-types.js";
 
 export type ChatSendOptions = {
   sessionKey: string;
@@ -44,7 +46,7 @@ export type TuiImageData = {
   mimeType: string;
 };
 
-export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type TuiApprovalDecision = ApprovalDecision;
 
 type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
@@ -90,32 +92,12 @@ export type TuiSessionList = {
   hasMore?: boolean;
   defaults?: SessionInfoDefaults;
   sessions: Array<
-    Pick<
-      SessionInfo,
-      | "thinkingLevel"
-      | "thinkingLevels"
-      | "fastMode"
-      | "verboseLevel"
-      | "traceLevel"
-      | "reasoningLevel"
-      | "model"
-      | "contextTokens"
-      | "inputTokens"
-      | "outputTokens"
-      | "totalTokens"
-      | "totalTokensFresh"
-      | "goal"
-      | "modelProvider"
-      | "agentRuntime"
-      | "displayName"
-    > & {
+    Omit<SessionInfo, "effectiveResponseUsage"> & {
       key: string;
       sessionId?: string;
-      updatedAt?: number | null;
       archived?: boolean;
       incognito?: boolean;
       sendPolicy?: string;
-      responseUsage?: ResponseUsageMode;
       label?: string;
       provider?: string;
       groupChannel?: string;
@@ -142,12 +124,7 @@ export type TuiSessionDescription = {
   defaults?: TuiSessionList["defaults"];
 };
 
-export type TuiAgentsList = {
-  defaultId: string;
-  mainKey: string;
-  scope: SessionScope;
-  agents: AgentSummary[];
-};
+export type TuiAgentsList = AgentsListResult;
 
 export type TuiModelChoice = Pick<
   ModelChoice,

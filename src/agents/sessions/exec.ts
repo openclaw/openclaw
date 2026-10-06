@@ -1,7 +1,3 @@
-/**
- * Shared command execution utilities for extensions and custom tools.
- */
-
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createWindowsOutputDecoder } from "../../infra/windows-encoding.js";
 import { releaseChildProcessOutputAfterExit } from "../../process/child-process.js";
@@ -13,23 +9,16 @@ import { createDeferredCore } from "../../shared/deferred.js";
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
 const FORCE_KILL_GRACE_MS = 5000;
 
-/**
- * Options for executing shell commands.
- */
 export interface ExecOptions {
   /** AbortSignal to cancel the command */
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
-  /** Working directory */
   cwd?: string;
   /** Optional maximum retained stdout/stderr characters per stream. */
   maxOutputChars?: number;
 }
 
-/**
- * Result of executing a shell command.
- */
 export interface ExecResult {
   stdout: string;
   stderr: string;
@@ -59,12 +48,11 @@ function clampMaxOutputChars(value: number | undefined): number {
 
 function appendCapturedOutput(
   current: OutputCapture,
-  chunk: Buffer | string,
+  chunk: string,
   maxOutputChars: number,
   truncateTail: boolean,
 ): OutputCapture {
-  const text = String(chunk);
-  const combined = `${current.text}${text}`;
+  const combined = `${current.text}${chunk}`;
   const overflowChars = Math.max(0, combined.length - maxOutputChars);
   if (overflowChars === 0) {
     return {
@@ -81,10 +69,6 @@ function appendCapturedOutput(
   };
 }
 
-/**
- * Execute a shell command and return stdout/stderr/code.
- * Supports timeout and abort signal.
- */
 export async function execCommand(
   command: string,
   args: string[],
@@ -141,14 +125,14 @@ export async function execCommand(
         proc.nodeChildProcess.once("exit", () => {
           childExited = true;
         });
-        let commandSettled = false;
+        let settled = false;
         const termination = createCommandTerminationController({
           child: proc.nodeChildProcess,
           cancelController,
           processTree: { mode: "graceful" },
           killGraceMs: FORCE_KILL_GRACE_MS,
           isChildExited: () => childExited,
-          isCommandSettled: () => commandSettled,
+          isCommandSettled: () => settled,
         });
         terminationController = termination;
 
@@ -160,7 +144,6 @@ export async function execCommand(
           stdout: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
           stderr: createWindowsOutputDecoder({ preserveUtf8Bom: true }),
         };
-        let settled = false;
         const maxOutputChars = clampMaxOutputChars(options?.maxOutputChars);
         const truncateOutput = options?.maxOutputChars !== undefined;
         let outputLimitExceeded: "stdout" | "stderr" | undefined;
@@ -175,7 +158,6 @@ export async function execCommand(
             return;
           }
           settled = true;
-          commandSettled = true;
           if (timeoutId) {
             clearTimeout(timeoutId);
           }

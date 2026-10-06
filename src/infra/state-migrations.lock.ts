@@ -48,14 +48,12 @@ export async function withLegacyMigrationStateLock(
   let result: MigrationMessages = { changes: [], warnings: [] };
   let releaseError: unknown;
   try {
-    try {
-      result = await lock.run(() => options.run(env));
-    } catch (error) {
-      if (!options.errorLabel) {
-        throw error;
-      }
-      result.warnings.push(`${options.errorLabel}: ${String(error)}`);
+    result = await lock.run(() => options.run(env));
+  } catch (error) {
+    if (!options.errorLabel) {
+      throw error;
     }
+    result.warnings.push(`${options.errorLabel}: ${String(error)}`);
   } finally {
     try {
       await lock.run(() => options.beforeRelease?.());

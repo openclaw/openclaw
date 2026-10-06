@@ -188,16 +188,12 @@ private final class TranscriptNSTextView: NSTextView {
             super.keyDown(with: event)
             return
         }
-        if isReturn, event.modifierFlags.contains(.command) {
-            self.onSend?()
-            return
-        }
         if isReturn {
-            if event.modifierFlags.contains(.shift) {
+            if event.modifierFlags.contains(.command) || !event.modifierFlags.contains(.shift) {
+                self.onSend?()
+            } else {
                 super.insertNewline(nil)
-                return
             }
-            self.onSend?()
             return
         }
         super.keyDown(with: event)

@@ -22,6 +22,7 @@ import {
 } from "../chat-queued-turns.js";
 import type { handleTrustedInternalChatSend } from "./chat-send-handler.js";
 import { createChatSendTurnAdoptionLifecycle } from "./chat-send-turn-adoption.js";
+import { createChatSendWorkAdmission } from "./chat-send-work-admission.js";
 import { requestProgressCardRefresh } from "./progress-card-refresh.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
@@ -109,6 +110,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
   const card: ProgressCard = { sessionKey, revision: 7, updatedAt: 1, markdown: "Previous status" };
   const context = {
     dedupe: new Map(),
+    chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
     broadcast: vi.fn(),
     logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -129,6 +131,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       adoption: ReturnType<typeof createChatSendTurnAdoptionLifecycle>;
       controller: AbortController;
       parked?: ReturnType<typeof parkSteerCandidate>;
+      releaseAdmission: ReturnType<typeof vi.fn>;
     }
   >();
   const runFollowup = createFollowupRunner({
@@ -158,8 +161,12 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       return;
     }
     const controller = new AbortController();
-    const release = vi.fn();
-    releases.set(runId, release);
+    const releaseAdmission = vi.fn();
+    const work = createChatSendWorkAdmission({
+      admission: { release: releaseAdmission },
+      logGateway: context.logGateway,
+    });
+    cleanups.push(async () => work.release());
     const adoption = createChatSendTurnAdoptionLifecycle({
       accountId: undefined,
       chatQueuedTurns: context.chatQueuedTurns,
@@ -185,7 +192,12 @@ function fixture(options: { parkSteer?: boolean } = {}) {
       },
       hasCronCreatorAuthority: false,
       suppressReplies: true,
-      retainWorkAdmission: () => release,
+      releaseSourceWorkAdmission: work.release,
+      retainWorkAdmission: () => {
+        const release = vi.fn(work.retain());
+        releases.set(runId, release);
+        return release;
+      },
     });
     const queued: FollowupRun = {
       prompt: String(request.params.message),
@@ -222,7 +234,7 @@ function fixture(options: { parkSteer?: boolean } = {}) {
         true,
       );
     }
-    sources.set(runId, { queued, adoption, controller, parked });
+    sources.set(runId, { queued, adoption, controller, parked, releaseAdmission });
     setGatewayDedupeEntry({
       dedupe: context.dedupe,
       key: `chat:` + runId,
@@ -431,6 +443,8 @@ describe("queued progress refresh settlement", () => {
         source.controller.abort();
       }
       expect(f.context.chatQueuedTurns.has(source.runId)).toBe(false);
+      expect(f.releases.get(source.runId)).toHaveBeenCalledOnce();
+      expect(source.releaseAdmission).toHaveBeenCalledOnce();
       expectTerminal(await f.refresh());
       expect(f.context.dedupe.get(`chat:${source.runId}`)?.payload).toMatchObject({
         status: "timeout",

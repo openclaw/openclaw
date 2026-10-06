@@ -7,6 +7,10 @@ import { canParallelizeVitestOutput } from "../../scripts/lib/vitest-report-owne
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.ts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import {
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import {
   createVitestReportFixture,
   reportChunkTestFiles,
   type ReportFixtureMode,
@@ -79,12 +83,20 @@ it.for([
 describe.skipIf(process.platform === "win32")("native multi-invocation report ownership", () => {
   const cacheLifetime = createFixtureLifetime();
   let compileCache: string;
-  beforeAll(() => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
     compileCache = cacheLifetime.createTempDir("oc-report-compile-");
     vi.setConfig({ maxConcurrency: 2 });
     return () => vi.resetConfig();
   });
-  afterAll(() => cacheLifetime.cleanup());
+  afterAll(async () => {
+    try {
+      await cacheLifetime.cleanup();
+    } finally {
+      await receipts.close();
+    }
+  });
   type ReportRunner = ReturnType<typeof createVitestReportFixture>;
   const reportTest = it.extend<{
     reports: {
@@ -93,11 +105,16 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
       run: (mode: ReportFixtureMode) => ReturnType<ReportRunner>;
     };
   }>({
-    reports: async ({ onTestFinished }, use) => {
+    reports: async ({ onTestFinished, signal }, use) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       const fixture = (root: string): ReportRunner => {
-        const invoke = createVitestReportFixture(root, undefined, compileCache);
+        const invoke = createVitestReportFixture(
+          root,
+          { receipts, signal },
+          undefined,
+          compileCache,
+        );
         return (...args) => {
           const completion = lifetime.run(() => invoke(...args));
           void cacheLifetime.track(completion.then(() => undefined));

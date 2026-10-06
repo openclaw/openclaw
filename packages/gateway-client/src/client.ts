@@ -20,6 +20,7 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createAbortError, raceWithTimeout } from "@openclaw/retry";
 import {
   formatGatewayClientErrorForLog,
   isGatewayClientStoppedError,
@@ -74,7 +75,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
-import { WebSocket } from "./websocket.js";
+import { WebSocket, type GatewayWebSocketTargetOptions } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -159,63 +160,56 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
-export type GatewayClientOptions = {
-  url?: string; // ws://127.0.0.1:18789
-  origin?: string;
-  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
-  edgeAuthHeaders?: Readonly<Record<string, string>>;
-  connectChallengeTimeoutMs?: number;
-  /**
-   * Server-side pre-auth handshake budget. Config-derived local clients use
-   * this to keep the connect-challenge watchdog aligned with the gateway.
-   */
-  preauthHandshakeTimeoutMs?: number;
-  tickWatchMinIntervalMs?: number;
-  tickWatchTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  token?: string;
-  bootstrapToken?: string;
-  /** Prefer one setup credential for the first successful device-auth exchange. */
-  preferBootstrapToken?: boolean;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-  instanceId?: string;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  clientBuildId?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  mode?: GatewayClientMode;
-  role?: string;
-  scopes?: string[];
-  modelCatalog?: ConnectParams["modelCatalog"];
-  caps?: string[];
-  commands?: string[];
-  computerUse?: ConnectParams["computerUse"];
-  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
-  workerRuns?: ConnectParams["workerRuns"];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
-  env?: NodeJS.ProcessEnv;
-  deviceIdentity?: DeviceIdentity | null;
-  hostDeps?: GatewayClientHostDeps;
-  minProtocol?: number;
-  maxProtocol?: number;
-  tlsFingerprint?: string;
-  onEvent?: (evt: EventFrame) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-  onConnectError?: (err: Error) => void;
-  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  /** Report retryable startup closes for clients that present connection progress. */
-  notifyOnStartupRetry?: boolean;
-  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-  onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
-};
+export type GatewayClientOptions = GatewayWebSocketTargetOptions &
+  NonNullable<ConnectParams["auth"]> & {
+    origin?: string;
+    /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    connectChallengeTimeoutMs?: number;
+    /**
+     * Server-side pre-auth handshake budget. Config-derived local clients use
+     * this to keep the connect-challenge watchdog aligned with the gateway.
+     */
+    preauthHandshakeTimeoutMs?: number;
+    tickWatchMinIntervalMs?: number;
+    tickWatchTimeoutMs?: number;
+    requestTimeoutMs?: number;
+    /** Prefer one setup credential for the first successful device-auth exchange. */
+    preferBootstrapToken?: boolean;
+    instanceId?: string;
+    clientName?: GatewayClientName;
+    clientDisplayName?: string;
+    clientVersion?: string;
+    clientBuildId?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    mode?: GatewayClientMode;
+    role?: string;
+    scopes?: string[];
+    modelCatalog?: ConnectParams["modelCatalog"];
+    caps?: string[];
+    commands?: string[];
+    computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
+    workerRuns?: ConnectParams["workerRuns"];
+    permissions?: Record<string, boolean>;
+    pathEnv?: string;
+    env?: NodeJS.ProcessEnv;
+    deviceIdentity?: DeviceIdentity | null;
+    hostDeps?: GatewayClientHostDeps;
+    minProtocol?: number;
+    maxProtocol?: number;
+    onEvent?: (evt: EventFrame) => void;
+    onHelloOk?: (hello: HelloOk) => void;
+    onConnectError?: (err: Error) => void;
+    onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+    /** Report retryable startup closes for clients that present connection progress. */
+    notifyOnStartupRetry?: boolean;
+    onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
+    onGap?: (info: { expected: number; received: number }) => void;
+    onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  };
 
 export type {
   GatewayClientCloseInfo,
@@ -295,7 +289,8 @@ export class GatewayClient {
       createRequestError: (error) => new GatewayClientRequestError(error),
       createRequestTimeoutError: (method, timeoutMs, requestSent) =>
         new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
-      createRequestAbortError: createGatewayRequestAbortError,
+      createRequestAbortError: (method) =>
+        createAbortError(`gateway request aborted for ${method}`),
       buildConnectPlan: ({ nonce, challengeTs, serverCapabilities, generation, ...authority }) => {
         if (!nonce) {
           throw new Error("gateway connect challenge missing nonce");
@@ -451,6 +446,7 @@ export class GatewayClient {
     const transport = resolveGatewayWebSocketTransport({
       url,
       tlsFingerprint: this.opts.tlsFingerprint,
+      tlsServerName: this.opts.tlsServerName,
       env: this.opts.env,
       normalizeTlsFingerprint: this.deps.normalizeTlsFingerprint,
       options: {
@@ -574,21 +570,16 @@ export class GatewayClient {
       opts?.timeoutMs === undefined
         ? STOP_AND_WAIT_TIMEOUT_MS
         : resolveSafeTimeoutDelayMs(opts.timeoutMs);
-    let timeout: NodeJS.Timeout | null = null;
     try {
-      await Promise.race([
-        stopPromise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error(`gateway client stop timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-          timeout.unref?.();
-        }),
-      ]);
+      await raceWithTimeout(
+        Promise.resolve(stopPromise),
+        timeoutMs,
+        () => {
+          throw new Error(`gateway client stop timed out after ${timeoutMs}ms`);
+        },
+        { ref: false },
+      );
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
       // The transport deadline must never abandon accepted durable operations.
       await this.deviceAuth.drain();
     }
@@ -608,7 +599,13 @@ export class GatewayClient {
     const ws = this.ws;
     this.ws = null;
     if (ws) {
-      const pendingStop = this.createPendingStop(ws);
+      // The package declaration build targets ES2023, which has no Promise.withResolvers.
+      let resolve: () => void = () => {};
+      const promise = new Promise<void>((done) => {
+        resolve = done;
+      });
+      const pendingStop: PendingStop = { ws, promise, resolve };
+      this.pendingStop = pendingStop;
       const forceTerminateTimer = setTimeout(() => {
         try {
           ws.terminate();
@@ -628,18 +625,6 @@ export class GatewayClient {
     }
     this.protocol.stop();
     return null;
-  }
-
-  private createPendingStop(ws: WebSocket): PendingStop {
-    if (this.pendingStop?.ws === ws) {
-      return this.pendingStop;
-    }
-    let resolve = () => {};
-    const promise = new Promise<void>((done) => {
-      resolve = done;
-    });
-    this.pendingStop = { ws, promise, resolve };
-    return this.pendingStop;
   }
 
   private resolvePendingStop(ws: WebSocket): void {
@@ -1300,9 +1285,4 @@ export class GatewayClient {
   }
 }
 
-function createGatewayRequestAbortError(method: string): Error {
-  const err = new Error(`gateway request aborted for ${method}`);
-  err.name = "AbortError";
-  return err;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

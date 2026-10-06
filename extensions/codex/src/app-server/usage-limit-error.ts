@@ -259,7 +259,7 @@ function readCodexErrorPayload(error: unknown): {
   if (!error || typeof error !== "object" || !("data" in error)) {
     return { message };
   }
-  const data = (error as { data?: unknown }).data as JsonValue | undefined;
+  const data = error.data;
   if (!isJsonObject(data)) {
     return { message };
   }

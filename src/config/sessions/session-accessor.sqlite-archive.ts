@@ -16,6 +16,7 @@ import { runScopedSqliteArchiveOperation } from "./session-accessor.sqlite-archi
 import type {
   MaterializedSessionStateDeletePlan,
   SessionStateDeletePlan,
+  SqliteArchiveOneShotWorkerData,
   TranscriptArchivePagePlan,
   TranscriptArchivePageResult,
   TranscriptArchivePublishPlan,
@@ -34,6 +35,7 @@ import {
   type SqliteWorkerWriteAdmission,
 } from "./session-accessor.sqlite-worker-request.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
@@ -101,11 +103,7 @@ function spawnSqliteTranscriptArchiveWorkerOperation<Result>(
           onExit: (code) => {
             exitCode = code;
           },
-          dispatch: () =>
-            worker.postMessage(
-              { type: "mutate", coordination },
-              coordination.stateLifecycle ? [coordination.stateLifecycle] : [],
-            ),
+          dispatch: () => worker.postMessage({ type: "mutate", coordination }, []),
         }),
     ).then((result) => [result]);
     const observe = (outcome: "resolved" | "rejected") => {
@@ -236,7 +234,11 @@ function runSqliteTranscriptArchiveWorker(
   }
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchiveWorkerResult>({
     expectedMessageType: "done",
-    workerData: { operation: "materialize", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "materialize",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
@@ -260,7 +262,11 @@ export function runSqliteTranscriptArchivePublishWorker(
   return runSqliteTranscriptArchiveWorkerOperation<TranscriptArchivePublishResult>({
     signal,
     expectedMessageType: "published",
-    workerData: { operation: "publish", type: "sqlite-transcript-archive-v2", plans },
+    workerData: {
+      operation: "publish",
+      type: "sqlite-transcript-archive-v2",
+      plans,
+    } satisfies SqliteArchiveOneShotWorkerData,
   });
 }
 
@@ -273,9 +279,6 @@ export async function readPendingSqliteTranscriptArchivesInWorker(
   },
   signal: AbortSignal,
 ): Promise<boolean> {
-  signal.throwIfAborted();
-  const { withSessionHistoryWorkerDatabase } =
-    await import("./session-transcript-worker-runtime.js");
   signal.throwIfAborted();
   return withSessionHistoryWorkerDatabase(
     { agentId: plan.agentId, path: plan.databasePath, env: plan.env },

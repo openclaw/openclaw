@@ -179,7 +179,7 @@ describe("signal mention gating", () => {
           accountId,
           runtime: { log, error: vi.fn(), exit: vi.fn() },
           groupHistories,
-          cfg: { agents: { list: [{ id: "main", identity: { name: "Claw" } }] } },
+          cfg: { agents: { entries: { main: { identity: { name: "Claw" } } } } },
         }),
       );
     const event = (groupId: string) =>

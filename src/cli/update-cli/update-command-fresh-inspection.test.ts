@@ -9,7 +9,7 @@ import * as channelConfig from "./update-command-config.js";
 import * as execution from "./update-command-execution.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
-import * as servicePlan from "./update-command-service-plan.js";
+import * as runtimePlan from "./update-command-runtime-preflight.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
@@ -25,7 +25,7 @@ it.each([false, true])(
       ...targetMetadata,
       schemaVersions: { ...targetMetadata.schemaVersions, state: OPENCLAW_STATE_SCHEMA_VERSION },
     });
-    vi.spyOn(servicePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
+    vi.spyOn(runtimePlan, "resolvePackageRuntimePreflight").mockResolvedValue({
       ok: true,
       value: {},
     });

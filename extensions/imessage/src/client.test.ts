@@ -7,10 +7,38 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
+const logVerboseMock = vi.hoisted(() => vi.fn());
+const contactsChangeDiagnostic =
+  "Could not fetch group for change type 1 with identifier 9E2F71C2:ABGroup, making it a delete change type.";
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
+  logVerbose: logVerboseMock,
 }));
 
 vi.mock("./cli-output.js", () => ({
@@ -69,6 +97,10 @@ afterAll(() => {
   vi.doUnmock("node:child_process");
   vi.doUnmock("./cli-output.js");
   vi.resetModules();
+});
+
+afterEach(() => {
+  effectGate.prepare = undefined;
 });
 
 describe("IMessageRpcClient LF framing", () => {
@@ -229,6 +261,7 @@ describe("IMessageRpcClient child stream error handling", () => {
     child = createMockChild();
     spawnMock.mockReset().mockReturnValue(child);
     runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
+    logVerboseMock.mockReset();
   });
 
   afterEach(async () => {
@@ -239,6 +272,68 @@ describe("IMessageRpcClient child stream error handling", () => {
       tempDirs.splice(0).map((dir) => fs.rm(dir, { force: true, recursive: true })),
     );
   });
+
+  it.each(["closed", "revoked"] as const)(
+    "refuses a %s RPC request after authority preparation without writing stdin",
+    async (outcome) => {
+      const preparing = Promise.withResolvers<void>();
+      const prepared = Promise.withResolvers<void>();
+      const refusal = new Error("scheduled request retired");
+      let current = true;
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const written = Promise.withResolvers<void>();
+      const write = vi.fn(() => {
+        written.resolve();
+        return true;
+      });
+      child.stdin.write = write;
+      const client = new IMessageRpcClient({ cliPath: "imsg" });
+      await client.start();
+      const response = client
+        .request(
+          "send",
+          { text: "hello" },
+          {
+            assertCurrent: () => {
+              if (!current) {
+                throw refusal;
+              }
+            },
+          },
+        )
+        .catch((error: unknown) => error);
+      try {
+        await Promise.race([
+          preparing.promise,
+          written.promise.then(() => {
+            throw new Error("RPC handoff bypassed authority preparation");
+          }),
+        ]);
+        expect(write).not.toHaveBeenCalled();
+        if (outcome === "closed") {
+          child.emit("close", 0, null);
+        } else {
+          current = false;
+        }
+        prepared.resolve();
+        if (outcome === "revoked") {
+          expect(await response).toBe(refusal);
+        } else {
+          expect(await response).toMatchObject({
+            message: "imsg rpc process changed before request initiation",
+          });
+        }
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        prepared.resolve();
+        child.emit("close", 0, null);
+        await client.stop();
+      }
+    },
+  );
 
   it.each(
     (["stdout", "stderr", "stdin"] as const).flatMap((streamName) =>
@@ -279,6 +374,7 @@ describe("IMessageRpcClient child stream error handling", () => {
   );
 
   it("propagates a synchronous stdin write failure as a terminal transport error", async () => {
+    vi.useFakeTimers();
     const writeError = new Error("write after end");
     child.stdin.write = () => {
       throw writeError;
@@ -286,7 +382,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     const client = new IMessageRpcClient({ cliPath: "imsg" });
     await client.start();
 
-    await expect(client.request("ping", {}, { timeoutMs: 0 })).rejects.toBe(writeError);
+    await expect(client.request("ping", {}, { timeoutMs: 10 })).rejects.toBe(writeError);
+    expect(vi.getTimerCount()).toBe(0);
     await expect(client.waitForClose()).rejects.toBe(writeError);
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
 
@@ -460,6 +557,90 @@ describe("IMessageRpcClient child stream error handling", () => {
     expect(runtimeError).toHaveBeenCalledWith("imsg rpc: unrelated warning");
   });
 
+  it.each([
+    contactsChangeDiagnostic,
+    `2026-08-04 00:32:38.518 imsg[88305:38969629] ${contactsChangeDiagnostic}`,
+  ])("logs the Contacts reconciliation diagnostic at verbose: %s", async (line) => {
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    child.stderr.emit("data", Buffer.from(`${line}\n`));
+
+    expect(runtimeError).not.toHaveBeenCalled();
+    expect(logVerboseMock).toHaveBeenCalledWith(`imsg rpc: ${line}`);
+  });
+
+  it.each([
+    "unable to connect to Messages database",
+    "CoreData: error: Failed to load persistent store",
+    "AddressBook failed to save contact",
+    `${contactsChangeDiagnostic} CoreData: error: Failed to load persistent store`,
+    `CoreData: error: Failed to load persistent store ${contactsChangeDiagnostic}`,
+  ])("keeps other stderr diagnostics at ERROR: %s", async (line) => {
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: "imsg",
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+
+    child.stderr.emit("data", Buffer.from(`${line}\n`));
+
+    expect(runtimeError).toHaveBeenCalledWith(`imsg rpc: ${line}`);
+    expect(logVerboseMock).not.toHaveBeenCalled();
+  });
+
+  it("classifies real child stderr for the documented reconciliation line and a framework error", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-stderr-"));
+    tempDirs.push(root);
+    const wrapperPath = path.join(root, "imsg");
+    const documented = `2026-08-04 00:32:38.518 imsg[88305:38969629] ${contactsChangeDiagnostic}`;
+    const frameworkError = "CoreData: error: Failed to load persistent store";
+    await fs.writeFile(
+      wrapperPath,
+      [
+        "#!/usr/bin/env node",
+        `process.stderr.write(${JSON.stringify(documented)} + "\\n");`,
+        `process.stderr.write(${JSON.stringify(frameworkError)} + "\\n");`,
+        'let buffered = "";',
+        'process.stdin.setEncoding("utf8");',
+        'process.stdin.on("data", (chunk) => {',
+        "  buffered += chunk;",
+        '  let newline = buffered.indexOf("\\n");',
+        "  while (newline !== -1) {",
+        "    const line = buffered.slice(0, newline);",
+        "    buffered = buffered.slice(newline + 1);",
+        "    const request = JSON.parse(line);",
+        '    process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result: { ok: true } }) + "\\n");',
+        '    newline = buffered.indexOf("\\n");',
+        "  }",
+        "});",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    const childProcess =
+      await vi.importActual<typeof import("node:child_process")>("node:child_process");
+    spawnMock.mockImplementationOnce((command, args, options) =>
+      childProcess.spawn(command, args, options),
+    );
+    const runtimeError = vi.fn();
+    const client = new IMessageRpcClient({
+      cliPath: wrapperPath,
+      runtime: { error: runtimeError, exit: vi.fn(), log: vi.fn() },
+    });
+    await client.start();
+    await expect(client.request("ping", {}, { timeoutMs: 5_000 })).resolves.toEqual({ ok: true });
+    await client.stop();
+
+    expect(logVerboseMock).toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+    expect(runtimeError).toHaveBeenCalledWith(`imsg rpc: ${frameworkError}`);
+    expect(runtimeError).not.toHaveBeenCalledWith(`imsg rpc: ${documented}`);
+  });
+
   it("expands cliPath locally while preserving remote dbPath and JSON data", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-imessage-rpc-boundary-"));
     tempDirs.push(root);
@@ -560,6 +741,7 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -640,18 +822,22 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
   });
 
   // send.ts matches this timeout wording; a wrapper deadline is not a bridge stall.
-  it("leaves a client-side timeout undecorated", async () => {
+  it("leaves a client-side timeout undecorated without disturbing another pending request", async () => {
     vi.useFakeTimers();
     const client = new IMessageRpcClient({ cliPath: "/tmp/imsg-stall-clienttimeout" });
     await client.start();
     const pending = client.request("send", {}, { timeoutMs: 10 });
     pending.catch(() => {});
+    const untimed = client.request("ping", {}, { timeoutMs: -1 });
+    untimed.catch(() => {});
     await vi.advanceTimersByTimeAsync(20);
 
     const error = (await pending.catch((cause: unknown) => cause)) as Error;
-    vi.useRealTimers();
-    expect(/imsg rpc timeout \(send\)/i.test(error.message)).toBe(true);
+    expect(error.message).toBe("imsg rpc timeout (send)");
     expect(error.message).not.toContain("imsg launch");
+    child.stdout.emit("data", '{"id":1,"result":"late"}\n{"id":2,"result":"alive"}\n');
+    await expect(untimed).resolves.toBe("alive");
+    expect(vi.getTimerCount()).toBe(0);
 
     child.emit("close", 0, null);
     await client.stop();

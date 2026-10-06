@@ -281,6 +281,21 @@ describe("checkGatewayHealth", () => {
     },
   );
 
+  it("reports a deleted Gateway Node path without marking the gateway unhealthy", async () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    callGateway
+      .mockResolvedValueOnce({
+        childRuntime: { execPath, available: false },
+      })
+      .mockResolvedValue({});
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
+    expect(note).toHaveBeenCalledWith(
+      `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+      "Gateway runtime",
+    );
+  });
+
   it.each([
     ["startupMigrationWarning", "Startup migration warnings"],
     ["startupRecoveryWarning", "Startup session recovery"],
@@ -394,7 +409,7 @@ describe("checkGatewayHealth", () => {
 
     expect(note).toHaveBeenCalledWith(
       [
-        "Channel status probe failed: channel probe timed out",
+        "Channel status check failed: channel probe timed out",
         "Retry: openclaw channels status --probe",
       ].join("\n"),
       "Channel warnings",
@@ -934,7 +949,7 @@ describe("probeGatewayMemoryStatus", () => {
     const result = await probeGatewayMemoryStatus({ cfg });
     expect(result.checked).toBe(false);
     expect(result.ready).toBe(false);
-    expect(result.error).toContain("gateway memory probe timed out");
+    expect(result.error).toContain("gateway memory check timed out");
     expect(result.skipped).toBe(false);
   });
 
@@ -948,7 +963,7 @@ describe("probeGatewayMemoryStatus", () => {
         ok: false,
         checked: false,
         error:
-          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to check",
       },
     });
 
@@ -965,7 +980,7 @@ describe("probeGatewayMemoryStatus", () => {
     await expect(probeGatewayMemoryStatus({ cfg })).resolves.toEqual({
       checked: true,
       ready: false,
-      error: "gateway memory probe unavailable: gateway request timeout for doctor.memory.status",
+      error: "gateway memory check unavailable: gateway request timeout for doctor.memory.status",
       skipped: false,
     });
   });

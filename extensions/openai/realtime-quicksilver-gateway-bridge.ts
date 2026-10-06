@@ -1,4 +1,5 @@
 // Gateway-owned GPT-Live bridge over released WebRTC and unlisted direct transport.
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   RealtimeVoiceAudioOutputPort,
@@ -7,7 +8,7 @@ import type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
-import WebSocket, { type RawData } from "ws";
+import WebSocket from "ws";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   assertOpenAIQuicksilverPcmOutput,
@@ -34,12 +35,11 @@ import {
   openAIQuicksilverConnectAbortError,
   waitForOpenAIQuicksilverConnectStep,
 } from "./realtime-quicksilver-sideband.js";
-import {
-  type OpenAIQuicksilverSocket,
-  type OpenAIQuicksilverSocketFactory,
-  QuicksilverSocketAudioQueue,
-  type QuicksilverMediaSocket,
-  type QuicksilverMediaSocketFactory,
+import type {
+  OpenAIQuicksilverSocket,
+  OpenAIQuicksilverSocketFactory,
+  QuicksilverMediaSocket,
+  QuicksilverMediaSocketFactory,
 } from "./realtime-quicksilver-socket.shared.js";
 import {
   buildOpenAIQuicksilverSession,
@@ -106,7 +106,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   private peer: OpenAIQuicksilverAudioPeerContract | undefined;
   private audioOutput: RealtimeVoiceAudioOutputPort | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
-  private readonly pendingRawAudio: QuicksilverSocketAudioQueue;
+  private readonly pendingRawAudio: OpenAIQuicksilverPendingAudio;
   private directSocket: QuicksilverMediaSocket | undefined;
   private ready = false;
   private sideband: OpenAIQuicksilverSocket | undefined;
@@ -119,8 +119,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     private readonly runtime: OpenAIRealtimeHost,
   ) {
     this.audio = new OpenAIQuicksilverAudioAdapter(config);
-    this.pendingRawAudio = new QuicksilverSocketAudioQueue(
+    this.pendingRawAudio = new OpenAIQuicksilverPendingAudio(
       config.audioFormat?.encoding === "g711_ulaw" ? 40_000 : 240_000,
+      1,
     );
   }
 
@@ -226,7 +227,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       if (!this.closingPromise) {
         this.releaseResources("abort");
       }
-      throw this.redactAdmissionError(error);
+      throw this.redactError(error, projectOpenAIQuicksilverAuthErrorMessage(error));
     }
     try {
       const requestIds = createOpenAIQuicksilverRequestIds();
@@ -256,12 +257,9 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     connectSignal: AbortSignal,
   ): Promise<void> {
     this.transport = "direct";
-    let resolveReady!: () => void;
-    const readyPromise = new Promise<void>((resolve) => {
-      resolveReady = resolve;
-    });
+    const ready = createDeferred();
     this.delegations = this.createDelegationController({
-      onSessionStarted: resolveReady,
+      onSessionStarted: ready.resolve,
     });
     await this.connectSocket(
       auth,
@@ -280,7 +278,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         voice: this.config.voice,
       }),
     );
-    await waitForOpenAIQuicksilverConnectStep(readyPromise, connectSignal);
+    await waitForOpenAIQuicksilverConnectStep(ready.promise, connectSignal);
   }
 
   private async connectWebRtc(
@@ -432,7 +430,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
       directSocket.sendAudio(this.pendingRawAudio.take());
     }
     for (const frame of connected.bufferedFrames) {
-      this.handleSidebandFrame(frame.data, frame.isBinary);
+      this.delegations?.handleFrame(frame.data, frame.isBinary);
     }
     if (terminalEvent?.kind === "error") {
       throw terminalEvent.error;
@@ -515,7 +513,7 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
   }
 
   private attachSidebandHandlers(socket: OpenAIQuicksilverSocket): void {
-    socket.on("message", (data, isBinary) => this.handleSidebandFrame(data, isBinary));
+    socket.on("message", (data, isBinary) => this.delegations?.handleFrame(data, isBinary));
     socket.on("error", (error) => this.fail(error));
     socket.on("close", (code, rawReason) => {
       const closeCode = code ?? 1006;
@@ -530,10 +528,6 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
         }
       }
     });
-  }
-
-  private handleSidebandFrame(data: RawData, isBinary: boolean): void {
-    this.delegations?.handleFrame(data, isBinary);
   }
 
   private scheduleExpiry(ttlMs: number): void {
@@ -554,16 +548,11 @@ export class OpenAIQuicksilverGatewayBridge implements RealtimeVoiceBridge {
     void this.teardown("error", () => this.config.onError?.(redactedError));
   }
 
-  private redactError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverErrorMessage("gateway"));
-    if (error instanceof Error && error.name === "TimeoutError") {
-      projected.name = "TimeoutError";
-    }
-    return projected;
-  }
-
-  private redactAdmissionError(error: unknown): Error {
-    const projected = new Error(projectOpenAIQuicksilverAuthErrorMessage(error));
+  private redactError(
+    error: unknown,
+    message = projectOpenAIQuicksilverErrorMessage("gateway"),
+  ): Error {
+    const projected = new Error(message);
     if (error instanceof Error && error.name === "TimeoutError") {
       projected.name = "TimeoutError";
     }

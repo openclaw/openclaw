@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createPluginRecord, createPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
@@ -78,15 +79,6 @@ function createApi() {
     entries: vi.fn(async () => []),
     clear: vi.fn(async () => undefined),
   }));
-  const openSyncKeyedStore = vi.fn(() => ({
-    register: vi.fn(),
-    registerIfAbsent: vi.fn(() => true),
-    lookup: vi.fn(() => undefined),
-    consume: vi.fn(() => undefined),
-    delete: vi.fn(() => false),
-    entries: vi.fn(() => []),
-    clear: vi.fn(),
-  }));
   const api = createTestPluginApi({
     id: "browser",
     name: "Browser",
@@ -94,7 +86,7 @@ function createApi() {
     rootDir: "/plugins/browser",
     config: {},
     runtime: {
-      state: { openKeyedStore, openSyncKeyedStore },
+      state: { openKeyedStore },
     } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
     registerGatewayMethod,
@@ -104,7 +96,6 @@ function createApi() {
   return {
     api,
     openKeyedStore,
-    openSyncKeyedStore,
     registerCli,
     registerGatewayMethod,
     registerService,
@@ -112,8 +103,8 @@ function createApi() {
   };
 }
 
-function createTool(context: OpenClawPluginToolContext) {
-  const { api, registerTool } = createApi();
+function createTool(context: OpenClawPluginToolContext, registration = createApi()) {
+  const { api, registerTool } = registration;
   registerBrowserPlugin(api);
   const factory = registerTool.mock.calls[0]?.[0];
   if (typeof factory !== "function") {
@@ -162,7 +153,7 @@ describe("browser plugin", () => {
   });
 
   it("initializes the durable tab registry without loading browser control or Gateway runtime", () => {
-    const { api, openSyncKeyedStore } = createApi();
+    const { api, openKeyedStore } = createApi();
     Object.defineProperty(api.runtime, "gateway", {
       get() {
         throw new Error("Gateway runtime must stay lazy during Browser registration");
@@ -170,11 +161,14 @@ describe("browser plugin", () => {
     });
     registerBrowserPlugin(api);
 
-    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+    expect(openKeyedStore).toHaveBeenCalledWith({
       namespace: "browser.session-tabs",
       maxEntries: 5_000,
       overflowPolicy: "reject-new",
     });
+    for (const store of openKeyedStore.mock.results) {
+      expect(store.value.entries).not.toHaveBeenCalled();
+    }
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
   });
 
@@ -231,14 +225,32 @@ describe("browser plugin", () => {
   });
 
   it("keeps browser tool registration synchronous while loading runtime on execute", async () => {
-    const tool = createTool({
-      sessionKey: "agent:main:webchat:direct:123",
-      browser: {
-        sandboxBridgeUrl: "http://127.0.0.1:9999",
-        allowHostControl: true,
-      },
+    const registration = createApi();
+    const { api, registerTool } = registration;
+    const record = createPluginRecord({ id: "browser", contracts: { tools: ["browser"] } });
+    const registry = createPluginRegistry({
+      runtime: api.runtime,
+      logger: api.logger,
+      activateGlobalSideEffects: false,
     });
+    registerTool.mockImplementation((tool, options) =>
+      registry.registerTool(record, tool, options),
+    );
+    const tool = createTool(
+      {
+        sessionKey: "agent:main:webchat:direct:123",
+        browser: {
+          sandboxBridgeUrl: "http://127.0.0.1:9999",
+          allowHostControl: true,
+        },
+      },
+      registration,
+    );
 
+    expect(record.toolNames).toEqual(["browser"]);
+    expect(registry.registry.tools).toEqual([
+      expect.objectContaining({ names: ["browser"], optional: false }),
+    ]);
     expect(tool.name).toBe("browser");
     expect(tool.resultContentSource).toBe("network");
     expect(tool.description).toContain("action=profiles");

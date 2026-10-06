@@ -33,18 +33,8 @@ export function takeDirectiveToken(
   raw: string,
   startIndex: number,
 ): { token: string | null; nextIndex: number } {
-  let i = startIndex;
-  const len = raw.length;
-  while (i < len && /\s/.test(raw.charAt(i))) {
-    i += 1;
-  }
-  if (i >= len) {
-    return { token: null, nextIndex: i };
-  }
-  const start = i;
-  while (i < len && !/\s/.test(raw.charAt(i))) {
-    i += 1;
-  }
-  const token = raw.slice(start, i);
-  return { token, nextIndex: i };
+  const match = /\S+/.exec(raw.slice(startIndex));
+  return match
+    ? { token: match[0], nextIndex: startIndex + match.index + match[0].length }
+    : { token: null, nextIndex: raw.length };
 }

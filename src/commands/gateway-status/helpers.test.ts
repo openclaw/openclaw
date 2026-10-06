@@ -254,7 +254,7 @@ describe("probe reachability classification", () => {
     expect(isScopeLimitedProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (51ms) · Capability: write-capable · Read probe: limited - missing scope: operator.read",
+      "Connect: ok (51ms) · Capability: write-capable · Read check: limited - missing scope: operator.read",
     );
   });
 
@@ -308,7 +308,7 @@ describe("probe reachability classification", () => {
     expect(isPostConnectProbeFailure(probe)).toBe(true);
     expect(isProbeReachable(probe)).toBe(true);
     expect(renderProbeSummaryLine(probe, false)).toBe(
-      "Connect: ok (43ms) · Capability: connect-only · Read probe: failed - unknown method: status",
+      "Connect: ok (43ms) · Capability: connect-only · Read check: failed - unknown method: status",
     );
   });
 

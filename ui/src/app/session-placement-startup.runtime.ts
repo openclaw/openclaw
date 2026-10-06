@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
@@ -153,13 +154,6 @@ export default function createApplicationPlacementStartupRuntime(
     );
   };
 
-  const refreshAfterFailure = (entry: PlacementStartupEntry) => {
-    if (!isCurrent(entry) || entry.work.kind === "cancelled") {
-      return;
-    }
-    params.sessions.invalidate();
-  };
-
   const pauseEntry = (
     entry: PlacementStartupEntry,
     recovery: SessionPlacementRecovery,
@@ -182,6 +176,7 @@ export default function createApplicationPlacementStartupRuntime(
     let currentRecovery = recovery;
     void advanceSessionPlacementDraft({
       client: entry.scope.client,
+      describe: params.sessions.describe,
       recovery: currentRecovery,
       persistRecovery: entry.persistRecovery,
       cleanupOnCancellation: () => !entry.persistRecovery && entry.work.kind !== "paused",
@@ -254,7 +249,11 @@ export default function createApplicationPlacementStartupRuntime(
           pauseEntry(entry, currentRecovery, formatUiError(error));
         }
       })
-      .finally(() => refreshAfterFailure(entry));
+      .finally(() => {
+        if (isCurrent(entry) && entry.work.kind !== "cancelled") {
+          params.sessions.invalidate();
+        }
+      });
   };
 
   const start = (input: PlacementStartupInput) => {
@@ -474,10 +473,7 @@ export default function createApplicationPlacementStartupRuntime(
         createdAt: entry.createdAt,
       });
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       connection.dispose();
       entries.clear();

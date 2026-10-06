@@ -1,23 +1,15 @@
-/**
- * Public facade and fallback coordinator for embedded-agent compaction.
- */
-import { AsyncLocalStorage } from "node:async_hooks";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import {
-  AsyncWorkScope,
-  captureAsyncWorkTracker,
-  getAsyncWorkSignal,
-} from "../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -42,6 +34,7 @@ import {
   resolveAgentRunSessionTarget,
 } from "../run-session-target.js";
 import { resolveSystemPromptRepoRoot } from "../system-prompt-params.js";
+import { runForegroundCompactionWork } from "./compact.foreground-work.js";
 import type {
   CompactEmbeddedAgentSessionParams,
   CompactEmbeddedAgentSessionRuntimeParams,
@@ -55,15 +48,12 @@ import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import type { PreparedCompactEmbeddedAgentSessionParams } from "./direct-compaction-preparation.js";
 import { compactEmbeddedAgentSessionDirectOnce } from "./direct-compaction.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
+import { resolveSharedPluginRuntimeWorkspace } from "./run/prepared-runtime-context.js";
 import { prepareEmbeddedSessionActiveProjectKeys } from "./session-prompt-state.js";
 import { consumeTranscriptBytePreflightClaim } from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-
-type CompactEmbeddedAgentSessionParamsWithSessionFile = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
-};
 
 function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactResult {
   return {
@@ -76,7 +66,7 @@ function lockedHarnessCompactionFailure(runtime: string): EmbeddedAgentCompactRe
 
 export async function compactNativeCliSession(params: {
   runtime: string | undefined;
-  compactParams: CompactEmbeddedAgentSessionParamsWithSessionFile;
+  compactParams: CompactEmbeddedAgentSessionParams;
   runControlOperation?: (run: () => Promise<void>) => Promise<void>;
 }): Promise<EmbeddedAgentCompactResult | undefined> {
   const runtime = normalizeOptionalAgentRuntimeId(params.runtime);
@@ -184,10 +174,6 @@ export async function compactNativeCliSession(params: {
   };
 }
 
-function hasExplicitCompactionModel(params: CompactEmbeddedAgentSessionParams): boolean {
-  return Boolean(params.config?.agents?.defaults?.compaction?.model?.trim());
-}
-
 function resolveCompactionFallbacksOverride(
   params: CompactEmbeddedAgentSessionParams,
 ): string[] | undefined {
@@ -201,12 +187,6 @@ function resolveCompactionFallbacksOverride(
       sessionKey: params.sessionKey,
     })
   );
-}
-
-function hasCompactionModelFallbackCandidates(params: CompactEmbeddedAgentSessionParams): boolean {
-  const fallbacksOverride = resolveCompactionFallbacksOverride(params);
-  const defaultFallbacks = resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model);
-  return (fallbacksOverride ?? defaultFallbacks).length > 0;
 }
 
 function classifyCompactionFallbackResult(
@@ -229,15 +209,6 @@ function classifyCompactionFallbackResult(
   return failoverError ? { error: failoverError } : null;
 }
 
-function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactResult {
-  const reason = isFallbackSummaryError(err) ? err.message : formatErrorMessage(err);
-  return {
-    ok: false,
-    compacted: false,
-    reason,
-  };
-}
-
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -246,6 +217,7 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const parentSignal = getAsyncWorkSignal();
   const memoryTranscript = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
   )?.memoryTranscript;
@@ -256,7 +228,16 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
-  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const assertReadCurrent = () => {
+    parentSignal?.throwIfAborted();
+    paramsBase.abortSignal?.throwIfAborted();
+    memoryTranscript?.assertActive();
+  };
+  const entry = await readSessionEntryReadOnlyInWorker(
+    { ...runSessionTarget, readConsistency: "latest" },
+    assertReadCurrent,
+  );
+  assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,
@@ -264,7 +245,7 @@ export async function compactEmbeddedAgentSessionDirect(
     lockedHarnessRuntime,
   );
   const transcriptBytePreflightAuthority = transcriptBytePreflightClaim?.authority;
-  const requestedParams: CompactEmbeddedAgentSessionParamsWithSessionFile = {
+  const requestedParams: CompactEmbeddedAgentSessionParams = {
     ...paramsBase,
     config: projectCodexHostTranscriptBytePreflightConfig(
       paramsBase.config,
@@ -327,17 +308,21 @@ export async function compactEmbeddedAgentSessionDirect(
   ) {
     return lockedHarnessCompactionFailure(lockedHarnessRuntime);
   }
-  const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();
-  const trackOwner = captureAsyncWorkTracker();
-  const parentSignal = getAsyncWorkSignal();
-  const cancellationSignal =
-    requestedParams.abortSignal && parentSignal
-      ? AbortSignal.any([requestedParams.abortSignal, parentSignal])
-      : (requestedParams.abortSignal ?? parentSignal);
-  const work = new AsyncWorkScope();
-  let context = work.run(() => AsyncLocalStorage.snapshot());
-  let releasePreparedRuntime: (() => Promise<void>) | undefined;
-  const runPreparedCompaction = async () => {
+  const sharedRuntimeWorkspace = resolveSharedPluginRuntimeWorkspace(
+    {
+      ...requestedParams,
+      workspaceDir: requestedWorkspaceDir,
+      agentId: requestedAgentIds.sessionAgentId,
+      isCanonicalWorkspace: requestedWorkspaceDir === canonicalWorkspaceDir,
+    },
+    () =>
+      loadPluginMetadataSnapshot({
+        config: requestedParams.config ?? {},
+        workspaceDir: requestedWorkspaceDir,
+        env: process.env,
+      }),
+  );
+  return await runForegroundCompactionWork(async (owner) => {
     // Compaction admits new work even when an engine restores a predecessor context.
     // Keep caller authority, but select metadata from the committed inventory.
     const preparedModelRuntimeLease = await runOutsidePluginRuntimeGenerationScope(() =>
@@ -346,8 +331,9 @@ export async function compactEmbeddedAgentSessionDirect(
           config: requestedParams.config ?? {},
           agentId: requestedAgentIds.sessionAgentId,
           agentDir: requestedAgentDir,
-          workspaceDir: requestedWorkspaceDir,
-          preserveWorkspaceDirOnRefresh: requestedWorkspaceDir !== canonicalWorkspaceDir,
+          workspaceDir: sharedRuntimeWorkspace?.workspaceDir ?? requestedWorkspaceDir,
+          preserveWorkspaceDirOnRefresh:
+            !sharedRuntimeWorkspace && requestedWorkspaceDir !== canonicalWorkspaceDir,
           ...(requestedParams.allowGatewaySubagentBinding
             ? { allowGatewaySubagentBinding: true }
             : {}),
@@ -406,7 +392,7 @@ export async function compactEmbeddedAgentSessionDirect(
         },
       ),
     );
-    releasePreparedRuntime = () => preparedModelRuntimeLease[Symbol.asyncDispose]();
+    owner.adoptLease(preparedModelRuntimeLease);
     try {
       const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;
       const preparedConfig =
@@ -414,8 +400,9 @@ export async function compactEmbeddedAgentSessionDirect(
           preparedModelRuntimeOwnerSnapshot.config,
           Boolean(transcriptBytePreflightAuthority),
         ) ?? preparedModelRuntimeOwnerSnapshot.config;
-      const preparedWorkspaceDir =
-        preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir;
+      const preparedWorkspaceDir = sharedRuntimeWorkspace
+        ? requestedWorkspaceDir
+        : (preparedModelRuntimeOwnerSnapshot.workspaceDir ?? requestedWorkspaceDir);
       const repoRoot =
         resolveSystemPromptRepoRoot({
           config: preparedConfig,
@@ -446,6 +433,12 @@ export async function compactEmbeddedAgentSessionDirect(
         ...(transcriptBytePreflightClaim
           ? {
               transcriptBytePreflightAuthority: true as const,
+              ...(transcriptBytePreflightClaim.withCompactionPersistenceAsync
+                ? {
+                    transcriptByteCompactionPersistenceAsync:
+                      transcriptBytePreflightClaim.withCompactionPersistenceAsync,
+                  }
+                : {}),
               ...(transcriptBytePreflightClaim.withCompactionPersistence
                 ? {
                     transcriptByteCompactionPersistence:
@@ -458,8 +451,11 @@ export async function compactEmbeddedAgentSessionDirect(
       const compactPrepared = async () => {
         if (
           transcriptBytePreflightAuthority ||
-          hasExplicitCompactionModel(params) ||
-          !hasCompactionModelFallbackCandidates(params)
+          params.config?.agents?.defaults?.compaction?.model?.trim() ||
+          (
+            resolveCompactionFallbacksOverride(params) ??
+            resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model)
+          ).length === 0
         ) {
           return await compactEmbeddedAgentSessionDirectOnce(params);
         }
@@ -553,38 +549,15 @@ export async function compactEmbeddedAgentSessionDirect(
         return fallbackResult.result;
       };
       return await withPluginRuntimeGenerationScope(preparedModelRuntime, () => {
-        context = AsyncLocalStorage.snapshot();
+        owner.captureContext();
         return compactPrepared();
       });
     } catch (err) {
-      return fallbackFailureToCompactionResult(err);
+      return {
+        ok: false,
+        compacted: false,
+        reason: isFallbackSummaryError(err) ? err.message : formatErrorMessage(err),
+      };
     }
-  };
-  // Logical completion reports promptly; actual attempt work retains this generation.
-  void trackOwner(async () => {
-    const closeWork = () => context(() => work.beginClose(cancellationSignal?.reason));
-    cancellationSignal?.addEventListener("abort", closeWork, { once: true });
-    if (cancellationSignal?.aborted) {
-      closeWork();
-    }
-    try {
-      callerResult.resolve(await work.track(runPreparedCompaction));
-    } catch (error) {
-      callerResult.reject(error);
-    } finally {
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => context(() => work.drain()),
-        );
-      } finally {
-        try {
-          await releasePreparedRuntime?.();
-        } finally {
-          cancellationSignal?.removeEventListener("abort", closeWork);
-        }
-      }
-    }
-  }).catch(callerResult.reject);
-  return await callerResult.promise;
+  }, requestedParams.abortSignal);
 }

@@ -2,6 +2,7 @@ package ai.openclaw.app.ui
 
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.chat.ChatSessionEntry
+import ai.openclaw.app.chat.SessionSnooze
 import ai.openclaw.app.chat.isSessionRunActive
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.ui.design.ClawEmptyState
@@ -19,6 +20,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.Archive
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.MicNone
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -62,6 +65,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -82,6 +86,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
 
 @Composable
 internal fun SessionsScreen(
@@ -113,8 +121,12 @@ internal fun SessionsScreen(
   var deleteSessionTarget by
     rememberSaveable(stateSaver = SessionActionTargetSaver) { mutableStateOf<SessionActionTarget?>(null) }
   var searchText by rememberSaveable { mutableStateOf("") }
-  var renameGroupName by rememberSaveable { mutableStateOf<String?>(null) }
-  var deleteGroupName by rememberSaveable { mutableStateOf<String?>(null) }
+  var renameGroupTarget by key("rename-group-owner") {
+    rememberSaveable(stateSaver = SessionGroupActionTargetSaver) { mutableStateOf<SessionGroupActionTarget?>(null) }
+  }
+  var deleteGroupTarget by key("delete-group-owner") {
+    rememberSaveable(stateSaver = SessionGroupActionTargetSaver) { mutableStateOf<SessionGroupActionTarget?>(null) }
+  }
   var newGroupDialogVisible by rememberSaveable { mutableStateOf(false) }
   val searchState =
     rememberSessionBrowserSearchState(
@@ -129,8 +141,9 @@ internal fun SessionsScreen(
       currentSessionKey = chatSessionKey,
       filter = filter,
       recentFirst = recentFirst,
+      nowMs = sessionStatusNowMs,
     )
-  val nextAttentionExpiry = nextSessionStatusExpiry(visibleSessions, sessionStatusNowMs)
+  val nextAttentionExpiry = nextSessionStatusExpiry(searchState.entries, sessionStatusNowMs)
   val storedGroups by viewModel.sessionCustomGroups.collectAsState()
   val sections =
     buildSessionTreeSections(
@@ -150,6 +163,8 @@ internal fun SessionsScreen(
     renameSessionTarget = renameSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
     groupSessionTarget = groupSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
     deleteSessionTarget = deleteSessionTarget?.takeIf { it.matchesGateway(activeGatewayStableId) }
+    renameGroupTarget = renameGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
+    deleteGroupTarget = deleteGroupTarget?.takeIf { it.gatewayStableId == activeGatewayStableId }
   }
 
   LaunchedEffect(isConnected, filter) {
@@ -206,10 +221,15 @@ internal fun SessionsScreen(
       }
 
       item {
-        Row(horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+          verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs),
+        ) {
           FilterPill(text = nativeString("Recent"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Recent, onClick = { filter = SessionFilter.Recent })
           FilterPill(text = nativeString("Current"), icon = Icons.Outlined.MicNone, active = filter == SessionFilter.Current, showDot = sessions.any { it.key == chatSessionKey }, onClick = { filter = SessionFilter.Current })
+          FilterPill(text = nativeString("Snoozed"), icon = Icons.Outlined.AccessTime, active = filter == SessionFilter.Snoozed, onClick = { filter = SessionFilter.Snoozed })
           FilterPill(text = nativeString("Archived"), icon = Icons.Outlined.Archive, active = filter == SessionFilter.Archived, onClick = { filter = SessionFilter.Archived })
+          FilterPill(text = nativeString("Automations"), icon = Icons.Outlined.Schedule, active = filter == SessionFilter.Automations, onClick = { filter = SessionFilter.Automations })
         }
       }
 
@@ -336,9 +356,9 @@ internal fun SessionsScreen(
               if (section.isCategory) {
                 SessionGroupHeader(
                   title = title,
-                  onRename = { renameGroupName = title },
+                  onRename = { renameGroupTarget = SessionGroupActionTarget(activeGatewayStableId, title) },
                   onNewGroup = { newGroupDialogVisible = true },
-                  onDelete = { deleteGroupName = title },
+                  onDelete = { deleteGroupTarget = SessionGroupActionTarget(activeGatewayStableId, title) },
                 )
               } else {
                 Text(
@@ -367,7 +387,14 @@ internal fun SessionsScreen(
                     fallback = if (active) nativeString("Current thread") else nativeString("OpenClaw thread"),
                     nowMs = sessionStatusNowMs,
                   ),
-              metadata = (session.lastActivityAt ?: session.updatedAtMs)?.let(::relativeSessionTime) ?: nativeString("now"),
+              metadata =
+                if (filter == SessionFilter.Snoozed && session.isSnoozed(sessionStatusNowMs)) {
+                  nativeString("Wakes \$wakeLabel", SessionSnooze.wakeLabel(requireNotNull(session.snoozedUntil), sessionStatusNowMs))
+                } else {
+                  (session.lastActivityAt ?: session.updatedAtMs)?.let { relativeSessionTime(it, sessionStatusNowMs) } ?: nativeString("now")
+                },
+              nowMs = sessionStatusNowMs,
+              showWakeTime = filter == SessionFilter.Snoozed,
               active = active,
               compact = compactLayout,
               archived = session.archived == true,
@@ -391,6 +418,17 @@ internal fun SessionsScreen(
               onSetPinned = { pinned ->
                 coroutineScope.launch {
                   viewModel.patchChatSession(key = session.key, ownerAgentId = session.ownerAgentId, pinned = pinned)
+                }
+              },
+              onSetSnooze = { wakeAtMs ->
+                coroutineScope.launch {
+                  viewModel.patchChatSession(
+                    key = session.key,
+                    ownerAgentId = session.ownerAgentId,
+                    snoozedUntil = wakeAtMs,
+                    clearSnooze = wakeAtMs == null,
+                    expectedSessionId = session.sessionId,
+                  )
                 }
               },
               onSetUnread = { unread ->
@@ -496,19 +534,22 @@ internal fun SessionsScreen(
     )
   }
 
-  renameGroupName?.let { group ->
+  renameGroupTarget?.let { target ->
     SessionTextDialog(
       title = nativeString("Rename group"),
-      stateKey = "group-rename:$group",
-      initialValue = group,
+      stateKey = "group-rename:${target.gatewayStableId}:${target.name}",
+      initialValue = target.name,
       confirmLabel = nativeString("Rename"),
       allowEmpty = false,
-      onDismiss = { renameGroupName = null },
+      onDismiss = { renameGroupTarget = null },
       onConfirm = { value ->
-        renameGroupName = null
+        renameGroupTarget = null
+        if (target.gatewayStableId != viewModel.activeGatewayStableId.value) return@SessionTextDialog
         val next = value.trim()
-        if (next.isNotEmpty() && next != group) {
-          coroutineScope.launch { viewModel.renameChatSessionGroup(from = group, to = next) }
+        if (next.isNotEmpty() && next != target.name) {
+          coroutineScope.launch {
+            viewModel.renameChatSessionGroup(from = target.name, to = next, expectedGatewayStableId = target.gatewayStableId)
+          }
         }
       },
     )
@@ -529,14 +570,18 @@ internal fun SessionsScreen(
     )
   }
 
-  deleteGroupName?.let { group ->
+  deleteGroupTarget?.let { target ->
+    val group = target.name
     SessionDeleteDialog(
       title = nativeString("Delete group?"),
       text = nativeString("Threads in \"\$group\" are kept and move back to Ungrouped.", group),
-      onDismiss = { deleteGroupName = null },
+      onDismiss = { deleteGroupTarget = null },
       onConfirm = {
-        deleteGroupName = null
-        coroutineScope.launch { viewModel.deleteChatSessionGroup(group) }
+        deleteGroupTarget = null
+        if (target.gatewayStableId != viewModel.activeGatewayStableId.value) return@SessionDeleteDialog
+        coroutineScope.launch {
+          viewModel.deleteChatSessionGroup(group, expectedGatewayStableId = target.gatewayStableId)
+        }
       },
     )
   }
@@ -614,6 +659,8 @@ private fun SessionRow(
   title: String,
   subtitle: String,
   metadata: String,
+  nowMs: Long,
+  showWakeTime: Boolean,
   active: Boolean,
   compact: Boolean,
   archived: Boolean,
@@ -625,6 +672,7 @@ private fun SessionRow(
   onToggleExpanded: () -> Unit,
   onClick: () -> Unit,
   onSetPinned: (Boolean) -> Unit,
+  onSetSnooze: (Long?) -> Unit,
   onSetUnread: (Boolean) -> Unit,
   onRename: () -> Unit,
   onSetColor: (String?) -> Unit,
@@ -639,6 +687,7 @@ private fun SessionRow(
   var submenu by remember { mutableStateOf<SessionRowSubmenu?>(null) }
   val selectedColor = session.color.takeIf { it in sessionColorNames }
   val canChangeArchived = !session.sessionId.isNullOrBlank()
+  val snoozePresets = remember(menuExpanded, submenu) { SessionSnooze.presets(System.currentTimeMillis()) }
 
   Surface(color = Color.Transparent, contentColor = ClawTheme.colors.text) {
     Box {
@@ -728,6 +777,9 @@ private fun SessionRow(
               }
               SessionDescendantSignals(collapsedDescendantState, visible = compact)
             }
+            if (showWakeTime) {
+              Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2)
+            }
             if (!compact) {
               Text(text = subtitle, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
               Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -739,7 +791,9 @@ private fun SessionRow(
 
           Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxxs)) {
             Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textMuted)
-            Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+            if (!showWakeTime) {
+              Text(text = metadata, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+            }
           }
         }
         HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
@@ -773,6 +827,16 @@ private fun SessionRow(
                 onSetColor(name)
               },
             )
+          }
+        } else if (submenu == SessionRowSubmenu.Snooze) {
+          SessionMenuItem(nativeString("← Back")) { submenu = null }
+          snoozePresets.forEach { preset ->
+            val time = DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).format(Instant.ofEpochMilli(preset.wakeAtMs).atZone(ZoneId.systemDefault()))
+            SessionMenuItem(nativeString("\$title · \$time", preset.title, time)) {
+              menuExpanded = false
+              submenu = null
+              onSetSnooze(preset.wakeAtMs)
+            }
           }
         } else if (archived) {
           if (canChangeArchived) {
@@ -811,6 +875,16 @@ private fun SessionRow(
             menuExpanded = false
             onSetPinned(session.pinned != true)
           }
+          if (canSnoozeSession(session)) {
+            if (session.isSnoozed(nowMs)) {
+              SessionMenuItem(nativeString("Wake session · \$wakeLabel", SessionSnooze.wakeLabel(requireNotNull(session.snoozedUntil), nowMs))) {
+                menuExpanded = false
+                onSetSnooze(null)
+              }
+            } else {
+              SessionMenuItem(nativeString("Snooze")) { submenu = SessionRowSubmenu.Snooze }
+            }
+          }
           SessionMenuItem(if (session.unread == true) nativeString("Mark as read") else nativeString("Mark as unread")) {
             menuExpanded = false
             onSetUnread(session.unread != true)
@@ -845,7 +919,7 @@ private fun SessionRow(
   }
 }
 
-private enum class SessionRowSubmenu { Color, Group }
+private enum class SessionRowSubmenu { Color, Group, Snooze }
 
 private fun sessionColorLabel(name: String?): String =
   when (name) {
@@ -979,7 +1053,9 @@ private fun SessionMiniTag(text: String) {
 internal enum class SessionFilter {
   Recent,
   Current,
+  Snoozed,
   Archived,
+  Automations,
 }
 
 internal data class SessionBrowserSearchState(
@@ -1034,12 +1110,17 @@ internal fun resolveSessionBrowserEntries(
   currentSessionKey: String,
   filter: SessionFilter,
   recentFirst: Boolean,
+  nowMs: Long = System.currentTimeMillis(),
 ): List<ChatSessionEntry> {
   val filtered =
     when (filter) {
-      SessionFilter.Recent -> entries.filter { it.archived != true }
+      SessionFilter.Recent -> entries.filter { isSessionVisibleInNavigation(it, currentSessionKey, nowMs) }
 
-      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && it.archived != true }
+      SessionFilter.Current -> entries.filter { it.key == currentSessionKey && !it.isSnoozed(nowMs) }
+
+      SessionFilter.Snoozed -> entries.filter { it.archived != true && it.isSnoozed(nowMs) }
+
+      SessionFilter.Automations -> entries.filter { it.archived != true && isAutomationSession(it) }
 
       // Gate on the entry's own archived flag so a pre-toggle active list can
       // never render with archived-only actions while a refetch is in flight.
@@ -1050,6 +1131,42 @@ internal fun resolveSessionBrowserEntries(
   } else {
     filtered.sortedBy { it.lastActivityAt ?: it.updatedAtMs ?: 0L }
   }
+}
+
+private val cronSessionDisplayKey = Regex("^(?:cron:|agent::*[^:]+:+cron:+[^:])")
+
+// Keep the native adapter aligned with src/shared/session-list-visibility.ts and
+// the selected-session exception in ui/src/lib/sessions/navigation.ts.
+internal fun isSessionVisibleInNavigation(
+  session: ChatSessionEntry,
+  currentSessionKey: String,
+  nowMs: Long = System.currentTimeMillis(),
+): Boolean = !session.isSnoozed(nowMs) && (session.key == currentSessionKey || (session.archived != true && !isAutomationSession(session)))
+
+internal fun canSnoozeSession(session: ChatSessionEntry): Boolean {
+  val key = session.key.trim().lowercase()
+  val agentKey = key.split(':', limit = 3).takeIf { it.size == 3 && it[0] == "agent" }
+  val agentRest = agentKey?.get(2)
+  val parentKey = session.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
+  // Dashboard rows can auto-parent to their agent's main root and remain pinnable.
+  val rootParent = agentKey?.let { "agent:${it[1]}:main" }
+  return !session.sessionId.isNullOrBlank() &&
+    session.archived != true &&
+    session.isMain != true &&
+    key !in setOf("main", "global", "unknown") &&
+    agentRest != "main" &&
+    !(agentRest ?: key).startsWith("subagent:") &&
+    (parentKey == null || parentKey == rootParent) &&
+    session.spawnedBy.isNullOrBlank()
+}
+
+private fun isAutomationSession(session: ChatSessionEntry): Boolean {
+  if (cronSessionDisplayKey.containsMatchIn(session.key.trim().lowercase()) || session.createdActorType == "system") return true
+  return (session.createdVia == "run" || session.createdVia == "internal") &&
+    session.createdActorType != "human" &&
+    session.label.isNullOrBlank() &&
+    session.displayName.isNullOrBlank() &&
+    session.subject.isNullOrBlank()
 }
 
 internal fun sessionListSubtitle(
@@ -1157,7 +1274,11 @@ internal data class SessionDescendantSignal(
 internal fun nextSessionStatusExpiry(
   entries: List<ChatSessionEntry>,
   nowMs: Long,
-): Long? = entries.mapNotNull { it.agentStatus?.expiresAt }.filter { it > nowMs }.minOrNull()
+): Long? =
+  listOfNotNull(
+    entries.mapNotNull { it.agentStatus?.expiresAt }.filter { it > nowMs }.minOrNull(),
+    SessionSnooze.nextWakeMs(entries, nowMs),
+  ).minOrNull()
 
 internal suspend fun awaitSessionStatusExpiry(
   expiry: Long,
@@ -1220,6 +1341,14 @@ internal fun buildSessionTreeSections(
         val parentKey =
           entry.parentSessionKey?.trim()?.takeIf(String::isNotEmpty)
             ?: entry.spawnedBy?.trim()?.takeIf(String::isNotEmpty)
+        // Ordinary New chats can retain a settings-inheritance parent without being child sessions.
+        if (
+          entry.createdVia == "operator" && entry.spawnDepth == 0 &&
+          entry.spawnedBy.isNullOrBlank() && entry.worktreeId == null &&
+          entry.forkedFromParent != true && entry.classification != "subagent"
+        ) {
+          return@forEach
+        }
         if (parentKey != null && parentKey != entry.key && parentKey in entriesByKey) {
           put(entry.key, parentKey)
         }
@@ -1311,6 +1440,19 @@ internal data class SessionActionTarget(
   fun matchesGateway(activeGatewayStableId: String?): Boolean = gatewayStableId == activeGatewayStableId
 }
 
+private data class SessionGroupActionTarget(
+  val gatewayStableId: String?,
+  val name: String,
+)
+
+private val SessionGroupActionTargetSaver =
+  Saver<SessionGroupActionTarget?, ArrayList<String>>(
+    save = { target -> target?.let { arrayListOf(it.gatewayStableId.orEmpty(), it.name) } ?: arrayListOf() },
+    restore = { values ->
+      if (values.size == 2) SessionGroupActionTarget(values[0].ifEmpty { null }, values[1]) else null
+    },
+  )
+
 private const val SESSION_ACTION_TARGET_STATE_FIELDS = 9
 
 private val SessionActionTargetSaver =
@@ -1357,8 +1499,7 @@ internal fun groupSessionEntries(
   knownGroups: List<String> = emptyList(),
 ): List<SessionSection> {
   if (entries.isEmpty()) return emptyList()
-  val pinned = entries.filter { it.pinned == true }
-  val remaining = entries.filterNot { it.pinned == true }
+  val (pinned, remaining) = entries.partition { it.pinned == true }
   val populated = remaining.filter { !it.category.isNullOrBlank() }.groupBy { it.category.orEmpty().trim() }
   // Stored-but-empty groups still render so they stay visible as move targets.
   val emptyKnown =
@@ -1374,7 +1515,7 @@ internal fun groupSessionEntries(
     if (pinned.isNotEmpty()) add(SessionSection(title = nativeString("Pinned"), entries = pinned))
     categories.forEach { (category, sessions) -> add(SessionSection(title = category, entries = sessions, isCategory = true)) }
     if (ungrouped.isNotEmpty()) {
-      add(SessionSection(title = nativeString("Ungrouped").takeIf { categories.isNotEmpty() }, entries = ungrouped))
+      add(SessionSection(title = nativeString("Ungrouped").takeIf { pinned.isNotEmpty() || categories.isNotEmpty() }, entries = ungrouped))
     }
   }
 }
@@ -1399,14 +1540,18 @@ private fun emptySessionTitle(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("No threads yet")
     SessionFilter.Current -> nativeString("No current thread")
+    SessionFilter.Snoozed -> nativeString("No snoozed threads")
     SessionFilter.Archived -> nativeString("No archived threads")
+    SessionFilter.Automations -> nativeString("No automation threads")
   }
 
 private fun emptySessionBody(filter: SessionFilter): String =
   when (filter) {
     SessionFilter.Recent -> nativeString("Start a new conversation and it will show up here.")
     SessionFilter.Current -> nativeString("Open Chat to start or resume the current thread.")
+    SessionFilter.Snoozed -> nativeString("Snoozed threads will show up here.")
     SessionFilter.Archived -> nativeString("Archived threads will show up here.")
+    SessionFilter.Automations -> nativeString("Automation and system conversations will show up here.")
   }
 
 internal fun relativeSessionTime(

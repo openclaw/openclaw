@@ -8,7 +8,7 @@ import {
   shouldIncludeSupplementalContext,
 } from "openclaw/plugin-sdk/security-runtime";
 import {
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveChannelResetConfig,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -24,14 +24,6 @@ import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js"
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
 const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
-
-type SlackThreadContextData = {
-  threadStarterBody: string | undefined;
-  threadHistoryBody: string | undefined;
-  shouldSeedInitialThreadContext: boolean;
-  threadLabel: string | undefined;
-  threadStarterMedia: SlackMediaResult[] | null;
-};
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
 
@@ -54,58 +46,16 @@ type SlackSessionResetFreshness =
 
 type SlackSessionFreshnessRuntime = {
   session?: {
-    resolveEntryResetFreshness?: (params: {
+    resolveEntryResetFreshnessAsync?: (params: {
       agentId: string;
       storePath?: string;
       sessionKey: string;
       sessionCfg?: OpenClawConfig["session"];
       resetType: "thread";
       resetOverride?: ReturnType<typeof resolveChannelResetConfig>;
-    }) => SlackSessionResetFreshness;
+    }) => Promise<SlackSessionResetFreshness>;
   };
 };
-
-function resolveSlackThreadSessionFreshness(params: {
-  ctx: SlackMonitorContext;
-  agentId: string;
-  storePath: string;
-  sessionKey: string;
-}): SlackSessionResetFreshness | undefined {
-  // Gateway startup supplies the full channel runtime, but the public surface
-  // intentionally keeps non-context helpers untyped for external plugins.
-  const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
-  return runtime?.session?.resolveEntryResetFreshness?.({
-    agentId: params.agentId,
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-    sessionCfg: params.ctx.cfg.session,
-    resetType: "thread",
-    resetOverride: resolveChannelResetConfig({
-      sessionCfg: params.ctx.cfg.session,
-      channel: "slack",
-    }),
-  });
-}
-
-async function resolveSlackThreadUserMap(params: {
-  ctx: SlackMonitorContext;
-  messages: SlackThreadStarter[];
-  eventScope?: SlackEventScope;
-}): Promise<Map<string, { name?: string }>> {
-  const uniqueUserIds = [
-    ...new Set(
-      params.messages.map((item) => item.userId).filter((id): id is string => Boolean(id)),
-    ),
-  ];
-  const { results } = await runTasksWithConcurrency({
-    tasks: uniqueUserIds.map((id) => async () => {
-      const user = await params.ctx.resolveUserName(id, params.eventScope);
-      return user ? ([id, user] as const) : null;
-    }),
-    limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
-  });
-  return new Map(results.flatMap((result) => (result ? [result] : [])));
-}
 
 export async function resolveSlackThreadContextData(params: {
   ctx: SlackMonitorContext;
@@ -132,30 +82,53 @@ export async function resolveSlackThreadContextData(params: {
   excludedMessageIds?: ReadonlySet<string>;
   assertHistoryCurrent?: () => void;
   abortSignal?: AbortSignal;
-}): Promise<SlackThreadContextData> {
+}) {
   const botIdentity = {
     botUserId: params.ctx.botUserId,
     botId: params.ctx.botId,
   };
   const isCurrentBotAuthor = (author: { userId?: string; botId?: string }): boolean =>
     isSlackThreadAuthorCurrentBot({ identity: botIdentity, author });
+  const resolveThreadUserMap = async (messages: SlackThreadStarter[]) => {
+    const uniqueUserIds = [
+      ...new Set(messages.map((item) => item.userId).filter((id): id is string => Boolean(id))),
+    ];
+    const { results } = await runTasksWithConcurrency({
+      tasks: uniqueUserIds.map((id) => async () => {
+        const user = await params.ctx.resolveUserName(id, params.eventScope);
+        return user ? ([id, user] as const) : null;
+      }),
+      limit: SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY,
+    });
+    return new Map(results.flatMap((result) => (result ? [result] : [])));
+  };
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  // Gateway startup supplies the full channel runtime, but the public surface
+  // intentionally keeps non-context helpers untyped for external plugins.
   const threadSessionFreshness =
     params.isThreadReply && params.threadTs
-      ? resolveSlackThreadSessionFreshness({
-          ctx: params.ctx,
+      ? await (
+          params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined
+        )?.session?.resolveEntryResetFreshnessAsync?.({
           agentId: params.agentId,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
+          sessionCfg: params.ctx.cfg.session,
+          resetType: "thread",
+          resetOverride: resolveChannelResetConfig({
+            sessionCfg: params.ctx.cfg.session,
+            channel: "slack",
+          }),
         })
       : undefined;
+  params.assertHistoryCurrent?.();
   const threadSessionPreviousTimestamp =
     params.isThreadReply && params.threadTs && !threadSessionFreshness
-      ? readSessionUpdatedAt({
+      ? await readSessionUpdatedAtAsync({
           storePath: params.storePath,
           sessionKey: params.sessionKey,
         })
@@ -352,11 +325,7 @@ export async function resolveSlackThreadContextData(params: {
         params.contextVisibilityMode !== "all" &&
         params.allowNameMatching &&
         params.allowFromLower.length > 0
-          ? await resolveSlackThreadUserMap({
-              ctx: params.ctx,
-              messages: threadHistoryWithoutCurrentBot,
-              eventScope: params.eventScope,
-            })
+          ? await resolveThreadUserMap(threadHistoryWithoutCurrentBot)
           : new Map<string, { name?: string }>();
       params.assertHistoryCurrent?.();
       const { items: filteredThreadHistory, omitted: omittedHistoryCount } =
@@ -380,11 +349,7 @@ export async function resolveSlackThreadContextData(params: {
                 });
               },
             });
-      const userMap = await resolveSlackThreadUserMap({
-        ctx: params.ctx,
-        messages: filteredThreadHistory,
-        eventScope: params.eventScope,
-      });
+      const userMap = await resolveThreadUserMap(filteredThreadHistory);
       params.assertHistoryCurrent?.();
       if (omittedHistoryCount > 0 || omittedCurrentBotHistoryCount > 0) {
         logVerbose(

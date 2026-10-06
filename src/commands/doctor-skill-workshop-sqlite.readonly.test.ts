@@ -232,8 +232,8 @@ describe("read-only Skill Workshop migration inspection", () => {
     await withOpenClawTestState({ label: "workshop-remaining-targets" }, async (state) => {
       const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       const blockedWorkspace = state.path("old-workspace");
-      await fs.mkdir(path.join(blockedWorkspace, ".openclaw"), { recursive: true });
-      await fs.writeFile(path.join(blockedWorkspace, ".openclaw", "workspace-state.json"), "{}");
+      await fs.mkdir(blockedWorkspace, { recursive: true });
+      await fs.writeFile(path.join(blockedWorkspace, "openclaw-workspace-state.json"), "{}");
       const records = [
         { name: "eligible", workspaceDir: state.workspaceDir },
         { name: "blocked", workspaceDir: blockedWorkspace },
@@ -421,7 +421,7 @@ describe("read-only Skill Workshop migration inspection", () => {
         await fs.mkdir(path.dirname(skillFile), { recursive: true });
         await fs.writeFile(skillFile, content);
         if (version === 15) {
-          seedLegacyV15ProposalRows(state.env, [
+          await seedLegacyV15ProposalRows(state.env, [
             { record, workspaceDir: state.workspaceDir, claimReleasedTime: null },
           ]);
         } else {

@@ -1,4 +1,3 @@
-// Read-only session queries.
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -25,11 +24,15 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
   canAccessIncognitoSession,
@@ -40,7 +43,7 @@ import {
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
-import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
+import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-candidates.js";
 import {
   listProjectedSessions,
   type SessionsPreviewEntry,
@@ -48,7 +51,8 @@ import {
 } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { withSessionListDiagnostics } from "./sessions-list-diagnostics.js";
+import { createPreparedReadHandler } from "./prepared-read.js";
+import { startSessionListDiagnostics } from "./sessions-list-diagnostics.js";
 import { sessionMaintenanceHandlers } from "./sessions-maintenance.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
@@ -83,7 +87,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+        respond(
+          false,
+          undefined,
+          errorShapeFromError(ErrorCodes.UNAVAILABLE, error, {
+            message: formatErrorMessage(error),
+          }),
+        );
       }
       return;
     }
@@ -256,29 +266,59 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+      respond(
+        false,
+        undefined,
+        errorShapeFromError(ErrorCodes.UNAVAILABLE, error, { message: formatErrorMessage(error) }),
+      );
     }
   },
-  "sessions.list": withSessionListDiagnostics(async (args, diagnostics) => {
-    const { params, respond, client, context } = args;
-    if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
-      return;
+  "sessions.list": createPreparedReadHandler((args) => {
+    const { params, client, context } = args;
+    const diagnostics = startSessionListDiagnostics(
+      args.respond,
+      args.req.method === "sessions.subscribe" ? "sessions.subscribe" : "sessions.list",
+      params,
+    );
+    const respondToCaller = diagnostics?.respond ?? args.respond;
+    try {
+      if (
+        !assertValidParams(params, validateSessionsListParams, "sessions.list", respondToCaller)
+      ) {
+        diagnostics?.finish("returned");
+        return undefined;
+      }
+      const projection = requireSessionRowProjection(context);
+      const assertCurrent = () => args.sessionMutationAuthorization?.assertCurrent();
+      return {
+        respond: respondToCaller,
+        assertCurrent,
+        beforeRespond: () => {
+          // An event delivered before roster admission may not have established its ancestor rows.
+          if (client?.connId) {
+            context.forgetConnectionAncestors(client.connId);
+          }
+        },
+        release: (outcome) => diagnostics?.finish(outcome),
+        run: async (respond) => {
+          await listProjectedSessions({
+            projection,
+            opts: params,
+            context,
+            client,
+            acceptsSerializedJson: args.acceptsSerializedJson,
+            diagnostics,
+            onResult: (result) => {
+              assertCurrent();
+              respond(true, result);
+            },
+          });
+        },
+      };
+    } catch (error) {
+      diagnostics?.finish("threw");
+      throw error;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
-    await listProjectedSessions({
-      projection,
-      opts: params,
-      context,
-      client,
-      diagnostics,
-      onResult: (result) => {
-        args.sessionMutationAuthorization?.assertCurrent();
-        respond(true, result);
-      },
-    });
   }),
   "sessions.preview": async ({
     params,
@@ -302,10 +342,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     const withPreviewRows = <T>(
       requestedKeys: readonly string[],
       consume: (read: SessionRowReadView) => T,
@@ -429,10 +466,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
       return;
     }
-    const projection = getSessionRowProjection(context);
-    if (!projection) {
-      throw new Error("Session projection is unavailable before Gateway startup completes");
-    }
+    const projection = requireSessionRowProjection(context);
     await withPreparedSessionResolve(
       {
         projection,
