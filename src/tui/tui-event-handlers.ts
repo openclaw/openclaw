@@ -313,12 +313,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (suppressEmptyExternalPlaceholder) {
         chatLog.dropAssistant(evt.runId);
       } else {
-        const images = extractTuiImageSources(evt.message);
-        if (images.length > 0) {
-          chatLog.finalizeAssistant(finalText, evt.runId, images);
-        } else {
-          chatLog.finalizeAssistant(finalText, evt.runId);
-        }
+        chatLog.finalizeAssistant(finalText, evt.runId, extractTuiImageSources(evt.message));
       }
       finalizeRun({
         runId: evt.runId,
@@ -613,13 +608,9 @@ export function createEventHandlers(context: EventHandlerContext) {
           partial: true,
         });
       } else if (phase === "result") {
-        if (allowToolOutput) {
-          chatLog.updateToolResult(toolCallId, data.result, {
-            isError: Boolean(data.isError),
-          });
-        } else {
-          chatLog.updateToolResult(toolCallId, { content: [] }, { isError: Boolean(data.isError) });
-        }
+        chatLog.updateToolResult(toolCallId, allowToolOutput ? data.result : { content: [] }, {
+          isError: Boolean(data.isError),
+        });
       }
       tui.requestRender();
       return;

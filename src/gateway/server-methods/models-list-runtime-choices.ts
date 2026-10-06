@@ -18,6 +18,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
 
 type CatalogDecisions = ReturnType<typeof createModelCatalogDecisions>;
 
@@ -56,7 +57,7 @@ export async function prepareModelPickerRuntimeChoices(params: {
     pluginRegistry: decisions.pluginRegistry,
   });
   const availableRuntimes = await decisions.runtimeChoices(entry, variants);
-  const alternatives = await Promise.all(
+  const alternatives = await settleCurrentReadPreparations(
     requestedRuntimes
       .filter((runtimeId) => runtimeId !== (selected?.id ?? "openclaw"))
       .map(async (runtimeId) => {

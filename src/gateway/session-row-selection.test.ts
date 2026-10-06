@@ -102,14 +102,14 @@ it("maintains list order across metadata changes and archived-row rematerializat
       const archivedQuery = { agentId: "main", key: third };
       sessionChanges.emit({ all: true, scope: "catalog" });
       await projection.ensureMaterialized();
-      expect(projection.isMaterialized(archivedQuery)).toBe(false);
+      expect(projection.capture(archivedQuery)?.materialized).toBeUndefined();
       const rematerialized = await listProjectedSessions({
         projection,
         opts: { archived: true },
       });
       expect(rematerialized.sessions.map((row) => row.key)).toEqual([third]);
       expect(rematerialized.totalCount).toBe(1);
-      expect(projection.isMaterialized(archivedQuery)).toBe(true);
+      expect(projection.capture(archivedQuery)?.materialized).toBeDefined();
       expect((await list())[0]?.key).toBe(second);
       expect(scan.mock.calls.filter(([query]) => !query?.key)).toHaveLength(0);
       await deleteSessionEntryLifecycle({

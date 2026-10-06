@@ -93,7 +93,6 @@ type BuiltMigration = {
   addPlan: Awaited<ReturnType<typeof buildClawAddPlan>>;
   manifest: ClawManifest;
   profile?: ClawOpenClawProfile;
-  clawMarkdownBody?: Buffer;
   packageFiles: Map<string, Buffer>;
   ownershipFiles: PersistedClawWorkspaceFile[];
 };
@@ -442,7 +441,6 @@ export async function buildClawMigrationPlan(params: {
       addPlan,
       manifest: loaded.manifest,
       ...(loaded.openClawProfile ? { profile: loaded.openClawProfile } : {}),
-      ...(loaded.clawMarkdownBody ? { clawMarkdownBody: loaded.clawMarkdownBody } : {}),
       packageFiles: projected.packageFiles,
       ownershipFiles,
     };

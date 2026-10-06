@@ -518,6 +518,12 @@ describe("llama.cpp managed setup", () => {
     const ctx = authContext(true);
 
     await expect(runLlamaCppSetup(ctx)).resolves.toEqual({ profiles: [] });
+    expect(ctx.prompter.note).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /embedding-only.*0\.3 GB.*memory\.search\.provider.*local.*models auth login --provider llama-cpp --method local/su,
+      ),
+      "Setup skipped",
+    );
     expect(ctx.prompter.confirm).not.toHaveBeenCalled();
     expect(mocks.ensureModel).not.toHaveBeenCalledWith(expect.objectContaining({ download: true }));
   });

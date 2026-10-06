@@ -805,6 +805,51 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
+  it("drains an authority-mismatched turn after its provided operation clears", async () => {
+    using warning = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => {});
+    const provided = createReplyOperation({
+      sessionKey: "agent:main:telegram:slash:source",
+      sessionId: "provided-session",
+      resetTriggered: false,
+    });
+    provided.bindToolAuthoritySnapshot({
+      fingerprint: () => "different-authority",
+      project: () => "different-authority",
+    });
+    provided.setPhase("running");
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+      replyOperation: provided,
+      bindActiveAuthority: false,
+      runOverrides: {
+        thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text", "image"] }],
+      },
+    });
+    const image = { type: "image" as const, data: "queued", mimeType: "image/png" };
+    followupRun.images = [image];
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledOnce();
+    expect(vi.mocked(scheduleFollowupDrain)).not.toHaveBeenCalled();
+    provided.complete();
+    expect(vi.mocked(scheduleFollowupDrain)).toHaveBeenCalledOnce();
+    await requireScheduledFollowupRunner()(followupRun);
+    expect(mockCallArgs(state.runEmbeddedAgentMock, "queued image drain")[0]).toMatchObject({
+      images: [image],
+      modelHasVision: true,
+    });
+    expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
+      reason: "source-operation-pending",
+      disposition: "followup-queued",
+      channel: "whatsapp",
+      sessionId: "session",
+      runId: undefined,
+    });
+  });
+
   it("keeps the continuing Telegram task's typing alive after an accepted steer", async () => {
     state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
     const active = createReplyOperation({

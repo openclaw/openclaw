@@ -203,7 +203,8 @@ openclaw gateway --verbose --ws-log full
 Ordinary channel reply routing logs
 `steering rejected; applying follow-up policy` at warning level when steering
 falls back. The fixed `reason` code distinguishes an unavailable owner or
-injection path, changed authority, terminal-reply state, and runtime rejection.
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
 Records include the channel, opaque session ID, and input or active run IDs when
 supplied. `disposition` distinguishes a follow-up policy decision, confirmed
 or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.

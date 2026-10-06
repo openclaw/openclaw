@@ -2256,6 +2256,20 @@ Usage listings prepare store discovery and selected context reports in workers;
 usage charts and logs hydrate durable transcripts through the history reader.
 These reads preserve missing-session results, stored bytes, and update behavior.
 
+File-backed chat metadata and model listings select and revalidate exact entries
+through the existing reader, retaining physical-store custody during preparation.
+They check visibility, saved account pins, and source identity before private auth
+preparation and result publication. Reader cleanup joins started preparation while
+preserving the original failure. Process-held incognito reads retain their existing
+native lifetime owner. Metadata-change tolerance, missing-session results, stored
+bytes, and update behavior are unchanged.
+
+Saved-session provider discovery retains its previous synchronous canonical-row
+check only at the final credential-send boundary. Guarded fetch requires that
+check after transport preparation and before each request or redirect; a worker
+round trip there would reopen the revocation window. A candidate follow-up is
+owner-published foreign-commit authority generations that can replace this read.
+
 Durable RPC history pages resolve profile avatars, automation labels, and legacy
 compaction metrics before the worker serializes the bounded message array. Its
 owned UTF-8 buffer transfers once to the host; coalesced readers share those
@@ -2679,6 +2693,15 @@ stored-key selection, and final writer comparisons remain transaction-local.
 The released synchronous statistics SDK and process-held incognito paths keep
 their existing owners. Schemas, stored bytes, retention, and update behavior are
 unchanged.
+
+Compaction sandbox selection reads placement through the existing shared-state
+projection and retains its physical-store observation until the consumer settles.
+Absent placements are retained too: a new placement, pending publication, owner
+replacement, or uncertain write refuses subsequent effects. Remote sandboxes also
+recheck the environment's live attachment and device identity. Queued compaction
+composes these checks with its original source and transcript commit authority;
+side questions and plugin-harness dispatch retain the same prepared owner.
+This read-only cutover changes no schema, admission, stored bytes, or update behavior.
 
 SessionManager's awaited persistence family uses its existing SQLite writer
 domain for file-backed transcripts, including user and custom messages,

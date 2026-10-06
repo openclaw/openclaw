@@ -37,6 +37,7 @@ import {
 import { createWorktreeGcPrefilter, lockState, unlockWorktree } from "./git-lock.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
 import { commandError, worktreePathExists, runGit, requireGit } from "./git.js";
+import { validateName } from "./name.js";
 import { worktreeOwnerMatches } from "./owner.js";
 import {
   timeWorktreePreparationPhase,
@@ -91,7 +92,6 @@ import {
   rebindLiveWorktreeRepository,
   resolveRepositoryIdentity,
   runSetupScript,
-  validateName,
   withWorktreeSource,
   withWorktreeSources,
   type ResolvedRepository,

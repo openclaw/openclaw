@@ -1,4 +1,3 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -33,7 +32,6 @@ export async function authorizeSessionCatalogThread(params: {
     rawAgentId: params.request.agentId,
     respond: params.respond,
     cfg: params.context.getRuntimeConfig(),
-    normalize: normalizeOptionalString,
   });
   if (!resolvedAgent) {
     return null;

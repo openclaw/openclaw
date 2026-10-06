@@ -191,6 +191,7 @@ export function createSessionRowPublication(owner: {
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
   lookup: (query: records.Lookup) => records.Row | undefined;
+  dirty: ReadonlySet<string>;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
   state: () => Pick<
     Parameters<typeof readSessionRowModelFacts>[0],
@@ -201,6 +202,9 @@ export function createSessionRowModelFactsReader(params: {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
+    }
+    if (records.ready(row) && !params.dirty.has(records.identity(row))) {
+      return row.materialized.source;
     }
     const state = params.state();
     return readSessionRowModelFacts({
@@ -261,12 +265,6 @@ export function createSessionRowDescriptionReader(owner: {
     });
 }
 
-/** One synchronous refresh slice shares agent policy; each later slice starts fresh. */
-function createSessionRowMaterializationBatch(): typeof readResidentSessionRow {
-  const activitySummaryEnabledByAgent = new Map<string, boolean>();
-  return (params) => readResidentSessionRow(params, activitySummaryEnabledByAgent);
-}
-
 /** Keyed and worker-prepared refreshes share the same bounded materialization slice. */
 export function createSessionRowMaterializer(owner: {
   isActive: () => boolean;
@@ -292,7 +290,9 @@ export function createSessionRowMaterializer(owner: {
     const cfg = owner.prepare();
     withAgentRosterFactsBatch(cfg, () => {
       const configuredAgentIds = new Set(listAgentIds(cfg));
-      const readRow = createSessionRowMaterializationBatch();
+      const activitySummaryEnabledByAgent = new Map<string, boolean>();
+      const readRow: typeof readResidentSessionRow = (params) =>
+        readResidentSessionRow(params, activitySummaryEnabledByAgent);
       for (const [offset, id] of ids.entries()) {
         if (offset > 0 && performance.now() - started >= 12) {
           break;
@@ -633,28 +633,40 @@ export function findSessionRowById(
 export function lookupSessionRow(
   query: records.Lookup,
   owner: {
-    disposed: boolean;
     cfg: records.Inputs["cfg"];
-    matching: (query: records.Query) => records.Row[];
-    storePaths: Iterable<string>;
+    rows: ReadonlyMap<string, records.Row>;
+    byKey: ReadonlyMap<string, ReadonlySet<string>>;
+    scope: ReturnType<typeof prepareSessionRowScopes> | undefined;
+    stores: ReadonlyMap<string, records.SessionRowStore>;
   },
 ) {
-  if (owner.disposed) {
-    return undefined;
-  }
-  const { agentId } = query;
-  const exact = owner.matching(query).filter((row) => row.agentId === agentId);
-  if (exact.length) {
-    return records.first(exact, owner.storePaths);
-  }
-  const key = resolveStoredSessionKeyForAgentStore({
-    cfg: owner.cfg,
-    sessionKey: query.key,
-    agentId,
-  });
-  if (isIncognitoSessionKey(key)) {
-    return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId });
-  }
-  const candidates = owner.matching({ ...query, key }).filter((row) => row.agentId === agentId);
-  return records.first(candidates, owner.storePaths);
+  const paths = query.storePath
+    ? (owner.scope?.physicalPaths(query.storePath, query.agentId) ?? [query.storePath])
+    : undefined;
+  let key = query.key;
+  do {
+    const candidates = owner.byKey.get(`key:${key}`);
+    if (candidates) {
+      for (const storePath of paths ?? owner.stores.keys()) {
+        for (const id of candidates) {
+          const row = owner.rows.get(id);
+          if (row?.agentId === query.agentId && row.storeTarget.storePath === storePath) {
+            return row;
+          }
+        }
+      }
+    }
+    if (key !== query.key) {
+      break;
+    }
+    key = resolveStoredSessionKeyForAgentStore({
+      cfg: owner.cfg,
+      sessionKey: key,
+      agentId: query.agentId,
+    });
+    if (isIncognitoSessionKey(key)) {
+      return readIncognitoSessionRow({ cfg: owner.cfg, key, agentId: query.agentId });
+    }
+  } while (key !== query.key);
+  return undefined;
 }

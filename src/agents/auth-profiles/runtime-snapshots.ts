@@ -391,11 +391,6 @@ export function listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner: AuthPr
   );
 }
 
-/** Returns true when a runtime snapshot exists for an agent dir. */
-export function hasRuntimeAuthProfileStoreSnapshot(agentDir?: string): boolean {
-  return runtimeAuthStoreSnapshots.has(resolveRuntimeStoreKey(agentDir));
-}
-
 /** Checks the owned profile keys without copying private credential data out of the owner. */
 export function hasRuntimeAuthProfileStoreSource(
   agentDir?: string,

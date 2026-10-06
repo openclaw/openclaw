@@ -223,6 +223,13 @@ export async function runReplyAgent(
   const activeReplyOperation = sessionKey
     ? replyRunRegistry.get(sessionKey)
     : providedReplyOperation;
+  // A source-only reservation still owns completion, but is not a steering target.
+  const shouldQueueProvidedSteer =
+    effectiveShouldSteer &&
+    isActive &&
+    messageInjectionDisposition === "none" &&
+    !activeReplyOperation &&
+    Boolean(providedReplyOperation);
   const typingSignals = createTypingSignaler({
     typing,
     mode: typingMode,
@@ -327,6 +334,7 @@ export async function runReplyAgent(
   if (
     effectiveShouldSteer &&
     isActive &&
+    !shouldQueueProvidedSteer &&
     !shouldQueueTerminalReceiptSteer &&
     messageInjectionDisposition === "none"
   ) {
@@ -356,7 +364,7 @@ export async function runReplyAgent(
     hasQueuedFollowups,
     isActive,
     isHeartbeat,
-    shouldFollowup: effectiveShouldFollowup,
+    shouldFollowup: effectiveShouldFollowup || shouldQueueProvidedSteer,
     resetTriggered: effectiveResetTriggered,
   });
   if (activeRunQueueAction === "drop") {
@@ -378,9 +386,11 @@ export async function runReplyAgent(
       queuedRunFollowupTurn,
       false,
     );
-    if (shouldQueueTerminalReceiptSteer) {
+    if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
       diagnosticLogger.warn("steering rejected; applying follow-up policy", {
-        reason: terminalDeliveryBlockReason,
+        reason: shouldQueueTerminalReceiptSteer
+          ? terminalDeliveryBlockReason
+          : "source-operation-pending",
         disposition: enqueued
           ? "followup-queued"
           : replyOperationRunState?.admission?.status === "skipped" &&
@@ -403,7 +413,8 @@ export async function runReplyAgent(
     }
     // The queue must stay dormant while the active owner can still collect
     // messages. Registering after enqueue closes the owner-clear race.
-    const queuedOperationOwner = replyRunRegistry.get(queueKey) ?? activeReplyOperation;
+    const queuedOperationOwner =
+      replyRunRegistry.get(queueKey) ?? activeReplyOperation ?? providedReplyOperation;
     if (queuedOperationOwner) {
       scheduleFollowupDrainAfterReplyOperationClear({
         operation: queuedOperationOwner,
