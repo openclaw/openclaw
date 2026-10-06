@@ -8,7 +8,27 @@ type SystemPromptToolListParams = {
   codeModeActive?: boolean;
   promptSurface: AgentPromptSurfaceKind;
   acpSpawnRuntimeEnabled: boolean;
+  toolNamePrefix?: string;
 };
+
+/**
+ * Maps normalized tool names to the names the model calls: first caller casing,
+ * plus any runtime transport prefix. Sparse tool arrays skip absent entries.
+ */
+export function resolveSystemPromptVisibleTools(
+  toolNames: readonly string[] | undefined,
+  toolNamePrefix = "",
+): Map<string, string> {
+  const visibleTools = new Map<string, string>();
+  (toolNames ?? []).forEach((tool) => {
+    const name = tool.trim();
+    const normalized = name.toLowerCase();
+    if (normalized && !visibleTools.has(normalized)) {
+      visibleTools.set(normalized, `${toolNamePrefix}${name}`);
+    }
+  });
+  return visibleTools;
+}
 
 /** Render the visible tool list with stable core ordering and caller-provided names. */
 export function buildSystemPromptToolLines(params: SystemPromptToolListParams): string[] {
@@ -77,11 +97,20 @@ export function buildSystemPromptToolLines(params: SystemPromptToolListParams): 
   const resolveToolName = (normalized: string) => visibleTools.get(normalized) ?? normalized;
   const extraTools = [...visibleTools.keys()].filter((tool) => !toolOrder.includes(tool));
   const enabledTools = toolOrder.filter((tool) => visibleTools.has(tool));
-  return [...enabledTools, ...extraTools.toSorted()].map((tool) => {
+  const orderedTools = [...enabledTools, ...extraTools.toSorted()];
+  const lines = orderedTools.map((tool) => {
     const summary = summaries[tool];
     const name = resolveToolName(tool);
     return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
+  const example = visibleTools.has("message") ? "message" : orderedTools[0];
+  // Skills, channel context, and shared hints name tools bare; map them once here.
+  return params.toolNamePrefix && example
+    ? [
+        `Other instructions may name these tools without the \`${params.toolNamePrefix}\` prefix; call the prefixed name (\`${example}\` means \`${resolveToolName(example)}\`).`,
+        ...lines,
+      ]
+    : lines;
 }
 
 /** Tool availability and setup guidance share the admitted prompt surface. */

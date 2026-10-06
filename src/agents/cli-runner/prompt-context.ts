@@ -1,10 +1,15 @@
+import { buildHarnessVisibleReplyGuidance } from "../../auto-reply/source-reply-delivery-mode.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import {
   buildActiveNodeContextText,
   prepareActiveNodeContext,
 } from "../../infra/active-node-context.js";
 import { labelRuntimeContextText } from "../../llm/types.js";
-import type { CliBackendConfig, CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
+import type {
+  CliBackendConfig,
+  CliBackendPromptContext,
+  CliBundleMcpMode,
+} from "../../plugins/cli-backend.types.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { buildCliSessionDriftNote } from "../cli-session.js";
@@ -21,6 +26,7 @@ import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
+import { resolveOpenClawMcpToolNamePrefix } from "./tool-policy.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
 
 /** Current-turn facts stay outside native prompts that are retained across CLI turns. */
@@ -142,11 +148,12 @@ export function composeCliPromptContext(prompt: string, context?: CliBackendProm
   return context?.appendContext ? `${prepended}\n\n${context.appendContext}` : prepended;
 }
 
+/** Builds the CLI system prompt with tools named as the backend's bundle MCP mode exposes them. */
 export async function prepareCliSystemPrompt(
   params: Omit<
     Parameters<typeof import("./helpers.js").buildCliAgentSystemPrompt>[0],
-    "preparedModelRuntime" | "preparedGitCoauthorPrompt"
-  >,
+    "preparedModelRuntime" | "preparedGitCoauthorPrompt" | "toolNamePrefix"
+  > & { bundleMcpMode?: CliBundleMcpMode },
 ): Promise<string> {
   const { buildCliAgentSystemPrompt } = await import("./helpers.js");
   let preparedModelRuntime:
@@ -180,11 +187,34 @@ export async function prepareCliSystemPrompt(
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
   });
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
+  const { bundleMcpMode, ...promptParams } = params;
   return buildCliAgentSystemPrompt({
-    ...params,
+    ...promptParams,
+    toolNamePrefix: resolveOpenClawMcpToolNamePrefix(bundleMcpMode),
     preparedModelRuntime,
     preparedGitCoauthorPrompt,
     preparedTtsPreferences,
+  });
+}
+
+/** Per-turn visible-reply guidance naming the message tool as the backend exposes it. */
+export function buildCliTurnReplyGuidance(
+  params: Pick<RunCliAgentParams, "sourceReplyDeliveryMode" | "isolatedCompletion">,
+  facts: {
+    messageToolAvailable: boolean;
+    requireExplicitMessageTarget?: boolean;
+    bundleMcpMode?: CliBundleMcpMode;
+  },
+): string | undefined {
+  if (params.isolatedCompletion) {
+    return undefined;
+  }
+  const toolNamePrefix = resolveOpenClawMcpToolNamePrefix(facts.bundleMcpMode);
+  return buildHarnessVisibleReplyGuidance({
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolAvailable: facts.messageToolAvailable,
+    requireExplicitMessageTarget: facts.requireExplicitMessageTarget,
+    ...(toolNamePrefix ? { messageToolName: `${toolNamePrefix}message` } : {}),
   });
 }
 

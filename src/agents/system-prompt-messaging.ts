@@ -32,14 +32,17 @@ export function buildMessagingSection(params: {
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
   delegationSectionRenders: boolean;
+  /** Model-visible name of the `message` tool, including any runtime transport prefix. */
+  messageToolName: string;
 }) {
+  const tool = params.messageToolName;
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
     ? messageToolAvailable
-      ? "- Current source visible reply MUST use `message(action=send)` unless the user explicitly requests only a reaction to the current source message: use `message(action=react, final=true)`. The final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
+      ? `- Current source visible reply MUST use \`${tool}(action=send)\` unless the user explicitly requests only a reaction to the current source message: use \`${tool}(action=react, final=true)\`. The final text is private. Set \`final=false\` for progress. Set \`final=true\`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning.`
       : "- Current source visible reply unavailable; final text remains private."
-    : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
+    : `- Current-session final text normally routes to source.${messageToolAvailable ? ` If turn says final private, visible output uses \`${tool}(action=send)\`.` : ""}`;
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
   const routingGuidance = [
     "- OpenClaw messaging: use available messaging tools, never shell commands, the CLI, curl, or direct RPC. Missing messaging tools are not permission to use another route.",
@@ -102,19 +105,19 @@ export function buildMessagingSection(params: {
       ? [
           "",
           "### message tool",
-          "- Proactive send/channel action (poll, reaction, etc.): `message`.",
+          `- Proactive send/channel action (poll, reaction, etc.): \`${tool}\`.`,
           groupMessageToolOnly
-            ? "- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => `message(action=send)`; final text private."
+            ? `- Group/channel: stale/joke/light ack/low-value chatter => reaction or silence. Needed text reply => \`${tool}(action=send)\`; final text private.`
             : "",
           messageToolOnly ? messageToolTargetInstruction : "- `send`: `target` + `message`.",
           params.messageChannelOptions
             ? `- No source default: proactive send needs \`channel\`; ids: ${params.messageChannelOptions}.`
             : "- Set `channel` only outside current/default source.",
           messageToolOnly
-            ? "- Visible `message(send)` content: never repeat in final."
+            ? `- Visible \`${tool}(send)\` content: never repeat in final.`
             : suppressSilentTokenGuidance
-              ? "- Follow turn delivery: private final => visible via `message(send)`; otherwise normal reply once."
-              : `- After visible \`message(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
+              ? `- Follow turn delivery: private final => visible via \`${tool}(send)\`; otherwise normal reply once.`
+              : `- After visible \`${tool}(send)\`, final ONLY ${SILENT_REPLY_TOKEN}.`,
           showGenericInlineButtonHint
             ? params.inlineButtonsEnabled
               ? '- Inline buttons: `send` with `presentation={"blocks":[{"type":"buttons","buttons":[{"label":"Yes","action":{"type":"callback","value":"yes"},"style":"primary"}]}]}`.'

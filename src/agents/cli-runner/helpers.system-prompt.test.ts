@@ -139,6 +139,41 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).toContain("- exec: Run shell on configured exec target");
   });
 
+  it("lists tools under the names the CLI backend exposes", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [createStubTool("exec"), createStubTool("message")],
+      toolNamePrefix: "mcp__openclaw__",
+      modelDisplay: "test/model",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(prompt).toContain("- mcp__openclaw__exec: Run shell on configured exec target");
+    expect(prompt).toContain("- mcp__openclaw__message: Message/channel actions");
+    expect(prompt).toContain("(`message` means `mcp__openclaw__message`)");
+    expect(prompt).not.toMatch(/^- (exec|message):/m);
+    expect(prompt).toContain(
+      "Current source visible reply MUST use `mcp__openclaw__message(action=send)`",
+    );
+    expect(prompt).toContain(
+      "Visible `mcp__openclaw__message(send)` content: never repeat in final.",
+    );
+  });
+
+  it("keeps bare tool names when the backend adds no prefix", () => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [createStubTool("message")],
+      modelDisplay: "test/model",
+    });
+
+    expect(prompt).toContain("- message: Message/channel actions");
+    expect(prompt).toContain(
+      "If turn says final private, visible output uses `message(action=send)`.",
+    );
+    expect(prompt).not.toContain("mcp__openclaw__");
+  });
+
   it("distinguishes the CLI working directory from the agent workspace", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw-agent",
