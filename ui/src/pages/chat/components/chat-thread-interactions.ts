@@ -206,6 +206,10 @@ export type ChatThreadProps = ChatSendStatusActions & {
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onCompanionSelection?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
   onOpenSession?: (sessionKey: string) => void;
+  /** Shows one of the session's subagents. */
+  onOpenSubagent?: (sessionKey: string) => void;
+  /** Shows the session's subagents; absent where the pane has no list of them to show. */
+  onOpenSubagents?: () => void;
   modelSetupRequired?: boolean;
   onModelSetup?: () => void;
 };
