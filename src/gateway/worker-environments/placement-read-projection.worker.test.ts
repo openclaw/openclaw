@@ -302,7 +302,12 @@ describe("worker placement read projection", () => {
       for (const settlement of ["rollback", "commit", "invalidate"] as const) {
         const prepared = await store.prepareMaintenancePlacements();
         const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
-        const publication = stagePlacementTurnClaimWorkerPublication(identity, placement);
+        const publication = stagePlacementTurnClaimWorkerPublication(
+          identity,
+          placement,
+          undefined,
+          placement.state,
+        );
         try {
           if (kind === "local") {
             prepared.assertCurrent();

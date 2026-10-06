@@ -42,7 +42,7 @@ type ClaimChange = {
 } & (
   | {
       kind: "claim";
-      localPlacement?: boolean;
+      localOnly?: boolean;
       facts?: WorkerSessionTurnClaimFacts;
       workspaceResult?: WorkspaceResultPostimage;
       workspacePlacement?: WorkerSessionPlacementRecord;
@@ -81,10 +81,6 @@ type PlacementAuthorityOwner = {
   workspaceResults: Map<string, WorkspaceResultFacts>;
 };
 
-function notifySettlement(owner: PlacementAuthorityOwner): void {
-  owner.settlementListeners.forEach((listener) => listener());
-}
-
 function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?: string): boolean {
   return [...owner.pending].some((change) => affectsPlacementObservation(change, sessionId));
 }
@@ -93,7 +89,7 @@ function affectsPlacementObservation(change: ClaimChange, sessionId?: string): b
   return (
     change.kind !== "tools" &&
     (sessionId === undefined
-      ? change.kind !== "claim" || !change.localPlacement
+      ? change.kind !== "claim" || !change.localOnly
       : change.sessionId === sessionId)
   );
 }
@@ -110,7 +106,7 @@ function notifyRevoked(claim: RetainedClaim): void {
 function closeOwner(owner: PlacementAuthorityOwner): void {
   owner.active = false;
   owner.pending.clear();
-  notifySettlement(owner);
+  owner.settlementListeners.forEach((listener) => listener());
   owner.settlementListeners.clear();
   owner.published.clear();
   owner.tools.clear();
@@ -197,7 +193,7 @@ function prunePublication(owner: PlacementAuthorityOwner, sessionId: string): vo
 
 function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, sequence: number): void {
   owner.pending.delete(change);
-  notifySettlement(owner);
+  owner.settlementListeners.forEach((listener) => listener());
   if (!owner.active) {
     return;
   }
@@ -400,7 +396,7 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
       },
       rollback() {
         owner.pending.delete(change);
-        notifySettlement(owner);
+        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
         try {
           assertTransactionUsable(db);
@@ -415,15 +411,16 @@ function stageChange(db: DatabaseSync, change: ClaimChange): void {
   }
 }
 
-/** Fence host authority before granting the worker's commit; settle only its exact receipt. */
+/** Fence before granting commit; null prior state proves absence, undefined stays fenced. */
 export function stagePlacementTurnClaimWorkerPublication(
   identity: DatabasePathIdentity,
   facts: WorkerSessionTurnClaimFacts,
   workspaceResult?: WorkspaceResultPostimage,
+  previousState?: WorkerSessionTurnClaimFacts["state"] | null,
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
-    localPlacement: facts.state === "local",
+    localOnly: facts.state === "local" && (previousState === null || previousState === "local"),
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
@@ -602,7 +599,7 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
     rollback: () =>
       settle(() => {
         owner.pending.delete(change);
-        notifySettlement(owner);
+        owner.settlementListeners.forEach((listener) => listener());
         prunePublication(owner, change.sessionId);
       }),
     invalidate: () =>
@@ -630,19 +627,28 @@ function stageWorkerChange(identity: DatabasePathIdentity, input: ClaimChange) {
 export function publishPlacementTurnClaimState(
   db: DatabaseSync,
   record: WorkerSessionPlacementRecord,
+  previousState?: WorkerSessionTurnClaimFacts["state"] | null,
 ): void {
   const snapshot = freezeJsonSnapshot(structuredClone(record));
   stageChange(db, {
     kind: "claim",
-    localPlacement: snapshot.state === "local",
+    localOnly: snapshot.state === "local" && (previousState === null || previousState === "local"),
     sessionId: snapshot.sessionId,
     workspacePlacement: snapshot,
     facts: snapshot,
   });
 }
 
-export function publishPlacementTurnClaimCleared(db: DatabaseSync, sessionId: string): void {
-  stageChange(db, { kind: "claim", sessionId });
+export function publishPlacementTurnClaimCleared(
+  db: DatabaseSync,
+  sessionId: string,
+  previousState?: WorkerSessionTurnClaimFacts["state"] | null,
+): void {
+  stageChange(db, {
+    kind: "claim",
+    sessionId,
+    localOnly: previousState === null || previousState === "local",
+  });
 }
 
 export function publishPlacementWorkspaceResultState(db: DatabaseSync, sessionId: string): void {
