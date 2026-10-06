@@ -18,7 +18,7 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { type SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
+import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 
 const retainedWatermarkQuery = createSqliteQueryCache((database) => {
   const db = getNodeSqliteKysely<DB>(database);
