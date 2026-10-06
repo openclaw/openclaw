@@ -1,4 +1,3 @@
-// Gateway Bench Child script supports OpenClaw repository automation.
 import type { ChildProcess } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {

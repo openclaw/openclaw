@@ -22,6 +22,7 @@ import { normalizeStoreSessionKey } from "./store-entry.js";
 export type SessionColdBatchInput = {
   databaseOptions: OpenClawAgentDatabaseOptions & { path: string };
   admissionIdentities: string[];
+  liveSessionKeys: string[];
   cooledSessionIds: string[];
   beforeMs: number;
   maxTranscripts: number;
@@ -36,10 +37,14 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
           const db = getNodeSqliteKysely<DB>(database.db);
           const admissions = collectSessionAdmissionReferences({
             database,
-            admissionIdentities: input.admissionIdentities,
+            admissionIdentities: [...input.admissionIdentities, ...input.liveSessionKeys],
           });
           const cooled = new Set(input.cooledSessionIds);
-          const excluded = readSessionColdStorageProtection(database, input.beforeMs);
+          const excluded = readSessionColdStorageProtection(
+            database,
+            input.beforeMs,
+            new Set(input.liveSessionKeys),
+          );
           for (const id of [...admissions, ...cooled]) {
             excluded.add(id);
           }

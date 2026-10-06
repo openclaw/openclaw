@@ -150,7 +150,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           updatedAt: 1_000,
           startedAt: 1_000,
           lifecycleRunId: runId,
-          status: "running",
           ...(restartSafe
             ? {
                 restartRecoveryDeliveryRunId: runId,

@@ -1,4 +1,3 @@
-// Determines CI scope from changed paths.
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -217,7 +216,6 @@ function isNativeProtocolInput(path) {
 }
 
 /**
- * Detects high-level CI scope from changed file paths.
  * @param {string[]} changedPaths
  * @returns {ChangedScope}
  */
@@ -715,7 +713,6 @@ export function shouldRunNativeI18n(changedPaths) {
 }
 
 /**
- * Detects whether node-fast CI can cover the changed paths.
  * @param {string[]} changedPaths
  * @returns {NodeFastScope}
  */
@@ -767,7 +764,6 @@ function detectInstallSmokeScopeForPath(path) {
 }
 
 /**
- * Detects whether install-smoke CI should run for changed paths.
  * @param {string[]} changedPaths
  * @returns {InstallSmokeScope}
  */
@@ -792,7 +788,6 @@ export function detectInstallSmokeScope(changedPaths) {
 }
 
 /**
- * Lists changed paths for CI base/head inputs.
  * @param {string} base
  * @param {string} [head]
  * @param {string} [cwd]
@@ -827,7 +822,6 @@ export function listChangedPaths(
 }
 
 /**
- * Writes CI scope decisions to GitHub Actions output.
  * @param {ChangedScope} scope
  * @param {string} [outputPath]
  * @param {InstallSmokeScope} [installSmokeScope]
@@ -915,11 +909,6 @@ export function writeGitHubOutput(
   );
 }
 
-/** @returns {boolean} */
-function isDirectRun() {
-  return isDirectRunUrl(process.argv[1], import.meta.url);
-}
-
 /**
  * @param {string[]} argv
  * @returns {{ base: string; head: string; mergeHeadFirstParent: boolean }}
@@ -945,7 +934,7 @@ export function parseArgs(argv) {
   return args;
 }
 
-if (isDirectRun()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   const workflowEventName = process.env.GITHUB_EVENT_NAME ?? "";
   try {
     const args = parseArgs(process.argv.slice(2));

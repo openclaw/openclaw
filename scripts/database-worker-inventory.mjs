@@ -854,17 +854,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-status.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["readSessionEntriesByStatus"],
-        evidence:
-          "gateway/server-startup-session-migration.ts:103 and startup main-session recovery via agents/main-session-recovery/main-session-restart-recovery-runtime.ts:270 -> :94 -> main-session-restart-recovery-store.ts:207. Runtime expected-target retry takes :200 and skips enumeration; other direct reader is session-entry-read.worker.ts:306.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
     [
       {
@@ -1088,12 +1077,6 @@ const reviewedOperations = new Map([
         operations: ["readSubagentRunRow", "readSubagentSessionListRows"],
         evidence:
           "Row reads are only completion/subagent-completion-admission.worker.ts:94,155 or its mutation kernel at :246,274,293,412,523,562,576 (admission.worker.ts:188). Session-list loader at store.sqlite.ts:409 is called only by src/state/openclaw-state-read.worker.ts:196; other native registry readers remain T1.",
-      },
-      {
-        tier: "T2",
-        operations: ["hasSubagentSessionOwnerInDatabase"],
-        evidence:
-          "Only subagent-session-reconciliation.ts:255 invokes the ownership query, through server-startup-session-migration.ts:130. Callers are server-startup-plugins.ts:99 and server-agent-database-startup.ts:112; the latter is the one-time deferred boot-inspection continuation in src/state/agent-database-startup.ts:235,290,322, not request/timer maintenance.",
       },
     ],
   ],
@@ -1828,11 +1811,12 @@ const reviewedOperations = new Map([
           "resolveUserProfileGitHubAttributionInDatabase",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
+          "selectGitHubProfileAlias",
           "applyVerifiedGitHubIdentity",
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity.",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],

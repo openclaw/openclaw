@@ -201,8 +201,7 @@ export async function persistAgentSessionPhase(params: {
               !params.isRestartRecoveryResumeRun &&
               internalFreshEntry &&
               (internalFreshEntry.mainRestartRecovery?.tombstone ||
-                (internalFreshEntry.status === "running" &&
-                  internalFreshEntry.abortedLastRun === true &&
+                (internalFreshEntry.abortedLastRun === true &&
                   getMainSessionRecoveryRetryCount(internalFreshEntry.mainRestartRecovery) >=
                     MAX_RECOVERY_RETRIES))
             ) {

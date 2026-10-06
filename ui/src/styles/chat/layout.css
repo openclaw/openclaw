@@ -380,6 +380,11 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
+.chat-child-attention .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-composer-neighbor-card--info {
   border-color: color-mix(in srgb, var(--info) 16%, transparent);
 }
@@ -2954,8 +2959,10 @@ openclaw-chat-ci-details {
   }
 }
 
+/* Display-contents notice hosts remain DOM ancestors. Their cards must use
+   the composer's inset instead of applying a second one inside the shell. */
 .agent-chat__composer-notices
-  > :is(
+  :is(
     .chat-composer-neighbor-card,
     .agent-chat__composer-errors,
     .agent-chat__talk-status.callout,

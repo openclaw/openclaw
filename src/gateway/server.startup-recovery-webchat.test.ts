@@ -247,8 +247,9 @@ it(
         {
           sessionId,
           updatedAt: Date.now() - 10_000,
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
+          mainRestartRecovery: { cycleId: "before-reset", revision: 1, chargedAttempts: 0 },
         },
       );
       clearSessionStoreCacheForTest();
@@ -409,8 +410,9 @@ it(
       );
       await patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({
         ...entry,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "after-reset", revision: 1, chargedAttempts: 0 },
         updatedAt: Date.now() - 10_000,
       }));
       await addRecoveryChild(currentChildMarker);
