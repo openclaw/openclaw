@@ -1,4 +1,3 @@
-// Doctor checks and repairs for exec safeBins profiles and trusted binary directories.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
@@ -23,11 +22,8 @@ type ExecSafeBinCoverageHit = {
   scopePath: string;
   /** Normalized binary name from safeBins. */
   bin: string;
-  /** Missing profile coverage or unsafe semantic shape detected by doctor. */
   kind: "missingProfile" | "riskySemantics";
-  /** True when the missing profile belongs to an interpreter/runtime binary. */
   isInterpreter?: boolean;
-  /** Risk explanation for risky semantic hits. */
   warning?: string;
 };
 
@@ -90,7 +86,6 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   return scopes;
 }
 
-/** Scan configured safeBins for missing profiles and risky low-friction entries. */
 export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
@@ -123,7 +118,6 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
   return hits;
 }
 
-/** Scan configured safeBins that resolve outside trusted binary directories. */
 export function scanExecSafeBinTrustedDirHints(
   cfg: OpenClawConfig,
 ): ExecSafeBinTrustedDirHintHit[] {
@@ -152,7 +146,6 @@ export function scanExecSafeBinTrustedDirHints(
   return hits;
 }
 
-/** Format doctor warnings for safeBins profile coverage and risky semantics. */
 export function collectExecSafeBinCoverageWarnings(params: {
   hits: ExecSafeBinCoverageHit[];
   doctorFixCommand: string;
@@ -201,7 +194,6 @@ export function collectExecSafeBinCoverageWarnings(params: {
   return lines;
 }
 
-/** Format doctor warnings for safeBins resolved outside trusted directories. */
 export function collectExecSafeBinTrustedDirHintWarnings(
   hits: ExecSafeBinTrustedDirHintHit[],
 ): string[] {
@@ -223,7 +215,6 @@ export function collectExecSafeBinTrustedDirHintWarnings(
   return lines;
 }
 
-/** Scaffold missing custom safeBin profiles and warn on interpreter/risky entries. */
 export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

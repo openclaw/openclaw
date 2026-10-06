@@ -157,7 +157,7 @@ it.each([
               });
             }
           }
-          const settled = await handleReplyAgentRunError(new Error("Backend stopped"), {
+          const reply = await handleReplyAgentRunError(new Error("Backend stopped"), {
             resolveVisibleReplyDelivery: async () => false,
             isHeartbeat: false,
             replyExpectation: "required",
@@ -169,12 +169,8 @@ it.each([
               return value;
             },
             sessionCtx: {},
-          }).then(
-            (reply) => ({ reply, error: undefined }),
-            (error: unknown) => ({ reply: undefined, error }),
-          );
-          expect(settled.error).toBeUndefined();
-          expect(settled.reply?.text).toBe(
+          });
+          expect(reply?.text).toBe(
             confirmed
               ? SILENT_REPLY_TOKEN
               : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",

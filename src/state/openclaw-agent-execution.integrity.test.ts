@@ -381,6 +381,7 @@ it.each([
   "invalidated",
   "failed",
   "revoked-before-grant",
+  "revoked-after-verification-admission",
   "missing-metadata",
   "version-mismatch",
   "closed-host",
@@ -440,6 +441,7 @@ it.each([
     context.admission.assertCurrent();
   };
   let revokedBeforeGrant = false;
+  let revokedAfterVerificationAdmission = false;
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent,
     createAdmission(binding) {
@@ -460,6 +462,17 @@ it.each([
             invalidateOpenClawAgentDatabaseValidation(database.path);
             revokedBeforeGrant = true;
           }
+          if (
+            proof === "revoked-after-verification-admission" &&
+            request.stage === "prepare" &&
+            typeof request.facts === "object" &&
+            request.facts !== null &&
+            "kind" in request.facts &&
+            request.facts.kind === "agent-validation-start"
+          ) {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+            revokedAfterVerificationAdmission = true;
+          }
           if (!grant()) {
             throw new Error("Native integrity fixture lost its retained admission");
           }
@@ -476,7 +489,11 @@ it.each([
     undefined,
     () => {},
   );
-  if (proof === "invalidated" || proof === "closed-host-revoked") {
+  if (
+    proof === "invalidated" ||
+    proof === "closed-host-revoked" ||
+    proof === "revoked-after-verification-admission"
+  ) {
     invalidateOpenClawAgentDatabaseValidation(database.path);
   } else if (proof === "closed-host-replaced") {
     fs.copyFileSync(database.path, `${database.path}.replacement`);
@@ -495,6 +512,16 @@ it.each([
   }
   const integrityCheck = vi.spyOn(verification, "requestOpenClawAgentDatabaseIntegrityCheck");
   try {
+    if (proof === "revoked-after-verification-admission") {
+      const operation = vi.fn(async () => "not admitted");
+      await expect(generation.run(source, operation)).rejects.toThrow(
+        "Agent schema admission changed before publication",
+      );
+      expect(revokedAfterVerificationAdmission).toBe(true);
+      expect(Array.from(new Int32Array(counter.checks))).toEqual([1, 1]);
+      expect(operation).not.toHaveBeenCalled();
+      return;
+    }
     if (proof === "failed") {
       await expect(generation.run(source, async () => "opened")).rejects.toThrow(
         "OpenClaw agent database claim is no longer current",

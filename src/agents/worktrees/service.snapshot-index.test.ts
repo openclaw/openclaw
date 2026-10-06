@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { probeTreeClone, readCloneFileMetadata } from "@openclaw/fs-safe/copy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as commandRunner from "../../process/exec-runner.js";
@@ -86,6 +87,35 @@ describe("ManagedWorktreeService snapshot index", () => {
     await fs.utimes(index, 1_600_000_000, 1_600_000_000);
     const run = commandRunner.runCommandWithTimeout;
     let checkedIndex = false;
+    const inspectCopy = async (copiedIndex: string) => {
+      const [sourceStat, copiedStat, copiedBytes] = await Promise.all([
+        fs.stat(index, { bigint: true }),
+        fs.stat(copiedIndex, { bigint: true }),
+        fs.readFile(copiedIndex),
+      ]);
+      const cloneMetadata =
+        process.platform === "darwin" && probeTreeClone(path.dirname(copiedIndex)) === "apfs"
+          ? await readCloneFileMetadata([index, copiedIndex])
+          : undefined;
+      return { sourceStat, copiedStat, copiedBytes, cloneMetadata };
+    };
+    const copies: Awaited<ReturnType<typeof inspectCopy>>[] = [];
+    const inspectionErrors: unknown[] = [];
+    const runBytes = commandRunner.runCommandBuffersWithTimeout;
+    vi.spyOn(commandRunner, "runCommandBuffersWithTimeout").mockImplementation(async (...args) => {
+      const argv = args[0];
+      const options = args[1];
+      const copiedIndex = typeof options === "object" ? options.env?.GIT_INDEX_FILE : undefined;
+      if (copiedIndex && argv.includes("read-tree") && argv.includes("--reset")) {
+        // Retain observations before Git rewrites the copy; assert outside product recovery.
+        try {
+          copies.push(await inspectCopy(copiedIndex));
+        } catch (error) {
+          inspectionErrors.push(error);
+        }
+      }
+      return await runBytes(...args);
+    });
     vi.spyOn(commandRunner, "runCommandWithTimeout").mockImplementation(async (...args) => {
       const argv = args[0];
       if (argv.includes("git") && argv.includes("worktree") && argv.includes("remove")) {
@@ -95,6 +125,21 @@ describe("ManagedWorktreeService snapshot index", () => {
       return await run(...args);
     });
     const removed = await service.remove({ id: created.id, reason: "test" });
+    expect(inspectionErrors).toEqual([]);
+    expect(copies).toHaveLength(1);
+    for (const { sourceStat, copiedStat, copiedBytes, cloneMetadata } of copies) {
+      expect(copiedBytes).toEqual(bytes);
+      expect([copiedStat.dev, copiedStat.ino]).not.toEqual([sourceStat.dev, sourceStat.ino]);
+      expect(copiedStat.mtimeNs).toBe(1_600_000_000_000_000_000n);
+      if (process.platform !== "win32") {
+        expect(copiedStat.mode & 0o777n).toBe(sourceStat.mode & 0o777n);
+      }
+      if (cloneMetadata) {
+        const [sourceMetadata, copiedMetadata] = cloneMetadata;
+        expect(sourceMetadata?.cloneId).toBeTruthy();
+        expect(copiedMetadata?.cloneId).toBe(sourceMetadata?.cloneId);
+      }
+    }
     expect(checkedIndex).toBe(true);
     expect(await git(repo, "show", `${removed.snapshotRef}:README.md`)).toBe("edit");
   });

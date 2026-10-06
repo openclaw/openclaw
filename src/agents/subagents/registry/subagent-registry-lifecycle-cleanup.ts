@@ -3,15 +3,10 @@ import {
   recordSystemEventStoreReplaced,
 } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import { defaultRuntime } from "../../../runtime.js";
-import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
 import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
 import { logAnnounceGiveUp } from "./subagent-registry-helpers.js";
-import {
-  runWithSubagentCleanupWorkAdmission,
-  retireSupersededCleanupIfNeeded,
-} from "./subagent-registry-lifecycle-attempt.js";
+import { runWithSubagentCleanupWorkAdmission } from "./subagent-registry-lifecycle-attempt.js";
 import type {
   SubagentLifecycleAnnounceCleanupContext,
   SubagentLifecycleCleanupContext,
@@ -20,7 +15,6 @@ import type {
 } from "./subagent-registry-lifecycle-context.js";
 import { scheduleRequesterSettleWake } from "./subagent-registry-lifecycle-wake.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
-import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -185,22 +179,4 @@ export function suspendReplacedStoreNotifications(
   }
   pending.add(work);
   return Promise.all(pending).then(() => {});
-}
-
-export function retireSupersededCleanupInBackground(
-  context: SubagentLifecycleCleanupContext,
-  runId: string,
-  entry: SubagentRunRecord,
-  generation: number,
-  stateContext: OpenClawStateWorkerContext,
-): void {
-  // A late delivery callback still owns retirement through its original source.
-  void runWithSubagentCleanupWorkAdmission(async () => {
-    assertSubagentRegistryWriteSourceCurrent(stateContext);
-    await retireSupersededCleanupIfNeeded(context, entry, generation);
-  }).catch((error: unknown) => {
-    defaultRuntime.log(
-      `[warn] subagent superseded cleanup retirement failed (${runId}): ${String(error)}`,
-    );
-  });
 }

@@ -43,28 +43,20 @@ function normalizeNotifyThreadKey(messageThreadId?: string | number): string {
   }
 }
 
-function notifySubscriberKey(subscriber: {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): string {
-  return JSON.stringify([
-    subscriber.to,
-    subscriber.accountId ?? "",
-    normalizeNotifyThreadKey(subscriber.messageThreadId),
-  ]);
-}
-
 function hashStoreKey(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function notifySubscriberStoreKey(subscriber: {
-  to: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-}): string {
-  return hashStoreKey(notifySubscriberKey(subscriber));
+export function notifySubscriberStoreKey(
+  subscriber: Pick<NotifySubscription, "to" | "accountId" | "messageThreadId">,
+): string {
+  return hashStoreKey(
+    JSON.stringify([
+      subscriber.to,
+      subscriber.accountId ?? "",
+      normalizeNotifyThreadKey(subscriber.messageThreadId),
+    ]),
+  );
 }
 
 export function notifyRequestStoreKey(requestId: string): string {

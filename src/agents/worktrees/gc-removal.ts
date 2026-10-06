@@ -369,8 +369,9 @@ export function createWorktreeGcRemoval(context: {
     progress.error("idle", error, record.id);
   };
   return {
-    remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) =>
-      withOwnerCleanup(record, (withOwnerMutation) =>
+    remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) => {
+      progress.result.eligibleCount += 1;
+      return withOwnerCleanup(record, (withOwnerMutation) =>
         context.remove({
           id: record.id,
           reason,
@@ -385,7 +386,8 @@ export function createWorktreeGcRemoval(context: {
           },
           commitGuard: () => assertOwnerCurrent(record, retiredOwner),
         }),
-      ),
+      );
+    },
     retireMissing: (record: ManagedWorktreeRecord) =>
       withOwnerCleanup(record, (withOwnerMutation) =>
         withOwnerMutation(() =>

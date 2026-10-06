@@ -101,7 +101,12 @@ export async function resolveApprovedWorkerLocalModel(params: ResolveApprovedWor
       resolved.ref.model,
     );
     if (!model) {
-      return { error: `Unknown configured model: ${resolved.ref.provider}/${resolved.ref.model}` };
+      return {
+        error:
+          `Worker-local inference model ${resolved.ref.provider}/${resolved.ref.model} is missing ` +
+          "from the Gateway model catalog. Add its metadata under models.providers in the " +
+          "Gateway openclaw.json; keep its endpoint and credentials only on the node.",
+      };
     }
     return {
       transcriptPolicy: resolveTranscriptPolicy({

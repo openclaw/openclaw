@@ -51,6 +51,10 @@ query SQLite. Supplied shared-state writers reuse their selected handle and chec
 schema and ownership after `BEGIN`, without a duplicate pre-transaction row read.
 Stored bytes, schemas, permissions, and update behavior are unchanged.
 
+Transcript watermarks select the rewrite generation and cold-or-hot sequence in
+one indexed statement on that snapshot. Session entry writes batch their saved
+snapshot fields in one upsert, preserving per-field revision triggers and rollback.
+
 Canonical main-key policy reads reuse the existing reader admission's value only within a current read operation. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, and observed foreign-commit version invalidate that value. Transactions, pinned snapshots, native mutation callbacks, and authorizer-controlled reads continue querying the policy. Continuation authority remains with canonical session admission.
 
 The Gateway does not schedule daily full-database scans. Admission-requested

@@ -302,9 +302,10 @@ type SessionIdentityEvidenceWorkerInput = {
   continuation?: CanonicalSessionReaderContinuation;
 };
 
-export type SessionBranchSummaryWorkerInput = {
+type SessionBranchSummaryWorkerInput = {
   kind: "branch-summaries";
-  request: SessionBranchSummaryReadRequest;
+  database: SessionBranchSummaryReadRequest["database"];
+  request: Omit<SessionBranchSummaryReadRequest, "database">;
 };
 
 type SessionHistoricalEvictionCandidatesWorkerInput = {
@@ -322,6 +323,7 @@ type SessionArchivedEvictionCandidatesWorkerInput = Omit<
 
 export type SessionHistoryWorkerInput =
   | SessionStoreProjectionWorkerInput
+  | SessionBranchSummaryWorkerInput
   | { kind: "cli-process-history"; request: ChatHistoryDisplayRequest }
   | LifecycleArtifactCleanupRequest
   | { kind: "prewarm"; database: { agentId: string; path: string }; env: NodeJS.ProcessEnv }
@@ -381,8 +383,7 @@ export type SessionTranscriptWorkerInput =
   | SessionModelContextWorkerInput
   | SessionContextMessagesWorkerInput
   | SessionEntryWorkerInput
-  | SessionResetRecallWorkerInput
-  | SessionBranchSummaryWorkerInput;
+  | SessionResetRecallWorkerInput;
 
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
@@ -424,7 +425,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     message: SessionTranscriptMessageEvent | undefined;
   };
   "sqlite-target": { target: ResolvedSqliteStoreTarget };
-  "branch-summaries": SessionBranchSummaryReadResult;
+  "branch-summaries": { kind: "branch-summaries"; result: SessionBranchSummaryReadResult };
   "history-page": SessionHistoryWorkerResult;
   "session-preview": { kind: "session-preview"; items: SessionPreviewItem[] };
   "session-title-fields": { kind: "session-title-fields"; fields: SessionTitleFields };
@@ -526,6 +527,10 @@ type CancellableSessionHistoryReader<
 > = (input: Omit<Input, "kind" | "database">, signal?: AbortSignal) => Promise<Value>;
 
 export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
+  readBranchSummaries: CancellableSessionHistoryReader<
+    SessionBranchSummaryWorkerInput,
+    SessionBranchSummaryReadResult
+  >;
   readMessagePresence: CancellableSessionHistoryReader<
     SessionTranscriptMessagePresenceWorkerInput,
     boolean

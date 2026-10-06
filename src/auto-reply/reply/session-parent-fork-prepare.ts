@@ -64,6 +64,7 @@ export async function prepareReplySessionParentFork(params: {
     return params.sessionEntry;
   }
   const decision = await resolveParentForkDecision({
+    parentSessionKey: params.parentSessionKey,
     parentEntry,
     agentId: params.agentId,
     storePath: params.storePath,

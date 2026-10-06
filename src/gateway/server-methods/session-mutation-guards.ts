@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { PreparedQuestionCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { withSessionPendingInputAuthorityGuard } from "../../config/sessions/session-pending-input-authority.js";
 import {
@@ -34,6 +35,7 @@ type RequestMutationOptions = Pick<
 type RequestMutationAuthorityBase = {
   /** Preparation checks cannot consume an opaque SDK commit callback. */
   assertPreparationCurrent: () => void;
+  questionCallerRead?: PreparedQuestionCallerRead;
   assertCurrent: () => void;
   /** Original transport/SDK lifetime; prepared-profile methods check selection separately. */
   assertLifetimeCurrent: () => void;
@@ -136,8 +138,9 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
   options: T,
   assertSourceCurrent: (() => void) | undefined,
   assertPreparationCurrent: (() => void) | undefined,
+  questionCallerRead?: PreparedQuestionCallerRead,
 ): T {
-  if (!assertSourceCurrent && !assertPreparationCurrent) {
+  if (!assertSourceCurrent && !assertPreparationCurrent && !questionCallerRead) {
     return options;
   }
   const source = readGatewayRequestMutationAuthority(options);
@@ -145,6 +148,7 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     options;
   bindRequestMutationAuthority(options, {
     ...source,
+    questionCallerRead,
     assertPreparationCurrent: () => {
       source.assertPreparationCurrent();
       assertPreparationCurrent?.();
@@ -288,6 +292,7 @@ export function bindGatewayRequestHandlerMutationAuthority<T extends GatewayRequ
       assertHandlerCurrent();
       source.assertPreparationCurrent();
     },
+    questionCallerRead: source.questionCallerRead,
     assertCurrent,
     assertLifetimeCurrent,
     expectedProfileBinding: retainedProfileBinding,

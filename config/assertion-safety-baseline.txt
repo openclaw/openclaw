@@ -1615,7 +1615,6 @@ src/auto-reply/reply/inbound-context.ts	8
 src/auto-reply/reply/mentions.ts	1
 src/auto-reply/reply/queue/drain.ts	1
 src/auto-reply/reply/queue/enqueue.ts	1
-src/auto-reply/reply/queue/settings.ts	1
 src/auto-reply/reply/reply-config-runtime-mode.ts	2
 src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
@@ -1718,7 +1717,6 @@ src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	6
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
-src/cli/channel-options.ts	1
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.gateway-readiness.ts	1
 src/cli/claws-cli.runtime.ts	2

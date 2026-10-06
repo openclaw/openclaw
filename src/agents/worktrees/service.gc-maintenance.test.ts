@@ -45,6 +45,31 @@ afterEach(() => {
   }
 });
 
+it("rebuilds pack lookup when its previous index names a removed pack", async () => {
+  const repo = await initRepo(tempDirs.make("worktree-stale-pack-index-"));
+  const packDirectory = path.join(repo, ".git", "objects", "pack");
+  const indexPath = path.join(packDirectory, "multi-pack-index");
+  await requireGit(repo, ["repack", "-a", "-d"]);
+  await repairWorktreePackIndex(repo);
+  const staleIndex = await fs.readFile(indexPath);
+  const oldPacks = new Set(
+    (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx")),
+  );
+  await fs.writeFile(path.join(repo, "replacement.txt"), "replacement pack\n");
+  await requireGit(repo, ["add", "replacement.txt"]);
+  await requireGit(repo, ["commit", "-m", "replace pack"]);
+  await requireGit(repo, ["repack", "-a", "-d"]);
+  const currentPacks = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
+  expect(currentPacks.every((name) => !oldPacks.has(name))).toBe(true);
+  // Reproduce an interrupted pack replacement without removing any reachable objects.
+  await fs.writeFile(indexPath, staleIndex);
+
+  await repairWorktreePackIndex(repo);
+
+  await requireGit(repo, ["multi-pack-index", "verify"]);
+  expect(await requireGit(repo, ["show", "HEAD:replacement.txt"])).toBe("replacement pack");
+});
+
 it("maintains each shared repository and suspends failures until explicitly retried", async () => {
   const repo = await initRepo(tempDirs.make("worktree-gc-first-repo-"));
   const otherRepo = await initRepo(tempDirs.make("worktree-gc-second-repo-"));

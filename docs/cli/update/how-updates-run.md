@@ -239,6 +239,18 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
+may add or remove hard links while the old Gateway serves; link-only metadata
+changes do not invalidate unchanged files on Windows or POSIX. Content, file
+identity, type, permissions, ownership, size, and modification-time changes still
+refuse the snapshot.
+
+This check belongs to the installed updater. An older updater that reports
+`Plugin entry changed after snapshot inventory` during native capture cannot
+obtain this repair from the candidate it is already validating. Use the
+installation's [manual update method](/install/updating/update-methods), with a
+verified backup and the managed Gateway stopped during package replacement.
+
 Before each candidate check starts, the updater names the check and command.
 These progress messages go to stderr with `--json`, leaving stdout for the JSON
 result. The installed updater owns these announcements, so an older updater gains

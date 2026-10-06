@@ -306,14 +306,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     : load.phase !== "committed" && load.startup;
 }
 
-type ChatHistoryRequestOwnership = {
-  version: number;
-  sessions: ChatState["sessions"];
-  client: GatewayBrowserClient;
-  connectionEpoch: number;
-  sessionKey: string;
-  agentId?: string;
-};
+type ChatHistoryRequestOwnership = ReturnType<typeof beginHistoryRequest>;
 
 export function beginHistoryRequest(
   state: ChatState,
@@ -321,7 +314,7 @@ export function beginHistoryRequest(
   connectionEpoch: number,
   sessionKey: string,
   agentId?: string,
-): ChatHistoryRequestOwnership {
+) {
   return {
     version: ++chatHistoryRequests(state).historyVersion,
     sessions: state.sessions,

@@ -150,6 +150,31 @@ function createRegistrationFixture() {
   return { refusal, manager };
 }
 
+type RestoreOptions = Parameters<typeof createSubagentRegistryRestorer>[0];
+
+function createRestorer(
+  options: Pick<RestoreOptions, "getGatewayContextResolver"> & Partial<RestoreOptions>,
+) {
+  return createSubagentRegistryRestorer({
+    runs: subagentRuns,
+    bindGatewayOwners: () => true,
+    settleRequesterTurn: async () => false,
+    retireSupersededRun: async () => {},
+    ensureListener: () => {},
+    startSweeper: () => {},
+    scheduleSweep: () => {},
+    resumeRun: () => {},
+    listSwarmRunsForGroup: () => [],
+    startQueuedSubagentRun: async () => true,
+    terminateAcceptedRestoredCollectorRun: async () => {},
+    cleanupCollectorLaunchResources: async () => true,
+    settleFailedQueuedSubagentLaunch: async () => true,
+    completeCollectorLaunchCleanup: async () => {},
+    warn: () => {},
+    ...options,
+  });
+}
+
 it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {
@@ -168,23 +193,14 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
     const startQueued = vi.fn(async () => true);
     const gatewayContext = sessionSharingTestContext(vi.fn());
     const resolveGatewayContext = () => gatewayContext;
-    const restorer = createSubagentRegistryRestorer({
-      runs: subagentRuns,
+    const restorer = createRestorer({
       getGatewayContextResolver: () => resolveGatewayContext,
-      bindGatewayOwners: () => true,
-      settleRequesterTurn: async () => false,
-      retireSupersededRun: async () => {},
-      ensureListener: () => {},
-      startSweeper: () => {},
-      scheduleSweep: () => {},
       resumeRun: resume,
       listSwarmRunsForGroup: () => [...subagentRuns.values()],
       startQueuedSubagentRun: startQueued,
-      terminateAcceptedRestoredCollectorRun: async () => {},
       cleanupCollectorLaunchResources: cleanupResources,
       settleFailedQueuedSubagentLaunch: manager.settleFailedQueuedSubagentLaunch,
       completeCollectorLaunchCleanup: cleaned,
-      warn: () => {},
     });
     try {
       await expect(
@@ -407,22 +423,12 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
     const startSweeper = vi.fn();
     const resumeRun = vi.fn();
     const warn = vi.fn();
-    const restorer = createSubagentRegistryRestorer({
-      runs: subagentRuns,
+    const restorer = createRestorer({
       getGatewayContextResolver: () => resolver,
-      bindGatewayOwners: () => true,
       settleRequesterTurn,
-      retireSupersededRun: async () => {},
       ensureListener,
       startSweeper,
-      scheduleSweep: () => {},
       resumeRun,
-      listSwarmRunsForGroup: () => [],
-      startQueuedSubagentRun: async () => true,
-      terminateAcceptedRestoredCollectorRun: async () => {},
-      cleanupCollectorLaunchResources: async () => true,
-      settleFailedQueuedSubagentLaunch: async () => true,
-      completeCollectorLaunchCleanup: async () => {},
       warn,
     });
     try {
@@ -493,10 +499,8 @@ it("retries retirement when registration supersedes another restored child durin
       cleanup: "keep",
       expectsCompletionMessage,
     });
-  const restorer = createSubagentRegistryRestorer({
-    runs: subagentRuns,
+  const restorer = createRestorer({
     getGatewayContextResolver: () => resolver,
-    bindGatewayOwners: () => true,
     settleRequesterTurn: async () => {
       throw new Error("Superseded children must retire before requester handoff");
     },
@@ -512,17 +516,6 @@ it("retries retirement when registration supersedes another restored child durin
         retiredLater.resolve();
       }
     },
-    ensureListener: () => {},
-    startSweeper: () => {},
-    scheduleSweep: () => {},
-    resumeRun: () => {},
-    listSwarmRunsForGroup: () => [],
-    startQueuedSubagentRun: async () => true,
-    terminateAcceptedRestoredCollectorRun: async () => {},
-    cleanupCollectorLaunchResources: async () => true,
-    settleFailedQueuedSubagentLaunch: async () => true,
-    completeCollectorLaunchCleanup: async () => {},
-    warn: () => {},
   });
   let activation: Promise<unknown> | undefined;
   try {

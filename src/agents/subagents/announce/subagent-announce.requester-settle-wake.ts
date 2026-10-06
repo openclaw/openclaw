@@ -47,10 +47,12 @@ import {
 } from "./subagent-announce-delivery.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
-import { readChildCompletionFindings } from "./subagent-announce-output.js";
+import {
+  readChildCompletionFindings,
+  selectCurrentRequesterCompletionRows,
+} from "./subagent-announce-output.js";
 import { SubagentAnnouncePreparationConflictError } from "./subagent-announce-result.js";
 import { hasUsableSessionEntry } from "./subagent-announce.js";
-import { selectCurrentRequesterCompletionRows } from "./subagent-announce.requester-settle-cohort.js";
 import { createRequesterDescendantReader } from "./subagent-announce.requester-settle-descendants.js";
 import { buildRequesterSettleWakeMessage } from "./subagent-announce.requester-settle-message.js";
 import { createRequesterSettleReceiptAdmission } from "./subagent-announce.requester-settle-receipt.js";
@@ -382,9 +384,7 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
       });
     }
     if (hasUnsettledDescendants) {
-      if (frozen) {
-        await deferBatch();
-      }
+      await deferBatch();
       return false;
     }
     const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);

@@ -324,6 +324,8 @@ describe("worktrees gateway methods", () => {
       outcome: "partial",
       limitsSatisfied: false,
       issueCount: 1,
+      eligibleCount: 2,
+      failedCount: 1,
       issues: [
         { id: "retained", stage: "idle", outcome: "failed", reason: "repository unavailable" },
       ],
@@ -335,7 +337,13 @@ describe("worktrees gateway methods", () => {
       expect(runGc).not.toHaveBeenCalled();
       await request;
       const receipt = respond.mock.calls[0]![1];
-      expect(receipt).toMatchObject({ state: "queued", jobId: expect.any(String) });
+      expect(receipt).toMatchObject({
+        state: "queued",
+        jobId: expect.any(String),
+        eligibleCount: 0,
+        deferredCount: 0,
+        failedCount: 0,
+      });
       expect(Value.Check(WorktreesGcResultSchema, receipt)).toBe(true);
 
       running = clock.advanceBy(0);

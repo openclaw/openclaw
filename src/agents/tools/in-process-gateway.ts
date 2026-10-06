@@ -33,6 +33,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { readQuestionDispatchCapability } from "../harness/host-private-capabilities.js";
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
@@ -59,6 +60,7 @@ export type InProcessGatewayCaller = <T = Record<string, unknown>>(
 type AgentToolGatewayRequest = Pick<
   CallGatewayOptions,
   | "assertDispatchCurrent"
+  | "prepareDispatchCurrent"
   | "config"
   | "expectFinal"
   | "method"
@@ -274,7 +276,14 @@ async function callAgentToolGatewayRequestBound<T>(
     } = request;
     return await runBoundInProcessGatewayCall(
       boundGateway,
-      () => callGateway<T>({ ...wireRequest, method }),
+      () =>
+        callGateway<T>({
+          ...wireRequest,
+          method,
+          assertDispatchCurrent:
+            readQuestionDispatchCapability(request.assertDispatchCurrent)
+              ?.assertCompatibilityCurrent ?? request.assertDispatchCurrent,
+        }),
       assertCurrent,
       revalidateOnCompletion,
     );
@@ -298,6 +307,7 @@ async function callAgentToolGatewayRequestBound<T>(
         ])
       : captureExternalSessionCommitGuard(request.sessionMutationCommitGuard);
   const dispatchOptions = {
+    prepareDispatchCurrent: request.prepareDispatchCurrent,
     forceSyntheticClient: true,
     operatorRoleActor: { kind: "system" as const },
     ...(request.agentRunTracking ? { agentRunTracking: request.agentRunTracking } : {}),

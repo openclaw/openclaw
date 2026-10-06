@@ -21,6 +21,11 @@ export type NodeWorkerNativeInferenceSnapshot = {
   models: ReadonlyMap<string, NodeWorkerNativeInferenceModel>;
 };
 
+export const NODE_WORKER_INFERENCE_SETUP_ERROR =
+  "Worker-local inference is not configured on this node. Add a compatible model under " +
+  "models.providers with a usable credential in the node openclaw.json, set " +
+  'nodeHost.workerRuns.isolation to "none", then restart the node host.';
+
 function resolvedHeaders(
   providerHeaders: Record<string, unknown> | undefined,
   modelHeaders: Record<string, string> | undefined,
@@ -127,7 +132,11 @@ export function projectNodeWorkerNativeInference(
   const ref = `${descriptor.assignment.modelRef.provider}/${descriptor.assignment.modelRef.model}`;
   const selected = snapshot.models.get(ref);
   if (!selected) {
-    throw new Error(`Node worker model ${ref} is not configured for worker inference`);
+    throw new Error(
+      `Worker-local inference model ${ref} is unavailable on this node. Configure it under ` +
+        "models.providers with a usable credential in the node openclaw.json, then restart " +
+        "the node host.",
+    );
   }
   return {
     config: {
@@ -166,7 +175,7 @@ export function assertNodeWorkerNativeInferenceAvailable(
     return;
   }
   if (!snapshot) {
-    throw new Error("Node worker native inference requires node-local startup configuration");
+    throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
   }
   projectNodeWorkerNativeInference(snapshot, descriptor);
 }

@@ -28,6 +28,7 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import type { IncognitoHistoryTarget } from "./session-incognito-history-contract.js";
 import type {
@@ -354,6 +355,18 @@ export async function listSessionPendingInputs(
   scope: Scope,
   options: { limit?: number; before?: number } = {},
 ): Promise<SessionPendingInputPage> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).list(options);
+  }
   const { rows, total, nextBefore } = await readPendingInputRows(scope, options);
   return {
     items: rows.toReversed().map(projectSessionPendingInput),
@@ -366,6 +379,18 @@ export async function readSessionPendingInput(
   scope: Scope,
   id: string,
 ): Promise<SessionPendingInput | undefined> {
+  const incognito = captureIncognitoSessionOperation(scope);
+  if (incognito) {
+    return createIncognitoPendingInputHistoryReader({
+      ...incognito,
+      target: {
+        sessionKey: scope.sessionKey,
+        sessionId: scope.sessionId,
+        lifecycleRevision: incognito.actor.sessions.readSharing(scope.sessionKey)?.entry
+          ?.lifecycleRevision,
+      },
+    }).read(id);
+  }
   const row = (await readPendingInputRows(scope, { id, limit: 1 })).rows[0];
   return row ? projectSessionPendingInput(row) : undefined;
 }
