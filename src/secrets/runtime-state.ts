@@ -628,7 +628,6 @@ function getProfileMutationDecision(params: {
   profileId: string;
   mutationLineage: typeof activeSnapshotLineageAuthMutations;
 }): {
-  baselineOwner: ProfileOwner;
   candidateOwner: ProfileOwner;
   candidateStatus: "mutated" | "unchanged" | "unknown";
   ownerChanged: boolean;
@@ -637,7 +636,6 @@ function getProfileMutationDecision(params: {
   const captured = params.mutationLineage[params.agentDir]?.profiles[params.profileId];
   if (!captured) {
     return {
-      baselineOwner: "absent",
       candidateOwner: "absent",
       candidateStatus: "mutated",
       ownerChanged: false,
@@ -649,7 +647,6 @@ function getProfileMutationDecision(params: {
     !isDeepStrictEqual(captured.baseline.databaseOwner, captured.candidate.databaseOwner);
   const relevant = ownerChanged ? captured.baseline : captured.candidate;
   return {
-    baselineOwner: captured.baseline.owner,
     candidateOwner: captured.candidate.owner,
     candidateStatus: compareMutationTokens(
       captured.candidate.token,

@@ -2648,7 +2648,7 @@ src/shared/runtime-import.ts	1
 src/shared/safe-record.ts	1
 src/shared/store-writer-queue.ts	1
 src/shared/worker-bundle-archive.ts	1
-src/skills/lifecycle/clawhub-install-core.ts	2
+src/skills/lifecycle/clawhub-install-core.ts	1
 src/skills/lifecycle/clawhub-store.ts	4
 src/skills/lifecycle/upload-store.ts	1
 src/skills/lifecycle/workspace-skill-write.ts	1
@@ -2701,7 +2701,7 @@ src/transcripts/store-export-ownership.ts	2
 src/transcripts/store-sqlite.ts	2
 src/tts/openai-compatible-speech-provider.ts	1
 src/tts/status-config.ts	1
-src/tts/tts-config.ts	5
+src/tts/tts-config.ts	4
 src/tts/tts-core.ts	1
 src/tts/tts-payload.ts	1
 src/tts/tts-provider-resolution.ts	1

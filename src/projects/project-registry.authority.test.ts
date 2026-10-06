@@ -55,7 +55,6 @@ vi.mock("../agents/worktrees/git.js", () => ({
   insideGitCheckout: fixture.forbiddenNative,
   runGit: fixture.forbiddenNative,
 }));
-vi.mock("./project-registration.js", () => ({ registerResolvedProject: vi.fn() }));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: fixture.forbiddenNative,
   removeProjectCheckoutReferenceInDatabase: fixture.forbiddenNative,
