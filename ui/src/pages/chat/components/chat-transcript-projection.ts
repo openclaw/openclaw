@@ -511,21 +511,26 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       });
     }
   }
-  // Voice captions reconcile against unfiltered immutable history, not the
-  // current search or streaming projection.
-  const realtimeConversation = renderRealtimeTalkConversation({
-    ...props,
-    realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
-      if (!entry.transcriptId) {
-        return true;
-      }
-      return !persistedMessageIds(
-        props.messages,
-        [],
-        () => new Set(props.messages.map(persistedMessageEntryId)),
-      ).has(entry.transcriptId);
-    }),
-  });
+  // The live voice-turn block renders at the tail while typed messages sort into
+  // history above it. Finalized voice turns are already persisted, so an explicit
+  // idle session (realtimeTalkActive === false) hides the block and lets history
+  // own chronology. Unset callers keep the block; production always sets the flag.
+  const realtimeConversation =
+    props.realtimeTalkActive !== false
+      ? renderRealtimeTalkConversation({
+          ...props,
+          realtimeTalkConversation: props.realtimeTalkConversation?.filter((entry) => {
+            if (!entry.transcriptId) {
+              return true;
+            }
+            return !persistedMessageIds(
+              props.messages,
+              [],
+              () => new Set(props.messages.map(persistedMessageEntryId)),
+            ).has(entry.transcriptId);
+          }),
+        })
+      : nothing;
   if (realtimeConversation !== nothing) {
     transcriptRows.push({
       kind: "content",
