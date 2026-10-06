@@ -1801,10 +1801,7 @@ openclaw-chat-video-player {
   transform: rotate(90deg);
 }
 
-.task-suggestion__hide {
-  display: none;
-}
-
+.task-suggestion__hide,
 .task-suggestion__instructions[open] .task-suggestion__show {
   display: none;
 }
