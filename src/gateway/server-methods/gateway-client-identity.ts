@@ -25,8 +25,12 @@ export function isGatewayClientProfilePending(client: GatewayClient | null): boo
 
 /** A GitHub quota failure names its cause and carries GitHub's reset deadline. */
 export function authenticatedProfileUnavailableError(cause?: unknown): ErrorShape {
+  // Only a real GitHub transport error may load the GitHub surface; it can be absent.
   const rateLimited =
-    cause instanceof gitHubPublicApi.ControlUiGitHubError && cause.statusCode === 429;
+    cause instanceof Error &&
+    cause.name === "ControlUiGitHubError" &&
+    cause instanceof gitHubPublicApi.ControlUiGitHubError &&
+    cause.statusCode === 429;
   return errorShape(
     ErrorCodes.UNAVAILABLE,
     rateLimited
