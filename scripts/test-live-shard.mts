@@ -93,6 +93,11 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["test/e2e/crabbox-sandbox.live.test.ts", ["OPENCLAW_E2E_CRABBOX"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
+const REQUIRED_NONEMPTY_LIVE_SHARD_FILE_ENVS = new Map([
+  ["extensions/llama-cpp/src/external-server/llama-server.live.test.ts", ["LLAMA_SERVER_LIVE_URL"]],
+  ["extensions/meta/meta.live.test.ts", ["MODEL_API_KEY"]],
+  ["extensions/mistral/mistral.live.test.ts", ["MISTRAL_API_KEY", "ELEVENLABS_API_KEY"]],
+]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
 const QA_RUNTIME_LIVE_TEST = "extensions/qa-lab/src/matrix-channel-driver.lifecycle.live.test.ts";
 const QA_RUNTIME_ARTIFACT = "dist/extensions/qa-lab/runtime-api.js";
@@ -636,11 +641,14 @@ function isDisabledOptionalLiveShardFile(
   evidence: FilePassEvidence | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const requiredEnvNames = OPTIONAL_LIVE_SHARD_FILE_ENVS.get(file);
-  if (
-    !requiredEnvNames ||
-    requiredEnvNames.some((name) => parsePermissiveBooleanToken(env[name]) === true)
-  ) {
+  const booleanOptIns = OPTIONAL_LIVE_SHARD_FILE_ENVS.get(file);
+  const requiredNonemptyEnv = REQUIRED_NONEMPTY_LIVE_SHARD_FILE_ENVS.get(file);
+  const enabled = booleanOptIns
+    ? booleanOptIns.some((name) => parsePermissiveBooleanToken(env[name]) === true)
+    : requiredNonemptyEnv
+      ? requiredNonemptyEnv.every((name) => env[name]?.trim())
+      : true;
+  if (enabled) {
     return false;
   }
   const statuses = evidence?.statuses ?? [];
@@ -658,7 +666,7 @@ function countEnabledLivePasses(
   env: NodeJS.ProcessEnv = process.env,
 ) {
   if (
-    OPTIONAL_LIVE_SHARD_FILE_ENVS.has(file) &&
+    (OPTIONAL_LIVE_SHARD_FILE_ENVS.has(file) || REQUIRED_NONEMPTY_LIVE_SHARD_FILE_ENVS.has(file)) &&
     isDisabledOptionalLiveShardFile(file, evidence, env)
   ) {
     return 0;

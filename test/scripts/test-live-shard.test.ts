@@ -565,6 +565,50 @@ describe("scripts/test-live-shard", () => {
     ).toEqual({ ok: true });
   });
 
+  it.each([
+    [
+      "extensions/llama-cpp/src/external-server/llama-server.live.test.ts",
+      { LLAMA_SERVER_LIVE_URL: "http://127.0.0.1:8080" },
+    ],
+    ["extensions/meta/meta.live.test.ts", { MODEL_API_KEY: "synthetic-model-key" }],
+    [
+      "extensions/mistral/mistral.live.test.ts",
+      { ELEVENLABS_API_KEY: "synthetic-elevenlabs-key", MISTRAL_API_KEY: "synthetic-mistral-key" },
+    ],
+  ])("requires nonempty live prerequisites before enforcing pass evidence for %s", (file, env) => {
+    const passingFile = "src/agents/openai-reasoning-compat.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), passingFile),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), file),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [passingFile, file];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), env)).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${file}`,
+    });
+    const firstEnvName = Object.keys(env)[0];
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        ...env,
+        ...(firstEnvName ? { [firstEnvName]: "" } : {}),
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("does not count disabled opt-in sentinel assertions as live shard proof", () => {
     const payload = {
       numPassedTests: 1,

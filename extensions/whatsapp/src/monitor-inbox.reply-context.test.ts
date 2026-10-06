@@ -12,6 +12,7 @@ import {
   buildNotifyMessageUpsert,
   getAuthDir,
   startInboxMonitor,
+  waitForInboundWorkDrained,
   waitForMessageCalls,
   type InboxOnMessage,
 } from "./monitor-inbox.test-harness.js";
@@ -52,6 +53,7 @@ describe("web monitor inbox reply context", () => {
 
     sock.ev.emit("messages.upsert", upsert);
     await waitForMessageCalls(onMessage, 1);
+    await waitForInboundWorkDrained();
 
     const inbound = inboundMessage(onMessage);
     expect(inbound.quote?.id).toBe("q1");

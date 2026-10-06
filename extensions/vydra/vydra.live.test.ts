@@ -16,6 +16,7 @@ const DEFAULT_LIVE_KLING_IMAGE_URL =
   "https://raw.githubusercontent.com/openclaw/openclaw/main/test/fixtures/media/roof-camera-sky.jpg";
 const LIVE_KLING_IMAGE_URL =
   process.env.OPENCLAW_LIVE_VYDRA_KLING_IMAGE_URL?.trim() || DEFAULT_LIVE_KLING_IMAGE_URL;
+const VYDRA_VIDEO_TIMEOUT_MS = 7 * 60_000;
 const VYDRA_KLING_TIMEOUT_MS = 12 * 60_000;
 
 const registerVydraPlugin = () =>
@@ -88,6 +89,7 @@ describe.skipIf(!LIVE || !VYDRA_API_KEY)("vydra live", () => {
           "A tiny paper diorama city at sunrise with slow cinematic camera motion and no text.",
         cfg: { plugins: { enabled: true } } as never,
         agentDir: "/tmp/openclaw-live-vydra-video",
+        timeoutMs: VYDRA_VIDEO_TIMEOUT_MS,
       });
 
       expect(result.videos.length).toBeGreaterThan(0);
