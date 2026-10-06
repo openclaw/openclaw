@@ -1,6 +1,9 @@
+import type { AcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import type { ReplyCompletion } from "../../agents/reply-completion.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import type { ReplyOperation } from "./reply-run-registry.js";
 
 export function buildWaitingStatusPayload(params: {
   completion: ReplyCompletion;
@@ -28,4 +31,31 @@ export function buildWaitingStatusPayload(params: {
       continuationStatus: true,
     },
   );
+}
+
+/** Ordinary and queued waiting replies offer their progress draft to the yielding turn's children. */
+export async function attachWaitingStatusProgressContinuation(params: {
+  payload: ReplyPayload;
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
+  operation: ReplyOperation;
+}): Promise<void> {
+  const { acceptedSessionSpawns, operation } = params;
+  if (!acceptedSessionSpawns?.length) {
+    return;
+  }
+  // Ordinary replies must not load the subagent registry.
+  const { adoptSubagentProgressDraft } =
+    await import("../../agents/subagents/registry/subagent-progress-draft.js");
+  let open = true;
+  setReplyPayloadMetadata(params.payload, {
+    progressContinuation: {
+      adopt: (draft) =>
+        open &&
+        resolveReplyOperationAbortReason(operation) === undefined &&
+        adoptSubagentProgressDraft(acceptedSessionSpawns, draft),
+      close: () => {
+        open = false;
+      },
+    },
+  });
 }

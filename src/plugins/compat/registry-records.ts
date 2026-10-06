@@ -9,6 +9,7 @@ import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
+import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
@@ -34,6 +35,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
+  PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD,
   {
     code: "gateway-placement-sync-results",
     status: "deprecated",

@@ -14,8 +14,9 @@ import {
   deferSqlitePostCommitPublication,
   hasSqlitePostCommitScope,
 } from "../infra/sqlite-post-commit.js";
-import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { readSqliteDataVersion, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
@@ -38,6 +39,7 @@ import {
 } from "./openclaw-agent-db-identity.js";
 import {
   readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim,
+  recordOpenClawAgentDatabaseAdmission,
   releaseOpenClawAgentDatabaseLease,
   type OpenClawAgentDatabaseWorkerLeaseReceipt,
 } from "./openclaw-agent-db-lease.js";
@@ -54,6 +56,7 @@ import {
 } from "./openclaw-agent-db-schema-helpers.js";
 import {
   clearOpenClawAgentDatabaseValidationCache,
+  getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   type OpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
@@ -80,7 +83,14 @@ type AgentDatabaseLifecycle = {
   incognito: WeakSet<OpenClawAgentDatabase>;
   generation: number;
   failures: Map<string, unknown>;
-  leases: Map<string, { leaseId: string; env: NodeJS.ProcessEnv }>;
+  leases: Map<
+    string,
+    {
+      leaseId: string;
+      env: NodeJS.ProcessEnv;
+      verification?: { dataVersion: number; validation: OpenClawAgentDatabaseValidation };
+    }
+  >;
   terminal: ReturnType<typeof createSqliteTerminalOpenLatch>;
   unregisterExitClose: (() => void) | null;
   pending: Map<string, PendingAgentDatabaseOpen>;
@@ -118,6 +128,53 @@ const cache = resolveGlobalSingleton<AgentDatabaseLifecycle>(
     retainedCloses: new Set(),
   }),
 );
+
+export function registerAgentDatabaseHandle(
+  database: OpenClawAgentDatabase,
+  leaseId: string,
+  env: NodeJS.ProcessEnv,
+  deferred: boolean,
+): void {
+  const validation = deferred ? getOpenClawAgentDatabaseValidation(database) : undefined;
+  cache.leases.set(database.path, {
+    leaseId,
+    env,
+    ...(validation
+      ? { verification: { dataVersion: readSqliteDataVersion(database.db), validation } }
+      : {}),
+  });
+  cache.databases.set(database.path, database);
+}
+
+/** Only the original writer can promote its background scan into durable proof. */
+export function recordOpenClawAgentDatabaseBackgroundVerification(
+  database: OpenClawAgentDatabase,
+  beforePublication: () => void,
+): boolean {
+  const lease = cache.leases.get(database.path);
+  const witness = lease?.verification;
+  if (!lease || !witness || cache.databases.get(database.path) !== database) {
+    return false;
+  }
+  lease.verification = undefined;
+  return runSqliteImmediateTransactionSync(database.db, () => {
+    beforePublication();
+    // BEGIN IMMEDIATE closes the foreign-commit gap between this probe and publication.
+    if (
+      Atomics.load(new Int32Array(witness.validation.valid), 0) !== 1 ||
+      !isOpenClawAgentDatabasePathCurrent(database) ||
+      readSqliteDataVersion(database.db) !== witness.dataVersion
+    ) {
+      return false;
+    }
+    return recordOpenClawAgentDatabaseAdmission(
+      lease.leaseId,
+      { agentId: database.agentId, path: database.path, env: lease.env },
+      witness.validation.identity,
+      true,
+    );
+  });
+}
 
 /** Queue a non-throwing runtime publication on the outer database commit edge. */
 export function deferOpenClawAgentPostCommitPublication(

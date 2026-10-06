@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
-import type { AssistantMessageEvent, Context, Model, StreamFn } from "@openclaw/llm-core";
+import type {
+  AssistantMessageEvent,
+  Context,
+  Model,
+  SimpleStreamOptions,
+  StreamFn,
+} from "@openclaw/llm-core";
 import OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
+import { getAiTransportHost } from "../host.js";
 import {
   codeModeToolSurfaceObserver,
   reasoningTagTextPolicy,
@@ -11,6 +18,7 @@ import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { buildCopilotDynamicHeaders } from "../providers/github-copilot-headers.js";
 import { finalizeOpenAICompletionsToolCalls } from "../providers/openai-completions-tool-calls.js";
 import { createOpenAIProviderClient } from "../providers/openai-provider-client.js";
+import { toOpenAIResponsesToolChoice } from "../providers/openai-tool-projection.js";
 import {
   clearPendingCommentaryText,
   tagUnresolvedTextAsCommentary,
@@ -25,13 +33,18 @@ import { createAssistantOutput } from "./assistant-output.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
 import { hasOpenAICompatibleConversationTurn } from "./openai-compatible-conversation-turn.js";
-import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
+import {
+  isNativeOpenAIEndpoint,
+  resolveOpenAICompletionsCompat,
+} from "./openai-completions-compat.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import { buildOpenAICompletionsRequest } from "./openai-completions-params.js";
 import {
   processCompletionsStream,
   shouldEmitOpenAICompletionsReasoning,
 } from "./openai-completions-stream.js";
+import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
+import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
 import {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
@@ -61,6 +74,7 @@ import {
   transportAbortError,
   withProviderResponseHook,
 } from "./transport-stream-shared.js";
+import { supportsModelTools } from "./transport-utils.js";
 
 export { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 
@@ -244,13 +258,44 @@ function createDirectCompletionsEventStream(
 }
 
 export function createOpenAICompletionsTransportStreamFn(): StreamFn {
-  return (model, context, options) =>
-    streamOpenAICompletionsRequest(
+  const streamResponses = createOpenAIResponsesTransportStreamFn();
+  return (model, context, options) => {
+    const completionsOptions = options as OpenAICompletionsOptions | undefined;
+    // Official Chat Completions rejects function tools alongside reasoning for
+    // current GPT models; Responses serves the same API-key route and keeps reasoning.
+    if (
+      model.reasoning &&
+      context.tools?.length &&
+      supportsModelTools(model) &&
+      isNativeOpenAIEndpoint(model)
+    ) {
+      const toolChoice = completionsOptions?.toolChoice;
+      const responsesOptions: SimpleStreamOptions &
+        Pick<OpenAIResponsesOptions, "reasoningEffort" | "toolChoice"> = {
+        ...options,
+        // Managed Completions defaults an unset selector to high; Responses would
+        // otherwise apply its own model default, which is none for some models.
+        ...(completionsOptions?.reasoning === undefined &&
+        completionsOptions?.reasoningEffort === undefined
+          ? { reasoningEffort: "high" }
+          : {}),
+        ...(toolChoice && typeof toolChoice === "object"
+          ? { toolChoice: toOpenAIResponsesToolChoice(toolChoice) }
+          : {}),
+      };
+      return streamResponses(
+        getAiTransportHost().inheritManagedTransport(model, { ...model, api: "openai-responses" }),
+        context,
+        responsesOptions,
+      );
+    }
+    return streamOpenAICompletionsRequest(
       model as Model<"openai-completions">,
       context,
-      options as OpenAICompletionsOptions | undefined,
+      completionsOptions,
       "managed",
     );
+  };
 }
 
 export function streamOpenAICompletionsRequest(

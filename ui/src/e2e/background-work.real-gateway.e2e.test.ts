@@ -242,7 +242,13 @@ suite.define(() => {
         );
         const assertParent = async () => {
           expect(page.url()).toBe(parentUrl);
-          expect(await composer.inputValue()).toBe(fixture.draft);
+          // Narrow background panels hide the conversation but retain its draft.
+          const retainedComposer = parent.getByRole("textbox", {
+            name: "Chat composer",
+            exact: true,
+            includeHidden: true,
+          });
+          expect(await retainedComposer.inputValue()).toBe(fixture.draft);
           expect(provider.parentIsPending()).toBe(true);
         };
 

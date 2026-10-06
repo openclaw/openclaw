@@ -36,12 +36,12 @@ import {
   createAgentDatabaseExecutionCapture,
   type IncognitoAgentExecutionOwner,
 } from "./openclaw-agent-execution-incognito.js";
+import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
 import {
   captureBorrowedAgentDatabaseGenerationClaim,
-  createAgentDatabaseNativeGeneration,
   supportsAgentDatabaseExecutionScope,
   supportsOpenClawAgentDatabaseExecution,
-} from "./openclaw-agent-execution-native.js";
+} from "./openclaw-agent-execution-scope.js";
 import {
   observeOpenClawDatabaseMaintenanceResource,
   runOutsideOpenClawDatabaseMaintenanceScope,
@@ -57,7 +57,7 @@ import {
   captureOpenClawStateWorkerContext,
 } from "./openclaw-state-worker-context.js";
 
-export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-native.js";
+export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-scope.js";
 
 const log = createSubsystemLogger("state/agent-db");
 // References are derived; the canonical agent and shared resource owners govern retirement.

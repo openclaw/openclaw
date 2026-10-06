@@ -138,6 +138,7 @@ export function createIncognitoSessionFacts(
   const { claim, captureSnapshot, captureStoreSnapshot, captureRead, deadlines } =
     createIncognitoSessionClaims({
       identity,
+      assertReadable: assertAdmittedCurrent,
       current,
       readTopologyRevision: () => topologyRevision,
       readSnapshotRevision: () => snapshotRevision,
