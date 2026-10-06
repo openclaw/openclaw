@@ -220,6 +220,20 @@ describe("CallManager verification on restore", () => {
     });
   });
 
+  it("expires a restored call at its persisted brief duration cap", async () => {
+    const { manager, provider, storePath } = await initializeManager({
+      callOverrides: {
+        startedAt: Date.now() - 20_000,
+        answeredAt: Date.now() - 19_000,
+        metadata: { maxDurationSeconds: 10 },
+      },
+      configOverrides: { maxDurationSeconds: 300 },
+    });
+    expect(manager.getActiveCalls()).toHaveLength(0);
+    expect(requireSingleHangupCall(provider).reason).toBe("timeout");
+    expect((await loadActiveCallsFromStore(storePath)).activeCalls.size).toBe(0);
+  });
+
   it("summarizes repeated restored-call verification outcomes", async () => {
     const now = Date.now();
     const storePath = createTestStorePath();
