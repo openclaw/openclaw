@@ -552,4 +552,60 @@ describe("node stream close acknowledgement", () => {
   it("waits out a large forward instead of the short close acknowledgement", async () => {
     await expectFlushBudget(Buffer.alloc(200 * 1024, 7));
   });
+
+  it("bounds websocket cleanup when the gateway sends a text frame", async () => {
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    wss.on("connection", (ws) => {
+      ws.once("message", () => {
+        setTimeout(() => ws.send("not-binary"), 20);
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    const delays: number[] = [];
+    const cleanups: Array<() => void> = [];
+    const controller = new AbortController();
+    try {
+      await expect(
+        runNodeStreamTransport({
+          gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+          attachPath: "/node-desktop/attach",
+          expectedAttachPath: "/node-desktop/attach",
+          target: { stream: target },
+          metadata: { ok: true },
+          streamName: "desktop",
+          signal: controller.signal,
+          scheduleCloseAck: (callback, delayMs) => {
+            delays.push(delayMs);
+            cleanups.push(callback);
+            return () => undefined;
+          },
+        }),
+      ).rejects.toThrow(/non-binary/);
+      expect(delays).toContain(30_000);
+    } finally {
+      for (const cleanup of cleanups) {
+        cleanup();
+      }
+      controller.abort();
+      target.destroy();
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
 });

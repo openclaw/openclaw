@@ -342,7 +342,28 @@ export async function runNodeStreamTransport(params: {
     params.signal.removeEventListener("abort", onAbort);
     socket.destroy();
     if (ws && (ws.readyState === WEBSOCKET_OPEN || ws.readyState === WEBSOCKET_CONNECTING)) {
-      ws.close();
+      const closing = ws;
+      closing.close();
+      // The long handshake budget is only for a forwarded stream that is
+      // waiting on the gateway. A failed command must not keep the socket
+      // for that whole budget when the peer never answers the close.
+      const scheduleCloseAck =
+        params.scheduleCloseAck ??
+        ((callback: () => void, delayMs: number) => {
+          const timer = setTimeout(callback, delayMs);
+          timer.unref?.();
+          return () => clearTimeout(timer);
+        });
+      const cancelCleanup = scheduleCloseAck(() => {
+        if (
+          closing.readyState === WEBSOCKET_CONNECTING ||
+          closing.readyState === WEBSOCKET_OPEN ||
+          closing.readyState === WEBSOCKET_CLOSING
+        ) {
+          closing.terminate();
+        }
+      }, STREAM_CLOSE_FLUSH_MS);
+      closing.once("close", () => cancelCleanup());
     }
   }
 }
