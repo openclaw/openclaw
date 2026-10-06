@@ -787,7 +787,8 @@ describe("gateway/node-registry", () => {
     "rechecks %s after the private launch pairing await",
     async (closed) => {
       const pairing = createDeferred<{ identity: string; generation: string }>();
-      const resolveCurrentPairingState = vi.fn().mockResolvedValue(pairingA);
+      const currentPairing = { identity: "identity-a", generation: "generation-a" };
+      const resolveCurrentPairingState = vi.fn().mockResolvedValue(currentPairing);
       const { nodeRegistry: registry, nodeWorkerSupervisorTransport: transport } =
         createPrivateRegistry({ resolveCurrentPairingState });
       const frames: string[] = [];
@@ -820,7 +821,7 @@ describe("gateway/node-registry", () => {
       } else {
         authorized = false;
       }
-      pairing.resolve(pairingA);
+      pairing.resolve(currentPairing);
       await expect(outcome).resolves.toMatchObject({ ok: false });
       expect(frames).toEqual([]);
       expect(dispatched).not.toHaveBeenCalled();
