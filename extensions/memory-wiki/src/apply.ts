@@ -11,6 +11,8 @@ import {
 import { compileMemoryWikiVault, type CompileMemoryWikiResult } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
+  WIKI_GENERATED_END_MARKER,
+  WIKI_GENERATED_START_MARKER,
   parseWikiMarkdown,
   renderWikiMarkdown,
   replaceWikiManagedMarkdownBlock,
@@ -24,8 +26,6 @@ import { readQueryableWikiPages, resolveQueryableWikiPageByLookup } from "./quer
 import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
-const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
-const GENERATED_END = "<!-- openclaw:wiki:generated:end -->";
 const HUMAN_START = "<!-- openclaw:human:start -->";
 const HUMAN_END = "<!-- openclaw:human:end -->";
 
@@ -165,8 +165,8 @@ function buildSynthesisBody(params: {
   const withGenerated = replaceWikiManagedMarkdownBlock({
     original: base,
     heading: "## Summary",
-    startMarker: GENERATED_START,
-    endMarker: GENERATED_END,
+    startMarker: WIKI_GENERATED_START_MARKER,
+    endMarker: WIKI_GENERATED_END_MARKER,
     body: params.generatedBody,
   });
   return ensureHumanNotesBlock(withGenerated);

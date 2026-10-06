@@ -357,6 +357,73 @@ describe("human Notes blocks", () => {
     expect(preserveHumanNotesBlock(rendered, existing)).toBe(existing);
   });
 
+  it("does not treat a generated Notes heading as the human Notes section", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      "## Notes",
+      "Generated subsection content",
+      generatedEnd,
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+    ].join("\n");
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: generatedStart,
+      endMarker: generatedEnd,
+      body: "Current summary",
+    });
+
+    expect(updated).toContain("Current summary");
+    expect(updated).not.toContain("Old summary");
+    expect(updated).toContain("Durable human annotation");
+    expect(updated.match(new RegExp(generatedStart, "gu"))).toHaveLength(1);
+  });
+
+  it("ignores a fenced human-end example in generated content when preserving Notes", () => {
+    const generatedStart = "<!-- openclaw:wiki:generated:start -->";
+    const generatedEnd = "<!-- openclaw:wiki:generated:end -->";
+    const original = [
+      "# Synthesis",
+      "",
+      "## Notes",
+      startMarker,
+      "Durable human annotation",
+      endMarker,
+      "",
+      "## Summary",
+      generatedStart,
+      "Old summary",
+      generatedEnd,
+      "",
+    ].join("\n");
+
+    const updated = replaceWikiManagedMarkdownBlock({
+      original,
+      heading: "## Summary",
+      startMarker: generatedStart,
+      endMarker: generatedEnd,
+      body: ["Current summary", "```markdown", endMarker, "```"].join("\n"),
+    });
+
+    expect(updated).toContain("Current summary");
+    expect(updated).toContain("Durable human annotation");
+    expect(extractHumanNotesBlock(updated)).toBe(
+      `${startMarker}\nDurable human annotation\n${endMarker}`,
+    );
+  });
+
   it("ignores source-body marker pairs when extracting and preserving actual Notes", () => {
     const sourceWithMarkers = [
       "# Source",
