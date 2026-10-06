@@ -272,10 +272,14 @@ it.each(["channel", "tool"] as const)(
     vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
       (admit, attachment) =>
         createAdmission((request, grant) => {
-          if (request.stage === "transaction") transaction++;
+          if (request.stage === "transaction") {
+            transaction++;
+          }
           if (request.stage === "commit" && transaction === (route === "channel" ? 2 : 1)) {
             current = false;
-            if (route === "channel") fixture.revoke();
+            if (route === "channel") {
+              fixture.revoke();
+            }
           }
           return admit(request, grant);
         }, attachment),
