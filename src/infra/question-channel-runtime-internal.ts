@@ -112,7 +112,7 @@ export function createQuestionChannelRuntime(
   };
 
   return {
-    handleRequested(record: QuestionRecord, scheduler: GatewayScheduler) {
+    handleRequested: (record: QuestionRecord, scheduler: GatewayScheduler) => {
       const owner = getAsyncWorkSignal();
       if (clearing || (owner && retiredGateways.has(owner))) {
         return;
@@ -130,7 +130,7 @@ export function createQuestionChannelRuntime(
       retainedEntries.add(entry);
       entries.set(record.id, entry);
     },
-    handleResolved(event: QuestionResolvedEvent) {
+    handleResolved: (event: QuestionResolvedEvent) => {
       const entry = entries.get(event.id);
       if (!entry || entry.terminal) {
         return;
@@ -149,11 +149,11 @@ export function createQuestionChannelRuntime(
         );
       }
     },
-    runWithDeliveries<T>(
+    runWithDeliveries: <T>(
       questionIds: readonly (string | undefined)[],
       run: () => T,
       deliveryOptions?: { unbound?: boolean },
-    ): T {
+    ): T => {
       if (!questionIds.some(Boolean)) {
         return run();
       }
@@ -176,7 +176,7 @@ export function createQuestionChannelRuntime(
         run,
       );
     },
-    registerDelivery({
+    registerDelivery: ({
       questionId,
       deliveryId,
       finalize,
@@ -184,7 +184,7 @@ export function createQuestionChannelRuntime(
       questionId: string;
       deliveryId: string;
       finalize: QuestionDeliveryFinalizer;
-    }) {
+    }) => {
       const captured = deliveryContext.getStore();
       if (
         clearing ||
@@ -220,7 +220,7 @@ export function createQuestionChannelRuntime(
       entry.deliveries.set(deliveryId, finalize);
       finalizeDelivery(entry, deliveryId, finalize);
     },
-    retireGateway(owner: AbortSignal) {
+    retireGateway: (owner: AbortSignal) => {
       // The Gateway calls this after joining received work and its finalizers,
       // not at beginClose: an admitted resolve can still finalize deliveries.
       retiredGateways.add(owner);
@@ -230,7 +230,7 @@ export function createQuestionChannelRuntime(
         }
       }
     },
-    clear() {
+    clear: () => {
       if (clearing) {
         return clearing;
       }
