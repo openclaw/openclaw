@@ -433,7 +433,11 @@ async function deliverReplyWithNormalization(
       turn.reasoningStepState.noteReasoningHint();
     }
     if (segment.lane === "answer" && info.kind === "tool") {
-      if (turn.verboseProgressActive()) {
+      const verbose = await turn.verboseProgressActive();
+      if (turn.isSuperseded()) {
+        return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
+      }
+      if (verbose) {
         const delivery = await sendPayload(
           turn,
           applyTextToPayload(effectivePayload, segment.update.text),

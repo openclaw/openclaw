@@ -20,11 +20,11 @@ import { captureSubagentListReadContext, type SubagentListReadContext } from "./
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
+  listRunsForControllerFromRuns,
   type SubagentRunReadIndex,
 } from "./subagent-registry-queries.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
   listSubagentRunsForRequester,
 } from "./subagent-registry-read.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
@@ -98,7 +98,9 @@ export function listControlledSubagentRunsForTurn(
   controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">,
   requesterTurnRunId?: string,
 ): SubagentRunRecord[] {
-  const controlledRuns = listSubagentRunsForController(
+  // Cancellation owns only current resident runs; acquire their dispatch holds before yielding.
+  const controlledRuns = listRunsForControllerFromRuns(
+    subagentRuns,
     controller.controllerSessionKey,
     controller.controllerAgentId,
   );

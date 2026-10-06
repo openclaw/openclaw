@@ -611,87 +611,53 @@ describe("Bedrock thinking request composition", () => {
       },
     ].map((modelOverrides) => ({
       name: `${modelOverrides.id} default`,
-      model: () =>
-        bedrockModel({ ...modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      modelOverrides,
       reasoning: undefined,
-      expectedMaxTokens: 128_000,
       expectedEffort: "medium",
     })),
     {
       name: "Fable 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "anthropic.claude-fable-5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-        }),
+      modelOverrides: { id: "anthropic.claude-fable-5" },
       reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
       expectedEffort: "low",
     },
-    {
-      name: "Opus 5 default",
-      model: () =>
-        bedrockModel({
+    ...[
+      {
+        name: "Opus 5",
+        modelOverrides: {
           id: "global.anthropic.claude-opus-5",
           name: "Claude Opus 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
           thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: undefined,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "high",
-    },
-    {
-      name: "Opus 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "global.anthropic.claude-opus-5",
-          name: "Claude Opus 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-          thinkingLevelMap: { xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
-      expectedEffort: undefined,
-    },
-    {
-      name: "Sonnet 5 default",
-      model: () =>
-        bedrockModel({
+        },
+        offEffort: undefined,
+      },
+      {
+        name: "Sonnet 5",
+        modelOverrides: {
           id: "us.anthropic.claude-sonnet-5",
           name: "Claude Sonnet 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
           thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: undefined,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "high",
-    },
-    {
-      name: "Sonnet 5 explicit off",
-      model: () =>
-        bedrockModel({
-          id: "us.anthropic.claude-sonnet-5",
-          name: "Claude Sonnet 5",
-          contextWindow: 1_000_000,
-          maxTokens: 128_000,
-          thinkingLevelMap: { off: "low", minimal: "low", xhigh: "xhigh", max: "max" },
-        }),
-      reasoning: "off" as const,
-      expectedMaxTokens: 128_000,
-      expectedEffort: "low",
-    },
+        },
+        offEffort: "low",
+      },
+    ].flatMap(({ name, modelOverrides, offEffort }) => [
+      { name: `${name} default`, modelOverrides, reasoning: undefined, expectedEffort: "high" },
+      {
+        name: `${name} explicit off`,
+        modelOverrides,
+        reasoning: "off" as const,
+        expectedEffort: offEffort,
+      },
+    ]),
   ])("sends $name policy in the final request", async (testCase) => {
     const options = testCase.reasoning === undefined ? {} : { reasoning: testCase.reasoning };
-    const input = await captureCommandInput(testCase.model(), context, options);
-
-    expect(input.inferenceConfig).toEqual(
-      testCase.expectedMaxTokens === undefined ? {} : { maxTokens: testCase.expectedMaxTokens },
+    const input = await captureCommandInput(
+      bedrockModel({ ...testCase.modelOverrides, contextWindow: 1_000_000, maxTokens: 128_000 }),
+      context,
+      options,
     );
+
+    expect(input.inferenceConfig).toEqual({ maxTokens: 128_000 });
     expect(input.additionalModelRequestFields).toEqual(
       testCase.expectedEffort === undefined
         ? undefined
@@ -803,6 +769,28 @@ describe("Bedrock thinking request composition", () => {
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "xhigh" },
     });
+  });
+});
+
+describe("Bedrock tool order", () => {
+  it("sends the same request bytes for any tool discovery order", async () => {
+    const lookup = {
+      name: "lookup",
+      description: "Lookup",
+      parameters: { type: "object", properties: {} },
+    };
+    const calculate = { ...lookup, name: "calculate", description: "Calculate" };
+    const capture = async (tools: unknown[]) =>
+      captureCommandInput(
+        bedrockModel({ id: "anthropic.claude-sonnet-4-20250514-v1:0" }),
+        { messages: [{ role: "user", content: "Hi", timestamp: 0 }], tools } as never,
+        { cacheRetention: "short", toolChoice: "auto" },
+      );
+    const forward = [lookup, calculate];
+    const first = await capture(forward);
+    const second = await capture([calculate, lookup]);
+    expect(JSON.stringify(first)).toBe(JSON.stringify(second));
+    expect(forward.map((tool) => tool.name)).toEqual(["lookup", "calculate"]);
   });
 });
 

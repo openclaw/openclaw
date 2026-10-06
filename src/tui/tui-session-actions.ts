@@ -89,14 +89,12 @@ export function createSessionActions(context: SessionActionContext) {
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const captureSessionSelection = () => captureTuiSessionSelection(state);
-
-  const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
-    matchesTuiSessionSelection(state, selection);
-
   const applySessionSelection = (nextSelection: { key: string; agentId: string }) => {
     if (
-      isCurrentSessionSelection({ sessionKey: nextSelection.key, agentId: nextSelection.agentId })
+      matchesTuiSessionSelection(state, {
+        sessionKey: nextSelection.key,
+        agentId: nextSelection.agentId,
+      })
     ) {
       return false;
     }
@@ -305,13 +303,13 @@ export function createSessionActions(context: SessionActionContext) {
   };
 
   const runRefreshSessionInfo = async () => {
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const historyGeneration = historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
     const isCurrentRefresh = () =>
       historyGeneration === historyLoadGeneration &&
       sessionGeneration === (state.sessionGeneration ?? 0) &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
       const result = await client.describeSession({
         sessionKey: selection.sessionKey,
@@ -376,11 +374,11 @@ export function createSessionActions(context: SessionActionContext) {
 
   const applySessionMutationResult = (
     result?: TuiSessionMutationResult | null,
-    requestSelection = captureSessionSelection(),
+    requestSelection = captureTuiSessionSelection(state),
   ): boolean => {
     // A reset can legitimately return a replacement key. Reject results using
     // the request's original selection, not the key the response must adopt.
-    if (!result?.entry || !isCurrentSessionSelection(requestSelection)) {
+    if (!result?.entry || !matchesTuiSessionSelection(state, requestSelection)) {
       return false;
     }
     // Invalidate same-key history/session-info readers before adopting the replacement epoch.
@@ -412,11 +410,11 @@ export function createSessionActions(context: SessionActionContext) {
     // latest request may render, or a slow reload can replace a newer selection.
     const generation = ++historyLoadGeneration;
     const sessionGeneration = state.sessionGeneration ?? 0;
-    const selection = captureSessionSelection();
+    const selection = captureTuiSessionSelection(state);
     const isCurrentLoad = () =>
       generation === historyLoadGeneration &&
       (state.sessionGeneration ?? 0) === sessionGeneration &&
-      isCurrentSessionSelection(selection);
+      matchesTuiSessionSelection(state, selection);
     try {
       const read = await readTuiSessionHistory({
         client,
@@ -527,12 +525,7 @@ export function createSessionActions(context: SessionActionContext) {
                 ...(liveUserMessage.images ? { images: liveUserMessage.images } : {}),
               });
             } else {
-              const images = extractTuiImageSources(message);
-              if (images.length > 0) {
-                chatLog.addUser(text, { images });
-              } else {
-                chatLog.addUser(text);
-              }
+              chatLog.addUser(text, { images: extractTuiImageSources(message) });
             }
           }
           continue;
@@ -542,12 +535,7 @@ export function createSessionActions(context: SessionActionContext) {
             includeThinking: state.showThinking,
           });
           if (text) {
-            const images = extractTuiImageSources(message);
-            if (images.length > 0) {
-              chatLog.finalizeAssistant(text, undefined, images);
-            } else {
-              chatLog.finalizeAssistant(text);
-            }
+            chatLog.finalizeAssistant(text, undefined, extractTuiImageSources(message));
           }
           continue;
         }

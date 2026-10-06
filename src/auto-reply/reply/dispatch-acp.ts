@@ -153,9 +153,8 @@ export async function tryDispatchAcpReplyCore(
     images?: Array<{ data: string; mimeType: string }>;
     extractedFileImages?: ExtractedFileImage[];
     sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    shouldSendToolSummaries: boolean;
-    shouldSendToolSummariesNow?: () => boolean;
-    shouldSendFullToolDetails: boolean;
+    shouldSendToolSummaries: () => Promise<boolean>;
+    shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
@@ -352,7 +351,6 @@ export async function tryDispatchAcpReplyCore(
   const projector = createAcpReplyProjector({
     cfg: params.cfg,
     shouldSendToolSummaries: params.shouldSendToolSummaries,
-    shouldSendToolSummariesNow: params.shouldSendToolSummariesNow,
     shouldSendFullToolDetails: params.shouldSendFullToolDetails,
     deliver: delivery.deliver,
     getConversationContext: () => params.ctx.agentText,

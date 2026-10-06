@@ -1,8 +1,10 @@
+import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqliteQueries from "../../infra/kysely-sync.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
@@ -21,6 +23,7 @@ import {
 } from "./session-accessor.js";
 import { captureSessionEntryRead } from "./session-accessor.sqlite-entry-read-lifetime.js";
 import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
+import { assertCapturedSessionEntryReadSource } from "./session-accessor.sqlite-exact-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 import {
@@ -36,6 +39,28 @@ afterEach(() => {
 });
 
 describe("exact SQLite session batches", () => {
+  it("checks captured database birthtime even without an open owner handle", () => {
+    const filename = path.join(
+      autoTempDirs.make("openclaw-read-source-identity-"),
+      "source.sqlite",
+    );
+    new DatabaseSync(filename).close();
+    const identity = readDatabasePathIdentitySync(filename);
+    const source = {
+      agentId: "main",
+      path: filename,
+      databaseIdentity: identity.key.slice("file:".length),
+      databaseBirthtime: identity.birthtime,
+    };
+    expect(() => assertCapturedSessionEntryReadSource(source)).not.toThrow();
+    expect(() =>
+      assertCapturedSessionEntryReadSource({
+        ...source,
+        databaseBirthtime: identity.birthtime === "0" ? "1" : "0",
+      }),
+    ).toThrow("file identity changed");
+  });
+
   it.each([
     { projection: "full", cohort: false },
     { projection: "list", cohort: false },

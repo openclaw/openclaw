@@ -38,7 +38,7 @@ import { sanitizeImageBlocks } from "../../tool-images.js";
 import { getAgentWorkspaceAccess } from "../../workspace-access.js";
 import { log } from "../logger.js";
 import {
-  collectMediaImageRefs,
+  mediaFactToImageRef,
   isOpenClawCliImageCachePath,
   resolveMediaFactLocalRef,
   type MediaFileRef,
@@ -274,7 +274,7 @@ export async function detectAndLoadPromptImages(
   const imageFactIndexes = media.flatMap((fact, factIndex) =>
     isImageMediaFact(fact) && !suppressed.has(factIndex) ? [factIndex] : [],
   );
-  const refs = collectMediaImageRefs(media).filter((ref): ref is MediaImageRef => Boolean(ref));
+  const refs = media.map(mediaFactToImageRef).filter((ref): ref is MediaImageRef => Boolean(ref));
   const refsByFact = new Map(refs.map((ref) => [ref.factIndex, ref]));
   const inferredSlots = (() => {
     if (params.imageOrder?.length === imageFactIndexes.length) {

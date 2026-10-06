@@ -36,12 +36,7 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const SANDBOX_REGISTRY_FILES_CHECK_ID = "core/doctor/sandbox/registry-files";
 
-type SandboxScriptInfo = {
-  scriptPath: string;
-  cwd: string;
-};
-
-function resolveSandboxScript(scriptRel: string): SandboxScriptInfo | null {
+function resolveSandboxScript(scriptRel: string) {
   // Scan every openclaw package root the shared resolver finds (symlinked launcher via realpath,
   // then cwd) and return the first that actually holds the script. The resolver follows npm/pnpm
   // global bins and version-manager links, but a published package root can resolve first and ship

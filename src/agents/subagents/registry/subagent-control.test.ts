@@ -2,11 +2,9 @@
 // oxfmt-ignore
 import { mockSessionReplacementForStore } from "./subagent-control.leaf-mocks.test-support.js";
 // oxfmt-ignore
-import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
-import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { runSubagentStateWorkerOperation, useSubagentControlFixture, useSubagentControlSessionStores } from "./subagent-control.test-support.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { stopSubagentsForRequester } from "../../../auto-reply/reply/abort-operation.js";
 import { tryFastAbortFromMessage } from "../../../auto-reply/reply/abort.js";
 import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
@@ -27,7 +25,6 @@ import {
   consumeSessionWorkAdmissionHandoff,
   getActiveSessionLifecycleMutationCount,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -55,6 +52,7 @@ import {
 } from "./subagent-registry.test-helpers.js";
 
 const fixture = useSubagentControlFixture();
+const { cfgWithSessionStore, writeSessionStoreFixture } = useSubagentControlSessionStores();
 
 type ControlRuntime = typeof import("./subagent-control.runtime.js");
 
@@ -89,26 +87,6 @@ function setSubagentControlDepsForTest(overrides: Partial<ControlRuntime> = {}) 
   }
 }
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterAll(async () => {
-    await closeOpenClawAgentDatabasesAsync(tempRoot);
-    cleanup();
-  }),
-);
-const tempRoot = tempDirs.make("openclaw-subagent-control-");
-let tempStoreIndex = 0;
-
-function nextSessionStorePath(label: string) {
-  tempStoreIndex += 1;
-  return path.join(tempRoot, `${tempStoreIndex}-${label}.json`);
-}
-
-function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): OpenClawConfig {
-  return {
-    session: { store: storePath },
-  } as OpenClawConfig;
-}
-
 function controllerFor(controllerSessionKey = "agent:main:main") {
   return {
     controllerSessionKey,
@@ -116,22 +94,6 @@ function controllerFor(controllerSessionKey = "agent:main:main") {
     callerIsSubagent: false,
     controlScope: "children" as const,
   };
-}
-
-async function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
-  const storePath = nextSessionStorePath(label);
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
-    const sessionId =
-      typeof record.sessionId === "string" && record.sessionId.trim()
-        ? record.sessionId
-        : `sess-${sessionKey.replaceAll(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}`;
-    await replaceSessionEntry({ storePath, sessionKey }, {
-      ...record,
-      sessionId,
-    } as SessionEntry);
-  }
-  return storePath;
 }
 
 function resetRegistryLeafMocks() {
@@ -191,7 +153,7 @@ describe("killSubagentRunAdmin", () => {
     expect(result.runId).toBe("run-worker");
     expect(result.sessionKey).toBe(childSessionKey);
     expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })?.abortedLastRun).toBe(true);
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeTypeOf(
+    expect((await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt).toBeTypeOf(
       "number",
     );
   });
@@ -223,7 +185,9 @@ describe("killSubagentRunAdmin", () => {
     });
 
     expect(result).toEqual({ found: false, killed: false });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
   });
 
   it("does not kill a same-id replacement generation", async () => {
@@ -255,7 +219,9 @@ describe("killSubagentRunAdmin", () => {
 
     expect(result).toEqual({ found: false, killed: false });
     expect(foreignOwner).toEqual({ found: false, killed: false });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
   });
 
   it("does not adopt a restart-recovery successor when an exact run id is required", async () => {
@@ -335,11 +301,13 @@ describe("killSubagentRunAdmin", () => {
         killed: false,
         runId: source.runId,
       });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
         runId: recoveryRunId,
         execution: { status: "running" },
       });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+      expect(
+        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+      ).toBeUndefined();
       expect(abort).not.toHaveBeenCalled();
     } finally {
       adopted?.release();
@@ -408,12 +376,14 @@ describe("killSubagentRunAdmin", () => {
       killed: false,
       runId,
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId,
       generation: 2,
       execution: { status: "running" },
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
     expect(abort).not.toHaveBeenCalled();
   });
 
@@ -788,7 +758,7 @@ describe("killSubagentRunAdmin", () => {
         task: { status: "cancelled", error: SUBAGENT_KILL_TASK_ERROR },
       },
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       execution: {
         endedAt: yieldedAt,
@@ -799,7 +769,7 @@ describe("killSubagentRunAdmin", () => {
         },
       },
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.pauseReason).toBeUndefined();
+    expect((await getSubagentRunByChildSessionKey(childSessionKey))?.pauseReason).toBeUndefined();
     const killedAt =
       result.found && result.targetState?.state === "terminal"
         ? result.targetState.task.endedAt
@@ -858,7 +828,9 @@ describe("killSubagentRunAdmin", () => {
 
     expect(result.found).toBe(true);
     expect(result.killed).toBe(false);
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
     const persisted = loadSessionEntry({ storePath, sessionKey: childSessionKey });
     expect(persisted?.abortedLastRun).toBeUndefined();
   });
@@ -957,7 +929,7 @@ describe("killSubagentRunAdmin", () => {
       runId: source.runId,
     });
     expect(abort).not.toHaveBeenCalled();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId: source.runId,
       generation: 2,
       execution: { status: "running" },
@@ -1014,11 +986,13 @@ describe("killSubagentRunAdmin", () => {
       sessionKey: childSessionKey,
       error: expect.stringContaining("Failed to persist subagent kill intent"),
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId: "run-worker-store-fail",
       execution: { status: "running" },
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
   });
 });
 
@@ -1062,7 +1036,7 @@ describe("controlled subagent cancellation races", () => {
     });
     const persisted = loadSessionEntry({ storePath, sessionKey: childSessionKey });
     expect(persisted?.abortedLastRun).toBeUndefined();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("run-current");
+    expect((await getSubagentRunByChildSessionKey(childSessionKey))?.runId).toBe("run-current");
   });
 
   it("does not let 24 in-flight kills cross into same-id successor generations", async () => {
@@ -1154,19 +1128,21 @@ describe("controlled subagent cancellation races", () => {
     expect(abort).not.toHaveBeenCalled();
     expect(clearQueues).not.toHaveBeenCalled();
     for (const [index, childSessionKey] of successorKeys.entries()) {
-      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
         runId: `run-old-${index}`,
         controllerSessionKey,
         generation: 2,
         execution: { status: "running" },
       });
-      expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
-      expect(getSubagentRunByChildSessionKey(descendantKeys[index]!)).toMatchObject({
+      expect(
+        (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+      ).toBeUndefined();
+      expect(await getSubagentRunByChildSessionKey(descendantKeys[index]!)).toMatchObject({
         runId: `run-successor-leaf-${index}`,
         execution: { status: "running" },
       });
       expect(
-        getSubagentRunByChildSessionKey(descendantKeys[index]!)?.execution.endedAt,
+        (await getSubagentRunByChildSessionKey(descendantKeys[index]!))?.execution.endedAt,
       ).toBeUndefined();
     }
   });
@@ -1260,7 +1236,7 @@ describe("controlled subagent cancellation races", () => {
       [childSessionKey, "run-persist-successor"],
       [descendantSessionKey, "run-persist-successor-leaf"],
     ] as const) {
-      const successor = getSubagentRunByChildSessionKey(sessionKey);
+      const successor = await getSubagentRunByChildSessionKey(sessionKey);
       expect(successor).toMatchObject({ runId, execution: { status: "running" } });
       expect(successor?.execution.endedAt).toBeUndefined();
     }
@@ -1316,7 +1292,7 @@ describe("controlled subagent cancellation races", () => {
 
     expect(abort).not.toHaveBeenCalled();
     expect(clearQueues).not.toHaveBeenCalled();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId: entry.runId,
       killIntent: undefined,
       execution: { status: "running" },
@@ -1364,7 +1340,7 @@ describe("controlled subagent cancellation races", () => {
     ).resolves.toMatchObject({ status: "ok", killed: 1 });
 
     expect(patches).toEqual([null, null]);
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       endedReason: SUBAGENT_ENDED_REASON_KILLED,
       execution: { status: "terminal" },
     });
@@ -1433,7 +1409,9 @@ describe("controlled subagent cancellation races", () => {
       killed: 1,
       labels: ["leaf task"],
     });
-    expect(getSubagentRunByChildSessionKey(leafSessionKey)?.execution.endedAt).toBeTypeOf("number");
+    expect((await getSubagentRunByChildSessionKey(leafSessionKey))?.execution.endedAt).toBeTypeOf(
+      "number",
+    );
   });
 
   it("does not cascade through a child session that moved to a newer parent", async () => {
@@ -1506,7 +1484,9 @@ describe("controlled subagent cancellation races", () => {
       killed: 0,
       labels: [],
     });
-    expect(getSubagentRunByChildSessionKey(leafSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(leafSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
   });
 
   it("interrupts a pending recovery admission before deciding the kill target is inactive", async () => {
@@ -1566,7 +1546,7 @@ describe("controlled subagent cancellation races", () => {
 
       await expect(pendingKill).resolves.toMatchObject({ status: "ok" });
       expect(abort).toHaveBeenCalledWith(sessionId);
-      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
         endedReason: SUBAGENT_ENDED_REASON_KILLED,
         execution: { status: "terminal" },
       });
@@ -1651,7 +1631,7 @@ describe("controlled subagent cancellation races", () => {
     });
 
     expect(abortedLastRunWrites).toEqual([]);
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId: entry.runId,
       killIntent: { reason: "killed", sessionId },
       execution: {
@@ -1659,7 +1639,9 @@ describe("controlled subagent cancellation races", () => {
         restartRecovery: { phase: "reserved" },
       },
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeUndefined();
+    expect(
+      (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
+    ).toBeUndefined();
   });
 });
 
@@ -1798,7 +1780,7 @@ describe("killAllControlledSubagentRuns", () => {
         }
         expect(controlRuntimeMocks.abortEmbeddedAgentRun).toHaveBeenCalledOnce();
         for (const entry of [running, queued]) {
-          expect(getSubagentRunByChildSessionKey(entry.childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(entry.childSessionKey)).toMatchObject({
             execution: { status: "terminal" },
             endedReason: SUBAGENT_ENDED_REASON_KILLED,
           });
@@ -1906,7 +1888,9 @@ describe("killAllControlledSubagentRuns", () => {
           ).toMatchObject({ killed: 1 });
           expect(controlRuntimeMocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
         }
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.runId).toBe("accepted-launch");
+        expect((await getSubagentRunByChildSessionKey(childSessionKey))?.runId).toBe(
+          "accepted-launch",
+        );
       } finally {
         response.resolve();
         await launchDone.promise;
@@ -2042,11 +2026,11 @@ describe("killAllControlledSubagentRuns", () => {
       }
       expect(persistedAfterFailure).toBe(true);
       expect(
-        getSubagentRunByChildSessionKey(first.childSessionKey)?.execution.endedAt,
+        (await getSubagentRunByChildSessionKey(first.childSessionKey))?.execution.endedAt,
       ).toBeUndefined();
-      expect(getSubagentRunByChildSessionKey(second.childSessionKey)?.execution.endedAt).toBeTypeOf(
-        "number",
-      );
+      expect(
+        (await getSubagentRunByChildSessionKey(second.childSessionKey))?.execution.endedAt,
+      ).toBeTypeOf("number");
     },
   );
 
@@ -2091,7 +2075,7 @@ describe("killAllControlledSubagentRuns", () => {
     });
     const persisted = loadSessionEntry({ storePath, sessionKey: childSessionKey });
     expect(persisted?.abortedLastRun).toBeUndefined();
-    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+    expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
       runId: "run-same-bulk",
       generation: 2,
     });
@@ -2228,7 +2212,7 @@ describe("killAllControlledSubagentRuns", () => {
       killed: 1,
       labels: ["active bulk child task"],
     });
-    expect(getSubagentRunByChildSessionKey(childSessionKey)?.execution.endedAt).toBeTypeOf(
+    expect((await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt).toBeTypeOf(
       "number",
     );
   });

@@ -141,7 +141,7 @@ describe("test runtime prerequisites", () => {
     ["tui-pty", ["--exclude", "tui/tui-text-wrap-pty.e2e.test.ts"], "runtime"],
     ["gateway-core", ["--exclude", "gateway-*.test.ts"], undefined],
     ["gateway", ["--exclude", "gateway-*.test.ts"], "runtime"],
-    ["tooling", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
+    ["infra", ["--exclude", "**/gateway-codex-delivery-cache.test.ts"], "runtime"],
     [
       "agents-core",
       resolveVitestRuntimeConfigScopes("test/vitest/vitest.agents-core.config.ts").flatMap(

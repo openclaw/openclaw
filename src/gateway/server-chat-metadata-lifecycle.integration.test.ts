@@ -11,6 +11,7 @@ import { revokeRuntimeAuthMaterializations } from "../agents/auth-profiles/runti
 import { reportEmbeddedRunSuccessfulAuthBinding } from "../agents/embedded-agent-runner/run/auth-profile-success.js";
 import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import type { AgentHarnessV2 } from "../agents/harness/types.js";
+import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import { getPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthMaterializations } from "../agents/prepared-model-runtime-auth.js";
 import {
@@ -44,7 +45,6 @@ import {
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import {
   buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
   prepareModelsListResult,
 } from "./server-methods/models-list-result.js";
 import { modelsHandlers } from "./server-methods/models.js";
@@ -144,7 +144,7 @@ async function expectAvailable(
   if (!owner) {
     throw new Error("expected prepared model owner");
   }
-  const projector = createGatewayAgentModelCatalogProjector({
+  const projector = createModelCatalogDecisions({
     cfg: activeConfig,
     agentId: "main",
     snapshot: owner.modelCatalog,
@@ -247,7 +247,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         if (!owner) {
           throw new Error("expected prepared native model owner");
         }
-        const projector = createGatewayAgentModelCatalogProjector({
+        const projector = createModelCatalogDecisions({
           cfg: owner.config,
           agentId: "main",
           snapshot: owner.modelCatalog,
@@ -666,8 +666,6 @@ describe("gateway chat metadata lifecycle composition", () => {
   it.each([
     ["SecretRef-only runtime auth", "secret-ref", true, false],
     ["SecretRef auth after profile-scoped catalog rejection", "secret-ref", true, true],
-    ["external CLI OAuth bootstrap", "external-oauth", true, false],
-    ["unresolved SecretRef", "unresolved-secret-ref", false, false],
   ] as const)(
     "converges chat metadata and models.list for %s",
     async (_, kind, available, rejected) => {

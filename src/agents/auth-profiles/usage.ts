@@ -646,46 +646,6 @@ export async function markAuthProfileFailure(params: {
   }
 }
 
-function buildBlockedProfileUsageStats(params: {
-  previousStats: ProfileUsageStats | undefined;
-  blockedUntil: number;
-  source: AuthProfileBlockedSource;
-  modelId: string | undefined;
-  now: number;
-}): ProfileUsageStats {
-  const activeBlockedUntil = resolveActiveWindowUntil(
-    params.previousStats?.blockedUntil,
-    params.now,
-  );
-  // One active block can stay model-scoped only while every observation names
-  // that same model. Mixed or unknown observations widen the profile.
-  const blockedModel =
-    activeBlockedUntil === 0
-      ? params.modelId
-      : params.previousStats?.blockedScope === "model" &&
-          params.previousStats.blockedModel === params.modelId &&
-          params.modelId
-        ? params.modelId
-        : undefined;
-  return {
-    ...params.previousStats,
-    blockedUntil: Math.max(activeBlockedUntil, params.blockedUntil),
-    blockedReason: "subscription_limit",
-    blockedSource: params.source,
-    blockedModel,
-    blockedScope: blockedModel ? "model" : undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    lastFailureAt: params.now,
-    failureCounts: {
-      ...params.previousStats?.failureCounts,
-      rate_limit: (params.previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-    },
-  };
-}
-
 /** Marks a profile blocked until a provider-reported reset timestamp. */
 export async function markAuthProfileBlockedUntil(params: {
   store: AuthProfileStore;
@@ -722,13 +682,33 @@ export async function markAuthProfileBlockedUntil(params: {
       }
       previousStats = freshStore.usageStats?.[profileId];
       updateTime = now;
-      nextStats = buildBlockedProfileUsageStats({
-        previousStats,
-        blockedUntil,
-        source,
-        modelId,
-        now,
-      });
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
+      // Mixed or unknown model observations widen an existing block to the profile.
+      const blockedModel =
+        activeBlockedUntil === 0
+          ? modelId
+          : previousStats?.blockedScope === "model" &&
+              previousStats.blockedModel === modelId &&
+              modelId
+            ? modelId
+            : undefined;
+      nextStats = {
+        ...previousStats,
+        blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+        blockedReason: "subscription_limit",
+        blockedSource: source,
+        blockedModel,
+        blockedScope: blockedModel ? "model" : undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+        cooldownClassification: undefined,
+        cooldownModel: undefined,
+        lastFailureAt: now,
+        failureCounts: {
+          ...previousStats?.failureCounts,
+          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+        },
+      };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;
       return true;

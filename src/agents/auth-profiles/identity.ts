@@ -1,13 +1,7 @@
-/**
- * Auth profile id and display metadata helpers.
- * Keeps profile id construction and human metadata lookup centralized for auth
- * status, storage, and provider selection.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileStore } from "./types.js";
 
-/** Builds a provider-prefixed auth profile id. */
 export function buildAuthProfileId(params: {
   providerId: string;
   profileName?: string | null;
@@ -18,7 +12,6 @@ export function buildAuthProfileId(params: {
   return `${profilePrefix}:${profileName}`;
 }
 
-/** Resolves display metadata for an auth profile from config/store. */
 export function resolveAuthProfileMetadata(params: {
   cfg?: OpenClawConfig;
   store?: AuthProfileStore;

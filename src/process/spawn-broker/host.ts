@@ -35,6 +35,7 @@ import {
 } from "./resource-host.js";
 import {
   SPAWN_BROKER_STARTUP_TIMEOUT_MS,
+  spawnBrokerStartupNowMs,
   type BrokerBootstrap,
   type BrokerResourceRequest,
   type BrokerResourceResponse,
@@ -395,9 +396,9 @@ export class SpawnBrokerHost {
     const brokerExited = createDeferredCore();
     let ended = false;
     let ready = false;
-    this.startupDeadline = Date.now() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
+    this.startupDeadline = spawnBrokerStartupNowMs() + SPAWN_BROKER_STARTUP_TIMEOUT_MS;
     const checkStartup = () => {
-      if (!ended && !ready && Date.now() >= this.startupDeadline) {
+      if (!ended && !ready && spawnBrokerStartupNowMs() >= this.startupDeadline) {
         fail(new Error("readiness deadline exceeded after 15000ms"));
         child.kill("SIGKILL");
       }

@@ -164,7 +164,6 @@ const emptyChildOwners: readonly string[] = Object.freeze([]);
 const sessionChildOwners = new WeakMap<
   SessionEntry,
   {
-    revision: object;
     key: string;
     controller?: string;
     parent?: string;
@@ -203,12 +202,7 @@ export function resolveSessionChildOwners(params: {
       ? normalizeOptionalString(entry.parentSessionKey)
       : undefined;
   const cached = sessionChildOwners.get(entry);
-  if (
-    cached?.revision === subagentRuns.revision &&
-    cached.key === key &&
-    cached.controller === controller &&
-    cached.parent === parent
-  ) {
+  if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;
   }
   const owners: string[] = [];
@@ -220,7 +214,6 @@ export function resolveSessionChildOwners(params: {
   }
   const result = owners.length ? Object.freeze(owners) : emptyChildOwners;
   sessionChildOwners.set(entry, {
-    revision: subagentRuns.revision,
     key,
     controller,
     parent,

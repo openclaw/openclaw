@@ -5,7 +5,6 @@ import {
   isToolResultContentType,
 } from "../../../../src/chat/tool-content.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
-import { t } from "../../i18n/index.ts";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import {
   isStandaloneToolMessageForDisplay,
@@ -35,17 +34,23 @@ function isConfirmedYield(card: ToolCard): boolean {
   );
 }
 
-/** Yield is a transcript boundary, independent of tool disclosure preferences. */
+/** A handoff's private continuation is never a tool detail, whatever the disclosure preference. */
 export function hasSessionsYieldCall(message: unknown): boolean {
   return extractToolCardsCached(message).some((card) => card.name === "sessions_yield");
 }
 
-export function projectSessionsYieldItems(
+/** The latest confirmed handoff that nothing has resumed yet. */
+export type PendingSessionsYield = {
+  timestamp: number | null;
+  runId?: string;
+};
+
+function scanSessionsYieldItems(
   items: ChatItem[],
-  activeRun?: { runId?: string | null; startedAt?: number | null },
-  showToolCalls = true,
-): ChatItem[] {
+  showToolCalls: boolean,
+): { items: ChatItem[]; pending: PendingSessionsYield | null } {
   const projected: ChatItem[][] = [];
+  let pending: PendingSessionsYield | null = null;
   let laterActivity = false;
   const laterRuns = new Set<string>();
   for (let index = items.length - 1; index >= 0; index--) {
@@ -54,28 +59,30 @@ export function projectSessionsYieldItems(
     const cards = message ? extractToolCardsCached(message) : [];
     const yieldCards = cards.filter((card) => card.name === "sessions_yield");
     const yields = yieldCards.filter(isConfirmedYield);
-    const markers: ChatItem[] = [];
-    const timestamp = message ? rawMessageTimestamp(message) : null;
-    for (let yieldIndex = yields.length - 1; yieldIndex >= 0; yieldIndex--) {
-      const card = yields[yieldIndex]!;
+    const lastYield = yields.at(-1);
+    const boundary: ChatItem[] = [];
+    if (lastYield) {
+      const timestamp = message ? rawMessageTimestamp(message) : null;
+      // Later output, or output from another run, means the parent already resumed.
       const resumed =
         laterActivity ||
-        [...laterRuns].some((runId) => card.runId !== undefined && runId !== card.runId) ||
-        (activeRun !== undefined &&
-          ((card.runId !== undefined &&
-            activeRun.runId != null &&
-            activeRun.runId !== card.runId) ||
-            (timestamp !== null &&
-              activeRun.startedAt != null &&
-              activeRun.startedAt > timestamp)));
-      markers.unshift({
-        kind: "notice",
-        key: `yield:${item.key}:${card.id}`,
-        sessionsYield: resumed ? "resumed" : "waiting",
-        label: t(resumed ? "chat.yieldResumed" : "chat.yieldWaiting"),
-        text: "",
-        timestamp: timestamp ?? 0,
-      });
+        [...laterRuns].some((runId) => lastYield.runId !== undefined && runId !== lastYield.runId);
+      if (resumed) {
+        // Nothing is drawn here, but the resumed run's rows must not pool, roll
+        // up or frame together with the run that handed off.
+        boundary.push({
+          kind: "notice",
+          key: `yield:${item.key}:${lastYield.id}`,
+          handoffBoundary: true,
+          text: "",
+          timestamp: timestamp ?? 0,
+        });
+      } else {
+        pending = {
+          timestamp: timestamp !== null && timestamp > 0 ? timestamp : null,
+          ...(lastYield.runId ? { runId: lastYield.runId } : {}),
+        };
+      }
       laterActivity = true;
     }
     let remaining: ChatItem[] = [item];
@@ -122,7 +129,7 @@ export function projectSessionsYieldItems(
           ]
         : [];
     }
-    projected.push([...remaining, ...markers]);
+    projected.push([...remaining, ...boundary]);
     const runId = message
       ? transcriptRunId(message)
       : item.kind === "stream" || item.kind === "reading-indicator"
@@ -138,23 +145,28 @@ export function projectSessionsYieldItems(
         normalizeRoleForGrouping(resolveMessageRole(message)) === "assistant" &&
         hasRenderableNormalizedMessage(message));
   }
-  return projected.toReversed().flat();
+  return { items: projected.toReversed().flat(), pending };
 }
 
-const yieldTimestampByHistory = new WeakMap<readonly unknown[], number | null>();
+/**
+ * Keeps handoff calls out of tool details and separates a resumed run from the
+ * run that handed off. The working indicator shows the wait itself.
+ */
+export function projectSessionsYieldItems(items: ChatItem[], showToolCalls = true): ChatItem[] {
+  return scanSessionsYieldItems(items, showToolCalls).items;
+}
+
+const pendingYieldByHistory = new WeakMap<readonly unknown[], PendingSessionsYield | null>();
 
 /** Reuse the tool pairing owner for separate results and bundled nested calls. */
-export function latestSessionsYieldTimestamp(messages: readonly unknown[]): number | null {
-  if (yieldTimestampByHistory.has(messages)) {
-    return yieldTimestampByHistory.get(messages) ?? null;
+export function pendingSessionsYield(messages: readonly unknown[]): PendingSessionsYield | null {
+  if (pendingYieldByHistory.has(messages)) {
+    return pendingYieldByHistory.get(messages) ?? null;
   }
-  const items = projectSessionsYieldItems(
+  const { pending } = scanSessionsYieldItems(
     coalesceToolActivityMessages(buildMessageItems(composeTranscriptDisplay([...messages]))),
+    true,
   );
-  const marker = items.findLast(
-    (item) => item.kind === "notice" && item.sessionsYield === "waiting",
-  );
-  const timestamp = marker?.kind === "notice" && marker.timestamp > 0 ? marker.timestamp : null;
-  yieldTimestampByHistory.set(messages, timestamp);
-  return timestamp;
+  pendingYieldByHistory.set(messages, pending);
+  return pending;
 }

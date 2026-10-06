@@ -94,6 +94,14 @@ function textRatios(text: string, includeWordish: boolean): [printable: number, 
   return total === 0 ? [0, 0] : [printable / total, wordish / total];
 }
 
+function isCleanText(buffer: Buffer, charset: AttachmentCharset): boolean {
+  try {
+    return textRatios(new TextDecoder(charset, { fatal: true }).decode(buffer), false)[0] === 1;
+  } catch {
+    return false;
+  }
+}
+
 function sniffTextCharset(buffer: Buffer): "utf-8" | "windows-1252" | undefined {
   const sample = buffer.subarray(0, 4096);
   // Finish the last sampled UTF-8 sequence without starting a new one outside the window.
@@ -152,6 +160,10 @@ export async function classifyAttachmentBytes(params: {
   const signature = params.buffer.length >= 4 ? params.buffer.readUInt32BE(0) : 0;
   if (signature === 0x504b0304 || signature === 0x504b0102 || signature === 0x504b0506) {
     return { mime, class: "archive" };
+  }
+  const bomCharset = hasUtf16Bom ? resolveUtf16Charset(params.buffer) : undefined;
+  if (detectedClass === "text" && bomCharset && isCleanText(params.buffer, bomCharset)) {
+    return { mime, class: "text", charset: bomCharset };
   }
   const charset = resolveUtf16Charset(params.buffer) ?? sniffTextCharset(params.buffer);
   if (!charset) {

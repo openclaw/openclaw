@@ -170,12 +170,7 @@ async function assertMutationFingerprintUnchanged(
 ): Promise<void> {
   const current = await handle.stat({ bigint: true });
   if (!sameFileMutationFingerprint(current, expected)) {
-    if (
-      current.dev !== expected.dev ||
-      current.ino !== expected.ino ||
-      current.birthtimeNs !== expected.birthtimeNs ||
-      current.size !== expected.size
-    ) {
+    if (!sameFileStatFingerprint(current, expected)) {
       throw new Error(`SQLite snapshot file changed while reading: ${filePath}`);
     }
     // Re-read the pinned snapshot when FUSE timestamps settle after copying or hashing.

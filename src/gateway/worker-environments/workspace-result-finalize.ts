@@ -42,6 +42,7 @@ import {
   formatWorkspaceConflictSummary,
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
@@ -57,10 +58,7 @@ type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "act
 type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
   Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
 
-type WorkspaceConflictReport = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount: number;
+type WorkspaceConflictReport = Required<WorkerWorkspaceResultConflict> & {
   summary: string;
 };
 

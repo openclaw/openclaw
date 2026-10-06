@@ -9,6 +9,10 @@ import {
 
 const APPROVALS_DISABLED_SENTINEL = "openclaw:approval-disabled";
 
+type QQBotConfigMigrationParams = ReturnType<typeof listQQBotConfigEntries>[number] & {
+  changes: string[];
+};
+
 function hasQQBotEntryMatching(
   value: unknown,
   predicate: (entry: Record<string, unknown>, inheritedEntry?: Record<string, unknown>) => boolean,
@@ -68,13 +72,9 @@ function hasConfiguredFilter(value: unknown): boolean {
   return Array.isArray(value) ? value.length > 0 : value !== undefined;
 }
 
-function migrateExecApprovals(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-  inheritedEntry?: Record<string, unknown>;
-  commandsAllowFrom?: string[];
-}): void {
+function migrateExecApprovals(
+  params: QQBotConfigMigrationParams & { commandsAllowFrom?: string[] },
+): void {
   const hasOwnLegacyConfig = Object.hasOwn(params.entry, "execApprovals");
   const hasLegacyConfig = hasOwnLegacyConfig || params.inheritedEntry?.execApprovals !== undefined;
   const hasOwnPolicyOverride =
@@ -190,11 +190,7 @@ function migrateExecApprovals(params: {
   );
 }
 
-function migrateAllowFrom(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateAllowFrom(params: QQBotConfigMigrationParams): void {
   const current = normalizeIds(params.entry.allowFrom);
   const normalized = normalizeLegacyAllowFrom(params.entry.allowFrom);
   if (current.every((id, index) => id === normalized[index])) {
@@ -214,11 +210,7 @@ function hasLegacyStreamingTransport(entry: Record<string, unknown>): boolean {
   );
 }
 
-function migrateStreamingTransport(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateStreamingTransport(params: QQBotConfigMigrationParams): void {
   const streaming = getRecord(params.entry.streaming);
   if (!streaming || !hasLegacyStreamingTransport(params.entry)) {
     return;
@@ -274,11 +266,7 @@ function mostRestrictiveTencentToolPolicy(
   return rank[normalizedFirst] <= rank[second] ? normalizedFirst : second;
 }
 
-function migrateGroupTools(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-}): void {
+function migrateGroupTools(params: QQBotConfigMigrationParams): void {
   const groups = getRecord(params.entry.groups);
   if (!groups) {
     return;
@@ -320,12 +308,7 @@ function hasLegacyGroupCommandLevel(entry: Record<string, unknown>): boolean {
   );
 }
 
-function migrateGroupCommandLevels(params: {
-  entry: Record<string, unknown>;
-  path: string;
-  changes: string[];
-  inheritedEntry?: Record<string, unknown>;
-}): void {
+function migrateGroupCommandLevels(params: QQBotConfigMigrationParams): void {
   const groups = getRecord(params.entry.groups);
   if (!groups) {
     const inheritedGroups = getRecord(params.inheritedEntry?.groups);

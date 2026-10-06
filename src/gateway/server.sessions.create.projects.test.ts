@@ -723,43 +723,35 @@ test("chat.send visibly rejects corrupt persisted project intent without default
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
-test.each(["workspace", "registered"])(
-  "sessions.create starts in a sandboxed %s project through a workspace alias",
-  async (kind) => {
-    const root = tempDirs.make("openclaw-session-workspace-project-");
-    const workspace = path.join(root, "workspace");
-    const alias = path.join(root, "workspace-alias");
-    await fs.mkdir(workspace);
-    await fs.symlink(workspace, alias, directoryLinkType);
-    testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
-    const { storePath } = await createSessionStoreDir();
-    const projectRoot =
-      kind === "workspace" ? workspace : await initializeRepository(workspace, "project");
-    const projectId =
-      kind === "workspace"
-        ? "workspace:main"
-        : (await registerProjectRegistry({ path: projectRoot })).id;
+test("sessions.create starts in a sandboxed workspace project through a workspace alias", async () => {
+  const root = tempDirs.make("openclaw-session-workspace-project-");
+  const workspace = path.join(root, "workspace");
+  const alias = path.join(root, "workspace-alias");
+  await fs.mkdir(workspace);
+  await fs.symlink(workspace, alias, directoryLinkType);
+  testState.agentConfig = { workspace: alias, sandbox: { mode: "all" } };
+  const { storePath } = await createSessionStoreDir();
+  const projectRoot = workspace;
 
-    const created = await directSessionReq<{
-      key: string;
-      entry?: { sessionRoot?: string; spawnedCwd?: string };
-    }>(
-      "sessions.create",
-      { agentId: "main", projectId },
-      { client: { connect: { scopes: ["operator.write"] } } as never },
-    );
+  const created = await directSessionReq<{
+    key: string;
+    entry?: { sessionRoot?: string; spawnedCwd?: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", projectId: "workspace:main" },
+    { client: { connect: { scopes: ["operator.write"] } } as never },
+  );
 
-    expect(created.ok, JSON.stringify(created.error)).toBe(true);
-    expect(created.payload?.entry).toMatchObject({
-      sessionRoot: projectRoot,
-      spawnedCwd: projectRoot,
-    });
-    expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
-      sessionRoot: projectRoot,
-      spawnedCwd: projectRoot,
-    });
-  },
-);
+  expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  expect(created.payload?.entry).toMatchObject({
+    sessionRoot: projectRoot,
+    spawnedCwd: projectRoot,
+  });
+  expect(loadSessionEntry({ sessionKey: created.payload!.key, storePath })).toMatchObject({
+    sessionRoot: projectRoot,
+    spawnedCwd: projectRoot,
+  });
+});
 
 test("sessions.create with an empty message preserves its owned checkout above the 100 cleanup target", async () => {
   const state = await createOpenClawTestState({

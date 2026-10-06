@@ -4,8 +4,10 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { recordSessionStateEvent } from "./session-state-events.js";
-import { recordSessionStateEventInDatabase } from "./session-state-events.kernel.js";
+import {
+  recordSessionStateEventInDatabase,
+  type SessionStateEventRow,
+} from "./session-state-events.kernel.js";
 import {
   child,
   cleanupSessionStateTestState,
@@ -19,9 +21,9 @@ import {
 afterEach(cleanupSessionStateTestState);
 
 describe("session state watcher cursor batches", () => {
-  it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", () => {
+  it("advances watcher fanout with bounded cursor reads and preserves excluded cursors", async () => {
     const database = createDatabaseOptions();
-    seedChild(database, nestedWatcher);
+    await seedChild(database, nestedWatcher);
     const { db } = openOpenClawStateDatabase(database);
     const watchers = Array.from(
       { length: 1_001 },
@@ -44,14 +46,19 @@ describe("session state watcher cursor batches", () => {
     const reads = trackSqliteStatementExecutions(db, ["cursors"], (sql) =>
       /^select\b/i.test(sql) && /\bfrom\s+"session_watch_cursors"/i.test(sql) ? "cursors" : null,
     );
-    let event: ReturnType<typeof recordSessionStateEvent>;
+    let event: SessionStateEventRow | undefined;
     try {
-      event = recordSessionStateEvent(
-        eventInput({
-          actorId: actor,
-          watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
-          watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
-        }),
+      event = runOpenClawStateWriteTransaction(
+        ({ db: transactionDb }) =>
+          recordSessionStateEventInDatabase(
+            transactionDb,
+            eventInput({
+              actorId: actor,
+              watcherSessionKeys: [watchers[0]!, missing, watchers[0]!, actor, "global", stale],
+              watcherStorePaths: { [stale]: "/synthetic/retired-store.sqlite" },
+            }),
+            Date.now(),
+          ).row,
         database,
       );
     } finally {

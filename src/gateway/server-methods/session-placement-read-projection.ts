@@ -4,6 +4,7 @@ import type { SessionRowDatabaseFacts } from "../../config/sessions/session-row-
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { projectSessionActivitySummary } from "../session-activity-summary-state.js";
 import { isSessionPermissionChangePending } from "../session-permission-change.js";
 import type { SessionRowPlacementFactsReader } from "../session-row-placement-projection.types.js";
@@ -145,6 +146,9 @@ function readSessionRowHasBoard(target: {
   storeTarget: GatewayStoredSessionTarget["storeTarget"];
 }) {
   const { key, storeTarget } = target;
+  if (!isIncognitoOpenClawAgentSqlitePath(storeTarget.storePath, storeTarget)) {
+    throw new Error("Session Board membership requires prepared database facts");
+  }
   const board = withOpenClawAgentDatabaseReadOnly(
     (database) => readBoardSessionKeys(database, [key]).has(key),
     { agentId: storeTarget.agentId, path: storeTarget.storePath },

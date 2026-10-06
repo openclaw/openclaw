@@ -220,6 +220,10 @@ export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
   };
   res.once("finish", release);
   res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
   return release;
 }
 

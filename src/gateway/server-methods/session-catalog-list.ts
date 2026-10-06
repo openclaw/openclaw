@@ -97,7 +97,6 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
       rawAgentId: request.agentId,
       respond,
       cfg: metadataConfig,
-      normalize: normalizeOptionalString,
     });
     if (!metadataAgent) {
       return;
@@ -137,7 +136,6 @@ export const listSessionCatalogHandler: GatewayRequestHandlers["sessions.catalog
     rawAgentId: request.agentId,
     respond,
     cfg: config,
-    normalize: normalizeOptionalString,
   });
   if (!resolvedAgent) {
     return;

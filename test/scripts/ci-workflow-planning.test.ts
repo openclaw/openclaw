@@ -498,9 +498,11 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
-  task?: "guards" | "npm-lock" | "prod-types" | "test-types";
+  task?: "guards" | "guards-architecture" | "npm-lock" | "prod-types" | "test-types";
   earlyGuards?: boolean;
+  splitPrGuards?: boolean;
   madgeImportCycles?: boolean;
+  kyselyGuardrails?: boolean;
   failPackageScript?: string;
   checkoutBase?: string;
   types?: {
@@ -632,6 +634,8 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       compatibility_target: String(options.frozenTarget),
       run_format_check: "false",
       run_pr_madge_import_cycles: String(options.madgeImportCycles ?? false),
+      run_pr_kysely_guardrails: String(options.kyselyGuardrails ?? false),
+      split_pr_guards: String(options.splitPrGuards ?? false),
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
       narrow_check_paths_json:
         options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
@@ -665,7 +669,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     step: checkShardStep,
     matrix: {
       task: options.task ?? "guards",
-      ...(options.earlyGuards ? { group: "guards" } : {}),
+      ...(options.earlyGuards ? { group: options.task ?? "guards" } : {}),
       ...options.types?.matrix,
     },
   });
@@ -707,6 +711,10 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
           RUN_PR_MADGE_IMPORT_CYCLES: String(
             resolveValue(row.step.env?.RUN_PR_MADGE_IMPORT_CYCLES) ?? "",
           ),
+          RUN_PR_KYSELY_GUARDRAILS: String(
+            resolveValue(row.step.env?.RUN_PR_KYSELY_GUARDRAILS) ?? "",
+          ),
+          SPLIT_PR_GUARDS: String(resolveValue(row.step.env?.SPLIT_PR_GUARDS) ?? ""),
           ...(typeCheck || options.earlyGuards
             ? {
                 OPENCLAW_LOCAL_CHECK: undefined,
@@ -1263,7 +1271,7 @@ describe("ci workflow guards", () => {
     it.each([
       {
         path: "src/shared/runtime.ts",
-        tasks: ["guards", "prod-types", "lint", "test-types"],
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: true,
         contracts: false,
@@ -1276,7 +1284,7 @@ describe("ci workflow guards", () => {
       },
       {
         path: "src/agents/session.test.ts",
-        tasks: ["guards", "lint", "test-types"],
+        tasks: ["guards", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: true,
         contracts: false,
@@ -1303,7 +1311,7 @@ describe("ci workflow guards", () => {
       },
       {
         path: "packages/ui-shared/index.ts",
-        tasks: ["guards", "prod-types", "lint", "test-types"],
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: true,
         contracts: false,
@@ -1317,7 +1325,7 @@ describe("ci workflow guards", () => {
       {
         path: "extensions/telegram/src/send.ts",
         boundaryOwner: "additional-checks",
-        tasks: ["guards", "prod-types", "lint", "test-types"],
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: true,
         contracts: false,
@@ -1332,7 +1340,7 @@ describe("ci workflow guards", () => {
       {
         path: "src/wizard/i18n/locales/en.ts",
         nodeDataOnly: true,
-        tasks: ["guards", "prod-types", "lint", "test-types"],
+        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
         fastTasks: [],
         baselineRatchets: false,
         contracts: false,
@@ -1424,28 +1432,35 @@ describe("ci workflow guards", () => {
             context,
           ).include.map((row: { task: string }) => row.task),
         ).toEqual(
-          nodeDataOnly ? tasks : tasks.filter((task) => !["guards", "dependencies"].includes(task)),
+          nodeDataOnly
+            ? tasks
+            : tasks.filter(
+                (task) => !["guards", "guards-architecture", "dependencies"].includes(task),
+              ),
         );
         const additional = workflow.jobs["check-additional-shard"];
         const independentRows = evaluateWorkflowExpression(
           additional.strategy.matrix,
           context,
         ).include.filter((row: { group: string }) =>
-          ["guards", "dependencies"].includes(row.group),
+          ["guards", "guards-architecture", "dependencies"].includes(row.group),
         );
         expect(independentRows).toEqual(
           nodeDataOnly
             ? []
             : tasks
-                .filter((task) => ["guards", "dependencies"].includes(task))
+                .filter((task) => ["guards", "guards-architecture", "dependencies"].includes(task))
                 .map((group) => ({
                   check_name: `check-${group}`,
                   group,
                   runner:
-                    group === "guards"
+                    group !== "dependencies"
                       ? "blacksmith-4vcpu-ubuntu-2404"
                       : "blacksmith-16vcpu-ubuntu-2404",
                 })),
+        );
+        expect(manifest.outputs.split_pr_guards).toBe(
+          String(tasks.includes("guards-architecture")),
         );
         if (nodeDataOnly) {
           expect(manifest.outputs.run_check).toBe("true");
@@ -1473,8 +1488,15 @@ describe("ci workflow guards", () => {
           expect(evaluateWorkflowExpression(`\${{ ${independentStep.if} }}`, rowContext)).toBe(
             true,
           );
+          const otherStep = additional.steps.find(
+            (candidate: WorkflowStep) => candidate.name === "Run additional check shard",
+          );
+          expect(evaluateWorkflowExpression(`\${{ ${otherStep.if} }}`, rowContext)).toBe(false);
           expect(evaluateWorkflowExpression(independentStep.env.TASK, rowContext)).toBe(
             matrix.group,
+          );
+          expect(evaluateWorkflowExpression(independentStep.env.SPLIT_PR_GUARDS, rowContext)).toBe(
+            manifest.outputs.split_pr_guards,
           );
           expect(
             evaluateWorkflowExpression(independentStep.env.NARROW_CHECK_PATHS_JSON, rowContext),
@@ -1658,7 +1680,7 @@ describe("ci workflow guards", () => {
       },
     );
 
-    it.each(["push"] as const)(
+    it.each(["push", "schedule"] as const)(
       "keeps full families on %s when narrowing is unavailable",
       (eventName) => {
         const manifest = runCiManifestFixture({
@@ -1698,6 +1720,7 @@ describe("ci workflow guards", () => {
           ).include.some((row: { task: string }) => row.task === "coercion-helpers"),
         ).toBe(false);
         expect(manifest.outputs.narrow_check_paths_json).toBe("");
+        expect(manifest.outputs.split_pr_guards).toBe("false");
         expect(manifest.outputs.run_baseline_ratchets).toBe("true");
         expect(manifest.outputs.run_plugin_contracts_shards).toBe("true");
         expect(manifest.outputs.run_channel_contracts_shards).toBe("true");
@@ -2933,9 +2956,11 @@ describe("ci workflow guards", () => {
       expect(actual).not.toContain("check-lint-hosted-core-shard");
       expect(actual).toContain("checks-baseline-ratchets");
       expect(actual).not.toContain("check-plan");
+      expect(ordinary.outputs.split_pr_guards).toBe("true");
+      expect(qualification.outputs.split_pr_guards).toBe("false");
       expect(Number(qualification.outputs.hybrid_hosted_base_rows)).toBe(
-        // Qualification retains three Mac Node rows, two Swift phases, and iOS.
-        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1,
+        // Qualification retains native rows; ordinary PRs add one parallel guard row.
+        Number(ordinary.outputs.hybrid_hosted_base_rows) + 2 + 3 + 2 + 1 - 1,
       );
       expect(Number(qualification.outputs.hybrid_hosted_total_rows)).toBe(actual.length);
     });
@@ -6309,6 +6334,12 @@ describe("ci workflow guards", () => {
             ...(eventName === "pull_request" ? [] : ["runtime-topology-architecture"]),
           ];
       expect(rows.map((row: { group: string }) => row.group)).toEqual(expectedGroups);
+      expect(manifest.outputs.split_pr_guards).toBe(String(eventName === "pull_request"));
+      const architectureGuards = [
+        ...rows,
+        ...JSON.parse(expectDefined(manifest.outputs.check_matrix, "check matrix")).include,
+      ].filter((row: { check_name: string }) => row.check_name === "check-guards-architecture");
+      expect(architectureGuards).toHaveLength(eventName === "pull_request" ? 1 : 0);
       expect(manifest.outputs.run_check_additional).toBe("true");
       for (const row of rows) {
         if (row.group === "source-contracts") {
@@ -6668,22 +6699,25 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.each([
-    { earlyGuards: false, selected: false, failure: "" },
-    { earlyGuards: true, selected: false, failure: "" },
-    { earlyGuards: false, selected: true, failure: "" },
-    { earlyGuards: true, selected: true, failure: "" },
-    { earlyGuards: false, selected: true, failure: "check:import-cycles" },
-    { earlyGuards: true, selected: true, failure: "check:import-cycles" },
-    { earlyGuards: false, selected: true, failure: "check:madge-import-cycles" },
-    { earlyGuards: true, selected: true, failure: "check:madge-import-cycles" },
-  ])(
-    "keeps cycle checks blocking in the existing guard row ($earlyGuards, $selected, $failure)",
-    ({ earlyGuards, selected, failure }) => {
+  it.each(
+    [false, true].flatMap((earlyGuards) =>
+      [
+        { selected: false, kysely: false, failure: "" },
+        { selected: true, kysely: false, failure: "" },
+        { selected: true, kysely: true, failure: "" },
+        { selected: true, kysely: true, failure: "check:import-cycles" },
+        { selected: true, kysely: true, failure: "check:madge-import-cycles" },
+        { selected: true, kysely: true, failure: "lint:kysely" },
+      ].map(({ selected, kysely, failure }) => ({ selected, kysely, failure, earlyGuards })),
+    ),
+  )(
+    "keeps cycle and Kysely checks blocking in the existing guard row ($earlyGuards, $selected, $kysely, $failure)",
+    ({ earlyGuards, selected, kysely, failure }) => {
       const result = runCheckShardFixture({
         frozenTarget: false,
         earlyGuards,
         madgeImportCycles: selected,
+        kyselyGuardrails: kysely,
         failPackageScript: failure,
         scripts: [
           "check:doctor-deprecation-registry",
@@ -6698,7 +6732,85 @@ describe("ci workflow guards", () => {
           ? ["check:import-cycles", "check:madge-import-cycles"]
           : ["check:import-cycles"],
       );
-      expect(result.calls).not.toContain("check:architecture");
+      expect(result.calls.includes("lint:kysely")).toBe(
+        kysely && (failure === "" || failure === "lint:kysely"),
+      );
+      for (const deferred of [
+        "check:architecture",
+        "check:deprecated-api-usage",
+        "check:wrapper-shadowing",
+        "check:deprecated-jsdoc",
+        "db:kysely:check",
+        "check:database-first-legacy-stores",
+      ]) {
+        expect(result.calls).not.toContain(deferred);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "keeps ordinary guards when source scans run in parallel (early=%s)",
+    (earlyGuards) => {
+      const result = runCheckShardFixture({
+        frozenTarget: false,
+        earlyGuards,
+        splitPrGuards: true,
+        madgeImportCycles: true,
+        kyselyGuardrails: true,
+        scripts: [
+          "check:doctor-deprecation-registry",
+          "check:browser-inspect-script:swift",
+          "check:temp-path-guardrails",
+          "check:coercion-helpers",
+        ],
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.calls).toContain("tool-display:check");
+      expect(result.calls).toContain("check:temp-path-guardrails");
+      expect(result.calls).toContain("lint:auth:pairing-account-scope");
+      expect(result.calls).not.toContain("check:import-cycles");
+      expect(result.calls).not.toContain("check:madge-import-cycles");
+      expect(result.calls).not.toContain("lint:kysely");
+    },
+  );
+
+  it.each(
+    [false, true].flatMap((earlyGuards) =>
+      [
+        { failure: "", kysely: false, calls: ["check:import-cycles", "check:madge-import-cycles"] },
+        {
+          failure: "",
+          kysely: true,
+          calls: ["check:import-cycles", "check:madge-import-cycles", "lint:kysely"],
+        },
+        { failure: "check:import-cycles", kysely: true, calls: ["check:import-cycles"] },
+        {
+          failure: "check:madge-import-cycles",
+          kysely: true,
+          calls: ["check:import-cycles", "check:madge-import-cycles"],
+        },
+        {
+          failure: "lint:kysely",
+          kysely: true,
+          calls: ["check:import-cycles", "check:madge-import-cycles", "lint:kysely"],
+        },
+      ].map(({ failure, kysely, calls }) => ({ failure, kysely, calls, earlyGuards })),
+    ),
+  )(
+    "runs selected architecture guards with blocking failures ($earlyGuards, $kysely, $failure)",
+    ({ earlyGuards, kysely, failure, calls }) => {
+      const result = runCheckShardFixture({
+        frozenTarget: false,
+        task: "guards-architecture",
+        earlyGuards,
+        splitPrGuards: true,
+        madgeImportCycles: true,
+        kyselyGuardrails: kysely,
+        failPackageScript: failure,
+        scripts: [],
+      });
+      expect(result.status, result.output).toBe(failure ? 17 : 0);
+      expect(result.calls).toEqual(calls);
     },
   );
 

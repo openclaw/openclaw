@@ -435,11 +435,7 @@ export class GatewayClient {
     );
   }
 
-  updateNodeManifest(manifest: {
-    caps: string[];
-    commands: string[];
-    computerUse?: BaseGatewayClientOptions["computerUse"];
-  }): void {
+  updateNodeManifest(manifest: Parameters<BaseGatewayClient["updateNodeManifest"]>[0]): void {
     if (this.#client) {
       this.#client.updateNodeManifest(manifest);
     } else {

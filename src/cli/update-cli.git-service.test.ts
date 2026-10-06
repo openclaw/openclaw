@@ -125,6 +125,14 @@ describe("update-cli", () => {
         runtimePath: process.execPath,
         wrapperPath,
       });
+      // A real LaunchAgent install creates this directory before the service runs.
+      await fs.mkdir(
+        requireValue(initialPlan.environment.TMPDIR, "managed service temp directory"),
+        {
+          recursive: true,
+          mode: 0o700,
+        },
+      );
       const existingEnvironment = Object.fromEntries(
         Object.entries(initialPlan.environment).filter(
           (entry): entry is [string, string] => typeof entry[1] === "string",

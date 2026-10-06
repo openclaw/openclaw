@@ -1314,54 +1314,39 @@ export class NodeRegistry {
     return await enqueueKeyedTask({
       tails: this.pairingGenerationEventChains,
       key: nodeId,
-      task: () =>
-        this.sendEventRawForPairingGenerationNow(
-          nodeId,
-          pairingGeneration,
-          event,
-          payloadJSON,
-          preparePayload,
-        ),
-    });
-  }
-
-  private async sendEventRawForPairingGenerationNow(
-    nodeId: string,
-    pairingGeneration: string,
-    event: string,
-    payloadJSON?: SerializedEventPayload | null,
-    preparePayload?: NodeEventPayloadPreparation,
-  ): Promise<boolean> {
-    let node = this.getRegisteredSessionForPairingGeneration(nodeId, pairingGeneration);
-    if (!node) {
-      return false;
-    }
-    if (this.options.resolveCurrentPairingState) {
-      const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
-        invalidateStale: true,
-      });
-      if (resolution.status !== "current") {
-        if (resolution.status === "stale" && resolution.presenceInvalidated) {
-          this.publishActiveNodeContext();
+      task: async () => {
+        let node = this.getRegisteredSessionForPairingGeneration(nodeId, pairingGeneration);
+        if (!node) {
+          return false;
         }
-        return false;
-      }
-      node = resolution.session;
-    }
-    // Select stream baselines after queued sends and pairing verification settle.
-    const prepared = preparePayload?.(node.connId);
-    if (preparePayload && !prepared) {
-      return false;
-    }
-    const sent = this.observeEventSend(
-      node,
-      event,
-      this.sendEventRawInternal(node, event, prepared ? prepared.payloadJSON : payloadJSON),
-    );
-    if (sent && this.nodesById.get(nodeId) === node) {
-      prepared?.onSent?.();
-    }
-    return sent;
+        if (this.options.resolveCurrentPairingState) {
+          const resolution = await this.resolvePairingLease(this.capturePairingLease(node), {
+            invalidateStale: true,
+          });
+          if (resolution.status !== "current") {
+            if (resolution.status === "stale" && resolution.presenceInvalidated) {
+              this.publishActiveNodeContext();
+            }
+            return false;
+          }
+          node = resolution.session;
+        }
+        // Select stream baselines after queued sends and pairing verification settle.
+        const prepared = preparePayload?.(node.connId);
+        if (preparePayload && !prepared) {
+          return false;
+        }
+        const sent = this.observeEventSend(
+          node,
+          event,
+          this.sendEventRawInternal(node, event, prepared ? prepared.payloadJSON : payloadJSON),
+        );
+        if (sent && this.nodesById.get(nodeId) === node) {
+          prepared?.onSent?.();
+        }
+        return sent;
+      },
+    });
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {

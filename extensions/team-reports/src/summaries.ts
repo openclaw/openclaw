@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
+import type { TeamReportsConfig } from "./config.js";
 import type {
   GithubCounts,
   GithubItem,
@@ -13,13 +14,6 @@ import type {
 export type SummaryLlm = Pick<OpenClawPluginApi["runtime"]["llm"], "complete">;
 type CompletionParams = Parameters<SummaryLlm["complete"]>[0];
 type SummaryLogger = Pick<SourceRuntime["logger"], "warn">;
-
-type SummaryOptions = {
-  enabled: boolean;
-  model?: string;
-  reasoning?: CompletionParams["reasoning"];
-  agentId?: string;
-};
 
 type SummaryResult = {
   report: ReportDocument;
@@ -321,7 +315,7 @@ function fallbackResult(
 
 export async function generateSummaries(params: {
   report: ReportDocument;
-  options: SummaryOptions;
+  options: TeamReportsConfig["summaries"];
   llm: SummaryLlm;
   previous?: { report: ReportDocument; summary: SummaryDocument };
   signal?: AbortSignal;

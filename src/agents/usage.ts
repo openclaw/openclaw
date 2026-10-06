@@ -85,25 +85,7 @@ export type NormalizedUsage = {
 };
 
 /** OpenAI chat-completions compatible usage shape. */
-export type OpenAiChatCompletionsUsage = {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-  prompt_tokens_details?: { cached_tokens: number };
-  completion_tokens_details?: { reasoning_tokens: number };
-};
-
-/** OpenAI Responses compatible usage shape. */
-type OpenAiResponsesUsage = {
-  input_tokens: number;
-  input_tokens_details: {
-    cached_tokens: number;
-    cache_write_tokens: number;
-  };
-  output_tokens: number;
-  output_tokens_details: { reasoning_tokens: number };
-  total_tokens: number;
-};
+export type OpenAiChatCompletionsUsage = ReturnType<typeof toOpenAiChatCompletionsUsage>;
 
 /** Assistant usage snapshot with token counts and computed cost buckets. */
 export type AssistantUsageSnapshot = Usage;
@@ -360,9 +342,7 @@ export function toDiagnosticUsage(usage: NormalizedUsage) {
  * cost. Field name and shape match OpenAI's documented usage breakdown:
  * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(
-  usage: NormalizedUsage | undefined,
-): OpenAiChatCompletionsUsage {
+export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined) {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
@@ -390,7 +370,7 @@ export function toOpenAiChatCompletionsUsage(
  * recombine OpenClaw's separately priced buckets and retain their details.
  * Reasoning tokens remain a detail of `output_tokens`, not an extra bucket.
  */
-export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined): OpenAiResponsesUsage {
+export function toOpenAiResponsesUsage(usage: NormalizedUsage | undefined) {
   const input = Math.max(0, usage?.input ?? 0);
   const output = Math.max(0, usage?.output ?? 0);
   const cacheRead = Math.max(0, usage?.cacheRead ?? 0);

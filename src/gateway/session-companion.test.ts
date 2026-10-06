@@ -72,7 +72,7 @@ function createHarness(overrides?: {
     scheduler: overrides?.scheduler ?? createTestGatewayScheduler(),
     contextReader: { currentSessionId, read: readContext },
     getConfig: () => cfg,
-    sessionObserver: { getCompanionSnapshot },
+    sessionObserver: { getCompanionSnapshotAsync: async () => getCompanionSnapshot() },
     resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
     run,
     now: overrides?.now ?? (() => 100),

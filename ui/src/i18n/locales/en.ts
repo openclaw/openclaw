@@ -2862,8 +2862,10 @@ export const en: TranslationMap & {
     },
     waitingForApproval: "Waiting for approval…",
     waitingOnSubagents: "Waiting on subagents",
-    yieldWaiting: "Handed off and waiting",
-    yieldResumed: "Resumed",
+    waitingOnSubagentsCount: "Waiting on {count} subagents",
+    waitingOnSubagent: "Waiting on {name}",
+    waitingOnSession: "Waiting on 1 session",
+    waitingOnSessionsCount: "Waiting on {count} sessions",
     startupStatus: {
       retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",

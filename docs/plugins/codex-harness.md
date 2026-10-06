@@ -42,9 +42,12 @@ the optional capability ignore it; the normal minimum-version check still applie
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
 bounded display rows in memory. They do not expire or restart native discovery
-on the normal sidebar polling interval. The sorted view retains only eligible
-display rows and is invalidated by resident row changes. Complete, unfiltered
-queries reuse it directly; live status and workspace settings still apply per page.
+on the normal sidebar polling interval. Row publication maintains one sorted view
+of eligible display rows and prepares their case-folded title text. A row change
+does not make the next poll rebuild or sort the inventory. Page selection stops
+after finding its rows and continuation; live status and workspace settings still
+apply per page. Searches with few matches and backward navigation can still
+examine the retained inventory, but do not allocate a filtered copy of it.
 This memory-only boundary is the local
 resident query. The Gateway also reads session entries from its resident session-row
 projection once its metadata is ready; mutations can require exact-key metadata refreshes
@@ -282,7 +285,7 @@ the following conservative capacities apply. The 490 column assumes 490 occupied
 entries in each named structure; a home with 490 current rows can still have
 20,000 historical field or queue entries.
 With those independent field and scan-path indexes full, settled string payload is
-bounded by 472.164 MiB for 490 current rows, or 936.165 MiB for 20,000 rows. These
+bounded by 473.566 MiB for 490 current rows, or 993.385 MiB for 20,000 rows. These
 figures exclude active work and object/engine overhead. The watched-directory cache
 can additionally retain 20,000 rollout paths (156.250 MiB at the maximum string
 length) and 256 directory keys (2 MiB). Unchanged generations share fingerprint
@@ -291,11 +294,16 @@ objects with the scan result; these are conservative independent bounds.
 | Retained string payload                        | 490 entries | 20,000 entries |
 | ---------------------------------------------- | ----------: | -------------: |
 | Display rows (12,469 code units each)          |  11.654 MiB |    475.655 MiB |
+| Prepared title search (up to 1,500 code units) |   1.402 MiB |     57.220 MiB |
 | Name, status, and settings records together    |   7.454 MiB |    304.260 MiB |
 | One scan-path generation                       |   3.828 MiB |    156.250 MiB |
 | Native thread DTOs pending projection          |  13.569 MiB |    553.856 MiB |
 | Mutation identifiers                           |   0.239 MiB |      9.766 MiB |
 | Cleanup or persistence keys (512-byte ceiling) |   0.479 MiB |     19.531 MiB |
+
+The title-search bound allows locale case folding to expand a 500-code-unit
+display title. This derived text is memory-only and is replaced or removed with
+its resident row; it is never persisted in the catalog snapshot.
 
 A native walk and file scan can each retain an older row snapshot, adding at most
 two row generations. Pending persistence can retain another row generation plus

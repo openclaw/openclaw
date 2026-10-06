@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { resolveChatSubagentWait } from "./chat-subagent-wait.ts";
+import { resolveChatSubagentWait, type ChatSubagentWait } from "./chat-subagent-wait.ts";
 import { renderChatWorkingIndicator } from "./components/chat-working-indicator.ts";
 
 const parent: GatewaySessionRow = {
@@ -21,11 +21,13 @@ const child: GatewaySessionRow = {
 const messages = [
   {
     role: "assistant",
+    runId: "parent-run",
     timestamp: 2_000,
     content: [{ type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} }],
   },
   {
     role: "toolResult",
+    runId: "parent-run",
     toolCallId: "yield",
     toolName: "sessions_yield",
     timestamp: 2_001,
@@ -66,28 +68,116 @@ describe("chat waiting on subagents", () => {
       runActive: ownRunActive,
       messages,
       subagentSessions: [child],
+      subagentSessionsHydrated: true,
     });
     expect(result !== null).toBe(waiting);
     if (waiting) {
-      expect(result).toEqual({ startedAt: 2_000, child: { key: child.key, label: child.label } });
+      expect(result).toEqual({
+        startedAt: 2_000,
+        runId: "parent-run",
+        runningCount: 1,
+        child: { key: child.key, label: child.label },
+      });
     }
   });
 
-  it("does not need child rows and only links a sole active direct child", () => {
+  it("does not need child rows, counts running direct children and links a sole one", () => {
     const derive = (childRows?: GatewaySessionRow[]) =>
       resolveChatSubagentWait({
         selectedSession: parent,
         runActive: false,
         messages,
         subagentSessions: childRows,
+        subagentSessionsHydrated: childRows !== undefined,
       });
-    expect(derive()).toEqual({ startedAt: 2_000 });
-    expect(derive([child, { ...child, key: "agent:main:subagent:other" }])?.child).toBeUndefined();
-    expect(derive([{ ...child, spawnedBy: "agent:main:other" }])?.child).toBeUndefined();
-    expect(derive([{ ...child, hasActiveRun: false }])?.child).toBeUndefined();
+    expect(derive()).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
+    const summarize = (childRows: GatewaySessionRow[]) => {
+      const wait = derive(childRows);
+      return [wait?.runningCount, wait?.child?.key];
+    };
+    expect(summarize([child, { ...child, key: "agent:main:subagent:other" }])).toEqual([
+      2,
+      undefined,
+    ]);
+    // Once the pane holds every child and none is unfinished, nothing is waited on.
+    expect(derive([{ ...child, spawnedBy: "agent:main:other" }])).toBeNull();
+    expect(derive([{ ...child, hasActiveRun: false }])).toBeNull();
     expect(
-      derive([child, { ...child, key: "agent:main:grandchild", spawnedBy: child.key }])?.child?.key,
-    ).toBe(child.key);
+      summarize([child, { ...child, key: "agent:main:grandchild", spawnedBy: child.key }]),
+    ).toEqual([1, child.key]);
+  });
+
+  it("counts a child that handed off to its own subagents as unfinished", () => {
+    const yielded = {
+      ...child,
+      key: "agent:main:subagent:yielded",
+      status: "running" as const,
+      hasActiveRun: false,
+      hasActiveSubagentRun: true,
+    };
+    expect(
+      resolveChatSubagentWait({
+        selectedSession: parent,
+        runActive: false,
+        messages,
+        subagentSessions: [child, yielded],
+        subagentSessionsHydrated: true,
+      }),
+    ).toMatchObject({ runningCount: 2 });
+  });
+
+  it("counts child sessions that are not subagents without naming them", () => {
+    const session = { ...child, key: "agent:main:dashboard:opened", label: "Opened session" };
+    const derive = (rows: GatewaySessionRow[]) =>
+      resolveChatSubagentWait({
+        selectedSession: parent,
+        runActive: false,
+        messages,
+        subagentSessions: rows,
+        subagentSessionsHydrated: true,
+      });
+    expect(derive([session])).toEqual({
+      startedAt: 2_000,
+      runId: "parent-run",
+      runningCount: 0,
+      sessionCount: 1,
+    });
+    // A subagent on the ACP runtime is a subagent like any other.
+    const acp = { ...child, key: "agent:main:acp:coder", label: "Coder" };
+    expect(derive([acp])).toMatchObject({ runningCount: 1, child: { key: acp.key } });
+    // Subagents come first: the other sessions are counted once none is left.
+    expect(derive([child, session])).toMatchObject({
+      runningCount: 1,
+      sessionCount: 1,
+      child: { key: child.key },
+    });
+  });
+
+  it("names or counts children only once the pane's own child query has answered", () => {
+    const derive = (subagentSessionsHydrated: boolean) =>
+      resolveChatSubagentWait({
+        selectedSession: parent,
+        runActive: false,
+        messages,
+        subagentSessions: [child],
+        subagentSessionsHydrated,
+      });
+    // A row seeded from another list is not proof that it is the only child left.
+    expect(derive(false)).toEqual({ startedAt: 2_000, runId: "parent-run", runningCount: 0 });
+    expect(derive(true)).toMatchObject({ runningCount: 1, child: { key: child.key } });
+  });
+
+  it.each([
+    { name: "the parent's run end", endedAt: 2_500, startedAt: 2_500 },
+    { name: "the yield when the row's run end is older", endedAt: 1_500, startedAt: 2_000 },
+  ])("counts the wait from $name", ({ endedAt, startedAt }) => {
+    expect(
+      resolveChatSubagentWait({
+        selectedSession: { ...parent, endedAt },
+        runActive: false,
+        messages,
+      })?.startedAt,
+    ).toBe(startedAt);
   });
 
   it.each([
@@ -101,31 +191,46 @@ describe("chat waiting on subagents", () => {
         runActive: false,
         messages: history,
       }),
-    ).toEqual({ startedAt: null });
+    ).toEqual({ startedAt: null, runningCount: 0 });
   });
 
   it("renders the wait without parent output usage or rotating phrases and navigates the child", () => {
     const container = document.createElement("div");
     const onOpenSession = vi.fn();
-    const waitingSubagents = { startedAt: 2_000, child: { key: child.key, label: child.label! } };
-    const draw = (startedAt: number | null) =>
+    const sole = { key: child.key, label: child.label! };
+    const draw = (waitingSubagents: ChatSubagentWait) =>
       render(
         renderChatWorkingIndicator(
-          { kind: "reading-indicator", key: "parent-wait", startedAt },
+          { kind: "reading-indicator", key: "parent-wait", startedAt: 1_500 },
           { waitingSubagents, onOpenSession, outputTokens: 4_700, workingPhrases: ["Building"] },
         ),
         container,
       );
-    draw(2_000);
-    expect(container.textContent).toContain("Waiting on subagents");
+    draw({ startedAt: 2_000, runningCount: 1, child: sole });
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain(
+      "Waiting on Backend implementation",
+    );
     expect(container.querySelector("openclaw-working-phrase")).toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+    // The wait counts from the handoff, not from the indicator item.
     expect(container.querySelector("openclaw-elapsed-time")).toHaveProperty("startMs", 2_000);
     container.querySelector("button")?.click();
     expect(onOpenSession).toHaveBeenCalledWith(child.key);
-    draw(2_000);
-    expect(container.querySelector("openclaw-elapsed-time")).toHaveProperty("startMs", 2_000);
-    draw(null);
+    draw({ startedAt: 2_000, runningCount: 3 });
+    expect(container.textContent).toContain("Waiting on 3 subagents");
+    expect(container.querySelector("button")).toBeNull();
+    draw({ startedAt: null, runningCount: 0 });
+    expect(container.textContent).toContain("Waiting on subagents");
     expect(container.querySelector("openclaw-elapsed-time")).toBeNull();
+    draw({ startedAt: 2_000, runningCount: 0, sessionCount: 2 });
+    expect(container.textContent).toContain("Waiting on 2 sessions");
+    expect(container.querySelector("button")).toBeNull();
+    draw({ startedAt: 2_000, runningCount: 0, sessionCount: 1 });
+    expect(container.textContent).toContain("Waiting on 1 session");
+    // A subagent still running is what the line names.
+    draw({ startedAt: 2_000, runningCount: 1, sessionCount: 2, child: sole });
+    expect(container.textContent?.replace(/\s+/g, " ")).toContain(
+      "Waiting on Backend implementation",
+    );
   });
 });

@@ -111,7 +111,7 @@ async function seedYieldedParent() {
     endedAt: startedAt + 50,
     abortedLastRun: false,
   });
-  expect(getSubagentRunByChildSessionKey(childKey)?.requesterSettleWake).toMatchObject({
+  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
     requesterYieldBatch: true,
   });
 }
@@ -247,7 +247,7 @@ it.each(["unchanged", "new turn", "reset incarnation", "partial cancellation"] a
         lastRunId: parentRunId,
       });
       await fixture.settle();
-      expect(getSubagentRunByChildSessionKey(childKey)?.killReconciliation).toMatchObject({
+      expect((await getSubagentRunByChildSessionKey(childKey))?.killReconciliation).toMatchObject({
         suppressTaskDelivery: true,
       });
       expect(

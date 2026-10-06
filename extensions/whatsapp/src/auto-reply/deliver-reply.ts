@@ -38,27 +38,17 @@ import { markdownToWhatsAppChunks } from "../targets-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 import { elide } from "./util.js";
 
-export type WhatsAppReplyDeliveryResult = {
-  results: WhatsAppSendResult[];
-  receipt: MessageReceipt;
-  providerAccepted: boolean;
-};
+export type WhatsAppReplyDeliveryResult = Awaited<ReturnType<typeof deliverWebReply>>;
 
-export type WhatsAppReplyTransportContext = {
-  accountId: string;
-  conversationId: string;
-  conversationKind: "direct" | "group";
-  chatJid: string;
+export type WhatsAppReplyTransportContext = Omit<
+  ReturnType<typeof createWhatsAppReplyTransportContext>,
+  "senderJid" | "correlationId"
+> & {
   senderJid?: string;
-  recipientJid: string;
   correlationId?: string;
-  reply: AdmittedWebInboundMessage["platform"]["reply"];
-  sendMedia: AdmittedWebInboundMessage["platform"]["sendMedia"];
 };
 
-export function createWhatsAppReplyTransportContext(
-  msg: AdmittedWebInboundMessage,
-): WhatsAppReplyTransportContext {
+export function createWhatsAppReplyTransportContext(msg: AdmittedWebInboundMessage) {
   const admission = requireWhatsAppInboundAdmission(msg);
   return {
     accountId: admission.accountId,
@@ -138,15 +128,11 @@ type WhatsAppReplyDeliveryParams = {
   onMediaAccepted?: (mediaUrl: string) => void;
 };
 
-export async function deliverWebReply(
-  params: WhatsAppReplyDeliveryParams,
-): Promise<WhatsAppReplyDeliveryResult> {
+export async function deliverWebReply(params: WhatsAppReplyDeliveryParams) {
   return await withWhatsAppLogicalDeliveryActivity(() => deliverWebReplyInActivityScope(params));
 }
 
-async function deliverWebReplyInActivityScope(
-  params: WhatsAppReplyDeliveryParams,
-): Promise<WhatsAppReplyDeliveryResult> {
+async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParams) {
   const { replyResult, transport, maxMediaBytes, textLimit, replyLogger, connectionId, skipLog } =
     params;
   const conversationId = transport.conversationId;
@@ -158,7 +144,7 @@ async function deliverWebReplyInActivityScope(
     acceptedMediaUrls.add(mediaUrl);
     params.onMediaAccepted?.(mediaUrl);
   };
-  const finishDelivery = (): WhatsAppReplyDeliveryResult => {
+  const finishDelivery = () => {
     const receipt = createWhatsAppReplyDeliveryReceipt(sendResults);
     return {
       results: sendResults,
