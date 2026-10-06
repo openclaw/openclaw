@@ -33,6 +33,10 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
+import {
+  captureIncognitoSessionBinding,
+  captureIncognitoSessionTopology,
+} from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { withSessionStoreTarget } from "./session-store-target-runtime.js";
@@ -60,7 +64,10 @@ export async function loadSessionEntryForAdmission(
     incognito?: SessionCollaborationScope["incognito"];
   } = {},
 ): Promise<{ entry: SessionEntry | undefined; databaseClaim: SessionAdmissionDatabaseClaim }> {
-  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
+  const binding = captureIncognitoSessionBinding(input);
+  const env = cloneEnvWithPlatformSemantics(
+    input.env ?? (binding && captureIncognitoSessionTopology()?.env) ?? process.env,
+  );
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const scope = { ...input, env };
   const agentId = scope.agentId
@@ -68,11 +75,18 @@ export async function loadSessionEntryForAdmission(
     : parseAgentSessionKey(scope.sessionKey)?.agentId;
   const assertCurrent = () => {
     preparation.signal?.throwIfAborted();
+    binding?.admissionSignal?.throwIfAborted();
     preparation.assertCurrent?.();
   };
   assertCurrent();
-  if (preparation.incognito) {
-    const { actor, authority } = preparation.incognito;
+  const incognitoBinding =
+    preparation.incognito ??
+    (binding && {
+      actor: binding.actor,
+      authority: { assertCurrent: () => binding.actor.assertReadable() },
+    });
+  if (incognitoBinding) {
+    const { actor, authority } = incognitoBinding;
     const resolved = resolveSqliteScope(scope);
     const options = toDatabaseOptions(resolved);
     if (actor.agentId !== resolved.agentId || actor.path !== options.path) {
@@ -106,6 +120,7 @@ export async function loadSessionEntryForAdmission(
       if (released) {
         throw new Error("Incognito admission claim is released");
       }
+      current.assertCurrent();
       borrowed.assertCurrent();
     };
     const release = () => {
@@ -137,6 +152,7 @@ export async function loadSessionEntryForAdmission(
       );
       current.assertCurrent();
       snapshot.claim.assertCurrent();
+      snapshot.snapshot.assertCurrent();
       const databaseClaim: WorkerSessionAdmissionClaim = {
         kind: "worker",
         identity: borrowed.identity.handle,
@@ -226,16 +242,16 @@ export async function loadSessionEntryForAdmission(
             const source: AgentDatabaseRequestExecutionSource = {
               assertCurrent: assertSourceCurrent,
               onRegistryChange: owner.onRegistryChange,
-              createAdmission(binding) {
+              createAdmission(admissionBinding) {
                 return () => ({
-                  nativeLocations: binding.nativeLocations,
+                  nativeLocations: admissionBinding.nativeLocations,
                   admission: createSqliteWorkerOperationAdmission((request, grant) => {
-                    binding.authorize(request);
+                    admissionBinding.authorize(request);
                     assertSourceCurrent();
                     if (!grant()) {
                       throw new Error("Session admission authority expired");
                     }
-                  }, binding.attachment),
+                  }, admissionBinding.attachment),
                 });
               },
             };

@@ -472,12 +472,15 @@ export function runSqliteReadOperationSync<T>(
   mode: "cached" | "fresh" = "cached",
 ): T {
   const owner = owners.get(database);
-  if (!owner?.admitted || owner.authorizerActive) {
+  if (!owner || owner.authorizerActive) {
     return operation();
   }
   owner.readDepth += 1;
   try {
-    owner.readDataVersion = readSqliteCacheDataVersion(database, mode);
+    // First admission publishes its probe into this scope before validation consumes it.
+    if (owner.admitted) {
+      owner.readDataVersion = readSqliteCacheDataVersion(database, mode);
+    }
     return operation();
   } finally {
     owner.readDepth -= 1;

@@ -284,15 +284,18 @@ export function withIncognitoSessionRow<T>(
       const { value, snapshot } = await actor.sessions.readRow(authority, key);
       let active = true;
       const assertions = [snapshot.assertCurrent];
-      const assertCurrent = () => {
+      const assertSourcesCurrent = (checks: readonly (() => void)[]) => {
         authority.assertCurrent();
-        if (!active) {
-          throw new Error("Incognito row consumer is no longer active");
-        }
-        for (const assert of assertions) {
+        for (const assert of checks) {
           assert();
         }
         actor.assertReadable();
+      };
+      const assertCurrent = () => {
+        if (!active) {
+          throw new Error("Incognito row consumer is no longer active");
+        }
+        assertSourcesCurrent(assertions);
       };
       const finish = (row: Row | undefined): T => {
         assertCurrent();
@@ -403,6 +406,8 @@ export function withIncognitoSessionRow<T>(
             },
           );
         };
+        // Acquisitions outlive presentation and retain root checks, never their own or siblings'.
+        const acquisitionAssertions = [...assertions];
         const withPrivate = async (index: number): Promise<T> => {
           const relatedKey = privateKeys[index];
           if (!relatedKey) {
@@ -416,7 +421,7 @@ export function withIncognitoSessionRow<T>(
                   kind: "ephemeral",
                   agentId,
                   env,
-                  authority: { assertCurrent },
+                  authority: { assertCurrent: () => assertSourcesCurrent(acquisitionAssertions) },
                   existingOnly: true,
                 });
           assertCurrent();

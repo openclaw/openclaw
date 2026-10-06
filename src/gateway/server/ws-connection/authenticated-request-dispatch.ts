@@ -45,7 +45,7 @@ import {
 import type { GatewayWsClient } from "../ws-types.js";
 import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { createGatewayRpcDiagnostics } from "./request-diagnostics.js";
-import { scheduleGatewayRequestStart } from "./request-start.js";
+import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
 import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 const loadGatewayServerMethods = createLazyPromise(
@@ -427,8 +427,11 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               );
               return;
             }
-            await start;
-            diagnostics?.finishQueue();
+            try {
+              await start;
+            } finally {
+              diagnostics?.finishQueue();
+            }
           }
           entry?.assertOpen();
           // Waiting never grants authority. Ordinary requests may outlive their socket;
@@ -461,14 +464,24 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
             ),
           );
         } catch (err) {
-          dispatchOutcome = "threw";
+          const startTimedOut = err instanceof GatewayRequestStartTimeoutError;
+          dispatchOutcome = startTimedOut ? "returned" : "threw";
           // Failure diagnostics and responses belong to the same request trace as the handler.
-          logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          if (!startTimedOut) {
+            logGateway.error(`request handler failed: ${formatForLog(err)}`);
+          }
           const staleInstall = classifyGatewayStaleInstall(err);
           respondWithAuthority(
             false,
             undefined,
-            staleInstall?.error ?? errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+            staleInstall?.error ??
+              errorShape(
+                ErrorCodes.UNAVAILABLE,
+                formatForLog(err),
+                startTimedOut
+                  ? { retryable: true, details: { reason: "request-start-timeout" } }
+                  : undefined,
+              ),
           );
         } finally {
           settled.resolve();

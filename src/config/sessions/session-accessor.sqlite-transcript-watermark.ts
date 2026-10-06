@@ -7,7 +7,6 @@ import {
   getNodeSqliteKysely,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
   withOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
@@ -64,12 +63,7 @@ export function readSessionTranscriptWatermark(
 ): SessionTranscriptWatermark {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      runSqliteDeferredTransactionSync(
-        database.db,
-        () => readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
-        { databaseLabel: database.path, operationLabel: "session transcript watermark read" },
-      ),
+    (database) => readSessionTranscriptWatermarkInDatabase(database, resolved.sessionId),
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : { generation: null, maxSeq: null };

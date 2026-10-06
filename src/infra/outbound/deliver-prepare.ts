@@ -78,17 +78,6 @@ async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
   });
 }
 
-function suppressionReasonForEmpty(params: {
-  replyHookChanged: boolean;
-  messageHookChanged: boolean;
-}) {
-  return params.messageHookChanged
-    ? ("empty_after_message_sending_hook" as const)
-    : params.replyHookChanged
-      ? ("empty_after_reply_payload_sending_hook" as const)
-      : ("no_visible_payload" as const);
-}
-
 function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
   const summary = buildPayloadSummary(payload);
   const {
@@ -336,10 +325,11 @@ async function prepareOutboundPlan(
       entries.push({
         sourceIndex,
         status: "suppressed",
-        reason: suppressionReasonForEmpty({
-          replyHookChanged: replyHookResult.changed,
-          messageHookChanged: messageHookResult.contentRewritten,
-        }),
+        reason: messageHookResult.contentRewritten
+          ? "empty_after_message_sending_hook"
+          : replyHookResult.changed
+            ? "empty_after_reply_payload_sending_hook"
+            : "no_visible_payload",
       });
       continue;
     }

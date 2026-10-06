@@ -1,4 +1,3 @@
-// Stable facade for message-action normalization, routing, and execution.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

@@ -180,6 +180,11 @@ export type ResolveChannelMessageIngressParams = {
   event: ChannelIngressEventInput;
   /** Exact finalized host context this result may enter; omit for decision-only checks. */
   contextBinding?: ChannelIngressContextBinding;
+  /** Opted-in public ingress: publish fresh isolated visible children of this invocation.
+   * The plugin must verify every supplied context post is public; unknown audiences deny.
+   * Recheck current account policy and delivery ownership synchronously at use time.
+   */
+  childSessionPublication?: { audience: "public"; assertCurrent: () => void };
   policy: ChannelIngressPolicyInput;
   /** Raw direct-message allowlist entries. */
   allowFrom?: Array<string | number> | null;

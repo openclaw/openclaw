@@ -266,6 +266,17 @@ describe("SQLite transcript watermark queries", () => {
       return watermark;
     };
     try {
+      const exec = vi.spyOn(database.db, "exec");
+      try {
+        expect(read()).toEqual(before);
+        expect(
+          exec.mock.calls.filter(([sql]) =>
+            /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql),
+          ),
+        ).toEqual([]);
+      } finally {
+        exec.mockRestore();
+      }
       expect(peer.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
       const db = getNodeSqliteKysely<DB>(peer);
       runSqliteDeferredTransactionSync(database.db, () => {

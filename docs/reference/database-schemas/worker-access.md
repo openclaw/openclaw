@@ -84,6 +84,18 @@ compatibility operations retain their existing tiers. Offline full-store reset i
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
 session reset and other archive lifecycle operations are classified separately.
 
+First-party channel and in-process approval requests carry their original live
+authority into the existing approval writer. Lookup, malformed-verdict denial,
+resolution, and cron standing-grant minting keep their synchronous worker
+transactions, physical-store admission, FIFO, and acknowledged publication.
+The carrier identifies an internal assertion; it never replaces current Gateway,
+caller, or channel authority with a captured permission. Released opaque
+`GatewayRequestHandlerOptions.sessionMutationCommitGuard` callbacks retain their
+native transaction boundary until the next Plugin SDK major, so shared SQL kernels
+remain in the T1 inventory. Existing other-owner session authority reads remain
+separate migration debt. Schemas, stored bytes, retention, and update behavior are
+unchanged.
+
 Workspace alias registration and snapshot operations retain T2 for their native
 Doctor/migration and relocation-retirement callers alongside worker dispatch.
 Plugin catalog repair, legacy import, and migration-receipt retirement are also
@@ -775,6 +787,33 @@ Production acquisition still supplies no actor binding. The final atomic activat
 must install it with the remaining adapters and remove native routes together.
 This prerequisite retires no T1 sites and changes no schema, retention, durability,
 expiry, configuration, or update behavior.
+
+### Incognito acquisition and authority composition (P7k, inactive)
+
+The shared binding can acquire an existing actor or explicitly create one through
+the canonical execution owner. It captures the physical state root before yielding
+and retains that incarnation through consumption and cleanup. Existing-only misses
+create nothing. A retained SessionManager or Codex reader cannot escape the borrow;
+message iterators recheck current authority on each yield and close when consumption
+ends.
+
+Entry reads, admission claims, logical candidates, combined discovery, and placement
+evidence consume the same actor. Store scans retain each actor and its snapshot until
+the consumer finishes. Sharing, delivery, presence, and completion lineage read the
+owner’s committed facts synchronously, including cross-agent facts, without querying
+the actor from a grant. Native worker transactions still produce those facts; the
+Gateway does not open the incognito database or duplicate its authority projection.
+
+Nested acquisition preserves the enclosing authority and admission signal. Combined
+discovery uses that binding’s state root and refuses a conflicting explicit root.
+Accepted creation retains its live operation authority after admission closes;
+only its exact transaction preimage can authorize it while publication is pending.
+
+Production acquisition remains host-owned. Target-based synchronous SDK refusal is
+prepared but stays inactive for unbound callers until the atomic cutover. Activation
+must install acquisition and remove native selection, bridge, topology, and DB-keyed
+facts together. This prerequisite changes no schema, retention, durability, expiry,
+configuration, or update behavior and retires no T1 sites.
 
 ### Incognito domain entry points (P7l, inactive)
 

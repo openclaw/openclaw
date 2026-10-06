@@ -11,6 +11,10 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import {
+  createMockConfig,
+  fixedStoreConfig,
+} from "./openclaw-tools.session-status.test-support.js";
 
 const loadSessionStoreMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
@@ -45,36 +49,7 @@ const emptyPluginMetadataSnapshot = {
 };
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-const createMockConfig = () => ({
-  session: { mainKey: "main", scope: "per-sender" },
-  agents: {
-    defaults: {
-      model: { primary: "openai/gpt-5.4" },
-      models: {},
-    },
-  },
-  tools: {
-    agentToAgent: { enabled: false },
-  },
-});
-
 let mockConfig: Record<string, unknown> = createMockConfig();
-
-function fixedStoreConfig() {
-  return {
-    session: { mainKey: "main", scope: "global", store: "/tmp/shared-sessions.sqlite" },
-    agents: {
-      ownership: "explicit",
-      defaults: {
-        model: { primary: "openai/gpt-5.4" },
-        models: {},
-        sessionStore: { agentId: "ops" },
-      },
-      entries: { ops: {}, research: {} },
-    },
-    tools: { agentToAgent: { enabled: false } },
-  };
-}
 
 function createSessionsModuleMock() {
   const resolveMockStorePath = (_store: string | undefined, opts?: { agentId?: string }) =>
@@ -269,6 +244,11 @@ function createCommandsStatusRuntimeModuleMock() {
 }
 
 vi.mock("../config/sessions.js", createSessionsModuleMock);
+vi.mock("../config/sessions/session-accessor.entry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.entry.js")>()),
+  resolveSessionEntryCandidateTargetForRuntime:
+    createSessionsModuleMock().resolveSessionEntryCandidateTarget,
+}));
 vi.mock("../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("./tools/in-process-gateway.js", () => ({
   callAgentToolGatewayRequest: (opts: unknown) => agentToolGatewayCallMock(opts),

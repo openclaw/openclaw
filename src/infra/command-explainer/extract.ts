@@ -1,5 +1,4 @@
 import type { Node as TreeSitterNode } from "web-tree-sitter";
-import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
   detectCarriedShellBuiltinArgv,
   detectCarrierInlineEvalArgv as detectSharedCarrierInlineEvalArgv,
@@ -205,23 +204,6 @@ function decodedSourceOffsetsForNode(node: TreeSitterNode, value: string): numbe
   }
   const prefixLength = valuePrefixLength(node);
   return Array.from({ length: value.length + 1 }, (_, index) => prefixLength + index);
-}
-
-function argumentFromNode(
-  index: number,
-  node: TreeSitterNode,
-  value: ShellWordValue,
-  base: SpanBase,
-): CommandArgument {
-  const span = spanFromNode(node, base);
-  const decodedSourceOffsets = decodedSourceOffsetsForNode(node, value.value);
-  return {
-    index,
-    text: node.text,
-    value: value.value,
-    span,
-    decodedSourceOffsets,
-  };
 }
 
 type ShellWordValue = { kind: "literal"; value: string } | { kind: "dynamic"; value: string };
@@ -491,7 +473,13 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
 
 function appendCommandArgument(node: TreeSitterNode, parsed: CommandArgv, state: WalkState): void {
   const value = shellWordValue(node);
-  const argument = argumentFromNode(parsed.argv.length, node, value, state.spanBase);
+  const argument: CommandArgument = {
+    index: parsed.argv.length,
+    text: node.text,
+    value: value.value,
+    span: spanFromNode(node, state.spanBase),
+    decodedSourceOffsets: decodedSourceOffsetsForNode(node, value.value),
+  };
   parsed.arguments.push(argument);
   if (value.kind === "dynamic") {
     parsed.dynamicArguments.push(argument);
@@ -657,10 +645,6 @@ function canParseShellWrapperPayload(transportArgv: string[], commandFlag: strin
   return lowerFlag === "-c" || lowerFlag === "--command" || /^-[^-]*c[^-]*$/i.test(lowerFlag);
 }
 
-function isDynamicPayload(payload: string, dynamicArguments: CommandArgument[]): boolean {
-  return dynamicArguments.some((argument) => argument.value === payload);
-}
-
 function payloadBaseFromArgument(argument: CommandArgument, payload: string): SpanBase | null {
   const payloadOffset = argument.value.indexOf(payload);
   if (payloadOffset < 0) {
@@ -709,7 +693,11 @@ function shellWrapperPayloadForParsing(
 ): { command: string; spanBase: SpanBase } | null {
   const shellWrapper = extractShellWrapperCommand(argv);
   const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
-  if (!shellWrapper.isWrapper || !payload || isDynamicPayload(payload, dynamicArguments)) {
+  if (
+    !shellWrapper.isWrapper ||
+    !payload ||
+    dynamicArguments.some((argument) => argument.value === payload)
+  ) {
     return null;
   }
   const spanBase = payloadBaseFromArguments(payload, argumentsList);
@@ -724,37 +712,6 @@ function shellWrapperPayloadForParsing(
   return { command: payload, spanBase };
 }
 
-function recordInlineEvalRisk(
-  inlineEval: InterpreterInlineEvalHit,
-  text: string,
-  span: SourceSpan,
-  output: MutableExplanation,
-): void {
-  output.risks.push({
-    kind: "inline-eval",
-    command: inlineEval.normalizedExecutable,
-    flag: inlineEval.flag,
-    text,
-    span,
-  });
-}
-
-function recordDynamicArgumentRisks(
-  command: string,
-  dynamicArguments: CommandArgument[],
-  output: MutableExplanation,
-): void {
-  for (const argument of dynamicArguments) {
-    output.risks.push({
-      kind: "dynamic-argument",
-      command,
-      argumentIndex: argument.index,
-      text: argument.text,
-      span: argument.span,
-    });
-  }
-}
-
 function recordCommandRisks(
   argv: string[],
   dynamicArguments: CommandArgument[],
@@ -767,10 +724,24 @@ function recordCommandRisks(
     return;
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
-  recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
+  for (const argument of dynamicArguments) {
+    output.risks.push({
+      kind: "dynamic-argument",
+      command: normalizedExecutable,
+      argumentIndex: argument.index,
+      text: argument.text,
+      span: argument.span,
+    });
+  }
   const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
   if (inlineEval) {
-    recordInlineEvalRisk(inlineEval, text, span, output);
+    output.risks.push({
+      kind: "inline-eval",
+      command: inlineEval.normalizedExecutable,
+      flag: inlineEval.flag,
+      text,
+      span,
+    });
   }
 
   const shellWrapper = extractShellWrapperCommand(argv);
@@ -982,14 +953,10 @@ async function walk(
   }
 }
 
-function commandBucketKey(command: CommandStep): string {
-  return `${command.context}\0${command.parentCommandId ?? ""}`;
-}
-
 function commandTopologyBuckets(commands: RecordedCommandStep[]): CommandTopologyBucket[] {
   const buckets = new Map<string, CommandTopologyBucket>();
   for (const command of commands) {
-    const key = commandBucketKey(command);
+    const key = `${command.context}\0${command.parentCommandId ?? ""}`;
     const bucket = buckets.get(key);
     if (bucket) {
       bucket.commands.push(command);
@@ -1015,18 +982,6 @@ type CommandSourceRange = {
   startIndex: number;
   endIndex: number;
 };
-
-function operatorSourceForBucket(
-  bucket: CommandTopologyBucket,
-  sources: readonly OperatorSource[],
-): OperatorSource | null {
-  return (
-    sources.find(
-      (source) =>
-        source.context === bucket.context && source.parentCommandId === bucket.parentCommandId,
-    ) ?? null
-  );
-}
 
 function commandSourceRanges(
   source: string,
@@ -1081,7 +1036,10 @@ function resolveOperators(
   const operators: CommandOperator[] = [];
 
   for (const bucket of commandTopologyBuckets(commands)) {
-    const bucketOperatorSource = operatorSourceForBucket(bucket, operatorSources);
+    const bucketOperatorSource = operatorSources.find(
+      (entry) =>
+        entry.context === bucket.context && entry.parentCommandId === bucket.parentCommandId,
+    );
     const bucketRanges = bucketOperatorSource
       ? commandSourceRanges(bucketOperatorSource.source, bucket.commands)
       : null;
@@ -1135,7 +1093,6 @@ function resolveOperators(
   return operators;
 }
 
-/** Parses a shell command into command steps, shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

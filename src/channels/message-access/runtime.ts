@@ -76,6 +76,7 @@ function createChannelIngressResolverForOwner(
         subject: input.subject,
         conversation: input.conversation,
         contextBinding: input.contextBinding,
+        childSessionPublication: input.childSessionPublication,
         event: {
           kind: event.kind ?? "message",
           authMode: event.authMode ?? "inbound",
@@ -438,6 +439,7 @@ async function resolveChannelMessageIngressForOwner(
             id: senderId!,
           },
       binding: participantBinding,
+      childSessionPublication: params.childSessionPublication,
       verifiedPrincipal,
       requesterProfile:
         requester && ownerIsCurrent()

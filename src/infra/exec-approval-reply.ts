@@ -45,7 +45,6 @@ export type ExecApprovalReplyMetadata = {
   sessionKey?: string;
 };
 
-/** Approval descriptor guaranteed to carry a canonical typed approval action. */
 export type TypedApprovalActionDescriptor = ExecApprovalActionDescriptor & {
   action: Extract<MessagePresentationAction, { type: "approval" }>;
 };
@@ -136,7 +135,6 @@ export function buildExecApprovalActionDescriptors(
     : [];
 }
 
-/** Build approval descriptors with explicit owner-aware typed actions. */
 export function buildTypedApprovalActionDescriptors(
   params: BuildExecApprovalActionDescriptorsParams & {
     approvalKind: ChannelApprovalKind;
@@ -159,7 +157,6 @@ export function buildTypedApprovalActionDescriptors(
   );
 }
 
-/** Build portable approval controls from decision descriptors. */
 export function buildApprovalPresentationFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): MessagePresentation | undefined {
@@ -196,7 +193,6 @@ export function buildApprovalButtonPresentation(
   );
 }
 
-/** Build portable approval controls with explicit owner-aware typed actions. */
 export function buildTypedApprovalPresentation(
   params: BuildApprovalPresentationParams & { approvalKind: ChannelApprovalKind },
 ): MessagePresentation | undefined {
@@ -368,7 +364,6 @@ export function buildExecApprovalPendingReplyPayload(
   };
 }
 
-/** Build an exec approval prompt with canonical typed decision actions. */
 export function buildTypedExecApprovalPendingReplyPayload(
   params: ExecApprovalPendingReplyParams,
 ): ReplyPayload {

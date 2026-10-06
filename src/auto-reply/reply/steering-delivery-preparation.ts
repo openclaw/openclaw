@@ -10,8 +10,8 @@ import { readIncognitoSessionSteeringEntry } from "../../config/sessions/session
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionEntriesFromStoresInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,

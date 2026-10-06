@@ -13,6 +13,11 @@ import {
 } from "../../agents/tools/gateway-caller-context.js";
 import { callInProcessGatewayToolWithCreation } from "../../agents/tools/in-process-gateway.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
+import {
+  bindChildSessionPublication,
+  admitChildSessionPublication,
+  readChildSessionPublication,
+} from "../../channels/message-access/child-session-publication.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   assignSessionOwner,
@@ -24,6 +29,7 @@ import {
   recordSessionParticipant,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
+import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -234,6 +240,7 @@ async function createHostedChildFixture(
       sessionId: string;
       runId: string;
       runStarted: boolean;
+      publicRead: boolean;
       entry: SessionEntry;
     }>(
       "sessions.create",
@@ -248,6 +255,11 @@ async function createHostedChildFixture(
         via: "spawn",
         actor: { type: "agent", id: "main" },
         requesterSessionKey,
+        ...(requesterSessionKey === parentKey
+          ? {
+              childSessionPublication: readChildSessionPublication(admitted.operationalRunInstance),
+            }
+          : {}),
         inheritedToolPolicy: { version: 1, allow: [], deny: [] },
       },
       {
@@ -323,6 +335,19 @@ async function createHostedChildFixture(
     await Promise.all(drains.filter((drain) => drain !== undefined));
   };
   return {
+    enablePublicIngress: () => {
+      const ingressContext = {};
+      bindChildSessionPublication(ingressContext, parentKey, () => {
+        if (!sourceCurrent || !hostCurrent) {
+          throw new Error("public source revoked");
+        }
+      });
+      admitChildSessionPublication(ingressContext, admitted.operationalRunInstance, () => {
+        if (caller.receiptAuthority?.() === false) {
+          throw new Error("public source run closed");
+        }
+      });
+    },
     send,
     sendNested,
     scope,
@@ -379,6 +404,32 @@ function userMessages(
 }
 
 describe("hosted creation transfers accepted child input", () => {
+  it("commits public ingress publication with the fresh child before its first turn, not its descendants", async () => {
+    await using fixture = await createHostedChildFixture(true);
+    fixture.enablePublicIngress();
+    const child = await fixture.send();
+    await fixture.dispatchEntered;
+    expect(child.publicRead).toBe(true);
+    expect(child.entry).not.toHaveProperty("publicShare");
+    expect(resolveSessionPublicShare(loadSessionEntry(fixture.scope()))?.sessionId).toBe(
+      child.sessionId,
+    );
+    expect(loadSessionEntry(fixture.parentScope)?.publicShare).toBeUndefined();
+    await fixture.finish();
+    expect(fixture.provider).toHaveBeenCalledTimes(1);
+    const nested = await fixture.sendNested();
+    expect(nested.publicRead).toBe(false);
+    expect(nested.entry).not.toHaveProperty("publicShare");
+  });
+
+  it("does not publish a private source's child", async () => {
+    await using fixture = await createHostedChildFixture(true);
+    await patchSessionEntryCore(fixture.parentScope, () => ({ visibility: "draft" }));
+    fixture.enablePublicIngress();
+    await expect(fixture.send()).rejects.toThrow(/non-private child/);
+    expect(fixture.provider).not.toHaveBeenCalled();
+  });
+
   it("retains delegated human Git credit without inventing child participation", async () => {
     await using fixture = await createHostedChildFixture();
     syncGitHubIdentity({

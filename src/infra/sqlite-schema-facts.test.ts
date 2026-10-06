@@ -213,17 +213,21 @@ describe("admitted SQLite schema facts", () => {
 
   it("ends nested read scopes on exceptions and before async continuations", async () => {
     const filename = path.join(tempDirs.make("openclaw-schema-read-scope-"), "state.sqlite");
-    const reader = openDatabase(undefined, true, filename);
+    const reader = openDatabase(undefined, false, filename);
     const writer = new DatabaseSync(filename);
     databases.push(writer);
     const hasTable = (name: string) =>
       runSqliteReadOperationSync(reader, () => tableExists(reader, name));
+    const admission = observeSqliteReadSql(StatementSync.prototype);
     expect(() =>
       runSqliteReadOperationSync(reader, () => {
+        admitSqliteSchema(reader);
         expect(hasTable("committed")).toBe(false);
         throw new Error("read failed");
       }),
     ).toThrow("read failed");
+    admission.restore();
+    expect(admission.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(1);
     writer.exec("CREATE TABLE committed (id)");
     expect(hasTable("committed")).toBe(true);
 
