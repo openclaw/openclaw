@@ -7,6 +7,11 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
+import type {
+  InternalAgentTurnOperatorAuthorityCapture,
+  InternalAgentTurnPrincipalOptions,
+} from "./agent-turn/internal-facade.types.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
 import { resolveSessionRequestTargets } from "./session-request-targets.js";
 
@@ -19,14 +24,21 @@ export function createContext(): GatewayRequestContext {
   } as unknown as GatewayRequestContext;
   context.resolveSessionRequestTargets = (request) =>
     resolveSessionRequestTargets({ ...request, context });
-  context.createAgentTurnFacade = (principal) =>
-    createInternalAgentTurnFacade({
-      ...principal,
-      getContext: () => context,
-      ...(context.getGatewayMethodRegistry
-        ? { getMethodRegistry: context.getGatewayMethodRegistry }
-        : {}),
-    });
+  context.createAgentTurnFacade = Object.assign(
+    (principal: InternalAgentTurnPrincipalOptions) =>
+      createInternalAgentTurnFacade({
+        ...principal,
+        getContext: () => context,
+        ...(context.getGatewayMethodRegistry
+          ? { getMethodRegistry: context.getGatewayMethodRegistry }
+          : {}),
+      }),
+    {
+      captureOperatorRunAuthority: async (
+        params: Parameters<InternalAgentTurnOperatorAuthorityCapture>[0],
+      ) => await captureGatewayOperatorRunAuthority({ ...params, context }),
+    },
+  );
   return context;
 }
 

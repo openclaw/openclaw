@@ -14,6 +14,10 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import type {
+  InternalAgentTurnOperatorAuthorityCapture,
+  InternalAgentTurnPrincipalOptions,
+} from "./agent-turn/internal-facade.types.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { ChannelRuntimeSnapshot } from "./server-channel-runtime.types.js";
@@ -220,11 +224,24 @@ function createLocalGatewayRequestContext(
     }
     return initializing;
   };
-  context.createAgentTurnFacade = async (principal) => {
-    const { createInternalAgentTurnFacade } =
-      await import("./agent-turn/internal-facade.runtime.js");
-    return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
-  };
+  context.createAgentTurnFacade = Object.assign(
+    async (principal: InternalAgentTurnPrincipalOptions) => {
+      const { createInternalAgentTurnFacade } =
+        await import("./agent-turn/internal-facade.runtime.js");
+      return createInternalAgentTurnFacade({ ...principal, getContext: () => context });
+    },
+    {
+      captureOperatorRunAuthority: async (
+        captureParams: Parameters<InternalAgentTurnOperatorAuthorityCapture>[0],
+      ) => {
+        const { captureGatewayOperatorRunAuthority } = await import("./operator-run-authority.js");
+        return await captureGatewayOperatorRunAuthority({
+          ...captureParams,
+          context,
+        });
+      },
+    },
+  );
   return context;
 }
 

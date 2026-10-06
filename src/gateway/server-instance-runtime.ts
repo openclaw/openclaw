@@ -17,7 +17,10 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 // HTTP agent ingress can finish before the lazy agent.wait handler loads its recorder.
 import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
-import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import type {
+  InternalAgentTurnOperatorAuthorityCapture,
+  InternalAgentTurnPrincipalOptions,
+} from "./agent-turn/internal-facade.types.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   ADMIN_SCOPE,
@@ -25,6 +28,7 @@ import {
   WRITE_SCOPE,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createRecoveryTypingManager } from "./recovery-typing.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type {
@@ -84,18 +88,29 @@ export function createGatewayInstanceRuntime(
     }
   };
 
-  const createAgentTurnFacade = (principal: InternalAgentTurnPrincipalOptions) => {
-    const assertContextCurrent = () => {
-      assertDispatchAvailable("agent turn");
-      principal.assertContextCurrent?.();
-    };
-    return createInternalAgentTurnFacade({
-      ...principal,
-      assertContextCurrent,
-      getContext: options.getContext,
-      getMethodRegistry: options.getMethodRegistry,
-    });
-  };
+  const createAgentTurnFacade = Object.assign(
+    (principal: InternalAgentTurnPrincipalOptions) => {
+      const assertContextCurrent = () => {
+        assertDispatchAvailable("agent turn");
+        principal.assertContextCurrent?.();
+      };
+      return createInternalAgentTurnFacade({
+        ...principal,
+        assertContextCurrent,
+        getContext: options.getContext,
+        getMethodRegistry: options.getMethodRegistry,
+      });
+    },
+    {
+      captureOperatorRunAuthority: async (
+        params: Parameters<InternalAgentTurnOperatorAuthorityCapture>[0],
+      ) =>
+        await captureGatewayOperatorRunAuthority({
+          ...params,
+          context: options.getContext(),
+        }),
+    },
+  );
 
   const dispatch = async <T>(params: {
     allowedMethods: ReadonlySet<string>;
