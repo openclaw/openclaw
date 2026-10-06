@@ -82,7 +82,11 @@ class NodeRuntimeWearProxyTest {
         gateway.rejectOperatorProtocol = true
         runtime.connect(gateway.endpoint)
         withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
-          while (runtime.gatewayConnectionProblem.value?.code != "PROTOCOL_MISMATCH") delay(10)
+          while (runtime.gatewayConnectionDisplay.value.problem
+              ?.code != "PROTOCOL_MISMATCH"
+          ) {
+            delay(10)
+          }
         }
         repeat(2) {
           val incompatible = checkNotNull(runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.ProxyStatus)).result).jsonObject

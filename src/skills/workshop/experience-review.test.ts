@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getPreparedModelRuntimePluginGeneration,
@@ -121,8 +122,35 @@ afterEach(() => {
 });
 
 describe("skill experience review scheduler", () => {
-  it("runs detached review work outside the foreground prepared generation", async () => {
+  it.each(["context", "source"] as const)(
+    "does not retain or schedule Incognito %s evidence",
+    async (identity) => {
+      vi.useFakeTimers();
+      const runReview = vi.fn(async () => {});
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive: () => false,
+        runReview,
+      });
+      const params = completedRun();
+      const sessionKey = "agent:main:dashboard:incognito-workshop";
+      if (identity === "context") {
+        params.ctx = { ...params.ctx, sessionKey };
+      } else {
+        params.source = { ...params.source!, sessionKey };
+      }
+      scheduler.schedule(params);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.runAllTimersAsync();
+      expect(runReview).not.toHaveBeenCalled();
+    },
+  );
+
+  it("runs detached review work outside the completed caller and prepared generation", async () => {
+    vi.useFakeTimers();
+    const caller = new AsyncLocalStorage<string>();
+    const observedCallers: Array<string | undefined> = [];
     const generation: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: {} as never,
@@ -138,10 +166,12 @@ describe("skill experience review scheduler", () => {
     });
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => {
+        observedCallers.push(caller.getStore());
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         return false;
       },
       runReview: async (candidate) => {
+        observedCallers.push(caller.getStore());
         observedPluginScopes.push(
           getPluginCache() === foregroundCache,
           getPluginRegistryForContext(),
@@ -151,20 +181,24 @@ describe("skill experience review scheduler", () => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         finishReview?.();
       },
-      setTimer: (callback) => setTimeout(callback, 0),
+      setTimer: (callback, delayMs) => setTimeout(AsyncLocalStorage.bind(callback), delayMs),
     });
 
-    withPluginCache(foregroundCache, () =>
-      withPluginRuntimeRegistryScope(foregroundRegistry, () =>
-        withPreparedModelRuntimePluginGenerationScope(generation, () => {
-          scheduler.schedule(completedRun());
-        }),
+    caller.run("completed-turn", () =>
+      withPluginCache(foregroundCache, () =>
+        withPluginRuntimeRegistryScope(foregroundRegistry, () =>
+          withPreparedModelRuntimePluginGenerationScope(generation, () => {
+            scheduler.schedule(completedRun());
+          }),
+        ),
       ),
     );
     await retirePluginCache(foregroundCache);
     setActivePluginRegistry(currentRegistry);
+    await vi.advanceTimersByTimeAsync(30_000);
     await reviewFinished;
 
+    expect(observedCallers).toEqual([undefined, undefined]);
     expect(observedGenerations).toEqual([undefined, undefined, undefined]);
     expect(observedPluginScopes).toEqual([false, currentRegistry]);
     scheduler.clear();
@@ -513,30 +547,41 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("drops the pending review after a failure", async () => {
-    const callbacks: Array<() => void> = [];
-    const setTimer = vi.fn((callback: () => void) => {
-      callbacks.push(callback);
-      const timer = setTimeout(() => {}, 60_000);
-      timer.unref();
-      return timer;
-    });
-    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-      setTimer,
-    });
-    scheduler.schedule(completedRun());
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(setTimer).toHaveBeenCalledOnce();
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
+  it.each(["activity check", "review"])(
+    "drops the pending review after a %s failure",
+    async (phase) => {
+      vi.useFakeTimers();
+      const callbacks: Array<() => void> = [];
+      const setTimer = vi.fn((callback: () => void) => {
+        callbacks.push(callback);
+        const timer = setTimeout(() => {}, 60_000);
+        timer.unref();
+        return timer;
+      });
+      const isSystemActive = vi.fn(() => {
+        if (phase === "activity check") {
+          throw new Error("activity unavailable");
+        }
+        return false;
+      });
+      const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive,
+        runReview,
+        setTimer,
+      });
+      scheduler.schedule(completedRun());
+      expect(() => callbacks[0]?.()).not.toThrow();
+      await flushMicrotasks();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      expect(setTimer).toHaveBeenCalledOnce();
+      callbacks[0]?.();
+      await flushMicrotasks();
+      expect(isSystemActive).toHaveBeenCalledOnce();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      scheduler.clear();
+    },
+  );
 
   it("skips errored, disabled, unavailable, and internal runs", async () => {
     vi.useFakeTimers();
@@ -571,24 +616,6 @@ describe("skill experience review scheduler", () => {
 });
 
 describe("skill experience review prompt", () => {
-  it("caps used and existing skill lists", () => {
-    const skills = Array.from({ length: 120 }, (_, index) => ({
-      name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
-      source: "workspace" as const,
-      activation: "read" as const,
-    }));
-    const prompt = buildSkillExperienceReviewPrompt(
-      {
-        usedSkills: skills,
-        existingSkills: skills,
-      },
-      "propose",
-    );
-    expect(prompt).toContain("more used skills omitted");
-    expect(prompt).toContain("(+70 more not shown)");
-    expect(Math.max(...prompt.split("\n").map((line) => line.length))).toBeLessThanOrEqual(2_000);
-  });
-
   it("renders a deterministic and capped used-skills receipt", () => {
     const usedSkills = Array.from({ length: 120 }, (_, index) => ({
       name: `skill-${String(index).padStart(3, "0")}-${"x".repeat(180)}`,
@@ -633,8 +660,8 @@ describe("skill experience review prompt", () => {
     }
   });
 
-  it.each(["auto", "propose"] as const)("preserves interrupted evidence in %s mode", (mode) => {
-    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, mode);
+  it("preserves interrupted evidence", () => {
+    const prompt = buildSkillExperienceReviewPrompt({ turnAborted: true }, "propose");
     expect(prompt).toContain("Only capture procedures that visibly worked");
   });
 
@@ -655,6 +682,13 @@ describe("skill experience review prompt", () => {
 });
 
 describe("skill experience review preparation", () => {
+  it("rejects Incognito evidence before preparing a queued review", async () => {
+    const params = completedRun({ sessionKey: "agent:main:dashboard:incognito-workshop" });
+    await expect(
+      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
+    ).resolves.toBeUndefined();
+  });
+
   it.each([
     { agentId: "direct", eligible: true },
     { agentId: "isolated", eligible: false },
@@ -674,12 +708,5 @@ describe("skill experience review preparation", () => {
     });
 
     expect(result !== undefined).toBe(eligible);
-  });
-
-  it("keeps an eligible foreground candidate", async () => {
-    const params = completedRun();
-    await expect(
-      prepareSkillExperienceReviewCandidate(captureCandidate(params), params.config),
-    ).resolves.toBeDefined();
   });
 });

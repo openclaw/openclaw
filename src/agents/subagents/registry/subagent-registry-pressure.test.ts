@@ -43,7 +43,7 @@ describe("subagent suspended delivery pressure", () => {
       await sweeper.sweepOnce();
       await sweeper.sweepOnce();
     }
-    sweeper.reset();
+    await sweeper.reset();
     await sweeper.sweepOnce();
     await sweeper.sweepOnce();
     expect(warn.mock.calls).toEqual(
@@ -70,7 +70,13 @@ describe("subagent suspended delivery pressure", () => {
 
     await sweeper.sweepOnce();
 
-    expect(discardTerminalDelivery).toHaveBeenCalledExactlyOnceWith(entry, Date.now(), "expired");
+    expect(discardTerminalDelivery).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
+      Date.now(),
+      "expired",
+    );
+    expect(entry.delivery?.status).toBe("suspended");
+    expect(runs.get(entry.runId)?.delivery?.status).toBe("discarded");
     expect(completeCleanupBookkeeping).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledExactlyOnceWith(
       "subagent suspended delivery discarded",

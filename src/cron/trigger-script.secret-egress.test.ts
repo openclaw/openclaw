@@ -75,7 +75,9 @@ describe("cron script gateway exec with secret egress", () => {
           execTarget: { version: 1, host: "gateway" } as const,
           executionIdentity: {
             ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
-            onPostAdmission: (context: AdmittedRunContext) => admitted.push(context),
+            onPostAdmission: (context: AdmittedRunContext) => {
+              admitted.push(context);
+            },
           },
         };
         await expect(

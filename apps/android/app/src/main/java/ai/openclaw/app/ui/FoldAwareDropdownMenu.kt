@@ -63,6 +63,7 @@ internal data class FoldAwareMenuItem(
   val icon: ImageVector? = null,
   val enabled: Boolean = true,
   val interactionSource: MutableInteractionSource? = null,
+  val iconContent: (@Composable () -> Unit)? = null,
 )
 
 /** Activity-hosted, non-nested menu. The surrounding Box is its stationary anchor. */
@@ -149,7 +150,7 @@ private fun MenuBody(
             text = {
               Text(item.label, onTextLayout = { opening.textLayouts[item.id] = it })
             },
-            leadingIcon = item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
+            leadingIcon = item.iconContent ?: item.icon?.let { icon -> { Icon(icon, contentDescription = null) } },
             enabled = item.enabled,
             interactionSource = item.interactionSource,
             onClick = { owner.accept(opening, item.id) },
@@ -446,8 +447,8 @@ private class AnchoredMenuOwner {
     }
     val token = host.windowToken ?: return null
     val display = host.display?.displayId ?: return null
-    val origin = host.windowOrigin()
-    val activityOffset = decor.windowOrigin() - origin
+    val origin = host.windowScreenOrigin()
+    val activityOffset = decor.windowScreenOrigin() - origin
     val metrics = WindowMetricsCalculator.getOrCreate().computeCurrentWindowMetrics(activity).bounds
     val full = IntRect(0, 0, metrics.width(), metrics.height())
     val position = anchor.positionInWindow()
@@ -458,11 +459,7 @@ private class AnchoredMenuOwner {
       foldSafeRegions(full, features.features)
         .map { it.translate(activityOffset) }
         .filter { it.contains(actualAnchor) }
-        .minWithOrNull(
-          compareByDescending<IntRect> { it.width.toLong() * it.height }
-            .thenBy { it.top }
-            .thenBy { if (direction == LayoutDirection.Ltr) it.left else -it.right },
-        ) ?: return null
+        .preferredFoldSafeRegion(direction) ?: return null
     val frame = Rect().also(host::getWindowVisibleDisplayFrame)
     val hostPosition = IntArray(2).also(host::getLocationInWindow)
     val hostBounds = IntRect(hostPosition[0], hostPosition[1], hostPosition[0] + host.width, hostPosition[1] + host.height)
@@ -493,12 +490,6 @@ private class AnchoredMenuOwner {
 }
 
 private fun IntRect.contains(other: IntRect): Boolean = other.width > 0 && other.height > 0 && other.left >= left && other.top >= top && other.right <= right && other.bottom <= bottom
-
-private fun View.windowOrigin(): IntOffset {
-  val screen = IntArray(2).also(::getLocationOnScreen)
-  val window = IntArray(2).also(::getLocationInWindow)
-  return IntOffset(screen[0] - window[0], screen[1] - window[1])
-}
 
 private fun View.screenBounds(): IntRect {
   val screen = IntArray(2).also(::getLocationOnScreen)

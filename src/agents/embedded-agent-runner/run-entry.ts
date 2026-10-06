@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   emitAgentEvent,
   emitAgentEventForRunContext,
@@ -8,12 +9,16 @@ import {
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { mergeAcceptedSessionSpawnsForRun } from "../accepted-session-spawn.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  readPreparedRunOperatorAuthority,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
 import {
   createAssistantErrorTranscript,
   type AssistantErrorTranscript,
 } from "../assistant-error-transcript.js";
 import { resolveModelFallbackError } from "../failover-error.js";
+import { isFallbackCandidateSkipped } from "../fallback-skip-cache.js";
 import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
@@ -35,16 +40,15 @@ import type {
   ModelFallbackRouteResolution,
 } from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
+import { modelKey } from "../model-ref-shared.js";
 import { settleFailedRequesterRun, settleRequesterRun } from "../requester-run-settlement.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { resolveSessionPlacementRuntimeOverride } from "../session-placement-admission.js";
 import {
   didEmbeddedCyberFailoverTargetCommitWork,
   EMBEDDED_CYBER_FAILOVER_TRIGGER_CODE,
-  isEmbeddedCyberFailoverTargetSkipped,
   isEmbeddedCyberFailoverTargetUsable,
   isEmbeddedModelSelectionStrict,
-  isSameEmbeddedCyberFailoverTarget,
   recordEmbeddedCyberFailoverTargetUnavailable,
   resolveEmbeddedCyberFailoverConfig,
   resolveEmbeddedCyberFailoverTarget,
@@ -62,12 +66,13 @@ import {
   type EmbeddedAgentRunEntryTerminal,
   type RunEntryTerminalBehavior,
 } from "./run-entry-terminal.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
 export type { EmbeddedAgentRunEntryTerminal } from "./run-entry-terminal.js";
 
-type RunEntryCandidateOptions = {
+export type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
@@ -162,19 +167,23 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
     const result = await runEmbeddedAgentEntryInternal(params);
     // Placement and asynchronous terminal cleanup have finished. Only this
     // accepted logical result may release children retained across candidates.
-    settleRequesterRun(requester, result.result, () => admission?.assertSourceCurrent());
+    await settleRequesterRun(requester, result.result, () => admission?.assertSourceCurrent());
     return result;
   } catch (error) {
-    throw settleFailedRequesterRun(requester, error);
+    throw await settleFailedRequesterRun(requester, error);
   }
 }
 
 async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   params: EmbeddedAgentRunEntryParams<T>,
 ): Promise<EmbeddedAgentRunEntryResult<T>> {
+  const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
-  const placementRuntime = resolveSessionPlacementRuntimeOverride(params.identity);
+  const placementRuntime = await resolveSessionPlacementRuntimeOverride(params.identity);
+  params.abortSignal?.throwIfAborted();
+  params.preparedRunAdmission?.assertSourceCurrent();
+  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const resolveRuntimeOverride = (provider: string, model: string) => {
     const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
     if (requestedRuntime || !placementRuntime) {
@@ -215,6 +224,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   });
   let failed = true;
   let unsettledContextEngineTurnAttempt: ContextEngineTurnAttemptFacts | undefined;
+  const discardTurnAttempt = async (facts: ContextEngineTurnAttemptFacts) => {
+    await discardContextEngineTurnAttemptIntent({ facts, lease: contextEngineLogicalTurnLease });
+    unsettledContextEngineTurnAttempt = undefined;
+  };
   let candidateIndex = 0;
   const committedSideEffect =
     params.behavior.kind === "command-rpc" ? params.behavior.hasCommittedSideEffect : undefined;
@@ -277,6 +290,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       runWithModelFallback<RunEntryCandidate<T>>({
         ...selection,
         ...params.identity,
+        operatorAuthority,
         abortSignal: params.abortSignal,
         resolveAgentHarnessRuntimeOverride: resolveRuntimeOverride,
         prepareCandidateChain: async (candidates) => {
@@ -337,11 +351,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                   : canFallback?.() === false
                     ? undefined
                     : result.classification,
-            }),
-        ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
-        ...(params.behavior.kind === "maintenance"
-          ? {}
-          : {
               mergeExhaustedResult: ({
                 latestResult,
                 preferredResult,
@@ -356,6 +365,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
                 turnAttempt: latestResult.turnAttempt,
               }),
             }),
+        ...(canFallback ? { canFallbackAfterError: canFallback } : {}),
         run: async (provider, model, options) => {
           assistantErrorTranscript.clear();
           if (!options) {
@@ -475,20 +485,19 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     if (
       capturedCyberRefusal &&
       target &&
+      (!operatorAuthority?.modelPolicy || operatorAuthority.modelPolicy.allows(target)) &&
       !isEmbeddedModelSelectionStrict(params.selection) &&
-      !isSameEmbeddedCyberFailoverTarget(capturedCyberRefusal, target) &&
-      !isEmbeddedCyberFailoverTargetSkipped({
+      modelKey(capturedCyberRefusal.provider, capturedCyberRefusal.model) !==
+        modelKey(target.provider, target.model) &&
+      !isFallbackCandidateSkipped({
         sessionId: params.identity.sessionId,
-        target,
+        provider: target.provider,
+        model: target.model,
         authScope,
       })
     ) {
       if (originalFallbackResult.result.turnAttempt) {
-        discardContextEngineTurnAttemptIntent({
-          facts: originalFallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
-        unsettledContextEngineTurnAttempt = undefined;
+        await discardTurnAttempt(originalFallbackResult.result.turnAttempt);
       }
       try {
         const targetFallbackResult = await runFallbackSearch(
@@ -538,11 +547,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           };
         } else {
           if (targetFallbackResult.result.turnAttempt) {
-            discardContextEngineTurnAttemptIntent({
-              facts: targetFallbackResult.result.turnAttempt,
-              lease: contextEngineLogicalTurnLease,
-            });
-            unsettledContextEngineTurnAttempt = undefined;
+            await discardTurnAttempt(targetFallbackResult.result.turnAttempt);
           }
           assistantErrorTranscript.restore(originalErrorTranscript);
           fallbackResult = {
@@ -625,11 +630,6 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
           }
         : {}),
     });
-    const settledResult = {
-      ...fallbackResult,
-      outcome,
-      result,
-    };
     const terminal = buildRunEntryTerminal({
       result,
       outcome: terminalOutcome,
@@ -642,7 +642,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       !params.abortSignal?.aborted &&
       canAdvanceContextEngineTurn({
         result,
-        fallbackOutcome: settledResult.outcome,
+        fallbackOutcome: outcome,
         terminal,
       });
     let releaseAcceptedTerminalWork: (() => void) | undefined;
@@ -660,13 +660,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
             facts: fallbackResult.result.turnAttempt,
             lease: contextEngineLogicalTurnLease,
           });
+          unsettledContextEngineTurnAttempt = undefined;
         } else {
-          discardContextEngineTurnAttemptIntent({
-            facts: fallbackResult.result.turnAttempt,
-            lease: contextEngineLogicalTurnLease,
-          });
+          await discardTurnAttempt(fallbackResult.result.turnAttempt);
         }
-        unsettledContextEngineTurnAttempt = undefined;
       }
     } finally {
       releaseAcceptedTerminalWork?.();
@@ -679,22 +676,20 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
       sessionOverrideSettled = true;
       if (
         !policyEscalated &&
-        settledResult.outcome === "completed" &&
+        outcome === "completed" &&
         params.sessionOverride.kind === "reconcile-completed"
       ) {
         await params.sessionOverride.reconcile({
-          provider: settledResult.provider,
-          model: settledResult.model,
+          provider: fallbackResult.provider,
+          model: fallbackResult.model,
         });
       }
     };
-    return { ...settledResult, terminal, settleSessionOverride };
+    return { ...fallbackResult, result, terminal, settleSessionOverride };
   } finally {
+    forgetPromptBuildDrainCacheForRun(params.identity.runId);
     if (unsettledContextEngineTurnAttempt) {
-      discardContextEngineTurnAttemptIntent({
-        facts: unsettledContextEngineTurnAttempt,
-        lease: contextEngineLogicalTurnLease,
-      });
+      await discardTurnAttempt(unsettledContextEngineTurnAttempt);
     }
     try {
       await assistantErrorTranscript.settle(failed && !params.abortSignal?.aborted);

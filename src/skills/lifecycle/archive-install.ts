@@ -1,15 +1,15 @@
-// Archive install helpers extract and validate skill archives during installation.
 import path from "node:path";
+import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import { installPackageDir } from "../../infra/install-package-dir.js";
-import {
-  evaluateSkillInstallPolicy,
-  type InstallSecurityScanResult,
-} from "../../plugins/install-security-scan.js";
+import { evaluateSkillInstallPolicy } from "../../plugins/install-security-scan.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
 import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/install-policy.js";
 import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
@@ -67,12 +67,6 @@ async function hasSkillArchiveRoot(
   return false;
 }
 
-function scanBlockedFailureKind(
-  blocked: NonNullable<InstallSecurityScanResult["blocked"]>,
-): SkillArchiveInstallFailureKind {
-  return blocked.code === "security_scan_failed" ? "unavailable" : "invalid-request";
-}
-
 const TRANSIENT_ARCHIVE_ERROR_PATTERNS = [
   "enoent",
   "enospc",
@@ -88,15 +82,10 @@ const TRANSIENT_ARCHIVE_ERROR_PATTERNS = [
 
 function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
   const lower = error.toLowerCase();
-  if (lower.startsWith("failed to install skill:")) {
-    return "unavailable";
-  }
-  for (const pattern of TRANSIENT_ARCHIVE_ERROR_PATTERNS) {
-    if (lower.includes(pattern)) {
-      return "unavailable";
-    }
-  }
-  return "invalid-request";
+  return lower.startsWith("failed to install skill:") ||
+    TRANSIENT_ARCHIVE_ERROR_PATTERNS.some((pattern) => lower.includes(pattern))
+    ? "unavailable"
+    : "invalid-request";
 }
 
 export async function installExtractedSkillRoot(
@@ -110,8 +99,17 @@ export async function installExtractedSkillRoot(
         ? String(sourceVersionValue)
         : undefined;
     const captureChanges = hasCommittedSkillChangeHooks();
+    const workspaceAccess = getAgentWorkspaceAccess(params.workspaceDir, "loadSkills");
+    const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+    if (access && !access.applySkillRoot) {
+      throw new WorkspaceAccessUnavailableError(
+        "Remote workspace skill installation is unavailable",
+      );
+    }
+    const applyRoot = access?.applySkillRoot ?? applyExtractedSkillRoot;
     const { policy: _policy, ...files } = params;
-    const result = await applyExtractedSkillRoot({
+    params.beforePersistentApply?.();
+    const result = await applyRoot({
       ...files,
       ...(captureChanges ? { changes: { source: changeSource, sourceVersion } } : {}),
       beforeInstall: async (mode) => {
@@ -130,10 +128,14 @@ export async function installExtractedSkillRoot(
           skillName: params.slug,
           sourceDir: params.extractedRoot,
         });
+        params.beforePersistentApply?.();
         return scanResult?.blocked
           ? {
               error: scanResult.blocked.reason,
-              failureKind: scanBlockedFailureKind(scanResult.blocked),
+              failureKind:
+                scanResult.blocked.code === "security_scan_failed"
+                  ? "unavailable"
+                  : "invalid-request",
             }
           : undefined;
       },
@@ -158,8 +160,10 @@ export async function installExtractedSkillRoot(
 }
 
 /** Native file replacement on the workspace host; policy and hook dispatch stay with the caller. */
-async function applyExtractedSkillRoot(
-  params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0],
+export async function applyExtractedSkillRoot(
+  params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0] & {
+    authorizeMutation?: () => Promise<void>;
+  },
 ): Promise<SkillRootApplyResult> {
   try {
     if (
@@ -207,6 +211,8 @@ async function applyExtractedSkillRoot(
       timeoutMs: params.timeoutMs ?? 120_000,
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
+      beforePersistentApply: params.beforePersistentApply,
+      authorizeMutation: params.authorizeMutation,
       hasDeps: false,
       depsLogMessage: "",
       ...(expectedClawHubState !== undefined
@@ -257,6 +263,7 @@ export async function installSkillArchiveFromPath(params: {
   timeoutMs?: number;
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
+  beforePersistentApply?: () => void;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -273,6 +280,7 @@ export async function installSkillArchiveFromPath(params: {
         timeoutMs: params.timeoutMs,
         logger: params.logger,
         policy: params.policy,
+        beforePersistentApply: params.beforePersistentApply,
       }),
   });
   if (!result.ok) {

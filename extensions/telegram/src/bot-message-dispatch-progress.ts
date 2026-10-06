@@ -1,15 +1,19 @@
 import {
   createChannelProgressDraftCompositor,
+  createLivePreviewLifecycle,
+  createPreviewMessageReceipt,
   resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftMaxLines,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import { deliverFallback } from "./bot-message-dispatch-delivery.js";
 import {
   enqueueDraftEvent,
   prepareAnswerLaneForToolProgress,
   retireAnswerLane,
-  rotateAnswerLaneAfterToolProgress,
   rotateAnswerLaneForNewMessage,
 } from "./bot-message-dispatch-draft.js";
 import type {
@@ -17,8 +21,11 @@ import type {
   TelegramDispatchTurnConfig as TurnConfig,
   TelegramProgressStateSlice,
 } from "./bot-message-dispatch.types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
+import { TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { editMessageTelegram } from "./send.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -51,6 +58,7 @@ function buildTelegramTextToolProgressLine(text: string, id?: string): ChannelPr
 
 type TelegramProgressDraftState = {
   answerLane: DraftLaneState;
+  reasoningLane: DraftLaneState;
   streamReasoningInProgressDraft: boolean;
 };
 
@@ -79,11 +87,6 @@ export function createProgressState(
   draftState: TelegramProgressDraftState,
   getTurn: () => Turn,
 ): TelegramProgressStateSlice {
-  const progressState = {
-    finalAnswerDeliveryStarted: false,
-    finalAnswerDelivered: false,
-    verboseProgressActive: () => false,
-  };
   const progressCompositor = createChannelProgressDraftCompositor({
     preparedItems: true,
     entry: config.telegramCfg,
@@ -104,7 +107,7 @@ export function createProgressState(
       draftState.answerLane.stream?.updatePreview(
         renderTelegramProgressDraftPreview(options.snapshot, {
           toolProgress: progressCompositor.previewToolProgressEnabled,
-          richMessages: config.telegramCfg.richMessages === true,
+          richMessages: config.richMessages,
           maxLines: resolveChannelProgressDraftMaxLines(config.telegramCfg),
           maxLineChars: resolveChannelProgressDraftMaxLineChars(config.telegramCfg),
         }),
@@ -115,35 +118,184 @@ export function createProgressState(
     },
     deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });
-  return Object.assign(progressState, {
+  const draftLanes = [draftState.answerLane, draftState.reasoningLane];
+  const previewLifecycle = createLivePreviewLifecycle<ReplyPayload, number>({
+    draft: draftLanes.some((lane) => lane.stream)
+      ? {
+          flush: async () => {
+            for (const lane of draftLanes) {
+              await lane.stream?.flush();
+            }
+          },
+          id: () =>
+            draftState.answerLane.stream?.messageId() ??
+            draftState.reasoningLane.stream?.messageId(),
+          discardPending: async () => {
+            for (const lane of draftLanes) {
+              await lane.stream?.discard();
+            }
+          },
+          clear: async () => {
+            for (const lane of draftLanes) {
+              // Accepted blocks and pagination pages have physical custody independent
+              // of whether this turn's final answer succeeded.
+              if (!lane.finalized) {
+                await lane.stream?.clear();
+              }
+            }
+          },
+        }
+      : undefined,
+    cleanupUndelivered: true,
+    onFinalStarted: () => progressCompositor.markFinalReplyStarted(),
+    onFinalDelivered: () => progressCompositor.markFinalReplyDelivered(),
+    onCleanupFailure: (error) =>
+      config.runtime.error?.(`telegram preview cleanup failed: ${formatErrorMessage(error)}`),
+  });
+  return {
+    verboseProgressActive: async () => false,
     progressCompositor,
+    previewLifecycle,
     commentaryProgressEnabled: progressCompositor.commentaryProgressEnabled,
     progressPreambleEnabled:
       config.streamMode === "progress" && draftState.answerLane.stream ? true : undefined,
-  });
+  };
 }
 
-export function canPushToolProgress(turn: Turn): boolean {
+export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
+  if (
+    turn.isSuperseded() ||
+    turn.previewLifecycle.finalSucceeded ||
+    turn.progressContinuationAdopted ||
+    turn.context.ctxPayload.InboundEventKind === "room_event" ||
+    !turn.previewLifecycle.finalFailed
+  ) {
+    return;
+  }
+  const text =
+    "I couldn't confirm the reply reached Telegram. Check OpenClaw chat history for the answer before retrying the task.";
+  const stream = turn.answerLane.stream;
+  const messageId = stream?.messageId();
+  if (
+    turn.previewLifecycle.finalDelivered ||
+    !stream ||
+    typeof messageId !== "number" ||
+    !Number.isFinite(messageId) ||
+    turn.answerLane.finalized
+  ) {
+    await deliverFallback(
+      turn,
+      [{ text, isError: true }],
+      turn.telegramCfg.silentErrorReplies === true,
+    );
+    return;
+  }
+  try {
+    await stream.discard();
+    if (turn.isSuperseded()) {
+      return;
+    }
+    await (turn.telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+      turn.context.chatId,
+      messageId,
+      text,
+      {
+        api: turn.bot.api,
+        cfg: turn.cfg,
+        accountId: turn.context.route.accountId,
+        linkPreview: turn.telegramCfg.linkPreview,
+      },
+    );
+    turn.answerLane.finalized = true;
+    turn.deliveryState.markDelivered();
+    await turn.previewLifecycle.observeDelivery(
+      {
+        visibleReplySent: true,
+        receipt: createPreviewMessageReceipt({ id: messageId }),
+        content: text,
+      },
+      { isError: true },
+    );
+  } catch (error) {
+    // An unavailable transport cannot terminalize the card. Keep its last visible
+    // progress instead of replacing unknown final custody with a duplicate send.
+    turn.runtime.error?.(`telegram failed preview settlement: ${formatErrorMessage(error)}`);
+  }
+}
+
+/**
+ * Keeps a confirmed progress card after its turn for the owner that adopted it.
+ * The card keeps Telegram's rendering, throttling and deletion; only the
+ * adopting owner's prepared items reach it.
+ */
+export function retainProgressDraft(turn: Turn, stream: TelegramDraftStream) {
+  // Retirement revokes the card synchronously: renders still queued here and
+  // edits still waiting for Telegram admission are rejected before network I/O.
+  let retired = false;
+  const assertNotRetired = () => {
+    if (retired) {
+      throw new TelegramRequestNotStartedError("Telegram retained progress retired");
+    }
+  };
+  const compositor = createChannelProgressDraftCompositor({
+    preparedItems: true,
+    entry: turn.telegramCfg,
+    mode: "progress",
+    active: true,
+    seed: `${turn.context.route.accountId}:${turn.context.chatId}:${turn.context.threadSpec.id ?? ""}`,
+    reasoningGate: false,
+    updateOnLineChange: true,
+    initialSnapshot: turn.progressCompositor.getSnapshot(),
+    update: (_text, options) => {
+      if (retired) {
+        return;
+      }
+      stream.updatePreview(
+        renderTelegramProgressDraftPreview(options.snapshot, {
+          toolProgress: compositor.previewToolProgressEnabled,
+          richMessages: turn.richMessages,
+          maxLines: resolveChannelProgressDraftMaxLines(turn.telegramCfg),
+          maxLineChars: resolveChannelProgressDraftMaxLineChars(turn.telegramCfg),
+        }),
+        assertNotRetired,
+      );
+    },
+  });
+  // Nothing renders until adoption hands the card over and the owner pushes.
+  let queue: Promise<unknown> | undefined;
+  const enqueue = (work: () => Promise<unknown>) => {
+    queue = (queue ?? compositor.start()).then(work).catch((error: unknown) => {
+      turn.runtime.error?.(`telegram retained progress failed: ${formatErrorMessage(error)}`);
+    });
+  };
+  return {
+    push: (item: Parameters<Turn["progressCompositor"]["pushItemEvent"]>[0]) =>
+      enqueue(() => compositor.pushItemEvent(item)),
+    retire: () => {
+      retired = true;
+      enqueue(async () => {
+        compositor.cancel();
+        await stream.clear();
+      });
+    },
+  };
+}
+
+export async function canPushToolProgress(turn: Turn): Promise<boolean> {
+  const verbose = await turn.verboseProgressActive();
   return Boolean(
     turn.answerLane.stream &&
-    !turn.verboseProgressActive() &&
+    !verbose &&
+    !turn.isSuperseded() &&
     !turn.answerLane.finalized &&
-    !turn.finalAnswerDeliveryStarted &&
-    !turn.finalAnswerDelivered,
+    !turn.previewLifecycle.finalStarted,
   );
 }
 
 function canPushCompactionProgress(turn: Turn): boolean {
   return Boolean(
-    turn.answerLane.stream &&
-    !turn.answerLane.finalized &&
-    !turn.finalAnswerDeliveryStarted &&
-    !turn.finalAnswerDelivered,
+    turn.answerLane.stream && !turn.answerLane.finalized && !turn.previewLifecycle.finalStarted,
   );
-}
-
-async function pushProgressEvent(turn: Turn, event: () => Promise<boolean>): Promise<boolean> {
-  return canPushToolProgress(turn) ? await event() : false;
 }
 
 export async function pushToolProgress(
@@ -151,7 +303,7 @@ export async function pushToolProgress(
   line?: string | ChannelProgressDraftLine,
   options?: { toolName?: string; startImmediately?: boolean; id?: string },
 ): Promise<boolean> {
-  if (!canPushToolProgress(turn)) {
+  if (!(await canPushToolProgress(turn))) {
     return false;
   }
   // Structured rows own detail; formatted callbacks only fill a missing keyed row.
@@ -169,15 +321,6 @@ export async function pushToolProgress(
   );
 }
 
-export async function pushReasoningProgress(
-  turn: Turn,
-  payload: { text?: string; isReasoningSnapshot?: boolean },
-): Promise<boolean> {
-  return await turn.progressCompositor.pushReasoningProgress(payload.text, {
-    snapshot: payload.isReasoningSnapshot === true,
-  });
-}
-
 export async function pushThinkingTokenProgress(
   turn: Turn,
   progressTokens: number,
@@ -187,32 +330,14 @@ export async function pushThinkingTokenProgress(
   });
 }
 
-export function markFinalStarted(turn: Turn): void {
-  turn.finalAnswerDeliveryStarted = true;
-  turn.progressCompositor.markFinalReplyStarted();
-}
-
-export function markFinalDelivered(turn: Turn): void {
-  turn.finalAnswerDelivered = true;
-  turn.progressCompositor.markFinalReplyDelivered();
-}
-
-export async function teardownProgressWindow(turn: Turn): Promise<void> {
-  if (turn.activeAnswerDraftIsToolProgressOnly) {
-    await rotateAnswerLaneAfterToolProgress(turn);
-    return;
-  }
-  await retireAnswerLane(turn, "clear");
-}
-
 export async function handleToolStart(
   turn: Turn,
   payload: CallbackPayload<"onToolStart">,
 ): Promise<boolean> {
   const toolName = payload.name?.trim();
-  const progressPromise = pushProgressEvent(turn, () =>
-    turn.progressCompositor.pushToolEvent(payload),
-  );
+  const progressPromise = (await canPushToolProgress(turn))
+    ? turn.progressCompositor.pushToolEvent(payload)
+    : Promise.resolve(false);
   if (turn.statusReactionController && toolName) {
     await turn.statusReactionController.setTool(toolName);
   }
@@ -253,7 +378,7 @@ export async function handleItemEvent(
 ): Promise<boolean> {
   let rendered = false;
   await enqueueDraftEvent(turn, async () => {
-    if (turn.finalAnswerDeliveryStarted || turn.finalAnswerDelivered) {
+    if (turn.previewLifecycle.finalStarted) {
       return;
     }
     if (
@@ -268,9 +393,8 @@ export async function handleItemEvent(
       turn.progressCompositor.resetActivity();
     }
     rendered =
-      payload.kind === "preamble"
-        ? await turn.progressCompositor.pushItemEvent(payload)
-        : await pushProgressEvent(turn, () => turn.progressCompositor.pushItemEvent(payload));
+      (payload.kind === "preamble" || (await canPushToolProgress(turn))) &&
+      (await turn.progressCompositor.pushItemEvent(payload));
   });
   return rendered;
 }
@@ -279,17 +403,10 @@ export async function handlePlanUpdate(
   turn: Turn,
   payload: CallbackPayload<"onPlanUpdate">,
 ): Promise<boolean> {
-  return payload.phase === "update" && canPushToolProgress(turn)
+  return payload.phase === "update" && (await canPushToolProgress(turn))
     ? await turn.progressCompositor.pushPlanProgress(payload.steps, {
         explanation: payload.explanation,
         explanationFormat: payload.explanationFormat,
       })
     : false;
-}
-
-export async function handleApprovalEvent(
-  turn: Turn,
-  payload: CallbackPayload<"onApprovalEvent">,
-): Promise<boolean> {
-  return await pushProgressEvent(turn, () => turn.progressCompositor.pushApprovalEvent(payload));
 }

@@ -8,7 +8,6 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import {
   resolveSqliteReadScope,
-  runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { pruneAllSessionTranscriptArchivesToHighWater } from "../../../config/sessions/session-history-archive-pruning.js";
@@ -24,7 +23,7 @@ import {
 import { useSubagentControlFixture } from "../../subagents/registry/subagent-control.test-support.js";
 import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../../subagents/registry/subagent-registry-state.js";
+import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import {
   leasePendingAgentSteeringItems,
   prependAgentSteeringPrompt,
@@ -68,7 +67,7 @@ async function publishChild(runId: string, answer: string) {
       __openclaw: { runId },
     },
   });
-  registerSubagentRun({
+  await registerSubagentRun({
     runId,
     childSessionKey,
     requesterSessionKey,
@@ -78,24 +77,27 @@ async function publishChild(runId: string, answer: string) {
     spawnMode: "session",
     expectsCompletionMessage: true,
   });
-  const child = subagentRuns.get(runId);
-  if (!child) {
-    throw new Error("Expected registered child");
-  }
   const terminalReply = buildAgentRunTerminalReplySnapshot({ visibleText: answer });
   if (terminalReply.disposition !== "visible") {
     throw new Error("Expected visible terminal reply");
   }
-  child.execution = {
-    ...child.execution,
-    status: "terminal",
-    endedAt: Date.now(),
-    outcome: { status: "ok" },
-    transcriptTarget: target,
-  };
-  child.completion = { required: true, resultText: terminalReply.text, terminalReply };
-  markPendingFinalDelivery({ entry: child });
-  persistSubagentRunsToDiskOrThrow(subagentRuns, [runId]);
+  const child = await mutateSubagentRuns([runId], (rows) => {
+    const current = rows.get(runId);
+    if (!current) {
+      throw new Error("Expected registered child");
+    }
+    const next = structuredClone(current);
+    next.execution = {
+      ...next.execution,
+      status: "terminal",
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      transcriptTarget: target,
+    };
+    next.completion = { required: true, resultText: terminalReply.text, terminalReply };
+    markPendingFinalDelivery({ entry: next });
+    return { value: next, postimages: new Map([[runId, next]]) };
+  });
   return { child, target, terminalReply };
 }
 
@@ -128,17 +130,12 @@ it("submits deferred child results after canonical archive pruning without poiso
   });
 
   const scope = resolveSqliteReadScope(archived.target);
-  const pruned = await runExclusiveSqliteSessionWrite(
-    scope,
-    () =>
-      pruneAllSessionTranscriptArchivesToHighWater({
-        archiveDirectory: path.dirname(archivePath),
-        databaseOptions: toDatabaseOptions(scope),
-        highWaterBytes: 0,
-        storePath: archived.target.storePath,
-      }),
-    "session.history.archive-prune",
-  );
+  const pruned = await pruneAllSessionTranscriptArchivesToHighWater({
+    archiveDirectory: path.dirname(archivePath),
+    databaseOptions: toDatabaseOptions(scope),
+    highWaterBytes: 0,
+    storePath: archived.target.storePath,
+  });
   expect(pruned.removedFiles).toBe(1);
   await expect(access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
   expect(
@@ -196,7 +193,6 @@ it("submits deferred child results after canonical archive pruning without poiso
     persistToolResultProjections: vi.fn(async () => {}),
     promptActiveSession: (text, options) => session.prompt(text, options),
     runtimeOnly: false,
-    sessionPromptState,
     systemPrompt: "Use the child findings.",
     toolResultAggregateMaxChars: 8_000,
     toolResultMaxChars: 4_000,
@@ -214,8 +210,8 @@ it("submits deferred child results after canonical archive pruning without poiso
   expect(delivered).not.toContain("Unrelated replacement answer.");
   expect(onSteeringAcknowledged).toHaveBeenCalledOnce();
   for (const { child } of [archived, healthy]) {
-    expect(child.delivery?.status).toBe("delivered");
-    expect(child.delivery?.steeringLeaseId).toBeUndefined();
+    expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(child.runId)?.delivery?.steeringLeaseId).toBeUndefined();
   }
   expect(
     await leasePendingAgentSteeringItems({ requesterSessionKey, leaseId: "next-turn" }),

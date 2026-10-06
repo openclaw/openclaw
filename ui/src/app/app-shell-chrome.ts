@@ -30,8 +30,11 @@ import {
   type KeyboardShortcutsDialogElement,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
-import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import {
+  CHAT_HISTORY_RECOVERY_CHANGED_EVENT,
+  CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
+} from "../pages/chat/chat-history-events.ts";
 import {
   readDebugOverlayMode,
   shouldCloseDebugOverlay,
@@ -39,6 +42,7 @@ import {
   type DebugOverlayMode,
 } from "../pages/debug/debug-overlay-frame.ts";
 import { ShellCommandPaletteOwner } from "./app-shell-command-palette-loading.ts";
+import { openShellNewSession, type ShellNewSessionHost } from "./app-shell-new-session.ts";
 import { ShellPanelOwner, type ShellPanelHost } from "./app-shell-panels.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -75,9 +79,8 @@ import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
 let nativeCommandsOwner: AbortController | undefined;
 
-export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
+export interface ShellChromeHost extends ShellNewSessionHost, ShellPanelHost {
   readonly activeSessionKey: string;
-  readonly onboardingMode: boolean;
   readonly updateComplete: Promise<boolean>;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly execApprovalElement: OptionalCustomElement;
@@ -88,12 +91,10 @@ export interface ShellChromeHost extends HTMLElement, ShellPanelHost {
   navDrawerTrigger: HTMLElement | null;
   nativeHistoryState: NativeHistoryState;
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
-  pendingNativeNewSession: boolean;
   requestUpdate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   exitSettings(): void;
   navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  openNewSession(agentId: string): void;
   chatNavigationOptions(
     face: BoardFace,
     options?: ApplicationNavigationOptions,
@@ -127,6 +128,9 @@ export class ShellChromeOwner {
     const host = this.host;
     host.nativeHistoryState = readNativeHistoryState();
     host.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget, options);
+    for (const type of [CHAT_HISTORY_RECOVERY_CHANGED_EVENT, CHAT_PANE_LIFECYCLE_CHANGED_EVENT]) {
+      host.addEventListener(type, () => host.requestUpdate(), options);
+    }
     document.addEventListener("keydown", this.handleDocumentKeydown, {
       capture: true,
       signal: this.listeners.signal,
@@ -236,15 +240,17 @@ export class ShellChromeOwner {
 
   readonly closeNavDrawer = (options: { restoreFocus?: boolean } = {}): void => {
     const host = this.host;
+    // Desktop navigation also calls this cleanup; a closed drawer never owned focus.
+    const restoreFocus = host.navDrawerOpen && options.restoreFocus;
     if (host.navDrawerOpen) {
       this.dismissSidebarTransientMenus();
       this.navDrawerSwipe.closed();
     }
     restoreToastFromNavDrawer(host);
-    const trigger = options.restoreFocus ? host.navDrawerTrigger : null;
+    const trigger = restoreFocus ? host.navDrawerTrigger : null;
     host.navDrawerOpen = false;
     host.navDrawerTrigger = null;
-    if (options.restoreFocus) {
+    if (restoreFocus) {
       requestAnimationFrame(() => this.restoreFocusTo(trigger));
     }
   };
@@ -271,25 +277,7 @@ export class ShellChromeOwner {
   };
 
   readonly handleNativeNewSession = (): void => {
-    const host = this.host;
-    const context = host.context;
-    if (host.onboardingMode) {
-      return;
-    }
-    if (!context) {
-      // Native document-finish can beat runtime initialization; replay the idempotent request.
-      host.pendingNativeNewSession = true;
-      return;
-    }
-    if (
-      !readSessionMethodAccess(context.gateway.snapshot, {
-        method: "sessions.create",
-        params: {},
-      }).allowed
-    ) {
-      return;
-    }
-    host.openNewSession(context.agentSelection.state.selectedId ?? "");
+    openShellNewSession(this.host, "native");
   };
 
   readonly handleNativeNavigate = (event: Event): void => {
@@ -444,6 +432,12 @@ export class ShellChromeOwner {
       return;
     }
     if (event.defaultPrevented) {
+      return;
+    }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event)) {
+      if (!event.repeat && openShellNewSession(this.host, "shortcut")) {
+        event.preventDefault();
+      }
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.keyboardShortcuts, event)) {
@@ -625,9 +619,6 @@ export class ShellChromeOwner {
   readonly handleShellNavDrawerToggle = (event: Event): void => {
     this.toggleNavigationSurface(shellNavDrawerTriggerFromEvent(event));
   };
-
-  readonly openApprovals = (): void =>
-    void window.dispatchEvent(new CustomEvent(SHELL_APPROVALS_OPEN_EVENT));
 
   private readonly handleApprovalsOpen = (event: Event): void => {
     const host = this.host;

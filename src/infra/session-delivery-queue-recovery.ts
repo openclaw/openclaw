@@ -48,7 +48,7 @@ const MAX_SESSION_DELIVERY_RETRIES = 5;
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedSessionDelivery>();
 
-async function notifySessionDeliverySettled(params: {
+async function finalizeSessionDeliverySettlement(params: {
   entry: QueuedSessionDelivery;
   log: SessionDeliveryRecoveryLogger;
   onSettled?: SettleSessionDeliveryFn;
@@ -58,24 +58,10 @@ async function notifySessionDeliverySettled(params: {
   try {
     params.queueContext.admission.assertCurrent();
     await params.onSettled?.(params.entry, params.outcome, params.queueContext);
-    return true;
   } catch (error) {
     params.log.error(
       `session delivery: settled callback failed for ${params.entry.id}: ${String(error)}`,
     );
-    return false;
-  }
-}
-
-async function finalizeSessionDeliverySettlement(params: {
-  entry: QueuedSessionDelivery;
-  log: SessionDeliveryRecoveryLogger;
-  onSettled?: SettleSessionDeliveryFn;
-  outcome: SessionDeliverySettledOutcome;
-  queueContext: OpenClawStateWorkerContext;
-}): Promise<boolean> {
-  const callbackSettled = await notifySessionDeliverySettled(params);
-  if (!callbackSettled) {
     return false;
   }
   try {
@@ -99,18 +85,6 @@ function resolvePendingSettlementOutcome(
   return entry.settlementOutcome ?? (entry.acknowledgedAt !== undefined ? "recovered" : undefined);
 }
 
-function resolveSessionDeliveryMaxRetries(entry: QueuedSessionDelivery): number {
-  return entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
-}
-
-function canReconcileStartedAgentAttemptAtRetryLimit(entry: QueuedSessionDelivery): boolean {
-  return (
-    entry.kind === "agentTurn" &&
-    entry.deliveryStartedAt !== undefined &&
-    entry.retryCount === resolveSessionDeliveryMaxRetries(entry)
-  );
-}
-
 function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: number) {
   if (entry.kind === "agentTurn" && entry.owner?.kind === "subagent_completion") {
     if (now >= entry.owner.deadlineAt) {
@@ -125,6 +99,7 @@ function resolveSessionRetryEligibility(entry: QueuedSessionDelivery, now: numbe
 }
 
 type SessionDeliveryDrainContext = {
+  now?: () => number;
   logLabel: string;
   log: SessionDeliveryRecoveryLogger;
   queueContext: OpenClawStateWorkerContext;
@@ -143,31 +118,29 @@ async function processPendingSessionDelivery(opts: {
   const pendingSettlementOutcome = resolvePendingSettlementOutcome(entry);
   if (pendingSettlementOutcome) {
     const finalized = await finalizeSessionDeliverySettlement({
+      ...context,
       entry,
-      log: context.log,
-      onSettled: context.onSettled,
       outcome: pendingSettlementOutcome,
-      queueContext: context.queueContext,
     });
     return { status: pendingSettlementOutcome, finalized };
   }
-  if (
-    !canReconcileStartedAgentAttemptAtRetryLimit(entry) &&
-    entry.retryCount >= resolveSessionDeliveryMaxRetries(entry)
-  ) {
+  const maxRetries = entry.maxRetries ?? MAX_SESSION_DELIVERY_RETRIES;
+  const canReconcileStartedAgentAttempt =
+    entry.kind === "agentTurn" &&
+    entry.deliveryStartedAt !== undefined &&
+    entry.retryCount === maxRetries;
+  if (!canReconcileStartedAgentAttempt && entry.retryCount >= maxRetries) {
     await markSessionDeliverySettlement(entry, "moved-to-failed", context.queueContext);
     const finalized = await finalizeSessionDeliverySettlement({
+      ...context,
       entry,
-      log: context.log,
-      onSettled: context.onSettled,
       outcome: "moved-to-failed",
-      queueContext: context.queueContext,
     });
     return { status: "max-retries", finalized };
   }
 
   if (!opts.bypassBackoff) {
-    const retryEligibility = resolveSessionRetryEligibility(entry, Date.now());
+    const retryEligibility = resolveSessionRetryEligibility(entry, (context.now ?? Date.now)());
     if (!retryEligibility.eligible) {
       return {
         status: "backoff",
@@ -226,11 +199,9 @@ async function processPendingSessionDelivery(opts: {
     }
   }
   const finalized = await finalizeSessionDeliverySettlement({
+    ...context,
     entry,
-    log: context.log,
-    onSettled: context.onSettled,
     outcome: result,
-    queueContext: context.queueContext,
   });
   return { status: result, finalized };
 }

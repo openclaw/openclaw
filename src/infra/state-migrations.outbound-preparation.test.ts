@@ -24,6 +24,39 @@ let pluginFile: string;
 let eventsFile: string;
 let cfg: OpenClawConfig;
 
+async function writePluginFixture({ failDisposal = false }: { failDisposal?: boolean } = {}) {
+  await fs.writeFile(
+    pluginFile,
+    `module.exports = {
+    id: "doctor-outbound-fixture",
+    register(api) {
+      const record = (value) => require("node:fs").appendFileSync(${JSON.stringify(eventsFile)}, value + "\\n");
+      api.on("reply_payload_sending", (event) => {
+        record("reply");
+        return { payload: { ...event.payload, text: event.payload.text + "|reply" } };
+      });
+      api.on("message_sending", (event) => {
+        if (api.runtime.config.current().plugins.entries["doctor-outbound-fixture"].enabled !== true) {
+          throw new Error("migration modifier lost its configured runtime");
+        }
+        record("message");
+        return { content: event.content + "|message" };
+      });
+      api.lifecycle.onDispose(async () => {
+        await require("node:fs/promises").appendFile(${JSON.stringify(eventsFile)}, "dispose\\n");
+      });
+      ${failDisposal ? 'api.registerRuntimeLifecycle({ id: "receipt-failure", dispose() { throw new Error("synthetic outbound disposal failure"); } });' : ""}
+      api.registerChannel({ plugin: {
+        id: "matrix", meta: { id: "matrix", label: "Fixture", selectionLabel: "Fixture", docsPath: "/fixture", blurb: "Synthetic" },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
+        outbound: { deliveryMode: "direct", sendText: async () => { throw new Error("migration must not send"); } },
+      } });
+    },
+  };`,
+  );
+}
+
 beforeEach(async () => {
   const home = temporary.make("openclaw-doctor-outbound-");
   stateDir = path.join(home, ".openclaw");
@@ -45,35 +78,7 @@ beforeEach(async () => {
       configSchema: { type: "object" },
     }),
   );
-  await fs.writeFile(
-    pluginFile,
-    `module.exports = {
-    id: "doctor-outbound-fixture",
-    register(api) {
-      const record = (value) => require("node:fs").appendFileSync(${JSON.stringify(eventsFile)}, value + "\\n");
-      api.on("reply_payload_sending", (event) => {
-        record("reply");
-        return { payload: { ...event.payload, text: event.payload.text + "|reply" } };
-      });
-      api.on("message_sending", (event) => {
-        if (api.runtime.config.current().plugins.entries["doctor-outbound-fixture"].enabled !== true) {
-          throw new Error("migration modifier lost its configured runtime");
-        }
-        record("message");
-        return { content: event.content + "|message" };
-      });
-      api.lifecycle.onDispose(async () => {
-        await require("node:fs/promises").appendFile(${JSON.stringify(eventsFile)}, "dispose\\n");
-      });
-      api.registerChannel({ plugin: {
-        id: "matrix", meta: { id: "matrix", label: "Fixture", selectionLabel: "Fixture", docsPath: "/fixture", blurb: "Synthetic" },
-        capabilities: { chatTypes: ["direct"] },
-        config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
-        outbound: { deliveryMode: "direct", sendText: async () => { throw new Error("migration must not send"); } },
-      } });
-    },
-  };`,
-  );
+  await writePluginFixture();
   cfg = {
     plugins: {
       allow: ["doctor-outbound-fixture"],
@@ -119,39 +124,36 @@ function legacy(id: string): LegacyQueuedDelivery {
 }
 
 describe("Doctor outbound preparation", () => {
-  it.each(["file", "sqlite", "claimed"] as const)(
+  it.each(["sqlite", "claimed"] as const)(
     "prepares %s custody with real plugin modifiers once without publishing a registry",
     async (kind) => {
-      const source = path.join(stateDir, "delivery-queue", "from-file.json");
-      await fs.mkdir(path.dirname(source), { recursive: true });
-      const bytes = JSON.stringify(legacy("from-file"));
-      if (kind === "file") {
-        await fs.writeFile(source, bytes);
-      } else {
-        seedDeliveryQueueEntry({
-          stateDir,
-          queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
-          entry: {
-            ...legacy("from-file"),
-            ...(kind === "claimed" ? { legacyPreparationState: "claimed" } : {}),
-          },
-        });
-      }
+      seedDeliveryQueueEntry({
+        stateDir,
+        queueName: kind === "sqlite" ? "outbound" : "outbound-legacy-preparing-v1",
+        entry: {
+          ...legacy("from-sqlite"),
+          ...(kind === "claimed" ? { legacyPreparationState: "claimed" } : {}),
+        },
+      });
       await autoMigrateLegacyState({
         cfg,
         env: process.env,
         legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
       });
-      if (kind === "file") {
-        expect(await fs.readFile(source, "utf8")).toBe(bytes);
-      }
       const active = getActivePluginRegistry();
       expect(getGlobalHookRunner()).toBeNull();
       const result = await repair();
       expect(result.warnings).toEqual([]);
-      expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-file", stateDir)).toMatchObject({
-        preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
-      });
+      expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject(
+        {
+          outcome: "completed",
+        },
+      );
+      expect(loadDeliveryQueueEntry("outbound-prepared-v1", "from-sqlite", stateDir)).toMatchObject(
+        {
+          preparedBatch: { entries: [{ payload: { text: "original|reply|message" } }] },
+        },
+      );
       expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
       expect(getActivePluginRegistry()).toBe(active);
       expect(getGlobalHookRunner()).toBeNull();
@@ -159,6 +161,19 @@ describe("Doctor outbound preparation", () => {
       expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
     },
   );
+
+  it("records a refused delivery migration when its resource disposer fails", async () => {
+    await writePluginFixture({ failDisposal: true });
+    seedDeliveryQueueEntry({ queueName: "outbound", entry: legacy("disposal-failure"), stateDir });
+
+    const result = await repair();
+
+    expect(result.stepReceipts.find((receipt) => receipt.id === "delivery-queues")).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "step-threw" },
+    });
+    expect(await fs.readFile(eventsFile, "utf8")).toBe("reply\nmessage\ndispose\n");
+  });
 
   it("preserves an unclaimed SQLite legacy row when its plugin cannot load", async () => {
     const entry = legacy("sqlite-only");

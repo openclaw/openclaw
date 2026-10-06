@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveInitialEmbeddedRunModel } from "../agents/embedded-agent-runner/run/runtime-resolution.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
@@ -36,8 +37,6 @@ const PLUGIN_GATEWAY_SESSION_MUTATION_METHODS = new Set([
   "send",
   "sessions.abort",
   "sessions.compact",
-  "sessions.compaction.branch",
-  "sessions.compaction.restore",
   "sessions.branches.switch",
   "sessions.rewind",
   "sessions.fork",
@@ -265,13 +264,7 @@ export function createPluginSessionOwnership(
   }): void => {
     const agentId = normalizeOptionalString(params.agentId);
     const storePath = normalizeOptionalString(params.storePath);
-    const sessionKeys = new Set<string>();
-    for (const value of params.sessionKeys ?? []) {
-      const sessionKey = normalizeOptionalString(value);
-      if (sessionKey) {
-        sessionKeys.add(sessionKey);
-      }
-    }
+    const sessionKeys = new Set(normalizeTrimmedStringList(params.sessionKeys));
     for (const sessionKey of sessionKeys) {
       assertStoredSessionEntryOwned({
         action: params.action,
@@ -281,20 +274,8 @@ export function createPluginSessionOwnership(
       });
     }
 
-    const sessionIds = new Set<string>();
-    for (const value of params.sessionIds ?? []) {
-      const sessionId = normalizeOptionalString(value);
-      if (sessionId) {
-        sessionIds.add(sessionId);
-      }
-    }
-    const sessionFiles = new Set<string>();
-    for (const value of params.sessionFiles ?? []) {
-      const sessionFile = normalizeOptionalString(value);
-      if (sessionFile) {
-        sessionFiles.add(sessionFile);
-      }
-    }
+    const sessionIds = new Set(normalizeTrimmedStringList(params.sessionIds));
+    const sessionFiles = new Set(normalizeTrimmedStringList(params.sessionFiles));
     if (sessionIds.size === 0 && sessionFiles.size === 0) {
       return;
     }
@@ -319,9 +300,7 @@ export function createPluginSessionOwnership(
           });
         }
         const matchedSessionIds = new Set(
-          sessionKeyMatches
-            .map(({ entry }) => normalizeOptionalString(entry.sessionId))
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
+          normalizeTrimmedStringList(sessionKeyMatches.map(({ entry }) => entry.sessionId)),
         );
         for (const match of entries) {
           const matchSessionId = normalizeOptionalString(match.entry.sessionId);

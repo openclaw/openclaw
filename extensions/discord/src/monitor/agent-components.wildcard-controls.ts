@@ -6,12 +6,11 @@ import {
   type ButtonInteraction,
   type ComponentData,
 } from "../internal/discord.js";
-import {
-  parseDiscordComponentData,
-  resolveInteractionCustomId,
-  type AgentComponentContext,
-  type AgentComponentMessageInteraction,
-} from "./agent-components-helpers.js";
+import { parseDiscordComponentData, resolveInteractionCustomId } from "./agent-components-data.js";
+import type {
+  AgentComponentContext,
+  AgentComponentMessageInteraction,
+} from "./agent-components.types.js";
 
 export type DiscordComponentControlHandlers = {
   handleComponentEvent: (params: {
@@ -140,32 +139,11 @@ class DiscordComponentButton extends Button {
   }
 }
 
-function createSelectControl(
-  spec: SelectControlSpec,
-  ctx: AgentComponentContext,
-  handlers: DiscordComponentControlHandlers,
-): BaseMessageInteractiveComponent {
-  return new DiscordComponentSelectControl(spec, ctx, handlers);
-}
-
-function bindSelectControl(spec: SelectControlSpec) {
-  return (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
-    createSelectControl(spec, ctx, handlers);
-}
-
-export function createDiscordComponentButtonControl(
-  ctx: AgentComponentContext,
-  handlers: DiscordComponentControlHandlers,
-): Button {
-  return new DiscordComponentButton(ctx, handlers);
-}
-
-export const createDiscordComponentStringSelectControl = bindSelectControl(SELECT_CONTROLS.string);
-export const createDiscordComponentUserSelectControl = bindSelectControl(SELECT_CONTROLS.user);
-export const createDiscordComponentRoleSelectControl = bindSelectControl(SELECT_CONTROLS.role);
-export const createDiscordComponentMentionableSelectControl = bindSelectControl(
-  SELECT_CONTROLS.mentionable,
-);
-export const createDiscordComponentChannelSelectControl = bindSelectControl(
-  SELECT_CONTROLS.channel,
-);
+export const discordComponentControlFactories = [
+  (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+    new DiscordComponentButton(ctx, handlers),
+  ...Object.values(SELECT_CONTROLS).map(
+    (spec) => (ctx: AgentComponentContext, handlers: DiscordComponentControlHandlers) =>
+      new DiscordComponentSelectControl(spec, ctx, handlers),
+  ),
+];

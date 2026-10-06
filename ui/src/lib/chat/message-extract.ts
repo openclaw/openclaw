@@ -1,8 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import { projectChatWorkContextForDisplay } from "../../../../src/chat/work-context.js";
 import { readPersistedMediaFacts } from "../../../../src/media/media-facts.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
@@ -28,7 +27,7 @@ function processMessageText(text: string, role: string): string {
     return stripThinkingTags(withoutInternalContext);
   }
   return shouldStripInboundMetadata
-    ? stripInboundMetadata(stripEnvelope(withoutInternalContext))
+    ? stripUserEnvelopeForDisplay(withoutInternalContext)
     : stripEnvelope(withoutInternalContext);
 }
 
@@ -165,24 +164,16 @@ function isTextOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
   for (const block of content) {
     if (!block || typeof block !== "object") {
       return false;
     }
     const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string") {
+    if (entry.type !== "text" || typeof entry.text !== "string") {
       return false;
     }
   }
-  return sawText;
+  return true;
 }
 
 /** True for user rows with no text and no media facts; such rows hide from history. */

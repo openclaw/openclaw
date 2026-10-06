@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePluginInstallPreflight } from "../cli/plugins-install-preflight.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -14,8 +15,11 @@ import {
   resolvePluginInstallTransaction,
 } from "./install-transaction.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+
 describe("git install target ownership", () => {
   let state: OpenClawTestState;
+  let sourceSeed: string;
   let sourceDir: string;
   let spec: string;
 
@@ -25,34 +29,39 @@ describe("git install target ownership", () => {
     return result.stdout.trim();
   }
 
-  async function commitPlugin(pluginId: string, version: string) {
+  async function commitPluginAt(root: string, pluginId: string, version: string) {
     await fs.writeFile(
-      path.join(sourceDir, "package.json"),
+      path.join(root, "package.json"),
       JSON.stringify({ name: "git-fixture", version, openclaw: { extensions: ["index.js"] } }),
     );
     await fs.writeFile(
-      path.join(sourceDir, "openclaw.plugin.json"),
+      path.join(root, "openclaw.plugin.json"),
       JSON.stringify({ id: pluginId, configSchema: { type: "object", properties: {} } }),
     );
-    await fs.writeFile(
-      path.join(sourceDir, "index.js"),
-      `export default ${JSON.stringify(version)};\n`,
-    );
-    await git(sourceDir, "add", ".");
-    await git(sourceDir, "-c", "commit.gpgsign=false", "commit", "-m", version);
-    return await git(sourceDir, "rev-parse", "HEAD");
+    await fs.writeFile(path.join(root, "index.js"), `export default ${JSON.stringify(version)};\n`);
+    await git(root, "add", ".");
+    await git(root, "-c", "commit.gpgsign=false", "commit", "-m", version);
+    return await git(root, "rev-parse", "HEAD");
   }
+
+  async function commitPlugin(pluginId: string, version: string) {
+    return await commitPluginAt(sourceDir, pluginId, version);
+  }
+
+  beforeAll(async () => {
+    sourceSeed = tempDirs.make("openclaw-git-install-seed-");
+    await git(sourceSeed, "init", "--initial-branch=main");
+    await git(sourceSeed, "config", "user.name", "OpenClaw Test");
+    await git(sourceSeed, "config", "user.email", "test@openclaw.invalid");
+    await commitPluginAt(sourceSeed, "demo", "1.0.0");
+  });
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "git-install-target" });
     const globalConfig = await state.writeText("global-npmrc", "");
     vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", globalConfig);
     sourceDir = state.path("source");
-    await fs.mkdir(sourceDir);
-    await git(sourceDir, "init", "--initial-branch=main");
-    await git(sourceDir, "config", "user.name", "OpenClaw Test");
-    await git(sourceDir, "config", "user.email", "test@openclaw.invalid");
-    await commitPlugin("demo", "1.0.0");
+    await fs.cp(sourceSeed, sourceDir, { recursive: true });
     spec = `git:${pathToFileURL(sourceDir).href}`;
   });
 

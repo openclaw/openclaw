@@ -94,7 +94,7 @@ function render({
   elements.installHint.textContent =
     firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs the CLI and managed Node runtime in ~/.openclaw.";
+      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -587,7 +587,7 @@ async function install() {
     description:
       firstRunBuild?.platform === "freebsd"
         ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
-        : "A managed CLI and Node runtime are being installed in your home directory.",
+        : "OpenClaw and its managed runtime are being installed in your home directory.",
     eyebrow: "INSTALLING",
     title: "Preparing your companion",
   });
@@ -705,7 +705,7 @@ await listen("updater://not-available", () => {
 await listen("updater://available", ({ payload }) => {
   elements.updateProgress.removeAttribute("value");
   renderUpdate({
-    message: payload.notes || "Downloading in the background…",
+    message: "Downloading in the background…",
     progress: true,
     title: `Update available v${payload.version} — downloading…`,
   });
@@ -729,23 +729,33 @@ await listen("updater://ready", ({ payload }) => {
   });
 });
 await listen("updater://available-manual", ({ payload }) => {
-  const openDownloadPage = () =>
-    invoke("open_release_page").catch((error) => {
-      if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
-        return;
-      }
-      renderUpdate({
-        action: openDownloadPage,
-        actionLabel: "Open download page",
+  const availableUpdate = {
+    message: "Install the latest system package from the release page.",
+    title: `Update available v${payload.version}`,
+  };
+  const openDownloadPage = async () => {
+    let result = availableUpdate;
+    try {
+      await invoke("open_release_page");
+    } catch (error) {
+      result = {
         message: friendlyError(error),
         title: "Could not open release page",
-      });
+      };
+    }
+    if (updateAction !== openDownloadPage || elements.updateBanner.classList.contains("hidden")) {
+      return;
+    }
+    renderUpdate({
+      ...result,
+      action: openDownloadPage,
+      actionLabel: "Open download page",
     });
+  };
   renderUpdate({
+    ...availableUpdate,
     action: openDownloadPage,
     actionLabel: "Open download page",
-    message: payload.notes || "Install the latest system package from the release page.",
-    title: `Update available v${payload.version}`,
   });
 });
 await listen("updater://error", ({ payload }) => {

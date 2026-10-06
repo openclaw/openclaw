@@ -16,19 +16,6 @@ export type GatewayPluginRuntimeClaim = Readonly<{
   publish: (publication: () => void) => boolean;
 }>;
 
-type GatewayPluginRuntimeReservation = Readonly<{
-  claim: GatewayPluginRuntimeClaim;
-  commit: () => void;
-  reject: () => void;
-  setReloadStatus: (status: GatewayPluginReloadStatus | undefined) => void;
-  finishReload: (
-    outcome: "applied" | "restored" | "failed" | "unchanged",
-    pluginIds: ReadonlySet<string>,
-    registry: PluginRegistry,
-    reportFailure?: (reason: string) => void,
-  ) => void;
-}>;
-
 /** One Gateway owner fences every plugin publication across startup and hot replacement. */
 export function createGatewayPluginRuntimeGeneration(params: {
   getServices: () => PluginServicesHandle | null;
@@ -74,7 +61,7 @@ export function createGatewayPluginRuntimeGeneration(params: {
     currentServices: () => params.getServices(),
     publishServices: (claim: GatewayPluginRuntimeClaim, services: PluginServicesHandle | null) =>
       claim.publish(() => params.setServices(services)),
-    reserve: (): GatewayPluginRuntimeReservation => {
+    reserve: () => {
       if (pending) {
         throw new Error("a Gateway plugin runtime replacement is already pending");
       }
@@ -96,12 +83,18 @@ export function createGatewayPluginRuntimeGeneration(params: {
         claim: reservation.claim,
         commit: () => settle(true),
         reject: () => settle(false),
-        setReloadStatus: (status) => {
+        setReloadStatus: (status: GatewayPluginReloadStatus | undefined) => {
           if (latestReservation === reservation.claim) {
             reloadStatus = status;
           }
         },
-        finishReload: (outcome, pluginIds, registry, reportFailure) => {
+        finishReload: (
+          outcome: "applied" | "restored" | "failed" | "unchanged",
+          pluginIds: ReadonlySet<string>,
+          registry: PluginRegistry,
+          unavailablePluginIds: ReadonlySet<string>,
+          reportFailure?: (reason: string) => void,
+        ) => {
           if (latestReservation !== reservation.claim) {
             return;
           }
@@ -129,8 +122,11 @@ export function createGatewayPluginRuntimeGeneration(params: {
                 )
               : [],
           );
-          if (outcome === "failed") {
-            for (const id of pluginIds) {
+          for (const id of pluginIds) {
+            if (
+              outcome === "failed" ||
+              (outcome === "restored" && unavailablePluginIds.has(id) && !restoredIds.has(id))
+            ) {
               failedIds.add(id);
             }
           }

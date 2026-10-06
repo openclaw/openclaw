@@ -9,7 +9,7 @@ import {
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
-import { discoverAuthStorage } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import {
   createApiKeyCredential,
@@ -72,7 +72,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
   writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
-describe("discoverAuthStorage", () => {
+describe("discoverAuthStorageFacts auth storage", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
     const credentials = resolveAgentCredentialMapFromStore(
       createAuthProfileStoreFixture({
@@ -208,7 +208,7 @@ describe("discoverAuthStorage", () => {
           "openai:key": createApiKeyCredential("openai", "test-key"),
         }),
       );
-      const authStorage = discoverAuthStorage(agentDir, {
+      const { authStorage } = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
@@ -224,47 +224,28 @@ describe("discoverAuthStorage", () => {
   });
 
   it("keeps keyRef and tokenRef profiles visible only for read-only agent discovery", () => {
-    const credentials = resolveAgentCredentialMapFromStore(
-      createAuthProfileStoreFixture({
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-        },
-        "expired:default": {
-          type: "token",
-          provider: "expired",
-          tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
-          expires: Date.now() - 1_000,
-        },
-      }),
-    );
-    const discoveryCredentials = resolveAgentCredentialMapFromStore(
-      createAuthProfileStoreFixture({
-        "openrouter:default": {
-          type: "api_key",
-          provider: "openrouter",
-          keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
-        },
-        "anthropic:default": {
-          type: "token",
-          provider: "anthropic",
-          tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
-        },
-        "expired:default": {
-          type: "token",
-          provider: "expired",
-          tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
-          expires: Date.now() - 1_000,
-        },
-      }),
-      { includeSecretRefPlaceholders: true },
-    );
+    const store = createAuthProfileStoreFixture<AuthProfileStore["profiles"]>({
+      "openrouter:default": {
+        type: "api_key",
+        provider: "openrouter",
+        keyRef: { source: "exec", provider: "keychain", id: "OPENROUTER_API_KEY" },
+      },
+      "anthropic:default": {
+        type: "token",
+        provider: "anthropic",
+        tokenRef: { source: "env", provider: "default", id: "ANTHROPIC_AUTH_TOKEN" },
+      },
+      "expired:default": {
+        type: "token",
+        provider: "expired",
+        tokenRef: { source: "env", provider: "default", id: "EXPIRED_AUTH_TOKEN" },
+        expires: Date.now() - 1_000,
+      },
+    });
+    const credentials = resolveAgentCredentialMapFromStore(store);
+    const discoveryCredentials = resolveAgentCredentialMapFromStore(store, {
+      includeSecretRefPlaceholders: true,
+    });
 
     expect(credentials.openrouter).toBeUndefined();
     expect(credentials.anthropic).toBeUndefined();
@@ -287,12 +268,12 @@ describe("discoverAuthStorage", () => {
         }),
       );
 
-      const readOnlyStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: readOnlyStorage } = discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
       });
-      const runtimeStorage = discoverAuthStorage(agentDir, {
+      const { authStorage: runtimeStorage } = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
       });
@@ -325,7 +306,7 @@ describe("discoverAuthStorage", () => {
           }),
         );
 
-        const storage = discoverAuthStorage(agentDir, {
+        const { authStorage: storage } = discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},
@@ -344,36 +325,13 @@ describe("discoverAuthStorage", () => {
   });
 
   it("includes env-backed provider auth when no auth profile exists", () => {
-    const previousMistral = process.env.MISTRAL_API_KEY;
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    process.env.MISTRAL_API_KEY = "mistral-env-test-key";
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    try {
-      const credentials = addEnvBackedAgentCredentials({}, { env: process.env });
-
-      expect(credentials.mistral).toEqual({
-        type: "api_key",
-        key: "mistral-env-test-key",
-      });
-    } finally {
-      if (previousMistral === undefined) {
-        delete process.env.MISTRAL_API_KEY;
-      } else {
-        process.env.MISTRAL_API_KEY = previousMistral;
-      }
-      if (previousBundledPluginsDir === undefined) {
-        delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-      } else {
-        process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-      }
-      if (previousDisableBundledPlugins === undefined) {
-        delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-      } else {
-        process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
-      }
-    }
+    const credentials = addEnvBackedAgentCredentials(
+      {},
+      {
+        env: { MISTRAL_API_KEY: "mistral-env-test-key" },
+      },
+    );
+    expect(credentials.mistral).toEqual({ type: "api_key", key: "mistral-env-test-key" });
   });
 
   it("includes workspace-scoped auth evidence in agent discovery credentials", () => {

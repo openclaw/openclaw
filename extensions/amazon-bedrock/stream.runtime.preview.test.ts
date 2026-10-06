@@ -165,12 +165,10 @@ it("bounds full-buffer preview work without losing raw deltas, progress, or term
   }
   const probe = vi.spyOn(JSON, "parse");
   let parsedChars = 0;
-  let fullParses = 0;
   const collectWork = () => {
     for (const [text] of probe.mock.calls) {
       if (typeof text === "string" && text.startsWith(`{"body":"${marker}`)) {
         parsedChars += text.length;
-        fullParses += 1;
       }
     }
     // The probe must not retain all historical argument prefixes itself.
@@ -179,8 +177,6 @@ it("bounds full-buffer preview work without losing raw deltas, progress, or term
   const received: string[] = [];
   const previewLengths: number[] = [];
   const terminal: unknown[] = [];
-  const started = performance.now();
-  const rssBefore = process.memoryUsage().rss;
   const result = await readBedrockFrames({
     frames: frames(),
     signal,
@@ -202,19 +198,6 @@ it("bounds full-buffer preview work without losing raw deltas, progress, or term
     },
   });
   collectWork();
-  console.log(
-    "bedrock-preview-work",
-    JSON.stringify({
-      chars: raw.length,
-      chunks: chunks.length,
-      received: received.length,
-      fullParses,
-      parsedChars,
-      elapsedMs: performance.now() - started,
-      rssBefore,
-      rssAfter: process.memoryUsage().rss,
-    }),
-  );
   expect(received).toEqual(chunks);
   expect(Math.max(...previewLengths)).toBeGreaterThan(body.length / 2);
   expect(terminal).toEqual([expected]);

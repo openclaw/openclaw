@@ -27,17 +27,7 @@ const mocks = vi.hoisted(() => ({
     readyForTest: false,
     liveCallProofRequired: true,
     checks: [],
-    actions: nativePackageReady
-      ? []
-      : [
-          {
-            id: "install-native-package",
-            kind: "command",
-            label: "Install or reinstall the FaceTime native package with Homebrew",
-            command:
-              "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi",
-          },
-        ],
+    actions: nativePackageReady ? [] : [{ id: "install-native-package" }],
   })),
 }));
 
@@ -65,6 +55,27 @@ vi.mock("./src/config.js", async (importOriginal) => {
 
 import plugin from "./index.js";
 
+function registerPlugin(enabled?: boolean) {
+  const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
+  let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
+  plugin.register!(
+    createTestPluginApi({
+      id: "facetime",
+      name: "FaceTime",
+      rootDir: "/plugin",
+      pluginConfig: { enabled, ownerHandles: ["owner@example.com"] },
+      runtime: { system: { runCommandWithTimeout: vi.fn() } } as never,
+      registerGatewayMethod: (name, handler) => {
+        gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
+      },
+      registerTool: (factory) => {
+        toolFactory = factory as unknown as typeof toolFactory;
+      },
+    }),
+  );
+  return { gatewayMethods, toolFactory };
+}
+
 describe("FaceTime control-plane registration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -72,42 +83,11 @@ describe("FaceTime control-plane registration", () => {
   });
 
   it("serves gateway and model status without build, socket, injection, or runtime activation", async () => {
-    const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
-    let toolFactory: (() => { execute(id: string, input: unknown): Promise<unknown> }) | undefined;
-    const register = plugin.register;
-    expect(register).toBeDefined();
-    register!(
-      createTestPluginApi({
-        id: "facetime",
-        name: "FaceTime",
-        source: "test",
-        rootDir: "/plugin",
-        config: {},
-        pluginConfig: { ownerHandles: ["owner@example.com"] },
-        runtime: {
-          system: { runCommandWithTimeout: vi.fn() },
-        } as never,
-        registerGatewayMethod: (name, handler) => {
-          gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
-        },
-        registerTool: (factory) => {
-          toolFactory = factory as unknown as typeof toolFactory;
-        },
-      }),
-    );
-
+    const { gatewayMethods, toolFactory } = registerPlugin();
     const respond = vi.fn();
-    const statusMethod = gatewayMethods.get("facetime.status");
-    expect(statusMethod).toBeDefined();
-    await statusMethod!({ respond });
+    await gatewayMethods.get("facetime.status")!({ respond });
     expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ activation: "inactive" }));
-    expect(toolFactory).toBeDefined();
-    const tool = (
-      toolFactory as unknown as () => {
-        execute(id: string, input: unknown): Promise<unknown>;
-      }
-    )();
-    await tool.execute("tool-1", { action: "get_status" });
+    await toolFactory!().execute("tool-1", { action: "get_status" });
 
     expect(mocks.staticStatus).toHaveBeenCalledTimes(2);
     expect(mocks.activateRuntime).not.toHaveBeenCalled();
@@ -115,23 +95,7 @@ describe("FaceTime control-plane registration", () => {
 
   it("reports native installation remediation without attempting runtime activation", async () => {
     mocks.nativePackageReady.mockResolvedValue(false);
-    const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
-    plugin.register!(
-      createTestPluginApi({
-        id: "facetime",
-        name: "FaceTime",
-        source: "test",
-        rootDir: "/plugin",
-        config: {},
-        pluginConfig: { ownerHandles: ["owner@example.com"] },
-        runtime: {
-          system: { runCommandWithTimeout: vi.fn() },
-        } as never,
-        registerGatewayMethod: (name, handler) => {
-          gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
-        },
-      }),
-    );
+    const { gatewayMethods } = registerPlugin();
 
     const respond = vi.fn();
     await gatewayMethods.get("facetime.setup")!({ respond });
@@ -153,23 +117,7 @@ describe("FaceTime control-plane registration", () => {
       throw new Error("carrier shutdown unresolved");
     });
     mocks.activateRuntime.mockResolvedValueOnce({ stop } as never);
-    const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
-    plugin.register!(
-      createTestPluginApi({
-        id: "facetime",
-        name: "FaceTime",
-        source: "test",
-        rootDir: "/plugin",
-        config: {},
-        pluginConfig: { enabled: true, ownerHandles: ["owner@example.com"] },
-        runtime: {
-          system: { runCommandWithTimeout: vi.fn() },
-        } as never,
-        registerGatewayMethod: (name, handler) => {
-          gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
-        },
-      }),
-    );
+    const { gatewayMethods } = registerPlugin(true);
 
     await gatewayMethods.get("facetime.preflight")!({ respond: vi.fn() });
     const firstRespond = vi.fn();
@@ -185,34 +133,14 @@ describe("FaceTime control-plane registration", () => {
   });
 
   it("blocks runtime activation until native uninstall finishes", async () => {
-    let finishUninstall: (() => void) | undefined;
-    mocks.uninstallDriver.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        finishUninstall = resolve;
-      }),
-    );
+    const { promise, resolve: finishUninstall } = Promise.withResolvers<void>();
+    mocks.uninstallDriver.mockReturnValueOnce(promise);
     const runtime = {
       stop: vi.fn(async () => undefined),
       preflight: vi.fn(async () => ({ ready: true })),
     };
     mocks.activateRuntime.mockResolvedValue(runtime as never);
-    const gatewayMethods = new Map<string, (options: unknown) => Promise<void>>();
-    plugin.register!(
-      createTestPluginApi({
-        id: "facetime",
-        name: "FaceTime",
-        source: "test",
-        rootDir: "/plugin",
-        config: {},
-        pluginConfig: { enabled: true, ownerHandles: ["owner@example.com"] },
-        runtime: {
-          system: { runCommandWithTimeout: vi.fn() },
-        } as never,
-        registerGatewayMethod: (name, handler) => {
-          gatewayMethods.set(name, handler as (options: unknown) => Promise<void>);
-        },
-      }),
-    );
+    const { gatewayMethods } = registerPlugin(true);
 
     await gatewayMethods.get("facetime.preflight")!({ respond: vi.fn() });
     const uninstall = gatewayMethods.get("facetime.uninstall")!({ respond: vi.fn() });
@@ -223,7 +151,7 @@ describe("FaceTime control-plane registration", () => {
     expect(blockedRespond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     expect(mocks.activateRuntime).toHaveBeenCalledTimes(1);
 
-    finishUninstall?.();
+    finishUninstall();
     await uninstall;
     const resumedRespond = vi.fn();
     await gatewayMethods.get("facetime.preflight")!({ respond: resumedRespond });

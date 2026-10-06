@@ -25,9 +25,13 @@ const terminalSession: SessionEntry = {
   endedAt: 2_000,
 };
 
-async function resolveCompletion(childSessionKey: string, storedSessionKey: string) {
+async function resolveCompletion(
+  childSessionKey: string,
+  storedSessionKey: string,
+  entry: SessionEntry = terminalSession,
+) {
   return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    replaceSessionEntrySync({ sessionKey: storedSessionKey, env: state.env }, terminalSession);
+    replaceSessionEntrySync({ sessionKey: storedSessionKey, env: state.env }, entry);
     return resolveSubagentSessionCompletion({
       childSessionKey,
       fallbackEndedAt: 3_000,
@@ -64,6 +68,13 @@ describe("subagent session reconciliation keys", () => {
 });
 
 describe("subagent session reconciliation ownership", () => {
+  it("does not turn an interrupted outcome with an end timestamp into registry completion", async () => {
+    const key = "agent:main:subagent:interrupted";
+    expect(
+      await resolveCompletion(key, key, { ...terminalSession, status: "interrupted" }),
+    ).toBeNull();
+  });
+
   it.each([
     { name: "default per-agent", file: undefined },
     { name: "configured fixed", file: "sessions.json" },
@@ -87,9 +98,13 @@ describe("subagent session reconciliation ownership", () => {
             `${agentId}-child`,
           );
           expect(
-            resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
+            await resolveSubagentSessionCompletion({
+              childSessionKey,
+              cfg,
+              fallbackEndedAt: 3_000,
+            }),
           ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
-          expect(resolveSubagentSessionStartedAt({ childSessionKey, cfg })).toBe(1_000);
+          expect(await resolveSubagentSessionStartedAt({ childSessionKey, cfg })).toBe(1_000);
         }
       } finally {
         await closeOpenClawAgentDatabasesAsync(state.root);
@@ -116,7 +131,11 @@ describe("subagent session reconciliation ownership", () => {
           );
 
           expect(
-            resolveSubagentSessionCompletion({ childSessionKey, cfg, fallbackEndedAt: 3_000 }),
+            await resolveSubagentSessionCompletion({
+              childSessionKey,
+              cfg,
+              fallbackEndedAt: 3_000,
+            }),
           ).toMatchObject({ endedAt: 2_000, outcome: { status: "ok" } });
           expect(loadSubagentSessionEntry({ childSessionKey, cfg })?.sessionId).toBe(
             "incognito-child",

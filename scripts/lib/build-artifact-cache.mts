@@ -3,7 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { acquireFileLockSync } from "@openclaw/fs-safe/file-lock";
+import {
+  acquireFileLock,
+  acquireFileLockSync,
+  type FileLockHandle,
+} from "@openclaw/fs-safe/file-lock";
 
 export const ARTIFACT_CACHE_VERSION = 6;
 export type BuildCachePath = {
@@ -235,20 +239,36 @@ export function publishArtifactFiles(
   }
 }
 
-/** Identify the emitter selected from tsdown, not a separately hoisted dependency. */
+/** Hash the bundler and the checkout-owned native emitter, including its executable and API. */
 export function resolveTsdownCompilerFiles() {
   const require = createRequire(import.meta.url);
   const tsdown = fs.realpathSync(require.resolve("tsdown"));
   const tsdownRequire = createRequire(tsdown);
   const dts = fs.realpathSync(tsdownRequire.resolve("rolldown-plugin-dts"));
-  const compilerRequire = createRequire(dts);
+  const compilerPackage = require.resolve("typescript/package.json");
+  const compilerRoot = path.dirname(compilerPackage);
+  const platformPackage = createRequire(compilerPackage).resolve(
+    `@typescript/typescript-${process.platform}-${process.arch}/package.json`,
+  );
+  const platformRoot = path.dirname(platformPackage);
   return [
     tsdown,
     require.resolve("tsdown/package.json"),
     dts,
     tsdownRequire.resolve("rolldown-plugin-dts/package.json"),
-    compilerRequire.resolve("typescript"),
-    compilerRequire.resolve("typescript/package.json"),
+    compilerPackage,
+    platformPackage,
+    path.join(compilerRoot, "bin/tsc"),
+    ...listCacheFiles(
+      compilerRoot,
+      [
+        { path: "lib", extensions: [".js", ".cjs", ".json"] },
+        { path: "dist", extensions: [".js", ".json"] },
+        { path: "vendor", extensions: [".js", ".json"] },
+      ],
+      fs,
+    ),
+    ...listCacheFiles(platformRoot, ["lib"], fs),
   ];
 }
 
@@ -279,16 +299,28 @@ function ownerIsDead(payload: unknown) {
   }
 }
 
-/** Own only synchronous cache snapshots; process lifetimes need checkout ownership. */
-export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
-  return acquireFileLockSync(target, {
+function buildArtifactLockOptions(timeoutMs: number) {
+  const reclaim = ({ payload }: { payload: unknown }) => ownerIsDead(payload);
+  return {
     timeoutMs,
     retry: { minTimeout: 500, maxTimeout: 500, factor: 1, randomize: false },
     payload: () => ({ pid: process.pid }),
-    shouldReclaim: ({ payload }) => ownerIsDead(payload),
-    staleRecovery: "remove-if-unchanged",
-    shouldRemoveStaleLock: ({ payload }) => ownerIsDead(payload),
-  });
+    shouldReclaim: reclaim,
+    staleRecovery: "remove-if-unchanged" as const,
+    shouldRemoveStaleLock: reclaim,
+  };
+}
+
+/** Snapshot locks never own subprocess lifetimes. */
+export function acquireBuildArtifactLock(target: string, timeoutMs = 600_000) {
+  return acquireFileLockSync(target, buildArtifactLockOptions(timeoutMs));
+}
+
+export function acquireBuildArtifactLockAsync(
+  target: string,
+  timeoutMs = 600_000,
+): Promise<FileLockHandle> {
+  return acquireFileLock(target, buildArtifactLockOptions(timeoutMs));
 }
 
 export type BuildCache = {

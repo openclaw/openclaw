@@ -34,18 +34,30 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   return {
     ...actual,
     Worker: class extends actual.Worker {
-      constructor(...[filename, options]: ConstructorParameters<typeof actual.Worker>) {
-        const data: unknown = options?.workerData;
+      override postMessage(...[message, transfers]: Parameters<Worker["postMessage"]>) {
         // Inject only at structured cloning; parent facts and the real worker stay intact.
-        super(
-          filename,
-          workerBoundary.fingerprint && isRecord(data) && data.kind === "catalog"
-            ? {
-                ...options,
-                workerData: { ...data, generationFingerprint: workerBoundary.fingerprint },
-              }
-            : options,
-        );
+        if (
+          workerBoundary.fingerprint &&
+          isRecord(message) &&
+          isRecord(message.input) &&
+          isRecord(message.input.value) &&
+          typeof message.input.value.generationFingerprint === "string"
+        ) {
+          return super.postMessage(
+            {
+              ...message,
+              input: {
+                ...message.input,
+                value: {
+                  ...message.input.value,
+                  generationFingerprint: workerBoundary.fingerprint,
+                },
+              },
+            },
+            transfers,
+          );
+        }
+        return super.postMessage(message, transfers);
       }
     },
   };

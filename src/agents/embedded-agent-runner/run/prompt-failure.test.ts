@@ -1,8 +1,13 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
-import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
+import {
+  buildExternalRunFailureReply,
+  buildKnownAgentRunFailureReplyPayload,
+} from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
+import { AgentHarnessPreflightError } from "../../harness/errors.js";
+import { recordModelFallbackStop } from "../../model-fallback-stop.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
@@ -71,6 +76,27 @@ function makeParams(
 }
 
 describe("handleEmbeddedPromptFailure", () => {
+  it("preserves terminal preflight identity and public copy despite a retryable diagnostic", async () => {
+    const diagnostic = new Error("404 No managed agent resource found: session-fixture");
+    const userMessage =
+      "The saved session is unavailable. Check the API key's project permissions and retry.";
+    const failure = new AgentHarnessPreflightError(diagnostic.message, {
+      cause: diagnostic,
+      userMessage,
+    });
+    const params = makeParams({ promptError: failure, pluginHarnessOwnsTransport: true });
+
+    await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
+
+    expect(params.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.traceAttempts).toEqual([]);
+    expect(buildExternalRunFailureReply({ message: failure.message, error: failure })).toEqual({
+      text: userMessage,
+      isGenericRunnerFailure: false,
+    });
+  });
+
   it("records local profile absence without an HTTP status in the fallback trace", async () => {
     const code = "selected_auth_profile_unavailable";
     const message = 'Selected auth profile "openai:work" was not found in OpenClaw.';
@@ -92,6 +118,26 @@ describe("handleEmbeddedPromptFailure", () => {
     ]);
     expect(params.traceAttempts[0]).not.toHaveProperty("status");
   });
+
+  it.each(["401 invalid API key", "Reasoning is mandatory for this endpoint"])(
+    "does not recover a recorded terminal failure despite provider-shaped text: %s",
+    async (message) => {
+      const committed = Object.freeze(new Error(message));
+      recordModelFallbackStop(committed);
+      const failure = new Error("metadata view unavailable", { cause: committed });
+      const params = makeParams({ promptError: failure });
+
+      await expect(handleEmbeddedPromptFailure(params)).rejects.toBe(failure);
+
+      expect(params.maybeRefreshRuntimeAuthForAuthError).not.toHaveBeenCalled();
+      expect(params.suspendForFailure).not.toHaveBeenCalled();
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
+      expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(params.attemptedThinking).toEqual(new Set());
+      expect(params.traceAttempts).toEqual([]);
+    },
+  );
 
   it.each([false, true])(
     "keeps account-restricted model errors on the model-failure path with fallback=%s",
@@ -357,7 +403,7 @@ describe("handleEmbeddedPromptFailure", () => {
   it("keeps a live SessionManager transcript-validation error off shared credential health", async () => {
     let promptError: unknown;
     try {
-      SessionManager.inMemory("/tmp").appendModelChange("", "");
+      await SessionManager.inMemory("/tmp").appendModelChange("", "");
     } catch (error) {
       promptError = error;
     }
@@ -402,7 +448,7 @@ describe("handleEmbeddedPromptFailure", () => {
         resolvedVerboseLevel: "off",
       }),
     ).toMatchObject({
-      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      text: "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.",
       isError: true,
     });
   });

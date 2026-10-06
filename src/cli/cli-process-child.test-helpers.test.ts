@@ -124,7 +124,7 @@ describe("runCliProcessChild", () => {
           "process.stdout.write('partial');",
           "globalThis.pending = new Promise(() => {});",
           "require('node:net').createServer().listen(0, '127.0.0.1');",
-          "process.on('SIGUSR2', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
+          "process.on('SIGQUIT', () => process.stderr.write('x'.repeat(8_100) + '\\nlast-stderr-line\\n'));",
           "setInterval(() => {}, 1_000);",
         ].join("\n"),
       ],
@@ -195,7 +195,7 @@ describe("runCliProcessChild", () => {
         runCliProcessChild({
           nodeArgs: [
             "-e",
-            "process.on('SIGUSR2', () => process.exit(0)); setInterval(() => {}, 1_000);",
+            "process.on('SIGQUIT', () => process.exit(0)); setInterval(() => {}, 1_000);",
           ],
           env: process.env,
           timeoutMs: 500,
@@ -332,9 +332,9 @@ describe("runCliProcessChild", () => {
     expect(child?.stderr.closed).toBe(true);
   });
 
-  it.each(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
+  it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
     "requires inherited output EOF before releasing a detached handoff (%s)",
-    async (shape) => {
+    async (shape, { signal }) => {
       const launcherShape = shape === "identity-unavailable" ? "launcher-alive" : shape;
       const fixture = createFixtureLifetime();
       const root = fixture.createTempDir("cli-inherited-output-");
@@ -364,7 +364,7 @@ describe("runCliProcessChild", () => {
               child = runningChild;
               runningChild.stdin.end();
               identityReady = (async () => {
-                descendantPid = await waitForPidFile(receipt, 5_000);
+                descendantPid = await waitForPidFile(receipt, signal);
                 descendantStart = getFileLockProcessStartTime(descendantPid);
                 if (descendantStart === null) {
                   throw identityFailure;

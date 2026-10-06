@@ -9,9 +9,9 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { hasProxyEnvConfigured } from "openclaw/plugin-sdk/security-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime-internal";
-import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
 /** HTTP agent that never uses a proxy — for localhost CDP connections. */
 const directHttpAgent = new http.Agent();
@@ -23,25 +23,13 @@ const directHttpsAgent = new https.Agent();
  * so callers fall through to their default behaviour.
  */
 export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | undefined {
-  try {
-    const parsed = new URL(url);
-    if (isLoopbackHost(parsed.hostname)) {
-      return parsed.protocol === "https:" || parsed.protocol === "wss:"
-        ? directHttpsAgent
-        : directHttpAgent;
-    }
-  } catch {
-    // not a valid URL — let caller handle it
+  const parsed = URL.parse(url);
+  if (parsed && isLoopbackHost(parsed.hostname)) {
+    return parsed.protocol === "https:" || parsed.protocol === "wss:"
+      ? directHttpsAgent
+      : directHttpAgent;
   }
   return undefined;
-}
-
-/**
- * Returns `true` when any proxy-related env var is set that could
- * interfere with loopback connections.
- */
-function hasProxyEnv(): boolean {
-  return hasProxyEnvConfigured();
 }
 
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
@@ -68,11 +56,7 @@ function appendLoopbackEntries(value: string | undefined): string {
 }
 
 function isLoopbackCdpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
 }
 
 type NoProxySnapshot = {
@@ -87,7 +71,7 @@ class NoProxyLeaseManager {
   private snapshot: NoProxySnapshot | null = null;
 
   acquire(url: string): (() => void) | null {
-    if (!isLoopbackCdpUrl(url) || !hasProxyEnv()) {
+    if (!isLoopbackCdpUrl(url) || !hasProxyEnvConfigured()) {
       return null;
     }
 

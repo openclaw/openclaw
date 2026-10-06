@@ -10,18 +10,7 @@ export type SnapshotLoaderModule = Pick<
   "resolvePluginMetadataSnapshot" | "loadPluginMetadataSnapshot"
 >;
 
-type SnapshotReaderSlot = {
-  adoptCurrentPluginMetadataSnapshotIfAbsent?: CurrentSnapshotModule["adoptCurrentPluginMetadataSnapshotIfAbsent"];
-  getCurrentPluginMetadataSnapshot?: CurrentSnapshotModule["getCurrentPluginMetadataSnapshot"];
-  resolvePluginMetadataSnapshot?: SnapshotLoaderModule["resolvePluginMetadataSnapshot"];
-  loadPluginMetadataSnapshot?: SnapshotLoaderModule["loadPluginMetadataSnapshot"];
-};
-
-// globalThis-keyed so a require-loaded second module instance shares the slot.
-export const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
-  Symbol.for("openclaw.pluginMetadataSnapshotReaders"),
-  () => ({}),
-);
+type SnapshotReaderSlot = Partial<CurrentSnapshotModule & SnapshotLoaderModule>;
 
 const readerCustody = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginMetadataSnapshotReaderCustody"),
@@ -33,6 +22,21 @@ const readerKeys = [
   "resolvePluginMetadataSnapshot",
   "loadPluginMetadataSnapshot",
 ] as const satisfies readonly (keyof SnapshotReaderSlot)[];
+
+// globalThis-keyed so a require-loaded second module instance shares the slot.
+export const snapshotReaderSlot = resolveGlobalSingleton<SnapshotReaderSlot>(
+  Symbol.for("openclaw.pluginMetadataSnapshotReaders"),
+  () => ({}),
+  (readers) => {
+    // Live Gateways retain their module graph through the final close join.
+    if (readerCustody.owners === 0) {
+      for (const key of readerKeys) {
+        delete readers[key];
+      }
+    }
+  },
+  "close-only",
+);
 
 /** Keep the running installation's readers until its final Gateway finishes closing. */
 export function retainPluginMetadataSnapshotReaders(): () => void {

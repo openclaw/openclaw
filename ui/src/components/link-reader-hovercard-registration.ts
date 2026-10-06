@@ -9,31 +9,19 @@ import type { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 import {
   LINK_READER_HOVERCARD_OPEN_DELAY_MS,
   LINK_READER_HOVERCARD_PROVIDER_TAG,
-  resolveLinkReaderTarget,
   resolveHoverPreviewTarget,
-  isPreviewAnchor,
 } from "./link-reader-target.ts";
 
-const bootstrap = new LazyHovercardBootstrap<LinkReaderHovercardProvider>({
-  tag: LINK_READER_HOVERCARD_PROVIDER_TAG,
-  load: async () => (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider,
-});
-
-export function previewTargetForAnchor(anchor: HTMLAnchorElement) {
-  if (!isPreviewAnchor(anchor)) {
-    return null;
-  }
-  const provider = bootstrap.providerFor(anchor);
-  const target =
-    provider?.client && provider.readers
-      ? resolveLinkReaderTarget(anchor.href, provider.readers)
-      : null;
-  return target?.reader.linkReader.previewMethod ? target : null;
-}
+export const linkReaderHovercardBootstrap = new LazyHovercardBootstrap<LinkReaderHovercardProvider>(
+  {
+    tag: LINK_READER_HOVERCARD_PROVIDER_TAG,
+    load: async () => (await import("./link-reader-hovercard.ts")).LinkReaderHovercardProvider,
+  },
+);
 
 /** Hover may use public page metadata; transcript prefetch remains reader-only. */
 function hoverTargetForAnchor(anchor: HTMLAnchorElement) {
-  const owner = bootstrap.providerFor(anchor);
+  const owner = linkReaderHovercardBootstrap.providerFor(anchor);
   return owner ? resolveHoverPreviewTarget(anchor, owner) : null;
 }
 
@@ -59,11 +47,11 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   }
   const startedAt = performance.now();
   try {
-    await bootstrap.define();
+    await linkReaderHovercardBootstrap.define();
   } catch {
     return;
   }
-  const provider = bootstrap.providerFor(anchor);
+  const provider = linkReaderHovercardBootstrap.providerFor(anchor);
   // Definition can precede Lit replaying values assigned before the lazy upgrade.
   await provider?.updateComplete;
   const current = hoverTargetForAnchor(anchor);
@@ -87,32 +75,4 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
   );
 }
 
-export async function prefetchLinkReader(
-  anchor: HTMLAnchorElement,
-  signal: AbortSignal,
-): Promise<void> {
-  const target = previewTargetForAnchor(anchor);
-  const owner = bootstrap.providerFor(anchor);
-  if (!target || !owner?.client?.connected || signal.aborted) {
-    return;
-  }
-  const { client, agentId, readers } = owner;
-  await bootstrap.define();
-  const provider = bootstrap.providerFor(anchor);
-  await provider?.updateComplete;
-  if (
-    signal.aborted ||
-    !anchor.isConnected ||
-    anchor.href !== target.href ||
-    document.hidden ||
-    provider !== owner ||
-    provider.client !== client ||
-    provider.agentId !== agentId ||
-    provider.readers !== readers
-  ) {
-    return;
-  }
-  await provider.prefetch(target, signal);
-}
-
-bootstrap.install(activateHovercard);
+linkReaderHovercardBootstrap.install(activateHovercard);

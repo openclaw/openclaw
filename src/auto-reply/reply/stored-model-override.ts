@@ -23,15 +23,13 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     return false;
   }
   const entry = params.sessionEntry;
-  const recoveredAutoFallbackOverride =
-    entry !== undefined &&
-    entry.modelOverrideSource === undefined &&
-    hasSessionAutoModelFallbackProvenance(entry);
-  // Older sessions may lack modelOverrideSource; provenance recovers the auto-fallback state.
-  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+  if (!entry) {
     return false;
   }
-  if (!entry) {
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  // Older sessions may lack modelOverrideSource; provenance recovers the auto-fallback state.
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
     return false;
   }
 

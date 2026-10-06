@@ -47,7 +47,7 @@ describe("terminal refusal resolution", () => {
       const input = makeTerminalInput({
         attempt,
         attemptAssistant: assistant,
-        maxEmptyResponseRetryAttempts: 0,
+        retryState: { emptyResponseAttempts: 1 },
       });
 
       const resolved = await resolveEmbeddedRunTerminal(input);
@@ -99,7 +99,7 @@ describe("terminal refusal resolution", () => {
       const input = makeTerminalInput({
         attempt,
         attemptAssistant: assistant,
-        maxEmptyResponseRetryAttempts: 0,
+        retryState: { emptyResponseAttempts: 1 },
       });
 
       const resolved = await resolveEmbeddedRunTerminal(input);
@@ -127,7 +127,7 @@ describe("terminal refusal resolution", () => {
     const input = makeTerminalInput({
       attempt,
       attemptAssistant: assistant,
-      maxEmptyResponseRetryAttempts: 0,
+      retryState: { emptyResponseAttempts: 1 },
     });
 
     const resolved = await resolveEmbeddedRunTerminal(input);

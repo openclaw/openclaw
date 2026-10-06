@@ -374,7 +374,9 @@ describe("setup admission", () => {
     async (reset) => {
       const create = vi.fn(() => new WizardSession(async () => {}));
       const pending = createAdmittedWizardSession(create);
-      const rejected = expect(pending).rejects.toThrow("draining");
+      const rejected = expect(pending).rejects.toThrow(
+        "Gateway is restarting. Please try again shortly.",
+      );
       markGatewayRestartDraining();
       if (reset) {
         resetGatewayWorkAdmission();

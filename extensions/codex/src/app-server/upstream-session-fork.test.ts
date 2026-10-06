@@ -53,8 +53,8 @@ const boundary = {
 
 vi.mock("openclaw/plugin-sdk/session-catalog", async (importOriginal) => ({
   ...(await importOriginal()),
-  deleteSessionUpstreamLink: linkMocks.delete,
-  upsertSessionUpstreamLink: linkMocks.upsert,
+  deleteSessionUpstreamLinkAsync: linkMocks.delete,
+  upsertSessionUpstreamLinkAsync: linkMocks.upsert,
 }));
 
 vi.mock("./transcript-mirror.js", async (importOriginal) => ({
@@ -130,7 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         return transport.client;
       });
       const config = {
-        agents: { list: [{ id: "main", agentDir: stateDir, workspace: stateDir }] },
+        agents: { entries: { main: { agentDir: stateDir, workspace: stateDir } } },
       };
       const pluginConfig = {
         appServer: {
@@ -288,11 +288,14 @@ describe("forkCodexUpstreamSession", () => {
       runtime,
     });
 
-    expect(forkThread).toHaveBeenCalledWith({
-      threadId: sourceThreadId,
-      beforeTurnId: "turn-2",
-      excludeTurns: true,
-    });
+    expect(forkThread).toHaveBeenCalledWith(
+      {
+        threadId: sourceThreadId,
+        beforeTurnId: "turn-2",
+        excludeTurns: true,
+      },
+      expect.any(Function),
+    );
     expect(boundaryMocks.listTurns).toHaveBeenLastCalledWith(control, "thread-forked");
     expect(transcriptMocks.importHistory).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -365,6 +368,7 @@ describe("forkCodexUpstreamSession", () => {
     });
     expect(forkThread).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: "workspace-write" }),
+      expect.any(Function),
     );
   });
 

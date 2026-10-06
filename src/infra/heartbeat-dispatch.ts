@@ -12,6 +12,7 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
+  isHostNoticePayload,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
@@ -95,7 +96,7 @@ export function createHeartbeatDispatch(
 }
 
 const FIRST_HEARTBEAT_ALERT_PREAMBLE =
-  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Set agents.defaults.heartbeat.target: "none" to keep these internal.';
+  'First heartbeat alert: your bot runs periodic background checks and messages you only when something needs attention. Run `openclaw config set agents.defaults.heartbeat.target "none"` to keep these internal.';
 const MAX_HEARTBEAT_TARGET_AWARENESS_CHARS = 1_000;
 
 function prepareHeartbeatTargetAwareness(params: {
@@ -160,29 +161,6 @@ function prepareHeartbeatTargetAwareness(params: {
   }
 }
 
-/**
- * Determines whether to set an indicator type for heartbeat delivery.
- * This is used when delivery would otherwise be suppressed but we still want
- * to indicate that the heartbeat completed successfully.
- *
- * Returns "alert" when alerts are disabled but delivery would otherwise succeed,
- * and "sent" when the heartbeat was sent. Returns undefined in all other cases.
- */
-function shouldSetIndicator(
-  noChannelTarget: boolean,
-  visibility: { showAlerts: boolean; useIndicator: boolean },
-): "sent" | "alert" | undefined {
-  if (noChannelTarget || !visibility.useIndicator) {
-    return undefined;
-  }
-  // When alerts are disabled, use "alert" indicator to show heartbeat was processed.
-  if (!visibility.showAlerts) {
-    return "alert";
-  }
-  // Otherwise, heartbeat was sent successfully.
-  return "sent";
-}
-
 /** Monitoring decides which final is public before ordinary dispatch can send it. */
 async function prepareHeartbeatDispatchReply(
   policy: HeartbeatDispatch,
@@ -194,7 +172,13 @@ async function prepareHeartbeatDispatchReply(
   const { delivery, visibility, sessionKey, storePath, runSessionKey, previousUpdatedAt } =
     prepared;
   const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
-  const selected = resolveHeartbeatReplyPayload(replyResult);
+  // A continuation under a quiet heartbeat posts the model's reply, never host notices;
+  // its terminal failure then stays silent.
+  const selected = resolveHeartbeatReplyPayload(
+    prepared.quietHostNotices
+      ? replies.filter((reply) => !isHostNoticePayload(reply))
+      : replyResult,
+  );
   const execution = resolveReplyOperationAgentTurn(runState);
   const heartbeatResponse = selectHeartbeatToolResponse(replyResult);
   const response = heartbeatResponse?.response;
@@ -237,6 +221,7 @@ async function prepareHeartbeatDispatchReply(
       heartbeatTerminalToolFailure: failure,
       replyPayload: selected,
     },
+    useHeartbeatFailureCopy: prepared.useHeartbeatFailureCopy,
     hasRelayableExecCompletion: prepared.hasRelayableExecCompletion,
     suppressUnmarkedSourceReplies:
       resolveSourceReplyDeliveryMode({
@@ -255,12 +240,22 @@ async function prepareHeartbeatDispatchReply(
       log.warn("heartbeat: scratch update ignored because no monitor job exists");
     } else {
       try {
-        const written = writeCronJobScratch({
-          storePath: resolveCronJobsStorePathFromConfig(cfg),
-          jobId: preflight.scratchJobId,
-          content: scratch,
-          expectedRevision: preflight.scratchRevision ?? 0,
-        });
+        const owner = runState.agentTurnOwner;
+        const written = await writeCronJobScratch(
+          {
+            storePath: resolveCronJobsStorePathFromConfig(cfg),
+            jobId: preflight.scratchJobId,
+            content: scratch,
+            expectedRevision: preflight.scratchRevision ?? 0,
+          },
+          {
+            assertCurrent() {
+              if (runState.agentTurnOwner !== owner || resolveReplyOperationAbortReason(owner)) {
+                throw new Error("Heartbeat scratch writer is no longer current");
+              }
+            },
+          },
+        );
         if (!written.ok) {
           log.warn("heartbeat: scratch update lost a concurrent revision race");
         }
@@ -269,10 +264,13 @@ async function prepareHeartbeatDispatchReply(
       }
     }
   }
-  // Unselected payloads never acquire delivery custody. Their exact prepared
+  // Quiet and unselected payloads never acquire delivery custody. Their exact prepared
   // intents may retire; queued or unknown recovery ownership is untouched.
   for (const reply of replies) {
-    if (reply !== selected && outcome.kind !== "failure") {
+    if (
+      (execution !== "failed" && response?.notify === false) ||
+      (reply !== selected && outcome.kind !== "failure")
+    ) {
       await suppressPendingFinalDelivery(reply, { preserveActivity: true });
     }
   }
@@ -284,10 +282,10 @@ async function prepareHeartbeatDispatchReply(
       accountId: delivery.accountId,
     });
     if (consume && preflight.shouldInspectPendingEvents) {
-      consumeSelectedSystemEventEntries(
-        resolveSystemEventQueueKey(sessionKey, agentId),
-        prepared.inspectedSystemEventsToConsume,
-      );
+      consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
+        ...prepared.inspectedSystemEventsToConsume,
+        ...prepared.deferredGenericEvents,
+      ]);
       if (prepared.hasExecCompletion && prepared.hasCronEvents) {
         // Coalesced waiters share this turn, but exec and cron retain separate prompt/delivery policy.
         requestHeartbeat({
@@ -465,9 +463,10 @@ async function prepareHeartbeatDispatchReply(
             status: "skipped",
             reason: noChannelTarget ? (delivery.reason ?? "no-target") : "alerts-disabled",
             hasMedia: outcome.mediaUrls.length > 0,
-            indicatorType: shouldSetIndicator(noChannelTarget, visibility)
-              ? resolveIndicatorType("sent")
-              : undefined,
+            indicatorType:
+              !noChannelTarget && visibility.useIndicator
+                ? resolveIndicatorType("sent")
+                : undefined,
           },
       !failed,
     );
@@ -587,7 +586,12 @@ export async function deliverHeartbeatDispatch(
       if (!internalProjection || policy.projectTarget === false) {
         return { visibleReplySent: false };
       }
-      const occurrenceIds = policy.prepared.inspectedSystemEventsToConsume.map((event) => event.id);
+      // Restart continuations are admitted as generic prompt text, so their queue
+      // identities join the publication key alongside inspected completions.
+      const occurrenceIds = [
+        ...policy.prepared.inspectedSystemEventsToConsume,
+        ...policy.prepared.deferredGenericEvents,
+      ].map((event) => event.id);
       if (!occurrenceIds.every((id): id is string => typeof id === "string" && id.length > 0)) {
         policy.deliveryReason = "exec completion occurrence identity unavailable";
         return { visibleReplySent: false };

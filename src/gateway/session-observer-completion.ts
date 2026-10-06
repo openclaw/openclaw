@@ -1,12 +1,15 @@
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   buildSessionObserverPrompt,
   normalizeSessionObserverModelOutput,
+  sanitizeSessionObserverModelText,
   SESSION_OBSERVER_MODEL_MAX_TOKENS,
   SESSION_OBSERVER_SYSTEM_PROMPT,
 } from "./session-observer-model.js";
 import type { SessionObserverDeps, SessionObserverState } from "./session-observer-model.js";
 
 const MODEL_TIMEOUT_MS = 10_000;
+const REJECTED_OUTPUT_MAX_CHARS = 160;
 
 type PrepareModel = NonNullable<SessionObserverDeps["prepareModel"]>;
 type CompleteModel = NonNullable<SessionObserverDeps["completeModel"]>;
@@ -30,14 +33,15 @@ export function createSessionObserverCompletion(params: {
       modelRef,
       useUtilityModel: true,
     }));
-    let failed = true;
+    let reusable = false;
     try {
       const prepared = await preparedPromise;
-      failed = false;
+      reusable = !prepared.agentHarnessRuntimeOverride;
       return prepared;
     } finally {
-      // Pending and successful preparation remain shared; settled failures do not.
-      if (failed && state.preparedPromise === preparedPromise) {
+      // Share pending work and successful native routes. Failed or borrowed routes
+      // re-prepare next digest so newly available credentials can restore HTTP.
+      if (!reusable && state.preparedPromise === preparedPromise) {
         state.preparedPromise = undefined;
       }
     }
@@ -47,19 +51,10 @@ export function createSessionObserverCompletion(params: {
     const controller = new AbortController();
     state.activeController = controller;
     const timeout = params.setTimeoutFn(() => controller.abort(), MODEL_TIMEOUT_MS);
-    const aborted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener(
-        "abort",
-        () => reject(new Error("session observer model call timed out or was cancelled")),
-        { once: true },
-      );
-    });
     try {
       const execute = async () => {
         const prepared = await ensurePrepared(state);
-        if (!params.isCurrent(state) || controller.signal.aborted) {
-          throw new Error("session observer state is no longer active");
-        }
+        let lastRejectedText = "";
         for (let attempt = 0; attempt < 2; attempt += 1) {
           if (!params.isCurrent(state) || controller.signal.aborted) {
             throw new Error("session observer state is no longer active");
@@ -80,10 +75,21 @@ export function createSessionObserverCompletion(params: {
           if (parsed) {
             return parsed;
           }
+          lastRejectedText = result.text;
         }
-        throw new Error("session observer returned invalid JSON twice");
+        const prefix = sanitizeSessionObserverModelText(
+          lastRejectedText,
+          REJECTED_OUTPUT_MAX_CHARS,
+        );
+        throw new Error(
+          `session observer returned invalid JSON twice; last rejected output: ${prefix}`,
+        );
       };
-      return await Promise.race([execute(), aborted]);
+      return await racePromiseWithAbortSignal(
+        execute(),
+        controller.signal,
+        () => new Error("session observer model call timed out or was cancelled"),
+      );
     } finally {
       params.clearTimeoutFn(timeout);
       if (state.activeController === controller) {

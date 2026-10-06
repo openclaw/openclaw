@@ -3,9 +3,11 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { toToolDefinitions } from "../agent-tool-definition-adapter.js";
 import type { AgentTool, AgentMessage } from "../runtime/index.js";
 import { attachInternalToolExecutionPreparer } from "../runtime/internal-hooks.js";
@@ -22,7 +24,14 @@ import { createAgentSession } from "./sdk.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
+    cleanup();
+  }),
+);
 afterEach(resetSecretRedactionRegistryForTest);
 
 describe("session tool outcomes", () => {
@@ -66,10 +75,19 @@ describe("session tool outcomes", () => {
         isError: outcome.isError,
       }));
       const agentDir = tempDirs.make("openclaw-sdk-tool-outcome-");
+      const target = {
+        agentId: "main",
+        sessionId: "tool-outcomes",
+        sessionKey: "agent:main:tool-outcomes",
+        storePath: path.join(agentDir, "openclaw-agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
       const { session } = await createAgentSession({
-        agentDir,
+        systemPrompt: "Test session prompt",
+        sessionManager: await SessionManager.openAsync(target, agentDir),
         model: testModel,
-        noTools: "builtin",
+        thinkingLevel: "medium" as const,
+        tools: outcomes.map((tool) => tool.name),
         customTools: toToolDefinitions(
           outcomes.map((outcome) => {
             const tool: AgentTool = {
@@ -188,11 +206,11 @@ describe("session tool outcomes", () => {
               message.content.some((block) => block.type === "image" && block.data === image.data),
           ),
         ).toBe(true);
-        const target = session.sessionManager.getSessionTarget();
-        if (!target) {
+        const persistedTarget = session.sessionManager.getSessionTarget();
+        if (!persistedTarget) {
           throw new Error("Expected a saved transcript target");
         }
-        const events = SessionManager.open(target).getEntries();
+        const events = SessionManager.open(persistedTarget).getEntries();
         expect(
           events.flatMap((event) =>
             event.type === "message" && event.message.role === "toolResult" ? [event.message] : [],
@@ -200,7 +218,7 @@ describe("session tool outcomes", () => {
         ).toMatchObject(expected);
       } finally {
         session.dispose();
-        disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
+        await disposeOpenClawAgentDatabaseByPath(path.join(agentDir, "openclaw-agent.sqlite"));
       }
     },
   );

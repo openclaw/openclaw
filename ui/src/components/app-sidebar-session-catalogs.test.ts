@@ -4,7 +4,9 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n } from "../i18n/index.ts";
+import { projectSidebarArchiveVisibility } from "./app-sidebar-session-archive-visibility.ts";
 import {
   findCatalogSessionHovercardRow,
   formatSidebarTimestamp,
@@ -149,6 +151,62 @@ describe("projectSidebarSessionCatalogs", () => {
     canContinue: true,
     canArchive: false,
   });
+
+  it.each([
+    ["active", 100, ["native"]],
+    ["active", 200, ["native", "adopted"]],
+    ["all", 100, ["native", "adopted"]],
+  ] as const)(
+    "applies shared %s visibility at %i to adopted rows only",
+    (statusFilter, now, expected) => {
+      const row: GatewaySessionRow = {
+        key: "agent:main:adopted",
+        kind: "direct",
+        snoozedUntil: 200,
+      };
+      const hosts: SessionCatalogHost[] = [
+        {
+          hostId: "gateway:local",
+          label: "Gateway",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            session("native", "Native"),
+            { ...session("adopted", "Adopted"), sessionKey: row.key },
+          ],
+        },
+      ];
+      const visibility = projectSidebarArchiveVisibility({
+        sessionData: {
+          sessionsAgentId: "main",
+          sessionsResult: null,
+          sessionResultsByAgent: {},
+          childSessionRowsByParent: {},
+          loadedChildSessionKeys: new Set(),
+          loadingChildSessionKeys: new Set(),
+          childSessionErrorsByParent: new Map(),
+        },
+        selectedAgentId: "main",
+        statusFilter,
+        now,
+        deletionState: () => undefined,
+        archiveVisibility: () => undefined,
+      });
+      const projected = projectSidebarSessionCatalogs(
+        [catalog(hosts)],
+        null,
+        [row],
+        visibility.isSessionHidden,
+      );
+      expect(
+        projected.flatMap((entry) =>
+          entry.visibleHosts.flatMap((host) =>
+            host.sessions.map((threadRow) => threadRow.threadId),
+          ),
+        ),
+      ).toEqual(expected);
+    },
+  );
 
   it("removes empty hosts", () => {
     const hosts: SessionCatalogHost[] = [

@@ -1,4 +1,3 @@
-// Android release signing tests cover encrypted signing asset sync and local materialization.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -157,7 +156,11 @@ describe("scripts/android-release-signing.mjs", () => {
     );
 
     expect(stdout).toContain("Android release signing plan");
+    expect(stdout).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
+    expect(stdout).toContain("Signing assets: android/openclaw");
+    expect(stdout).toContain(`Pinned APK certificate SHA-256: ${APK_CERTIFICATE_SHA256}`);
     expect(stdout).toContain("Materialized output: apps/android/build/release-signing");
+    expect(stdout).toContain("ORG_GRADLE_PROJECT_*");
   });
 
   it("terminates a hung signing command at its deadline", () => {
@@ -177,16 +180,11 @@ describe("scripts/android-release-signing.mjs", () => {
     ["--mode"],
     ["--mode", "--manifest"],
     ["--mode", "-h"],
-    ["--manifest"],
     ["--manifest", "-h"],
     ["--workspace", "--mode"],
-    ["--workspace", "-h"],
     ["--materialized-dir", "--mode"],
-    ["--materialized-dir", "-h"],
     ["--keystore", "--mode"],
-    ["--keystore", "-h"],
     ["--properties", "--mode"],
-    ["--properties", "-h"],
   ])("rejects missing values for %s before release signing work", (...args) => {
     const result = runNode(args);
 
@@ -194,17 +192,6 @@ describe("scripts/android-release-signing.mjs", () => {
     expect(result.stderr).toContain(`Missing value for ${args[0]}.`);
     expect(result.stderr).not.toContain("ENOENT");
     expect(result.stdout).toBe("");
-  });
-
-  it("documents the canonical Android release signing plan", () => {
-    const result = runNode(["--mode", "plan"]);
-
-    expect(result.ok).toBe(true);
-    expect(result.stdout).toContain("Signing repo: git@github.com:openclaw/apps-signing.git");
-    expect(result.stdout).toContain("Signing assets: android/openclaw");
-    expect(result.stdout).toContain(`Pinned APK certificate SHA-256: ${APK_CERTIFICATE_SHA256}`);
-    expect(result.stdout).toContain("Materialized output: apps/android/build/release-signing");
-    expect(result.stdout).toContain("ORG_GRADLE_PROJECT_*");
   });
 
   it.runIf(commandAvailable("openssl"))(

@@ -24,9 +24,7 @@ private final class LocalSocketLifecycleLease: @unchecked Sendable {
             .path
         let lockPath = "\(canonicalSocketPath).lifecycle.lock"
         let reserved = self.processLock.withLock { () -> Bool in
-            guard !self.reservedPaths.contains(lockPath) else { return false }
-            self.reservedPaths.insert(lockPath)
-            return true
+            self.reservedPaths.insert(lockPath).inserted
         }
         guard reserved else {
             throw ExecApprovalsSocketPathGuardError.lifecycleLockBusy(path: lockPath)

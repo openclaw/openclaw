@@ -1,6 +1,5 @@
 import { asOptionalObjectRecord as asMessageRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Formats terminal-safe strings for TUI messages and status surfaces.
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { hasTerminalControl } from "../../packages/terminal-core/src/safe-text.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -28,16 +27,6 @@ const BIDI_CONTROL_GLOBAL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 const RTL_ISOLATE_START = "\u2067";
 const RTL_ISOLATE_END = "\u2069";
 
-/** Keep routing/provider/profile details in session state, not the compact footer. */
-function formatModelFooter(params: {
-  model?: string | null;
-  thinkingLevel?: string | null;
-}): string {
-  const model = splitTrailingAuthProfile(params.model ?? "").model || "unknown";
-  const thinkingLevel = params.thinkingLevel?.trim();
-  return thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model;
-}
-
 /** Format the compact TUI footer from authoritative session and process state. */
 export function formatTuiFooter(params: {
   agentLabel: string;
@@ -47,8 +36,15 @@ export function formatTuiFooter(params: {
   deliver: boolean;
 }): string {
   const { sessionInfo } = params;
+  // Keep routing/provider/profile details in session state, not the compact footer.
+  const model = splitTrailingAuthProfile(sessionInfo.model ?? "").model || "unknown";
+  const thinkingLevel = params.thinkingLevel?.trim();
   const fastLabel =
-    sessionInfo.fastMode === "auto" ? "fast:auto" : sessionInfo.fastMode === true ? "fast" : null;
+    sessionInfo.fastMode === "auto" || sessionInfo.fastMode === "ultrafast"
+      ? `fast:${sessionInfo.fastMode}`
+      : sessionInfo.fastMode === true
+        ? "fast"
+        : null;
   const verbose = sessionInfo.verboseLevel ?? "off";
   const trace = sessionInfo.traceLevel ?? "off";
   const reasoning = sessionInfo.reasoningLevel ?? "off";
@@ -58,7 +54,7 @@ export function formatTuiFooter(params: {
   const footer = [
     `agent ${params.agentLabel}`,
     `session ${params.sessionLabel}`,
-    formatModelFooter({ model: sessionInfo.model, thinkingLevel: params.thinkingLevel }),
+    thinkingLevel && thinkingLevel !== "off" ? `${model} ${thinkingLevel}` : model,
     formatGoalFooter(sessionInfo.goal),
     fastLabel,
     verbose !== "off" ? `verbose ${verbose}` : null,
@@ -102,15 +98,8 @@ function redactBinaryLikeLine(line: string): string {
   return line;
 }
 
-function isolateRtlLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(line)) {
-    return line;
-  }
-  return `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}`;
-}
-
 export function isolateRtlRenderedLine(line: string): string {
-  if (!RTL_SCRIPT_RE.test(stripAnsi(line))) {
+  if (!RTL_SCRIPT_RE.test(line) || !RTL_SCRIPT_RE.test(stripAnsi(line))) {
     return line;
   }
   const padding = line.match(/^(\s*)(.*\S)(\s*)$/u);
@@ -126,7 +115,9 @@ function applyRtlIsolation(text: string): string {
   }
   return text
     .split("\n")
-    .map((line) => isolateRtlLine(line))
+    .map((line) =>
+      RTL_SCRIPT_RE.test(line) ? `${RTL_ISOLATE_START}${line}${RTL_ISOLATE_END}` : line,
+    )
     .join("\n");
 }
 
@@ -250,7 +241,10 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
     const code = attachment?.code;
     const kind = attachment?.kind;
     if (
-      (code === "file-not-found" || code === "unsupported-format" || code === "delivery-failed") &&
+      (code === "file-not-found" ||
+        code === "unsupported-format" ||
+        code === "delivery-failed" ||
+        code === "invalid-reference") &&
       (kind === "image" || kind === "audio" || kind === "video" || kind === "document")
     ) {
       // Assistant attachment labels can contain private paths or capability URLs.
@@ -277,77 +271,42 @@ function formatTuiAssistantContent(message: unknown, contentText: string): strin
   return appendReplyMediaFailures(text, failures) ?? "";
 }
 
-function resolveMessageRecord(
-  message: unknown,
-): { record: Record<string, unknown>; content: unknown } | undefined {
-  const record = asMessageRecord(message);
-  if (!record) {
-    return undefined;
-  }
-  return { record, content: record.content };
-}
-
 function formatAssistantErrorFromRecord(record: Record<string, unknown>): string {
-  const stopReason = typeof record.stopReason === "string" ? record.stopReason : "";
-  if (stopReason !== "error") {
+  if (record.stopReason !== "error") {
     return "";
   }
   const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : "";
   return formatRawAssistantErrorForUi(errorMessage);
 }
 
-function collectBlockStrings(params: {
-  content: unknown;
-  blockType: "text" | "thinking";
-  valueKey: "text" | "thinking";
-}): string[] {
-  if (!Array.isArray(params.content)) {
+function collectBlockStrings(content: unknown, type: string, key = type): string[] {
+  if (!Array.isArray(content)) {
     return [];
   }
   const parts: string[] = [];
-  for (const block of params.content) {
+  for (const block of content) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const rec = block as Record<string, unknown>;
-    if (rec.type === params.blockType && typeof rec[params.valueKey] === "string") {
-      parts.push(rec[params.valueKey] as string);
+    const value = rec[key];
+    if (rec.type === type && typeof value === "string") {
+      parts.push(value);
     }
   }
   return parts;
 }
 
-/**
- * Extract ONLY thinking blocks from message content.
- * Model-agnostic: returns empty string if no thinking blocks exist.
- */
 export function extractThinkingFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
-    return "";
-  }
-  const { content } = resolved;
-  if (typeof content === "string") {
-    return "";
-  }
-  const parts = collectBlockStrings({
-    content,
-    blockType: "thinking",
-    valueKey: "thinking",
-  });
-  return parts.join("\n").trim();
+  return collectBlockStrings(asMessageRecord(message)?.content, "thinking").join("\n").trim();
 }
 
-/**
- * Extract ONLY text content blocks from message (excludes thinking).
- * Model-agnostic: works for any model with text content blocks.
- */
 export function extractContentFromMessage(message: unknown): string {
-  const resolved = resolveMessageRecord(message);
-  if (!resolved) {
+  const record = asMessageRecord(message);
+  if (!record) {
     return "";
   }
-  const { record, content } = resolved;
+  const { content } = record;
 
   if (record.role === "assistant") {
     if (typeof content === "string") {
@@ -366,72 +325,33 @@ export function extractContentFromMessage(message: unknown): string {
     return sanitizeRenderableText(content).trim();
   }
 
-  const parts = collectBlockStrings({
-    content,
-    blockType: "text",
-    valueKey: "text",
-  }).map(sanitizeRenderableText);
+  const parts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   if (parts.length > 0) {
     return parts.join("\n").trim();
   }
   return formatAssistantErrorFromRecord(record);
 }
 
-function extractAssistantRenderableContent(record: Record<string, unknown>): string {
-  const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
-  const pairingQr = extractPairingQrTerminalText(record);
-  const content = [visible, pairingQr].filter(Boolean).join("\n\n").trim();
-  if (content) {
-    return content;
-  }
-  return formatAssistantErrorFromRecord(record);
-}
-
 function extractPairingQrTerminalText(record: Record<string, unknown>): string {
-  const content = record.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const blockRecord = block as Record<string, unknown>;
-    if (
-      blockRecord.type === "openclaw_pairing_qr" &&
-      typeof blockRecord.terminalText === "string"
-    ) {
-      const text = sanitizeRenderableText(blockRecord.terminalText).trim();
-      if (text) {
-        parts.push(text);
-      }
-    }
-  }
-  return parts.join("\n\n").trim();
+  return collectBlockStrings(record.content, "openclaw_pairing_qr", "terminalText")
+    .map((text) => sanitizeRenderableText(text).trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function extractTextBlocks(content: unknown, opts?: { includeThinking?: boolean }): string {
   if (typeof content === "string") {
     return sanitizeRenderableText(content).trim();
   }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-
-  const textParts = collectBlockStrings({ content, blockType: "text", valueKey: "text" }).map(
-    sanitizeRenderableText,
-  );
+  const textParts = collectBlockStrings(content, "text").map(sanitizeRenderableText);
   const thinkingParts =
     opts?.includeThinking === true
-      ? collectBlockStrings({ content, blockType: "thinking", valueKey: "thinking" }).map(
-          sanitizeRenderableText,
-        )
+      ? collectBlockStrings(content, "thinking").map(sanitizeRenderableText)
       : [];
 
   return composeThinkingAndContent({
-    thinkingText: thinkingParts.join("\n").trim(),
-    contentText: textParts.join("\n").trim(),
+    thinkingText: thinkingParts.join("\n"),
+    contentText: textParts.join("\n"),
     showThinking: opts?.includeThinking ?? false,
   });
 }
@@ -476,7 +396,10 @@ export function extractTextFromMessage(
     return "";
   }
   if (record.role === "assistant") {
-    const contentText = extractAssistantRenderableContent(record);
+    const visible = sanitizeRenderableText(extractAssistantPhaseText(record) ?? "").trim();
+    const pairingQr = extractPairingQrTerminalText(record);
+    const contentText =
+      [visible, pairingQr].filter(Boolean).join("\n\n") || formatAssistantErrorFromRecord(record);
     return composeThinkingAndContent({
       // History is stateless; the stream assembler retains hidden thinking for later toggles.
       thinkingText: opts?.includeThinking ? extractThinkingFromMessage(record) : "",
@@ -499,11 +422,7 @@ export function extractTextFromMessage(
     return extractUserAttachmentText(record);
   }
 
-  const errorText = formatAssistantErrorFromRecord(record);
-  if (!errorText) {
-    return "";
-  }
-  return errorText;
+  return formatAssistantErrorFromRecord(record);
 }
 
 /** Extract abort-visible text while keeping attachment-only aborts diagnostic-only. */
@@ -533,18 +452,16 @@ function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
-function formatGoalUsage(goal: SessionGoal): string | null {
-  if (goal.tokenBudget === undefined) {
-    return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
-  }
-  return `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-}
-
 function formatGoalFooter(goal?: SessionGoal): string | null {
   if (!goal) {
     return null;
   }
-  const usage = formatGoalUsage(goal);
+  const usage =
+    goal.tokenBudget === undefined
+      ? goal.tokensUsed > 0
+        ? formatTokenCount(goal.tokensUsed)
+        : null
+      : `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
   const suffix = usage ? ` (${usage})` : "";
   switch (goal.status) {
     case "active":

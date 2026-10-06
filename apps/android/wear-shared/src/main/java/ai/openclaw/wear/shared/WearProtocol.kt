@@ -2,7 +2,6 @@ package ai.openclaw.wear.shared
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -251,21 +250,14 @@ object WearProtocolCodec {
   }
 
   private fun hasValidPayloadDepth(message: WearMessage): Boolean {
-    val payloads =
+    val payload =
       when (message) {
-        is WearMessage.Request -> listOf(message.params)
-        is WearMessage.Response -> listOfNotNull(message.result)
-        is WearMessage.Event -> listOfNotNull(message.payload)
+        is WearMessage.Request -> message.params
+        is WearMessage.Response -> message.result
+        is WearMessage.Event -> message.payload
       }
-    return payloads.all { element -> hasValidElementDepth(element, parentDepth = 1) }
-  }
-
-  private fun hasValidElementDepth(
-    element: JsonElement,
-    parentDepth: Int,
-  ): Boolean {
     val pending = ArrayDeque<Pair<JsonElement, Int>>()
-    pending.addLast(element to parentDepth)
+    pending.addLast((payload ?: return true) to 1)
     while (pending.isNotEmpty()) {
       val (current, parent) = pending.removeLast()
       val children =
@@ -299,8 +291,6 @@ object WearProtocolCodec {
     val root =
       try {
         json.parseToJsonElement(text).jsonObject
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }
@@ -313,8 +303,6 @@ object WearProtocolCodec {
     val message =
       try {
         json.decodeFromJsonElement(WearMessage.serializer(), root)
-      } catch (_: SerializationException) {
-        return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       } catch (_: IllegalArgumentException) {
         return WearDecodeResult.Failure(WearDecodeFailureReason.Malformed)
       }

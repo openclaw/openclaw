@@ -1,4 +1,5 @@
 // Backup restore tests cover verified whole-archive extraction and fresh-target safety.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
@@ -75,7 +76,7 @@ async function writeArchive(params: {
   payloadPath: string;
   manifest?: string;
   extraEntries?: Buffer[];
-}): Promise<void> {
+}): Promise<string> {
   const manifest =
     params.manifest ??
     `${JSON.stringify({
@@ -104,6 +105,25 @@ async function writeArchive(params: {
       ]),
     ),
   );
+  return manifest;
+}
+
+async function writeUnextractableArchive(archivePath: string) {
+  const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+  const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
+  await writeArchive({
+    archivePath,
+    archiveRoot,
+    payloadPath: buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json"),
+    extraEntries: [
+      encodeTarEntry({ path: directoryPath, type: "Directory" }),
+      encodeTarEntry({
+        path: `${archiveRoot}/payload/directory-hardlink`,
+        type: "Link",
+        linkpath: directoryPath,
+      }),
+    ],
+  });
 }
 
 describe("backupRestoreCommand", () => {
@@ -402,6 +422,80 @@ describe("backupRestoreCommand", () => {
     );
   });
 
+  it("refuses insufficient target capacity before extraction and counts hardlink data once", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-backup-restore-capacity-",
+        scenario: "minimal",
+      },
+      async (state) => {
+        const archivePath = state.path("backup.tar.gz");
+        const refusedTarget = state.path("refused-target");
+        const exactTarget = state.path("exact-target");
+        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
+        const payloadPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
+        const extraPath = `${archiveRoot}/payload/extra.txt`;
+        const extraContents = "payload\n";
+        const manifest = await writeArchive({
+          archivePath,
+          archiveRoot,
+          payloadPath,
+          extraEntries: [
+            encodeTarEntry({ path: extraPath, contents: extraContents }),
+            encodeTarEntry({
+              path: `${archiveRoot}/payload/extra-link.txt`,
+              type: "Link",
+              linkpath: extraPath,
+            }),
+          ],
+        });
+
+        const realDiskSpace = fsSync.statfsSync(state.root);
+        let availableBytes = 1024 * 1024;
+        const statfs = vi.spyOn(fsSync, "statfsSync").mockImplementation(() => ({
+          type: realDiskSpace.type,
+          bsize: 1,
+          bavail: availableBytes,
+          bfree: availableBytes,
+          blocks: availableBytes + 1024 * 1024,
+          files: realDiskSpace.files,
+          frsize: realDiskSpace.frsize,
+          ffree: realDiskSpace.ffree,
+        }));
+        try {
+          const refused = await backupRestoreCommand(createTestRuntime(), {
+            archive: archivePath,
+            target: refusedTarget,
+          }).catch((error: unknown) => error);
+          expect(refused).toBeInstanceOf(Error);
+          expect((refused as Error).message).toContain(refusedTarget);
+          expect((refused as Error).message).toMatch(
+            /requires 256 MiB.*archive data plus 256 MiB reserve.*only 1 MiB is available/iu,
+          );
+          await expect(fs.lstat(refusedTarget)).rejects.toMatchObject({ code: "ENOENT" });
+
+          const regularFileBytes =
+            Buffer.byteLength(manifest) +
+            Buffer.byteLength("{}\n") +
+            Buffer.byteLength(extraContents);
+          availableBytes = 256 * 1024 * 1024 + regularFileBytes;
+          await expect(
+            backupRestoreCommand(createTestRuntime(), {
+              archive: archivePath,
+              target: exactTarget,
+            }),
+          ).resolves.toMatchObject({ targetPath: exactTarget });
+          expect((await fs.stat(path.join(exactTarget, extraPath))).ino).toBe(
+            (await fs.stat(path.join(exactTarget, `${archiveRoot}/payload/extra-link.txt`))).ino,
+          );
+        } finally {
+          statfs.mockRestore();
+        }
+      },
+    );
+  });
+
   it("rejects a staging target inside a configured external live agent directory", async () => {
     await withOpenClawTestState(
       {
@@ -600,22 +694,7 @@ describe("backupRestoreCommand", () => {
       async (state) => {
         const archivePath = state.path("unextractable.tar.gz");
         const targetPath = state.path("restore-target");
-        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-        const assetPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
-        const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
-        await writeArchive({
-          archivePath,
-          archiveRoot,
-          payloadPath: assetPath,
-          extraEntries: [
-            encodeTarEntry({ path: directoryPath, type: "Directory" }),
-            encodeTarEntry({
-              path: `${archiveRoot}/payload/directory-hardlink`,
-              type: "Link",
-              linkpath: directoryPath,
-            }),
-          ],
-        });
+        await writeUnextractableArchive(archivePath);
 
         await expect(
           backupRestoreCommand(createTestRuntime(), { archive: archivePath, target: targetPath }),
@@ -639,22 +718,7 @@ describe("backupRestoreCommand", () => {
       async (state) => {
         const archivePath = state.path("unextractable.tar.gz");
         const targetPath = state.path("restore-target");
-        const archiveRoot = "2026-08-12T00-00-00.000Z-openclaw-backup";
-        const assetPath = buildBackupArchivePath(archiveRoot, "/tmp/openclaw.json");
-        const directoryPath = `${archiveRoot}/payload/invalid-hardlink-target`;
-        await writeArchive({
-          archivePath,
-          archiveRoot,
-          payloadPath: assetPath,
-          extraEntries: [
-            encodeTarEntry({ path: directoryPath, type: "Directory" }),
-            encodeTarEntry({
-              path: `${archiveRoot}/payload/directory-hardlink`,
-              type: "Link",
-              linkpath: directoryPath,
-            }),
-          ],
-        });
+        await writeUnextractableArchive(archivePath);
         const cleanupError = new Error("cleanup denied");
         vi.spyOn(fs, "rm").mockRejectedValueOnce(cleanupError);
 

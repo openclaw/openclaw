@@ -133,7 +133,7 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -215,6 +215,9 @@ plugins, and installed skills.
     | `/export-session [path]` | Owner-only. Export the current session to HTML inside the workspace. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
 
+    `/session idle` and `/session max-age` wait for the channel's binding update
+    before confirming success. A failed update does not produce a success reply.
+
     Explicit `/export-session` paths replace existing files inside the
     workspace. Omit the path to generate a collision-safe filename.
 
@@ -243,7 +246,7 @@ plugins, and installed skills.
     | `/think <level\|default>` | Set the thinking level or clear the session override. Aliases: `/thinking`, `/t` |
     | `/verbose on\|off\|full` | Toggle verbose output. Alias: `/v` |
     | `/trace on\|off` | Toggle plugin trace output for the current session |
-    | `/fast [status\|auto\|on\|off\|default]` | Show, set, or clear fast mode |
+    | `/fast [status\|auto\|on\|off\|ultrafast\|default]` | Show, set, or clear fast mode |
     | `/reasoning [on\|off\|stream]` | Toggle reasoning visibility. Alias: `/reason` |
     | `/elevated [on\|off\|ask\|full]` | Toggle elevated mode. Alias: `/elev` |
     | `/exec host=<auto\|sandbox\|gateway\|node> security=<deny\|allowlist\|full> ask=<off\|on-miss\|always> node=<id>` | Show resolved exec defaults; persist host/node placement, apply security/ask to this message only. See [Session permission modes](/gateway/permission-modes) |
@@ -259,8 +262,8 @@ plugins, and installed skills.
       <Accordion title="verbose / trace / fast / reasoning safety">
         - `/verbose` is for debugging — keep it **off** in normal use.
         - `/trace` reveals only plugin-owned trace/debug lines. Normal verbose chatter stays off.
-        - `/fast auto|on|off` persists a session override. Use the Sessions UI `inherit` option to clear it.
-        - `/fast` is provider-specific: OpenAI/Codex map it to `service_tier=priority`. Direct Anthropic requests map it to `service_tier=auto` or `standard_only`.
+        - `/fast auto|on|off|ultrafast` persists a session override. Use `/fast default` or the Sessions UI `inherit` option to clear it.
+        - `/fast` is provider-specific: ordinary Fast starts from priority on OpenAI/Codex. Codex requests Ultrafast only for an explicit `"ultrafast"` selection and an authenticated app-server catalog that advertises it for the selected native model. Fast, Auto, and unspecified selections never automatically upgrade. Set `appServer.enableUltrafast: false` to disable Ultrafast: explicit `/fast ultrafast` then sends ordinary Fast (`priority`) without an Ultrafast catalog check. Saving the preference does not guarantee provider fulfillment. Standard and inactive Auto remain off. Direct Anthropic Fast requests map to `service_tier=auto` or `standard_only`.
         - `/reasoning`, `/verbose`, and `/trace` are risky in group settings — they may reveal internal reasoning or plugin diagnostics. Keep them off in group chats.
 
       </Accordion>
@@ -295,12 +298,11 @@ plugins, and installed skills.
     | `/commands` | Show the generated command catalog |
     | `/tools [compact\|verbose]` | Show what the current agent can use right now |
     | `/status` | Show execution/runtime status, Gateway and system uptime, plugin health, plus provider usage/quota |
-    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices. Requires `commands.plugins: true` |
+    | `/status plugins` | Show detailed plugin health: load errors, quarantines, channel plugin failures, dependency issues, compatibility notices, and informational diagnostics in a separate bounded section. Requires `commands.plugins: true` |
     | `/goal [status\|start\|edit\|pause\|resume\|complete\|block\|clear] ...` | Manage the current session's durable [goal](/tools/goal) |
     | `/dashboard [request]` | Create or update the current session's dashboard using the Control UI dashboard workflow |
     | `/diagnostics [note]` | Owner-only support-report flow. Asks for exec approval every time |
     | `/openclaw <request>` | Run the OpenClaw setup and repair helper from an owner DM |
-    | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
     | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
@@ -320,7 +322,7 @@ user skill directly.
     | `/loop status` | Owner-only. List loops bound to this conversation |
     | `/loop stop [name]` | Owner-only. Stop matching loops bound to this conversation |
     | `/allowlist [list\|add\|remove] ...` | Manage allowlist entries. Text-only |
-    | `/approve <id> <decision>` | Resolve exec or plugin approval prompts |
+    | `/approve <id> <decision>` | Resolve exec, plugin, or OpenClaw change approval prompts |
     | `/btw <question>` | Ask a side question without changing session context. Alias: `/side`. See [BTW](/tools/btw) |
   </Accordion>
 

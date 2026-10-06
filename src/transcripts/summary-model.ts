@@ -6,7 +6,7 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/
 import { z } from "zod";
 import { createReasoningTagTextPartitioner } from "../../packages/markdown-core/src/reasoning-tags.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { resolveNativeModelPrimary } from "../agents/agent-scope.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -100,7 +100,7 @@ export async function summarizeTranscriptsWithModel(params: {
   );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const run = async () => {
-    const primary = resolveAgentEffectiveModelPrimary(params.cfg, params.agentId);
+    const primary = resolveNativeModelPrimary(params.cfg, params.agentId);
     const utility = resolveUtilityModelRefForAgent({ cfg: params.cfg, agentId: params.agentId });
     const models = [utility, primary].filter((ref) => Boolean(ref?.trim()));
     if (!models.length || !params.utterances.length) {

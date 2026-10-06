@@ -34,6 +34,7 @@ import {
 } from "./zod-schema.root-support.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.session.js";
+import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
 export const OpenClawSchemaShape = {
@@ -45,12 +46,15 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          webhookListeners: z
+            .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
+            .optional(),
         })
         .optional(),
     })
     .optional(),
   env: z
-    .object({
+    .strictObject({
       shellEnv: z
         .strictObject({
           enabled: z.boolean().optional(),
@@ -59,7 +63,6 @@ export const OpenClawSchemaShape = {
         .optional(),
       vars: z.record(z.string(), z.string()).optional(),
     })
-    .strict()
     .optional(),
   wizard: z
     .strictObject({
@@ -122,6 +125,8 @@ export const OpenClawSchemaShape = {
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
           z
             .strictObject({
+              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
+              engine: z.enum(["chromium", "lightpanda"]).optional(),
               /** CDP port for this profile. Allocated once at creation, persisted permanently. */
               cdpPort: z.number().int().min(1).max(65535).optional(),
               /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -167,6 +172,49 @@ export const OpenClawSchemaShape = {
             .refine((value) => value.driver !== "extension" || !value.cdpUrl, {
               message:
                 'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
+            })
+            .superRefine((value, ctx) => {
+              if (value.engine !== "lightpanda") {
+                return;
+              }
+              const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
+              if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["cdpUrl"],
+                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
+                });
+              }
+              if (value.attachOnly !== true) {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["attachOnly"],
+                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
+                });
+              }
+              if (value.driver !== undefined && value.driver !== "openclaw") {
+                ctx.addIssue({
+                  code: "custom",
+                  path: ["driver"],
+                  message: 'Lightpanda requires the default "openclaw" CDP driver',
+                });
+              }
+              for (const key of [
+                "cdpPort",
+                "userDataDir",
+                "mcpCommand",
+                "mcpArgs",
+                "headless",
+                "executablePath",
+              ] as const) {
+                if (value[key] !== undefined) {
+                  ctx.addIssue({
+                    code: "custom",
+                    path: [key],
+                    message: `Lightpanda does not support the profile ${key} setting`,
+                  });
+                }
+              }
             }),
         )
         .optional(),
@@ -190,6 +238,25 @@ export const OpenClawSchemaShape = {
           allowLegacyAuth: z.boolean().optional(),
         })
         .optional(),
+    })
+    .superRefine((value, ctx) => {
+      const endpoints = new Map<string, { name: string; engine?: string }>();
+      for (const [name, profile] of Object.entries(value.profiles ?? {})) {
+        const endpoint = profile.cdpUrl ? URL.parse(profile.cdpUrl) : null;
+        if (!endpoint) {
+          continue;
+        }
+        const key = endpoint.toString().replace(/\/$/, "");
+        const previous = endpoints.get(key);
+        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+          ctx.addIssue({
+            code: "custom",
+            path: ["profiles", name, "cdpUrl"],
+            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+          });
+        }
+        endpoints.set(key, { name, engine: profile.engine });
+      }
     })
     .optional(),
   ui: z
@@ -297,6 +364,7 @@ export const OpenClawSchemaShape = {
     )
     .optional(),
   worktreeAcceleration: z.boolean().optional(),
+  worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
   security: SecuritySchema,
   bindings: BindingsSchema,
@@ -441,6 +509,7 @@ export const OpenClawSchemaShape = {
   talk: TalkSchema.optional(),
   gateway: GatewayConfigSchema,
   cloudWorkers: CloudWorkersConfigSchema,
+  storage: StorageConfigSchema,
   desktop: DesktopConfigSchema,
   memory: MemorySchema,
   mcp: McpConfigSchema,

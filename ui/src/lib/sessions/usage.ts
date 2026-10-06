@@ -1,8 +1,6 @@
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-
-type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
+import type { SessionRequestClient } from "./session-capability.ts";
 
 export type SessionUsageTarget = { key: string; agentId?: string };
 
@@ -36,8 +34,13 @@ function buildSessionUsageDateParams(timeZone: "local" | "utc") {
       };
 }
 
-function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record<string, unknown> {
-  return {
+export function requestSessionUsage(
+  client: SessionRequestClient,
+  query: SessionUsageQuery,
+  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
+): Promise<SessionsUsageResult> {
+  const key = options?.key;
+  const params = {
     startDate: query.startDate,
     endDate: query.endDate,
     ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
@@ -45,17 +48,6 @@ function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record
     ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
     groupBy: query.scope,
     ...(key ? { key, limit: 1 } : { limit: 1000 }),
-    includeContextWeight: false,
-  };
-}
-
-export function requestSessionUsage(
-  client: SessionRequestClient,
-  query: SessionUsageQuery,
-  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
-): Promise<SessionsUsageResult> {
-  const params = {
-    ...buildSessionUsageParams(query, options?.key),
     includeContextWeight: options?.includeContextWeight === true,
   };
   return options?.signal

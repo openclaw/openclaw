@@ -6,9 +6,9 @@ import {
   QA_BASE_RUNTIME_PLUGIN_IDS,
   QA_CODEX_OPENAI_CATALOG_BASE_URL,
 } from "../qa-gateway-config.js";
-import type { RuntimeId } from "../runtime-parity.js";
+import type { RuntimeId } from "../runtime-id.js";
 import type { QaProviderMode } from "./index.js";
-import { getQaProvider } from "./index.js";
+import { getQaProvider, QA_DEFAULT_IMAGE_MODEL } from "./index.js";
 
 type QaImageGenerationPatchInput = {
   providerMode: QaProviderMode;
@@ -18,29 +18,8 @@ type QaImageGenerationPatchInput = {
   forcedRuntime?: RuntimeId;
 };
 
-function splitModelProviderId(modelRef: string) {
-  const slash = modelRef.indexOf("/");
-  return slash > 0 ? modelRef.slice(0, slash) : null;
-}
-
-function uniqueNonEmpty(values: readonly (string | null | undefined)[]) {
-  return uniqueStrings(normalizeTrimmedStringList(values));
-}
-
 export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchInput) {
   const provider = getQaProvider(input.providerMode);
-  const usesOpenAiMockImageProvider = input.providerMode === "mock-openai";
-  const imageModelRef = usesOpenAiMockImageProvider
-    ? "openai/gpt-image-1"
-    : provider.defaultImageGenerationModel({
-        modelProviderIds: provider.defaultImageGenerationProviderIds,
-      });
-  if (!imageModelRef) {
-    throw new Error(
-      `QA provider "${input.providerMode}" does not expose an image generation model`,
-    );
-  }
-  const imageProviderId = splitModelProviderId(imageModelRef);
   const modelPatch = (() => {
     if (provider.kind !== "mock") {
       return null;
@@ -74,38 +53,24 @@ export function buildQaImageGenerationConfigPatch(input: QaImageGenerationPatchI
       },
     };
   })();
-  const providerPluginIds = imageProviderId ? [imageProviderId] : [];
-  const enabledPluginIds = uniqueNonEmpty(providerPluginIds);
-
   return {
     plugins: {
-      allow: uniqueNonEmpty([
-        ...QA_BASE_RUNTIME_PLUGIN_IDS,
-        ...(input.existingPluginIds ?? []),
-        ...enabledPluginIds,
-        ...input.requiredPluginIds,
-      ]),
-      ...(enabledPluginIds.length > 0
-        ? {
-            entries: Object.fromEntries(
-              enabledPluginIds.map((pluginId) => [pluginId, { enabled: true }]),
-            ),
-          }
-        : {}),
+      allow: uniqueStrings(
+        normalizeTrimmedStringList([
+          ...QA_BASE_RUNTIME_PLUGIN_IDS,
+          ...(input.existingPluginIds ?? []),
+          "openai",
+          ...input.requiredPluginIds,
+        ]),
+      ),
+      entries: { openai: { enabled: true } },
     },
-    ...(modelPatch
-      ? {
-          models: {
-            mode: modelPatch.mode,
-            providers: modelPatch.providers,
-          },
-        }
-      : {}),
+    ...(modelPatch ? { models: modelPatch } : {}),
     agents: {
       defaults: {
         mediaModels: {
           image: {
-            primary: imageModelRef,
+            primary: QA_DEFAULT_IMAGE_MODEL,
           },
         },
       },

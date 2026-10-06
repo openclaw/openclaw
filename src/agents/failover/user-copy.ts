@@ -15,11 +15,12 @@ import {
 } from "../../shared/assistant-error-format.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import type { CliTimeoutContext, FallbackAttemptRecord } from "../failover-error.js";
-import { ERROR_PREFIX_RE, renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
+import { ERROR_DETAILS_HINT, ERROR_PREFIX_RE } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReasonCore } from "./classify-core.js";
 import {
   isPeriodicUsageLimitErrorMessage,
   isProviderCompletedErrorFinishReasonMessage,
+  splitFailoverAggregateLegs,
 } from "./message-patterns.js";
 import {
   classifyProviderRequestFacets,
@@ -27,23 +28,12 @@ import {
 } from "./request-error-facets.js";
 import type { FailoverClassification, FailoverReason } from "./signal.js";
 
-type FailoverUserCopyContext = {
-  raw?: string;
-  provider?: string;
-  model?: string;
-  authMode?: string;
-};
-
-type FailoverBaseCopyRenderer = (context: FailoverUserCopyContext) => string;
-
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
+const RATE_LIMIT_ERROR_USER_MESSAGE =
+  "⚠️ The AI service needs a short break. Please try again in a few minutes.";
 export const AUTH_INVALID_TOKEN_USER_TEXT =
-  "Authentication failed (provider returned HTTP 401). " +
-  "Your provider token may have expired — try the request again in a moment. " +
-  "If the failure persists, re-authenticate this provider.";
+  "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
-  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 export const renderFailoverCodeUserCopy = (code: unknown): string | undefined =>
   code === "selected_auth_profile_unavailable"
     ? SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT
@@ -52,13 +42,16 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
   "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
-const RATE_LIMIT_RETRY_MESSAGE =
-  "⚠️ The model request was rate-limited. Please try again in a few minutes.";
 const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
 const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_RE =
+  /\b(?:this\s+)?prompt\s+(?:is\s+)?(?:too long|longer than)\b.{0,120}\b(?:free tier|single request|per[- ]request)\b/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE =
+  "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+const PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
 
@@ -79,8 +72,8 @@ export function formatBillingErrorMessage(
       : "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
   }
   return providerLabel
-    ? `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`
-    : "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
+    ? `⚠️ ${providerLabel} returned a billing error — check your account's balance and usage limits before trying again.`
+    : "⚠️ The AI service reported a billing problem. Check your account's credit balance and usage limits before trying again.";
 }
 
 const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
@@ -96,7 +89,7 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   if (isCloudflareOrHtmlErrorPage(withoutPrefix)) {
     return undefined;
   }
-  const trimmed = candidate.trim();
+  const trimmed = candidate.trim().replace(/\s+\((?:rate_limit|overloaded|unknown)\)$/iu, "");
   if (
     trimmed.length > 300 ||
     trimmed.startsWith("{") ||
@@ -107,45 +100,19 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
-function renderRateLimitBaseCopy(context: FailoverUserCopyContext): string {
-  const raw = context.raw ?? "";
-  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
-    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
+function renderProviderPromptSizeLimitCopy(raw: string): string | undefined {
+  if (raw.length > PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH) {
+    return undefined;
   }
-  return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
-}
-
-const FAILOVER_REASON_BASE_COPY = {
-  auth: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  auth_permanent: () => AUTH_INVALID_TOKEN_USER_TEXT,
-  format: (context) => renderFormatErrorCopy(context.raw ?? ""),
-  rate_limit: renderRateLimitBaseCopy,
-  overloaded: (context) =>
-    MODEL_CAPACITY_ERROR_RE.test(context.raw ?? "")
-      ? MODEL_CAPACITY_ERROR_USER_MESSAGE
-      : OVERLOADED_ERROR_USER_MESSAGE,
-  billing: (context) =>
-    formatBillingErrorMessage(context.provider, context.model, context.authMode),
-  server_error: () => "LLM request failed: provider returned an internal error.",
-  timeout: () => "LLM request timed out.",
-  tls_certificate: () =>
-    "LLM request failed: TLS certificate validation rejected the provider endpoint. Check the endpoint hostname, proxy, and local certificate trust.",
-  context_overflow: () =>
-    "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.",
-  model_not_found: () =>
-    "The selected model was not found by the provider. Check the model id or choose a different model.",
-  session_expired: () => "The provider session expired. Start a new session and try again.",
-  empty_response: () => "The model returned an empty response. Please try again.",
-  no_error_details: () => "LLM request failed with an unknown error.",
-  unclassified: () => "LLM request failed.",
-  unknown: () => "LLM request failed with an unknown error.",
-} satisfies Record<FailoverReason, FailoverBaseCopyRenderer>;
-
-function renderFailoverBaseCopy(
-  reason: FailoverReason,
-  context: FailoverUserCopyContext = {},
-): string {
-  return FAILOVER_REASON_BASE_COPY[reason](context);
+  const status = extractErrorHttpStatus(raw);
+  if (status?.code !== 400) {
+    return undefined;
+  }
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(status.rest);
+  const providerMessage = info?.message ?? status.rest;
+  return providerMessage.length <= 300 && PROVIDER_PROMPT_SIZE_LIMIT_RE.test(providerMessage)
+    ? PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE
+    : undefined;
 }
 
 /** Render rate-limit versus overload copy from the canonical classified reason. */
@@ -153,7 +120,24 @@ export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
   raw?: string;
 }): string {
-  return renderFailoverBaseCopy(params.reason, { raw: params.raw });
+  const raw = params.raw ?? "";
+  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
+    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
+  }
+  if (params.reason === "overloaded") {
+    return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const promptSizeCopy = renderProviderPromptSizeLimitCopy(raw);
+  if (promptSizeCopy) {
+    return promptSizeCopy;
+  }
+  for (const leg of splitFailoverAggregateLegs(raw)) {
+    const fromLeg = extractProviderRateLimitMessage(leg);
+    if (fromLeg) {
+      return fromLeg;
+    }
+  }
+  return extractProviderRateLimitMessage(raw) ?? RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
@@ -259,10 +243,12 @@ export function renderSanitizedUserFacingText(
       ERROR_PREFIX_RE.test(trimmed) ||
       CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(trimmed))
   ) {
-    return renderFailoverBaseCopy("context_overflow");
+    return "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
   }
   if (reason === "billing" || reason === "rate_limit" || reason === "overloaded") {
-    return renderFailoverBaseCopy(reason, { raw: trimmed });
+    return reason === "billing"
+      ? BILLING_ERROR_USER_MESSAGE
+      : renderRateLimitOrOverloadedCopy({ reason, raw: trimmed });
   }
   // Labeled HTTP statuses require the full grammar; keep provider retry detail above.
   const providerRequestCode = resolveProviderRequestFailureCode({
@@ -294,7 +280,7 @@ export function renderSanitizedUserFacingText(
       return formatRawAssistantErrorForUi(trimmed);
     }
     if (reason === "timeout") {
-      return renderFailoverBaseCopy("timeout");
+      return "LLM request timed out.";
     }
     return formatRawAssistantErrorForUi(trimmed);
   }
@@ -302,10 +288,11 @@ export function renderSanitizedUserFacingText(
 }
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
-  "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.";
-const HEARTBEAT_FAILURE_LEAD = "⚠️ Heartbeat check failed before it could produce an update";
-const HEARTBEAT_FAILURE_TAIL = "The main chat session remains available.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}. ${HEARTBEAT_FAILURE_TAIL}`;
+  "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+// A failed background turn can have partial effects; it does not establish chat health.
+const HEARTBEAT_FAILURE_LEAD = "⚠️ The background check did not complete.";
+const HEARTBEAT_FAILURE_LOG_HINT = "Troubleshooting: run `openclaw logs --follow` in a terminal.";
+export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}\n\n${HEARTBEAT_FAILURE_LOG_HINT}`;
 
 /** `reason` is the failure-reply owner's already sanitized and capped detail. */
 export function renderHeartbeatRunFailureCopy(reason?: string): string {
@@ -313,18 +300,18 @@ export function renderHeartbeatRunFailureCopy(reason?: string): string {
     return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
   }
   const terminator = /[.!?]$/u.test(reason) ? "" : ".";
-  return `${HEARTBEAT_FAILURE_LEAD}: ${reason}${terminator} ${HEARTBEAT_FAILURE_TAIL}`;
+  return `${HEARTBEAT_FAILURE_LEAD}\n\nDetails: ${reason}${terminator}\n${HEARTBEAT_FAILURE_LOG_HINT}`;
 }
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
 const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
-  "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
+  "⚠️ The AI service can't accept more requests right now. Wait a few minutes, then try again. If it continues, check your account's usage and billing limits.";
 const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned a temporary internal error before replying. Try again in a moment, or switch to another model if it keeps happening.";
 const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 const PROVIDER_MODEL_UNAVAILABLE_USER_MESSAGE =
-  "⚠️ The configured model is unavailable from the provider — it may have been renamed, retired, or is not offered on this account. This needs a config update (agents.defaults.model); retrying or starting a new session won't fix it.";
+  "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.";
 
 const PROVIDER_REQUEST_COPY = {
   provider_authentication_error: PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE,
@@ -424,6 +411,12 @@ export function renderRateLimitReplyCopy(params: {
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  if (params.reason === "rate_limit") {
+    const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
+    if (promptSizeCopy) {
+      return promptSizeCopy;
+    }
+  }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
     params.message,
@@ -445,23 +438,32 @@ export function renderRateLimitReplyCopy(params: {
       );
       return providerMessage.startsWith("⚠️") ? providerMessage : `⚠️ ${providerMessage}`;
     }
-    return RATE_LIMIT_RETRY_MESSAGE;
+    return RATE_LIMIT_ERROR_USER_MESSAGE;
+  }
+  for (const attempt of attempts) {
+    if (attempt.reason !== "rate_limit" || !attempt.error) {
+      continue;
+    }
+    const hint = extractProviderRateLimitMessage(attempt.error);
+    if (hint) {
+      return params.sanitizeText?.(attempt.error) ?? hint;
+    }
   }
   const expiry = params.cooldownExpiry;
   const nowMs = params.nowMs ?? Date.now();
   if (typeof expiry === "number" && expiry > nowMs) {
     const secsLeft = Math.max(1, Math.ceil((expiry - nowMs) / 1000));
     return secsLeft <= 60
-      ? `⚠️ Rate-limited — ready in ~${secsLeft}s. Please wait a moment.`
-      : `⚠️ Rate-limited — ready in ~${Math.ceil(secsLeft / 60)} min. Please try again shortly.`;
+      ? `⚠️ The AI service needs a short break. Please try again in ~${secsLeft}s.`
+      : `⚠️ The AI service needs a short break. Please try again in ~${Math.ceil(secsLeft / 60)} min.`;
   }
   const attemptedModels = new Set(
     attempts.map((attempt) => `${attempt.provider}/${attempt.model}`),
   );
   return attemptedModels.size > 1 &&
     attempts.every((attempt) => attempt.reason === "rate_limit" || attempt.reason === "overloaded")
-    ? "⚠️ All attempted models were rate-limited or overloaded. Please try again in a few minutes."
-    : RATE_LIMIT_RETRY_MESSAGE;
+    ? "⚠️ The AI services are busy. Please try again in a few minutes."
+    : RATE_LIMIT_ERROR_USER_MESSAGE;
 }
 
 export function renderBillingReplyCopy(params: {
@@ -481,8 +483,7 @@ export function renderBillingReplyCopy(params: {
       : params.authMode === "oauth" || params.authMode === "token"
         ? params
         : undefined;
-  return billingFailure &&
-    (billingFailure.authMode === "oauth" || billingFailure.authMode === "token")
+  return billingFailure
     ? formatBillingErrorMessage(
         billingFailure.provider,
         billingFailure.model,
@@ -490,8 +491,6 @@ export function renderBillingReplyCopy(params: {
       )
     : BILLING_ERROR_USER_MESSAGE;
 }
-
-const SAFE_MISSING_API_KEY_PROVIDERS = new Set(["anthropic", "google", "openai"]);
 
 export function renderMissingApiKeyReplyCopy(params?: {
   provider: string;
@@ -502,21 +501,17 @@ export function renderMissingApiKeyReplyCopy(params?: {
     return null;
   }
   if (provider === "openai" && params?.providerGuidance) {
-    return "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.";
+    return "⚠️ OpenAI needs a different sign-in for this model. Open Models in the Control UI or run `openclaw configure` to choose how to connect.";
   }
-  if (provider === "openai") {
-    return '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.';
-  }
-  return SAFE_MISSING_API_KEY_PROVIDERS.has(provider)
-    ? `⚠️ Missing API key for provider "${provider}". Configure the gateway auth for that provider, then try again.`
-    : "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.";
+  return provider === "openai"
+    ? "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`."
+    : "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.";
 }
 
 const CLI_BACKEND_NO_OUTPUT_STALL_RE =
   /\bCLI produced no output for\s+(\d+)\s*s\s+and was terminated\b/iu;
 const CLI_BACKEND_OVERALL_TIMEOUT_RE =
   /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
-const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
 
 export function renderCliTimeoutReplyCopy(params: {
   message: string;
@@ -531,39 +526,27 @@ export function renderCliTimeoutReplyCopy(params: {
   if (!Number.isFinite(seconds)) {
     return null;
   }
-  const routedModelRef = params.message.match(CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE)?.[1];
-  const routingSuffix = routedModelRef ? ` (routing ${routedModelRef})` : "";
   const mode = timeout?.mode ?? (stall ? "no-output" : "overall");
-  const stoppedWork: string[] = [];
-  if (timeout?.backgroundTaskCount) {
-    stoppedWork.push(
-      `${timeout.backgroundTaskCount} CLI background ${timeout.backgroundTaskCount === 1 ? "task" : "tasks"}`,
-    );
-  }
-  if (timeout?.activeToolCount) {
-    stoppedWork.push(
-      `${timeout.activeToolCount} active CLI tool ${timeout.activeToolCount === 1 ? "call" : "calls"}`,
-    );
-  }
-  let workStatus =
-    stoppedWork.length > 0
-      ? ` It also stopped ${stoppedWork.join(" and ")}; that work shares the parent CLI process. Effects may be partial; check before retrying.`
-      : timeout?.observedActivity
-        ? " The CLI had already begun work, so effects may be partial; check before retrying."
-        : "";
-  if (params.replayPrevented) {
-    workStatus += " OpenClaw did not replay this turn automatically.";
-  }
-  return mode === "no-output"
-    ? `⚠️ CLI subprocess${routingSuffix}: no output for ${seconds}s, so the no-output watchdog stopped it. This is separate from the overall agent timeout; the gateway is unaffected.${workStatus} Check for an interactive prompt. The CLI backend ${params.provider ?? "<id>"} produced no output before its watchdog expired.`
-    : `⚠️ CLI turn${routingSuffix}: timed out after ${seconds}s (overall turn limit). The gateway is unaffected.${workStatus} For long work, use a detached OpenClaw sub-agent (no run timeout by default), or raise \`agents.defaults.timeoutSeconds\`.`;
+  const mayHaveCompletedWork =
+    timeout?.observedActivity ||
+    timeout?.backgroundTaskCount ||
+    timeout?.activeToolCount ||
+    params.replayPrevented;
+  const workStatus = mayHaveCompletedWork
+    ? " Some work may have completed. Check its results before trying again."
+    : "";
+  const summary = mode === "no-output" ? "The task stopped responding." : "The task took too long.";
+  const remedy =
+    mode === "no-output"
+      ? "Check for a sign-in or confirmation prompt in the terminal."
+      : "Try a smaller task, or increase the task time limit in the Control UI settings.";
+  return `⚠️ ${summary}${workStatus} ${remedy}`;
 }
 
 type AuthProfileFailureCopyParams = {
   reason: FailoverReason;
   provider: string;
   allInCooldown: boolean;
-  causeText?: string;
   recoveryHint?: string;
 };
 
@@ -596,60 +579,43 @@ const AUTH_PROFILE_COOLDOWN_COPY = {
   unknown: authProfileUnavailableCopy,
 } satisfies Record<FailoverReason, (provider: string) => string>;
 
-type AuthProfileReasonPolicy = {
-  direct: ((provider: string) => string) | undefined;
-  recovery: boolean;
+const AUTH_PROFILE_DIRECT_COPY: Partial<Record<FailoverReason, (provider: string) => string>> = {
+  auth: AUTH_PROFILE_COOLDOWN_COPY.auth,
+  auth_permanent: (provider) => `${provider} isn't accepting your saved login.`,
+  billing: AUTH_PROFILE_COOLDOWN_COPY.billing,
+  session_expired: AUTH_PROFILE_COOLDOWN_COPY.session_expired,
 };
 
-const AUTH_PROFILE_REASON_POLICY = {
-  auth: { direct: AUTH_PROFILE_COOLDOWN_COPY.auth, recovery: true },
-  auth_permanent: {
-    direct: (provider) => `${provider} isn't accepting your saved login.`,
-    recovery: true,
-  },
-  format: { direct: undefined, recovery: false },
-  rate_limit: { direct: undefined, recovery: false },
-  overloaded: { direct: undefined, recovery: false },
-  billing: { direct: AUTH_PROFILE_COOLDOWN_COPY.billing, recovery: true },
-  server_error: { direct: undefined, recovery: false },
-  timeout: { direct: undefined, recovery: false },
-  tls_certificate: { direct: undefined, recovery: false },
-  context_overflow: { direct: undefined, recovery: true },
-  model_not_found: { direct: undefined, recovery: false },
-  session_expired: { direct: AUTH_PROFILE_COOLDOWN_COPY.session_expired, recovery: true },
-  empty_response: { direct: undefined, recovery: true },
-  no_error_details: { direct: undefined, recovery: true },
-  unclassified: { direct: undefined, recovery: true },
-  unknown: { direct: undefined, recovery: true },
-} satisfies Record<FailoverReason, AuthProfileReasonPolicy>;
+const AUTH_PROFILE_RECOVERY_REASONS = new Set<FailoverReason>([
+  "auth",
+  "auth_permanent",
+  "billing",
+  "context_overflow",
+  "session_expired",
+  "empty_response",
+  "no_error_details",
+  "unclassified",
+  "unknown",
+]);
 
 export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyParams): string {
-  const policy = AUTH_PROFILE_REASON_POLICY[params.reason];
   const description = params.allInCooldown
     ? AUTH_PROFILE_COOLDOWN_COPY[params.reason](params.provider)
-    : policy.direct?.(params.provider);
-  if (!description) {
-    return params.causeText?.trim() || authProfileUnavailableCopy(params.provider);
-  }
-  const hint = policy.recovery ? params.recoveryHint : null;
-  const causeText = params.causeText?.trim() ?? "";
-  const suffix = causeText && !description.includes(causeText) ? ` (${causeText})` : "";
-  return `${[description, hint].filter(Boolean).join(" ")}${suffix}`;
+    : AUTH_PROFILE_DIRECT_COPY[params.reason]?.(params.provider);
+  const hint = AUTH_PROFILE_RECOVERY_REASONS.has(params.reason) ? params.recoveryHint : null;
+  return [description ?? authProfileUnavailableCopy(params.provider), hint]
+    .filter(Boolean)
+    .join(" ");
 }
 
-const CONTROL_UI_LOG_HINT = "To view logs, run `openclaw logs --follow` in a terminal.";
-
-export function renderControlUiAgentFailureCopy(errorText: string): string {
-  return `⚠️ Agent failed before reply: ${errorText.trim().replace(/\.\s*$/, "")}.\n${CONTROL_UI_LOG_HINT}`;
+export function renderControlUiAgentFailureCopy(): string {
+  return `⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. ${ERROR_DETAILS_HINT}`;
 }
 
 export function replaceGenericExternalRunFailureText(text: string): {
   text: string;
   replaced: boolean;
 } {
-  if (text.trim() === GENERIC_EXTERNAL_RUN_FAILURE_TEXT) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, replaced: true };
-  }
   const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
   if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
     return { text, replaced: false };

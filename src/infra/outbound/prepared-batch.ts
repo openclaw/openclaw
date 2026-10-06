@@ -1,10 +1,7 @@
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type {
-  OutboundPayloadDeliveryOutcome,
-  OutboundPayloadDeliverySuppressionReason,
-} from "./deliver-types.js";
-import { summarizeOutboundPayloadForTransport } from "./payloads.js";
+import type { OutboundPayloadDeliveryOutcome } from "./deliver-types.js";
+import { resolveSendableOutboundReplyParts } from "./reply-payload-parts.js";
 
 export const PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION = 1 as const;
 
@@ -17,15 +14,10 @@ type PreparedOutboundAcceptedEntry = {
   preparedMediaCount: number;
 };
 
-type PreparedOutboundSuppressedEntry = {
-  sourceIndex: number;
-  status: "suppressed";
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-};
+type PreparedOutboundSuppressedEntry = Omit<
+  Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>,
+  "index"
+> & { sourceIndex: number };
 
 export type PreparedOutboundBatchEntry =
   | PreparedOutboundAcceptedEntry
@@ -55,7 +47,7 @@ export function createUnmodifiedPreparedOutboundBatch(
       payload,
       replyHookChanged: false,
       messageHookChanged: false,
-      preparedMediaCount: summarizeOutboundPayloadForTransport(payload).mediaUrls.length,
+      preparedMediaCount: resolveSendableOutboundReplyParts(payload).mediaCount,
     })),
   };
 }

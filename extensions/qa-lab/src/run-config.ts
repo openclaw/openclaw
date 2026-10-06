@@ -1,14 +1,13 @@
-// Qa Lab helper module supports run config behavior.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { z } from "zod";
 import type {
   QaLabExecutionKind,
   QaLabResolvedRunPlan,
   QaLabRunnerSnapshot,
   QaLabRunSelection,
 } from "../runner-contract.js";
-import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import {
   defaultQaRuntimeModelForMode,
   resolveQaRuntimeModelPair,
@@ -49,12 +48,6 @@ export function defaultQaModelForMode(mode: QaProviderMode, alternate = false) {
   return defaultQaRuntimeModelForMode(mode, alternate ? { alternate: true } : undefined);
 }
 
-type QaDefaultModelResolver = (mode: QaProviderMode, alternate?: boolean) => string;
-
-function defaultStaticModelForMode(mode: QaProviderMode, alternate = false) {
-  return defaultStaticQaModelForMode(mode, alternate ? { alternate: true } : undefined);
-}
-
 function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profileId: string) {
   const profile = profiles.find((entry) => entry.id === profileId);
   if (!profile) {
@@ -65,18 +58,16 @@ function requireQaRunProfile(profiles: readonly QaLabRunProfileOption[], profile
 
 function createDefaultQaRunSelection(
   profiles: readonly QaLabRunProfileOption[],
-  options?: { resolveDefaultModel?: QaDefaultModelResolver },
 ): QaLabRunSelection {
   const profile = requireQaRunProfile(profiles, "smoke-ci");
   const providerMode: QaProviderMode = "mock-openai";
-  const resolveDefaultModel = options?.resolveDefaultModel ?? defaultQaModelForMode;
   return {
     profile: profile.id,
     channel: null,
     channelDriver: profile.channelDriver,
     evidenceMode: profile.evidenceMode,
     providerMode,
-    ...resolveQaRuntimeModelPair({ providerMode, resolveDefaultModel }),
+    ...resolveQaRuntimeModelPair({ providerMode }),
     fastMode: getQaProvider(providerMode).kind === "live",
     runtimePair: null,
     runtimePairLane: null,
@@ -117,17 +108,19 @@ function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]): stri
   return selectedIds;
 }
 
-function normalizeQaChannelDriver(
+function normalizeQaSelectionEnum<T>(
   input: unknown,
-  fallback: QaLabRunSelection["channelDriver"],
-): QaLabRunSelection["channelDriver"] {
+  fallback: T,
+  schema: z.ZodType<T>,
+  label: string,
+): T {
   if (input === undefined || input === null || input === "") {
     return fallback;
   }
-  const parsed = qaScorecardChannelDriverSchema.safeParse(input);
+  const parsed = schema.safeParse(input);
   if (!parsed.success) {
     const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA channel driver${details}`);
+    throw new Error(`unknown QA ${label}${details}`);
   }
   return parsed.data;
 }
@@ -143,10 +136,11 @@ function normalizeQaProfile(
   if (input !== undefined && input !== null && (typeof input !== "string" || !input.trim())) {
     throw new Error("QA runner profile must be a non-empty string");
   }
-  const profile = typeof input === "string" ? input.trim() : fallback;
-  if (!profiles.some((entry) => entry.id === profile)) {
+  const profileId = typeof input === "string" ? input.trim() : fallback;
+  const profile = profiles.find((entry) => entry.id === profileId);
+  if (!profile) {
     throw new Error(
-      `unknown QA run profile: ${profile}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
+      `unknown QA run profile: ${profileId}; expected one of ${profiles.map((entry) => entry.id).join(", ")}`,
     );
   }
   return profile;
@@ -160,21 +154,6 @@ function normalizeQaChannel(input: unknown): string | null {
     throw new Error("QA runner channel must be a non-empty string");
   }
   return input.trim().toLowerCase();
-}
-
-function normalizeQaEvidenceMode(
-  input: unknown,
-  fallback: QaLabRunSelection["evidenceMode"],
-): QaLabRunSelection["evidenceMode"] {
-  if (input === undefined || input === null || input === "") {
-    return fallback;
-  }
-  const parsed = qaScorecardEvidenceModeSchema.safeParse(input);
-  if (!parsed.success) {
-    const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA evidence mode${details}`);
-  }
-  return parsed.data;
 }
 
 function normalizeQaRuntimePair(input: unknown): QaLabRunSelection["runtimePair"] {
@@ -197,18 +176,6 @@ function normalizeQaRuntimePair(input: unknown): QaLabRunSelection["runtimePair"
   return ["openclaw", "codex"];
 }
 
-function normalizeQaRuntimePairLane(input: unknown): QaLabRunSelection["runtimePairLane"] {
-  if (input === undefined || input === null || input === "") {
-    return null;
-  }
-  const parsed = qaRuntimePairLaneSchema.safeParse(input);
-  if (!parsed.success) {
-    const details = typeof input === "string" ? `: ${input}` : "";
-    throw new Error(`unknown QA runtime-pair lane${details}`);
-  }
-  return parsed.data;
-}
-
 export function normalizeQaRunSelection(
   input: unknown,
   scenarios: QaSeedScenario[],
@@ -218,12 +185,12 @@ export function normalizeQaRunSelection(
     throw new Error("QA runner request must be a JSON object");
   }
   const payload = input as Record<string, unknown>;
-  const profile = normalizeQaProfile(
+  const profileDefaults = normalizeQaProfile(
     payload.profile,
     profiles,
     Array.isArray(payload.scenarioIds) ? "all" : undefined,
   );
-  const profileDefaults = requireQaRunProfile(profiles, profile);
+  const profile = profileDefaults.id;
   const providerMode = normalizeQaProviderMode(
     payload.providerMode ?? (profile === "smoke-ci" ? "mock-openai" : undefined),
   );
@@ -235,13 +202,28 @@ export function normalizeQaRunSelection(
   return {
     profile,
     channel: normalizeQaChannel(payload.channel),
-    channelDriver: normalizeQaChannelDriver(payload.channelDriver, profileDefaults.channelDriver),
-    evidenceMode: normalizeQaEvidenceMode(payload.evidenceMode, profileDefaults.evidenceMode),
+    channelDriver: normalizeQaSelectionEnum(
+      payload.channelDriver,
+      profileDefaults.channelDriver,
+      qaScorecardChannelDriverSchema,
+      "channel driver",
+    ),
+    evidenceMode: normalizeQaSelectionEnum(
+      payload.evidenceMode,
+      profileDefaults.evidenceMode,
+      qaScorecardEvidenceModeSchema,
+      "evidence mode",
+    ),
     providerMode,
     ...models,
     fastMode: getQaProvider(providerMode).kind === "live" || payload.fastMode === true,
     runtimePair: normalizeQaRuntimePair(payload.runtimePair),
-    runtimePairLane: normalizeQaRuntimePairLane(payload.runtimePairLane),
+    runtimePairLane: normalizeQaSelectionEnum(
+      payload.runtimePairLane,
+      null,
+      qaRuntimePairLaneSchema,
+      "runtime-pair lane",
+    ),
     scenarioIds: normalizeScenarioIds(payload.scenarioIds, scenarios),
   };
 }
@@ -438,9 +420,7 @@ export function createIdleQaRunnerSnapshot(
 ): QaLabRunnerSnapshot {
   return {
     status: "idle",
-    selection: createDefaultQaRunSelection(profiles, {
-      resolveDefaultModel: defaultStaticModelForMode,
-    }),
+    selection: createDefaultQaRunSelection(profiles),
     plan,
     artifacts: null,
     error: null,

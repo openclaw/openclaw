@@ -1,14 +1,14 @@
 import { migrateManagedWorktreeCanonicalWorkspaces } from "../config/sessions/worktree-workspace-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  listExistingAgentDatabaseTargets,
+  type ExistingAgentDatabaseTarget,
+} from "../infra/session-sqlite-migration-readers.js";
+import {
   closeOpenClawAgentDatabaseByPathAsync,
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
-import {
-  listExistingAgentDatabaseTargets,
-  type ExistingAgentDatabaseTarget,
-} from "./doctor-session-sqlite-readers.js";
 
 /** Run after key repairs, whose source claims include workspace metadata. */
 export async function repairLegacySessionWorktreeWorkspaces(params: {

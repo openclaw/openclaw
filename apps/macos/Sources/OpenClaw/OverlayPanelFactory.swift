@@ -33,7 +33,7 @@ enum OverlayPanelFactory {
     static func animatePresent(window: NSWindow, from start: NSRect, to target: NSRect, duration: TimeInterval = 0.18) {
         window.setFrame(start, display: true)
         window.alphaValue = 0
-        window.orderFrontRegardless()
+        AppActivation.shared.orderFrontRegardless(window: window)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = duration
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -89,14 +89,7 @@ enum OverlayPanelFactory {
         completion: @escaping @MainActor @Sendable () -> Void)
     {
         let target = window.frame.offsetBy(dx: offsetX, dy: offsetY)
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = duration
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().setFrame(target, display: true)
-            window.animator().alphaValue = 0
-        } completionHandler: {
-            Task { @MainActor in completion() }
-        }
+        self.animateDismiss(window: window, to: target, duration: duration, completion: completion)
     }
 
     @MainActor
@@ -113,20 +106,6 @@ enum OverlayPanelFactory {
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in completion() }
-        }
-    }
-
-    @MainActor
-    static func animateDismissAndHide(
-        window: NSWindow,
-        offsetX: CGFloat = 6,
-        offsetY: CGFloat = 6,
-        duration: TimeInterval = 0.16,
-        onHidden: @escaping @MainActor () -> Void)
-    {
-        self.animateDismiss(window: window, offsetX: offsetX, offsetY: offsetY, duration: duration) {
-            window.orderOut(nil)
-            onHidden()
         }
     }
 

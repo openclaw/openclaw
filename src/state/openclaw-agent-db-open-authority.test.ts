@@ -18,6 +18,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   withOpenClawAgentDatabaseAsync,
 } from "./openclaw-agent-db.js";
+import { clearOpenClawAgentIntegrityVerification } from "./openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -54,6 +55,7 @@ function fixture(repair = false) {
   }
   const pathname = database.path;
   closeOpenClawAgentDatabasesForTest(root);
+  clearOpenClawAgentIntegrityVerification(pathname, options.env);
   const state = openOpenClawStateDatabase({ env: options.env });
   const leases = () => state.db.prepare("SELECT lease_id FROM agent_database_leases").all();
   return { options, pathname, state, leases };

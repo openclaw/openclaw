@@ -13,7 +13,10 @@ import {
   type InternalSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -26,7 +29,8 @@ import {
 import { truncateOversizedToolResultsInSessionManager } from "./tool-result-truncation.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
   }),
@@ -109,21 +113,25 @@ describe("committed transcript rewrite notifications", () => {
         sessionKey: "agent:other:old-session",
         agentId: "other",
       };
-      const repair = () => {
+      const repair = async () => {
         if (kind === "thinking") {
-          return repairRejectedThinkingReplayInSessionManager({
-            sessionManager: manager,
-            ...caller,
-          }).repaired;
+          return (
+            await repairRejectedThinkingReplayInSessionManager({
+              sessionManager: manager,
+              ...caller,
+            })
+          ).repaired;
         }
         if (kind === "compaction") {
-          return repairRejectedCompactionReplayInSessionManager({
-            sessionManager: manager,
-            ...caller,
-            checkpoint,
-          }).repaired;
+          return (
+            await repairRejectedCompactionReplayInSessionManager({
+              sessionManager: manager,
+              ...caller,
+              checkpoint,
+            })
+          ).repaired;
         }
-        const outcome = handleEmbeddedAttemptMidTurnPrecheck({
+        const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
           attempt: { ...caller, provider: "openai", modelId: "gpt-5.5", contextTokenBudget: 1_000 },
           request: {
             route: "truncate_tool_results_only",
@@ -188,7 +196,7 @@ describe("committed transcript rewrite notifications", () => {
     },
   );
 
-  it("retains a file-only replay notification without a persisted manager target", () => {
+  it("retains a file-only replay notification without a persisted manager target", async () => {
     const manager = SessionManager.inMemory();
     manager.appendMessage(
       makeAgentAssistantMessage({ content: [{ type: "thinking", thinking: "stale" }] }),
@@ -199,12 +207,14 @@ describe("committed transcript rewrite notifications", () => {
     const stopPublic = onSessionTranscriptUpdate(external);
     try {
       expect(
-        repairRejectedThinkingReplayInSessionManager({
-          sessionManager: manager,
-          sessionFile: "/synthetic/legacy.jsonl",
-          sessionKey: "agent:main:legacy",
-          agentId: "main",
-        }).repaired,
+        (
+          await repairRejectedThinkingReplayInSessionManager({
+            sessionManager: manager,
+            sessionFile: "/synthetic/legacy.jsonl",
+            sessionKey: "agent:main:legacy",
+            agentId: "main",
+          })
+        ).repaired,
       ).toBe(true);
       expect(internal).toHaveBeenCalledExactlyOnceWith({
         sessionFile: "/synthetic/legacy.jsonl",
@@ -218,7 +228,7 @@ describe("committed transcript rewrite notifications", () => {
     }
   });
 
-  it("retains explicit identity-only truncation notification without a manager target", () => {
+  it("retains explicit identity-only truncation notification without a manager target", async () => {
     const manager = SessionManager.inMemory();
     manager.appendMessage({
       role: "toolResult",
@@ -240,11 +250,13 @@ describe("committed transcript rewrite notifications", () => {
     const stopPublic = onSessionTranscriptUpdate(external);
     try {
       expect(
-        truncateOversizedToolResultsInSessionManager({
-          sessionManager: manager,
-          contextWindowTokens: 1_000,
-          ...target,
-        }).truncated,
+        (
+          await truncateOversizedToolResultsInSessionManager({
+            sessionManager: manager,
+            contextWindowTokens: 1_000,
+            ...target,
+          })
+        ).truncated,
       ).toBe(true);
       expect(internal).toHaveBeenCalledExactlyOnceWith({
         target,

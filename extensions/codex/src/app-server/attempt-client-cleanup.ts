@@ -1,6 +1,3 @@
-/**
- * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
- */
 import {
   AgentHarnessPreflightError,
   embeddedAgentLog,
@@ -16,15 +13,14 @@ import {
   isCodexAppServerRequestTimeoutError,
   type CodexAppServerClient,
 } from "./client.js";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 import {
   isCodexAppServerStartSelectionChangedError,
   retireSharedCodexAppServerClientIfCurrent,
 } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
-/** Timeout for best-effort app-server turn interruption during cleanup. */
 export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
-/** Timeout for best-effort thread unsubscribe during cleanup. */
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
@@ -46,13 +42,6 @@ export class CodexAppServerUnsafeSubscriptionError extends Error {
   }
 }
 
-export function isCodexAppServerUnsafeSubscriptionError(
-  error: unknown,
-): error is CodexAppServerUnsafeSubscriptionError {
-  return error instanceof CodexAppServerUnsafeSubscriptionError;
-}
-
-/** Asserts Codex resumed the exact thread this attempt subscribed to. */
 export function assertCodexThreadResumeSubscription(
   requestedThreadId: string,
   returnedThreadId: string,
@@ -121,7 +110,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
       await client.request("turn/interrupt", requestParams, { timeoutMs });
       return true;
     }
-    const deadline = Date.now() + timeoutMs;
+    const deadline = performance.now() + timeoutMs;
     const started = createDeferred<boolean>();
     // Codex acknowledges interruption before publishing turn/completed. Register
     // first so an immediate exact-turn terminal cannot race past its owner.
@@ -140,7 +129,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
     const requestInterrupt = async () => {
       try {
         await client.request("turn/interrupt", requestParams, {
-          timeoutMs: Math.max(1, deadline - Date.now()),
+          timeoutMs: Math.max(1, deadline - performance.now()),
           // The client floors RPC timeouts at 100ms. The lifecycle signal owns
           // the exact remaining deadline and cancels RPCs when terminal wins.
           signal: completion.settledSignal,
@@ -163,7 +152,7 @@ export async function interruptCodexTurnAndWaitBestEffort(
         completion.completion.then(() => false),
         started.promise,
       ]);
-      if (activated && completion.state === "pending" && Date.now() < deadline) {
+      if (activated && completion.state === "pending" && performance.now() < deadline) {
         await requestInterrupt();
       }
     }
@@ -225,13 +214,13 @@ export async function terminateCodexBackgroundTerminals(
   }
 }
 
-/** Unsubscribes from a thread while swallowing cleanup-only failures. */
 export async function unsubscribeCodexThreadBestEffort(
   client: CodexAppServerClient,
   params: {
     threadId: string;
     timeoutMs: number;
     assertCurrent?: () => void;
+    withCurrent?: (write: () => void) => Promise<void>;
   },
 ): Promise<boolean> {
   try {
@@ -240,6 +229,7 @@ export async function unsubscribeCodexThreadBestEffort(
       params.threadId,
       params.timeoutMs,
       params.assertCurrent,
+      params.withCurrent,
     );
     return true;
   } catch (error) {
@@ -257,19 +247,20 @@ export function shouldRetireCodexStartupClient(
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"],
   signal: AbortSignal,
 ): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   if (
     signal.aborted ||
-    isCodexAppServerStartupError(error) ||
-    isCodexAppServerRequestTimeoutError(error)
+    isCodexAppServerStartupError(cause) ||
+    isCodexAppServerRequestTimeoutError(cause)
   ) {
     return true;
   }
   // Model-independent preflights preserve healthy conversations. A handoff with
   // an uncertain native write owns its retirement at the resume boundary.
   return (
-    !isCodexAppServerStartSelectionChangedError(error) &&
-    !isCodexAppServerOverloadError(error) &&
-    !(error instanceof AgentHarnessPreflightError && error.scope === undefined) &&
-    (isCodexAppServerBrokenPipeError(error) || !spawnedBy)
+    !isCodexAppServerStartSelectionChangedError(cause) &&
+    !isCodexAppServerOverloadError(cause) &&
+    !(cause instanceof AgentHarnessPreflightError && cause.scope === undefined) &&
+    (isCodexAppServerBrokenPipeError(cause) || !spawnedBy)
   );
 }

@@ -1,6 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
-// Control UI app navigation defines sidebar and settings presentation metadata.
 import type { RouteId } from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
@@ -24,7 +23,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "dashboards",
   "usage",
   "cron",
-  "tasks",
   "sessions",
   "systems",
   "activity",
@@ -36,22 +34,14 @@ export const SIDEBAR_NAV_ROUTES = [
 
 // Routes presented as tabs of the Plugins hub. The sidebar highlights the
 // Plugins entry for all of them, mirroring how config covers settings routes.
-const PLUGINS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
-  "plugins",
-  "skills",
-  "skill-workshop",
-]);
-
 export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
-  return PLUGINS_HUB_ROUTES.has(routeId);
+  return routeId === "plugins" || routeId === "skills" || routeId === "skill-workshop";
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
 // Sessions entry for both routes, mirroring the Plugins hub behavior.
-const SESSIONS_HUB_ROUTES: ReadonlySet<NavigationRouteId> = new Set(["sessions", "worktrees"]);
-
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {
-  return SESSIONS_HUB_ROUTES.has(routeId);
+  return routeId === "sessions" || routeId === "worktrees";
 }
 
 export type SidebarNavRoute = (typeof SIDEBAR_NAV_ROUTES)[number];
@@ -211,6 +201,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
     routes: [
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -238,6 +229,7 @@ const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "devices",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "memory",
@@ -253,8 +245,17 @@ export function isSettingsNavigationRouteVisible(
   canAdmin: boolean,
   nativeDeviceSettings: NativeDeviceSettingsCapability | null = null,
 ): boolean {
-  if (routeId === "device" || routeId === "device-permissions") {
+  if (routeId === "device") {
     return nativeDeviceSettings !== null;
+  }
+  if (routeId === "device-permissions") {
+    const snapshot = nativeDeviceSettings?.snapshot;
+    return Boolean(
+      snapshot &&
+      (snapshot.permissions.entries.length > 0 ||
+        snapshot.permissions.location ||
+        snapshot.capabilities?.activeComputerPresenceEnabled !== undefined),
+    );
   }
   if (routeId === "updates") {
     return canAdmin || nativeDeviceSettings !== null;
@@ -268,6 +269,9 @@ export function deviceSettingsGroupLabelKey(
   const device = snapshot?.device;
   if (device?.platform === "macos") {
     return "nav.settingsGroupDevice";
+  }
+  if (device?.platform === "linux" || device?.platform === "windows") {
+    return "nav.settingsGroupThisComputer";
   }
   if (device?.platform === "ios") {
     if (device.formFactor === "phone") {
@@ -299,6 +303,8 @@ export function visibleSettingsNavigationGroups(
 // Subpages with a visible owner keep that owner selected so users retain
 // location context while completing the nested flow.
 const SETTINGS_SUBPAGE_ROUTES: readonly NavigationRouteId[] = [
+  // Legacy General redirects remain Settings-owned during router transitions.
+  "config",
   "ai-agents",
   "model-setup",
   "lobsterdex",
@@ -337,9 +343,8 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   systems: navigationPresentation("monitor", "systems"),
   usage: navigationPresentation("coins", "usage"),
   cron: navigationPresentation("calendarClock", "cron"),
-  tasks: navigationPresentation("listChecks", "tasks"),
-  skills: navigationPresentation("zap", "skills"),
-  "skill-settings": navigationPresentation("zap", "skills"),
+  skills: navigationPresentation("bookOpenText", "skills"),
+  "skill-settings": navigationPresentation("bookOpenText", "skills"),
   plugins: navigationPresentation("plug", "plugins"),
   "plugin-settings": navigationPresentation("plug", "plugins"),
   "skill-workshop": navigationPresentation("wrench", "skillWorkshop"),
@@ -360,6 +365,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   automation: navigationPresentation("terminal", "automation"),
   mcp: navigationPresentation("wrench", "mcp"),
   memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
   talk: navigationPresentation("mic", "talk"),
   infrastructure: navigationPresentation("globe", "infrastructure"),
   labs: navigationPresentation("flaskConical", "labs"),
@@ -450,23 +456,18 @@ export function titleForRoute(routeId: NavigationRouteId): string {
 
 /** Window/tab title, markers leftmost because tabs truncate from the right.
  * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable) and carries the pending-outbox total; titles already ending in the brand
+ * actionable); titles already ending in the brand
  * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   gatewayDisconnected?: boolean;
-  queuedCount?: number;
 }): string {
   const base = options.context.endsWith("OpenClaw")
     ? options.context
     : `${options.context} — OpenClaw`;
   if (options.gatewayDisconnected) {
-    const queued =
-      options.queuedCount && options.queuedCount > 0
-        ? ` · ${t("connection.queuedCount", { count: String(options.queuedCount) })}`
-        : "";
-    return `(${t("connection.disconnectedTitle")}${queued}) ${base}`;
+    return `(${t("connection.disconnectedTitle")}) ${base}`;
   }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;

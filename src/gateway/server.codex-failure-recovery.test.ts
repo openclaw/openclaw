@@ -25,6 +25,13 @@ type ReadyThread = {
   action: string;
 };
 
+const RECOVERY_FAILURE_TEXT =
+  "⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+const UNLOAD_FAILURE_DETAIL =
+  "Codex did not confirm unloading its previous configuration. The thread is preserved; stop competing native work and reconnect before retrying.";
+const SHUTDOWN_FAILURE_DETAIL =
+  "The previous conversation process did not confirm shutdown; the conversation was preserved.";
+
 const cases: Array<{
   name: string;
   failFirst: boolean;
@@ -32,11 +39,6 @@ const cases: Array<{
   idleSibling?: "incognito" | "persistent";
   shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
-  {
-    name: "recovers a settled failure",
-    failFirst: true,
-    activeSibling: false,
-  },
   {
     name: "leaves active siblings alone",
     failFirst: true,
@@ -289,6 +291,7 @@ it.each(cases)(
       },
     };
     const readyThreads = new Map<string, ReadyThread>();
+    const lifecycleErrors = new Map<string, string[]>();
     const gateway = await startGatewayWithClient({
       cfg,
       configPath: values.OPENCLAW_CONFIG_PATH,
@@ -297,9 +300,23 @@ it.each(cases)(
         if (
           event !== "agent" ||
           !isRecord(payload) ||
-          payload.stream !== "codex_app_server.lifecycle" ||
           typeof payload.runId !== "string" ||
-          !isRecord(payload.data) ||
+          !isRecord(payload.data)
+        ) {
+          return;
+        }
+        if (
+          payload.stream === "lifecycle" &&
+          payload.data.phase === "error" &&
+          typeof payload.data.error === "string"
+        ) {
+          lifecycleErrors.set(payload.runId, [
+            ...(lifecycleErrors.get(payload.runId) ?? []),
+            payload.data.error,
+          ]);
+        }
+        if (
+          payload.stream !== "codex_app_server.lifecycle" ||
           payload.data.phase !== "thread_ready"
         ) {
           return;
@@ -358,7 +375,7 @@ it.each(cases)(
     const settled = await wait(first.runId);
     expect(settled).toMatchObject({ status: failFirst ? "error" : "ok" });
     if (failFirst) {
-      expect(settled.error).toContain("controlled settled failure");
+      expect(settled.error).toBe("LLM request rejected: controlled settled failure");
     }
     const previous = await ready(first.runId);
     expect(previous.action).toBe("started");
@@ -431,7 +448,10 @@ it.each(cases)(
         const refused = await start("Continue with changed instructions.", key);
         const result = await wait(refused.runId);
         expect(result.status).toBe("error");
-        expect(result.error).toContain("did not confirm unloading");
+        expect(result.error).toBe(RECOVERY_FAILURE_TEXT);
+        expect(lifecycleErrors.get(refused.runId)).toEqual(
+          expect.arrayContaining([expect.stringContaining(UNLOAD_FAILURE_DETAIL)]),
+        );
         expect(readyThreads.has(refused.runId)).toBe(false);
       }
       expect(primaryRequests).toHaveLength(1);
@@ -460,8 +480,11 @@ it.each(cases)(
       const result = await wait(refused.runId);
       expect(result).toMatchObject({
         status: "error",
-        error: expect.stringContaining("did not confirm unloading"),
+        error: RECOVERY_FAILURE_TEXT,
       });
+      expect(lifecycleErrors.get(refused.runId)).toEqual(
+        expect.arrayContaining([expect.stringContaining(UNLOAD_FAILURE_DETAIL)]),
+      );
       expect(readyThreads.has(refused.runId)).toBe(false);
       expect(primaryRequests).toHaveLength(1);
       await assertOriginalBinding();
@@ -492,10 +515,14 @@ it.each(cases)(
         expect(exitGate.child.signalCode).toBeNull();
         expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
       } else if (shutdown === "unconfirmed") {
+        await vi.advanceTimersByTimeAsync(2_000);
         expect(await wait(continued.runId)).toMatchObject({
           status: "error",
-          error: expect.stringContaining("did not confirm shutdown"),
+          error: RECOVERY_FAILURE_TEXT,
         });
+        expect(lifecycleErrors.get(continued.runId)).toEqual(
+          expect.arrayContaining([expect.stringContaining(SHUTDOWN_FAILURE_DETAIL)]),
+        );
       }
       exitGate.release();
       await withTestTimeout(exitGate.exited, 10_000, "old native process did not exit");
@@ -562,6 +589,9 @@ function holdNativeExit(
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
     closing = true;
+    // Hold the shutdown clock with the child: binding reads and chat.abort
+    // must precede the exit deadline, even when the host is busy.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
@@ -632,6 +662,7 @@ function holdNativeExit(
         return;
       }
       released = true;
+      vi.useRealTimers();
       child.off("newListener", onListener);
       restoreExitConfirmation();
       end.mockRestore();

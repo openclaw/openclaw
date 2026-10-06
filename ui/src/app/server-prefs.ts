@@ -2,6 +2,7 @@
 // the approval gate and other devices pick them up. The localStorage mirror gives instant boot and
 // stays authoritative when this client cannot write config (viewer scope, offline). Pending local
 // intent shadows server snapshots until the hash-free LWW ack; failed pushes degrade device-local.
+import { sleepWithAbort } from "@openclaw/retry";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ConfigPatchAck } from "../lib/config/config-gateway-operations.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
@@ -274,17 +275,14 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
     ? (profileId ?? resolveProfileAppearanceProfileId(scope))
     : null;
   const effectiveScope = resolveProfilePreferenceScope(scope, activeProfile);
-  const reset = specification.reset;
-  if (!reset) {
+  // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
+  const write = specification.write as
+    | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
+    | undefined;
+  if (!write) {
     throw new Error(`Server UI preference is not resettable: ${key}`);
   }
   if (state?.provenance === "device-local") {
-    const write = specification.write as
-      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
-      | undefined;
-    if (!write) {
-      throw new Error(`Server UI preference cannot restore a retained local value: ${key}`);
-    }
     const patch = write(state.resetValue);
     const keys: SyncedPrefKey[] =
       key === "theme" && patch.theme !== loadSettings().theme
@@ -304,16 +302,7 @@ export function resetServerUiPref<K extends ResettableServerUiPrefKey>(
   requestServerUiPrefReset(key, "server");
   // The resolved state owns the reset target, including the Gateway fallback
   // while the profile is still loading. Config preferences use product defaults.
-  if (state) {
-    // SAFETY: SYNCED_PREFS pairs each key's write() with that key's own value type.
-    const write = specification.write as
-      | ((value: SyncedPrefValue<K> | undefined) => Partial<UiSettings>)
-      | undefined;
-    if (write) {
-      return applyReset(write(state.resetValue));
-    }
-  }
-  return applyReset(reset(loadSettings()));
+  return applyReset(write(state?.resetValue));
 }
 export function applyServerUiPrefs(
   configObject: unknown,
@@ -528,7 +517,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         }
       }
     }
-    const useProfile = Boolean(profileBatch && Object.keys(profileBatch).length);
+    const useProfile = Object.keys(profileBatch).length > 0;
     const batch = useProfile ? profileBatch : { ...pendingPrefs };
     const afterCommit = pushAfterCommit;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -629,9 +618,7 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
         break;
       }
       if (result.reason === "conflict" && attempt === 0) {
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 250);
-        });
+        await sleepWithAbort(250);
         continue;
       }
       if (result.reason === "conflict") {

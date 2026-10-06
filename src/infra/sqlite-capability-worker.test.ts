@@ -8,9 +8,10 @@ const workers = vi.hoisted(() => ({
   terminate: vi.fn<() => Promise<number>>(),
 }));
 
-vi.mock("node:worker_threads", async () => {
+vi.mock("node:worker_threads", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   return {
+    ...(await importOriginal<typeof import("node:worker_threads")>()),
     Worker: class extends EventEmitter {
       constructor() {
         super();

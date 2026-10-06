@@ -203,14 +203,30 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}new`);
-        await page.addStyleTag({ content: ":root { --safe-area-bottom: 34px !important; }" });
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
         const composer = page.locator(".new-session-page__composer");
         await composer.waitFor();
-        const margins = await composer.evaluate((element) => {
-          const style = getComputedStyle(element);
-          return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
+        await composer.scrollIntoViewIfNeeded();
+        const bounds = await composer.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            left: rect.left,
+            right: rect.right,
+            bottom: rect.bottom,
+            draftBottom: element.closest(".new-session-page__draft")!.getBoundingClientRect()
+              .bottom,
+            shellBottom: element.closest(".shell")!.getBoundingClientRect().bottom,
+          };
         });
-        expect(margins).toEqual({ bottom: "40px", left: "4px", right: "4px" });
+        // New Session remains in its scrollable draft flow, not docked like
+        // Chat. Its local 6px gap must not reserve the app's physical inset again.
+        expect(bounds.shellBottom).toBeCloseTo(viewport.height - 34, 0);
+        expect(bounds.draftBottom - bounds.bottom).toBeCloseTo(6, 0);
+        expect(bounds.bottom).toBeLessThanOrEqual(bounds.shellBottom);
+        expect(bounds.left).toBeGreaterThanOrEqual(20);
+        expect(bounds.right).toBeLessThanOrEqual(viewport.width - 20);
+        expect(bounds.left).toBeCloseTo(viewport.width - bounds.right, 0);
       } finally {
         await suite.closeBrowserContext(context);
       }

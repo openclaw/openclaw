@@ -1,5 +1,6 @@
 import path from "node:path";
 import {
+  createWorkspaceAttachmentPreparer,
   declareAgentWorkspaceAccess,
   registerAgentWorkspaceAccess,
 } from "openclaw/plugin-sdk/agent-workspace-runtime";
@@ -41,7 +42,14 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
   };
   api.registerService({
     id: "file-transfer-workspaces",
-    reload: { configPrefixes: ["plugins.entries.file-transfer.config.workspaces", "agents"] },
+    reload: {
+      configPrefixes: [
+        "plugins.entries.file-transfer.config.workspaces",
+        "agents.defaults.workspace",
+        "agents.entries.*.workspace",
+        "agents.ownership",
+      ],
+    },
     async start(ctx) {
       stop();
       const controller = new AbortController();
@@ -79,15 +87,49 @@ export function registerNodeWorkspaces(api: OpenClawPluginApi): void {
           throw new Error("Node workspaces require Gateway service node access");
         }
         const { createNodeWorkspaceBridge } = await import("./workspace-bridge.js");
+        const { createNodeWorkspaceMemory } = await import("./workspace-memory.js");
+        const { createNodeWorkspaceSkills } = await import("./workspace-skills.js");
         controller.signal.throwIfAborted();
         for (const entry of bindings.values()) {
+          const bridge = createNodeWorkspaceBridge({
+            ...entry,
+            invoke,
+            signal: controller.signal,
+            openDuplex: ctx.openNodeDuplex,
+          });
           releases.push(
             registerAgentWorkspaceAccess(entry.workspaceDir, {
-              bridge: createNodeWorkspaceBridge({
-                ...entry,
-                invoke,
-                signal: controller.signal,
-              }),
+              ...(ctx.openNodeDuplex
+                ? {
+                    ...createNodeWorkspaceSkills({
+                      ...entry,
+                      signal: controller.signal,
+                      openDuplex: ctx.openNodeDuplex,
+                    }),
+                    memoryFiles: createNodeWorkspaceMemory({
+                      ...entry,
+                      signal: controller.signal,
+                      openDuplex: ctx.openNodeDuplex,
+                    }),
+                    prepareTurnAttachments: createWorkspaceAttachmentPreparer({
+                      remoteRoot: entry.remoteRoot,
+                      createBridge: (assertCurrent, signal) =>
+                        createNodeWorkspaceBridge({
+                          ...entry,
+                          invoke,
+                          signal: AbortSignal.any([controller.signal, signal]),
+                          openDuplex: ctx.openNodeDuplex,
+                          assertCurrent,
+                        }),
+                    }),
+                  }
+                : {}),
+              bridge,
+              outboundMedia: {
+                localRoots: [entry.workspaceDir],
+                readFile: (filePath, maxBytes) =>
+                  bridge.readFile({ filePath, cwd: entry.workspaceDir, maxBytes }),
+              },
             }),
           );
         }

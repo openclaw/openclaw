@@ -1,29 +1,19 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listFleetCells, reserveFleetCell } from "../fleet/registry.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import { iterateOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-read-connection.js";
 import {
-  iterateOpenClawStateDatabaseReadOnly,
   withArtifactPreservingStateReads,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "./openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useStateDatabaseTempDirs();
 
 async function fixture() {
   const root = tempDirs.make("fixed-read-existing-schema-");
@@ -46,17 +36,11 @@ async function fixture() {
 }
 
 async function withoutHostSql(run: () => Promise<void>) {
-  const { DatabaseSync, StatementSync } = requireNodeSqlite();
-  const calls = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await run();
-    expect(calls.reduce((total, call) => total + call.mock.calls.length, 0)).toBe(0);
+    sql.expectIdle();
   } finally {
     vi.restoreAllMocks();
   }

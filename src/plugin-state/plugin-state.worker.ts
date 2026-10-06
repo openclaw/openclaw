@@ -1,4 +1,5 @@
 import { err, ok } from "@openclaw/normalization-core/result";
+import { requestSessionEntriesCurrentAdmission } from "../config/sessions/session-entry-current-admission.worker.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
@@ -17,6 +18,7 @@ import {
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
+  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
@@ -38,6 +40,10 @@ import {
   pluginStateWorkerOperations,
 } from "./plugin-state-worker-contract.js";
 import { capturePluginStateWorkerFailure } from "./plugin-state-worker-errors.js";
+import {
+  clearRuntimeHealthEntries,
+  hasRuntimeHealthEntriesToClear,
+} from "./runtime-health-store.kernel.js";
 
 export function executePluginStateCommand(
   command: SqliteWorkerCommand<PluginStateWorkerOperations>,
@@ -46,6 +52,23 @@ export function executePluginStateCommand(
   hasRetainedDatabase: boolean,
 ): PluginStateWorkerOperations[keyof PluginStateWorkerOperations]["output"] {
   const description = pluginStateWorkerOperations[command.type];
+  const admit = (stage: "transaction" | "commit") =>
+    requestSessionEntriesCurrentAdmission(command.input?.sessionEntryCurrentSources, {
+      stage,
+      facts: undefined,
+    });
+  const failure = (error: unknown) =>
+    err(
+      capturePluginStateWorkerFailure(
+        wrapPluginStateError(
+          error,
+          description.operation,
+          description.code,
+          description.message,
+          options.path,
+        ),
+      ),
+    );
   if (
     command.type === "pluginState.lookup" ||
     command.type === "pluginState.lookupMany" ||
@@ -104,17 +127,23 @@ export function executePluginStateCommand(
           );
       }
     } catch (error) {
-      return err(
-        capturePluginStateWorkerFailure(
-          wrapPluginStateError(
-            error,
-            description.operation,
-            description.code,
-            description.message,
-            options.path,
-          ),
-        ),
+      return failure(error);
+    }
+  }
+  if (command.type === "pluginState.clearRuntimeHealth") {
+    try {
+      // An absent health mirror must not open or upgrade a native-only state database.
+      // A positive observation still rereads current rows inside the write transaction.
+      const present = withPluginStateDatabaseReadOnly(
+        "entries",
+        (store) => hasRuntimeHealthEntriesToClear(store, command.input),
+        options,
       );
+      if (!present) {
+        return ok(undefined);
+      }
+    } catch (error) {
+      return failure(error);
     }
   }
   let database: OpenClawStateDatabase;
@@ -137,54 +166,53 @@ export function executePluginStateCommand(
     return ok(
       runOpenClawStateWriteTransaction(
         (store) => {
-          switch (command.type) {
-            case "pluginState.appendJournal":
-              return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
-            case "pluginState.observe":
-              return observePluginStateEntry(
-                store,
-                command.input,
-                captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
-              );
-            case "pluginState.compareUpdate":
-            case "pluginState.compareDelete":
-              return compareAndApplyPluginStateEntry(
-                store,
-                command.input,
-                captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
-              );
-            case "pluginState.moveEntries":
-              return movePluginStateEntries(store, command.input);
-            case "pluginState.register":
-              return registerPluginStateEntry(store, command.input);
-            case "pluginState.registerIfAbsent":
-              return registerPluginStateEntryIfAbsent(store, command.input);
-            case "pluginState.deleteIfEqual":
-              return deletePluginStateEntryIfEqual(store, command.input);
-            case "pluginState.consume":
-              return consumePluginStateEntry(store, command.input);
-            case "pluginState.delete":
-              return deletePluginStateEntry(store.db, command.input) > 0;
-            case "pluginState.clear":
-              return clearPluginStateNamespace(store.db, command.input);
-            default:
-              throw new Error("Plugin-state read command entered its write path");
-          }
+          admit("transaction");
+          const result = (() => {
+            switch (command.type) {
+              case "pluginState.appendJournal":
+                return registerPluginStateSequencedJournalEntryInDatabase(store, command.input);
+              case "pluginState.observe":
+                return observePluginStateEntry(
+                  store,
+                  command.input,
+                  captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
+                );
+              case "pluginState.compareUpdate":
+              case "pluginState.compareDelete":
+                return compareAndApplyPluginStateEntry(
+                  store,
+                  command.input,
+                  captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
+                );
+              case "pluginState.moveEntries":
+                return movePluginStateEntries(store, command.input);
+              case "pluginState.register":
+                return registerPluginStateEntry(store, command.input);
+              case "pluginState.registerIfAbsent":
+                return registerPluginStateEntryIfAbsent(store, command.input);
+              case "pluginState.deleteIfEqual":
+                return deletePluginStateEntryIfEqual(store, command.input);
+              case "pluginState.consume":
+                return consumePluginStateEntry(store, command.input);
+              case "pluginState.delete":
+                return deletePluginStateEntry(store.db, command.input) > 0;
+              case "pluginState.clear":
+                return clearPluginStateNamespace(store.db, command.input);
+              case "pluginState.clearRuntimeHealth":
+                return clearRuntimeHealthEntries(store, command.input);
+              case "pluginState.sweep":
+                return deleteExpiredPluginStateEntries(store.db, Date.now());
+              default:
+                throw new Error("Plugin-state read command entered its write path");
+            }
+          })();
+          admit("commit");
+          return result;
         },
         { ...options, database },
       ),
     );
   } catch (error) {
-    return err(
-      capturePluginStateWorkerFailure(
-        wrapPluginStateError(
-          error,
-          description.operation,
-          description.code,
-          description.message,
-          options.path,
-        ),
-      ),
-    );
+    return failure(error);
   }
 }

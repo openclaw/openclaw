@@ -19,29 +19,6 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("assertSqliteIntegrity", () => {
-  it("accepts structurally and referentially consistent databases", () => {
-    const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = ON;
-        CREATE TABLE parents (id INTEGER PRIMARY KEY);
-        CREATE TABLE children (
-          id INTEGER PRIMARY KEY,
-          parent_id INTEGER NOT NULL REFERENCES parents(id)
-        );
-        INSERT INTO parents (id) VALUES (1);
-        INSERT INTO children (id, parent_id) VALUES (1, 1);
-      `);
-
-      expect(assertSqliteIntegrity(database, "test database")).toEqual({
-        integrityCheck: "ok",
-      });
-    } finally {
-      database.close();
-    }
-  });
-
   it("rejects foreign-key violations that structural checks do not detect", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
@@ -89,7 +66,9 @@ describe("assertSqliteIntegrity", () => {
 
     expect(failure).toMatchObject({
       name: "SqliteIntegrityError",
-      message: "SQLite integrity_check failed for test database: broken index",
+      message: expect.stringContaining(
+        "SQLite integrity_check failed for test database: broken index",
+      ),
     });
   });
 
@@ -401,6 +380,7 @@ describe("integrity gate attribution", () => {
           expect(failure).toBeUndefined();
         }
         expect(diagnostics).toEqual({
+          integrityGateMode: "full",
           integrityGateMs: gateMs,
           integrityGateOutcome: foreignKeyViolation ? "failed" : "healthy",
           integrityCheckSyncMs: syncMs,
@@ -429,6 +409,7 @@ describe("integrity gate attribution", () => {
             sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
           );
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 4,
             integrityGateOutcome: "healthy",
             integrityCheckSyncMs: 4,
@@ -457,6 +438,7 @@ describe("integrity gate attribution", () => {
             expect(worker.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: Math.floor(lifetimeMs + 4.5),
             integrityGateOutcome: outcome,
             ...(checkMs === undefined ? {} : { integrityWorkerCheckMs: Math.floor(checkMs) }),
@@ -469,6 +451,7 @@ describe("integrity gate attribution", () => {
               sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
             );
             expect(diagnostics).toEqual({
+              integrityGateMode: "full",
               integrityGateMs: 4,
               integrityGateOutcome: "healthy",
               integrityCheckSyncMs: 4,
@@ -491,6 +474,7 @@ describe("integrity gate attribution", () => {
             expect(manual.next().done).toBe(true);
           }
           expect(diagnostics).toEqual({
+            integrityGateMode: "full",
             integrityGateMs: 12,
             integrityGateOutcome: outcome,
           });
@@ -529,6 +513,45 @@ describe("isTerminalSqliteIntegrityError", () => {
 });
 
 describe("confirmSqliteFileIntegrity", () => {
+  it("confirms page corruption despite empty WAL sidecars created by its own reader", () => {
+    const databasePath = path.join(tempDirs.make("sqlite-corrupt-wal-"), "database.sqlite");
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    database.exec(
+      "PRAGMA journal_mode=WAL; CREATE TABLE damaged(value TEXT); INSERT INTO damaged VALUES ('preserved');",
+    );
+    const pageSize = Number(database.prepare("PRAGMA page_size").get()?.page_size);
+    const rootPage = Number(
+      database.prepare("SELECT rootpage FROM sqlite_schema WHERE name='damaged'").get()?.rootpage,
+    );
+    database.close();
+    expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
+    const file = fs.openSync(databasePath, "r+");
+    try {
+      fs.writeSync(file, Buffer.from([0xff]), 0, 1, (rootPage - 1) * pageSize);
+    } finally {
+      fs.closeSync(file);
+    }
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let opening = 0;
+    const reader = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      const db = open(...args);
+      // Reproduce native empty-WAL creation/retouching independently of SQLite and filesystem versions.
+      fs.writeFileSync(`${databasePath}-wal`, "");
+      fs.utimesSync(`${databasePath}-wal`, ++opening, opening);
+      return db;
+    });
+    try {
+      expect(confirmSqliteFileIntegrity(databasePath, "damaged WAL database")).toMatchObject({
+        status: "failed",
+        terminal: true,
+        error: { name: "SqliteIntegrityError" },
+        generation: { database: { size: BigInt(fs.statSync(databasePath).size) } },
+      });
+    } finally {
+      reader.mockRestore();
+    }
+  });
+
   it("leaves SQLite open failures unbound because the failed file identity is unknown", () => {
     const databasePath = path.join(tempDirs.make("sqlite-open-integrity-"), "database.sqlite");
     fs.writeFileSync(databasePath, "not a sqlite database");

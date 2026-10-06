@@ -54,7 +54,7 @@ The authoritative advertised **discovery** inventory lives in `src/gateway/serve
 - Server handshake and method dispatch: `src/gateway/server-core-runtime.ts`
 - Node client: `src/gateway/client.ts`
 - Generated JSON Schema: `dist/protocol.schema.json` (build output, not committed)
-- Generated Swift models: `apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift`
+- Generated Swift models: SwiftPM/Xcode plugin output, or `apps/shared/OpenClawKit/.build/protocol/GatewayModels.swift` for repository tooling
 
 The derived selection uses lexical order of the full source export names **before** removing the `Schema` suffix. The migration and session-placement maps follow it in their own insertion order. This replaces the former manually ordered registration fragments; JSON definition order and Swift declaration placement can change without changing schema data or native declaration bodies.
 
@@ -63,12 +63,13 @@ Membership is now opt-out for eligible source exports: a new `*Schema` export in
 ## Current pipeline
 
 - `pnpm protocol:gen` writes JSON Schema (draft-07) to `dist/protocol.schema.json`.
-- `pnpm protocol:gen:swift` generates the Swift gateway models.
-- `pnpm protocol:check:swift` verifies the committed Swift models without rewriting them.
-- `pnpm protocol:gen:kotlin` generates the Android protocol models and constants.
-- `pnpm protocol:check` checks the registry structure, runs all three generators, and verifies the committed Swift and Kotlin output. The JSON Schema output is a gitignored build artifact with no committed baseline to diff against, so `pnpm protocol:gen` instead asserts the published-document contract (required frame definitions, frame ordering, `type` discriminator mapping, non-empty method metadata) and fails the check when the generated schema drifts from it.
+- `pnpm install` and `pnpm build` prepare native protocol models automatically. SwiftPM/Xcode and Gradle also generate their own build-owned sources and skip unchanged generation. Fresh full-repository source archives use these same entry points.
+- `pnpm protocol:gen:swift` generates Swift models in the shared package's ignored `.build/protocol` directory.
+- `pnpm protocol:gen:kotlin` generates Android models and constants under `apps/android/app/build/generated/openclaw-protocol`.
+- `pnpm protocol:check:swift` and `pnpm protocol:check:kotlin` bypass the cache, check the schema/version contract, and generate twice to verify determinism.
+- `pnpm protocol:check` checks the registry structure and all generated artifacts. Outputs are ignored build artifacts, not committed baselines. JSON Schema validation checks required frame definitions, frame ordering, the `type` discriminator mapping, and non-empty method metadata. Native validation checks protocol versions and Swift model/enum membership against the schema registry; native compatibility tests protect decoding and initializer contracts.
 
-When a gateway schema affects native clients, run `pnpm protocol:gen:swift`, review the generated diff, then run `pnpm protocol:check:swift`. Commit the schema and `GatewayModels.swift` update together. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
+Commit schema and generator changes together; native outputs are never committed. `scripts/native-protocol-inputs.json` owns the source inputs shared by repository tooling and both native build systems. Generation checks its import graph against that manifest, so an undeclared dependency fails instead of leaving stale models. Stable decoding behavior belongs in the focused `GatewayModelsCompatibilityTests.swift` regressions rather than in handwritten model copies.
 
 ## How the schemas are used at runtime
 

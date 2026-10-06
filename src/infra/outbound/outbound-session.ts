@@ -8,7 +8,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { PreparedConversationRegistryScope } from "../../config/sessions/conversation-registry.js";
 import {
@@ -36,9 +36,12 @@ import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/se
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import { buildOutboundBaseSessionKey } from "./base-session-key.js";
+import {
+  stripOutboundTargetKindPrefix,
+  stripTargetProviderPrefix,
+} from "./channel-target-prefix.js";
 import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
-/** Session route produced for an outbound message target. */
 export type OutboundSessionRoute = {
   sessionKey: string;
   baseSessionKey: string;
@@ -55,7 +58,6 @@ export type OutboundSessionRoute = {
   displayName?: string;
 };
 
-/** Inputs required to resolve an outbound target into a session route. */
 export type ResolveOutboundSessionRouteParams = {
   cfg: OpenClawConfig;
   channel: ChannelId;
@@ -69,10 +71,6 @@ export type ResolveOutboundSessionRouteParams = {
   replyToId?: string | null;
   threadId?: string | number | null;
 };
-
-function resolveOutboundChannelPlugin(channel: ChannelId) {
-  return getChannelPlugin(channel);
-}
 
 function rebaseOutboundSessionRoute(
   route: OutboundSessionRoute,
@@ -91,77 +89,18 @@ function rebaseOutboundSessionRoute(
   };
 }
 
-function stripProviderPrefix(raw: string, channel: string): string {
-  const trimmed = raw.trim();
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  const prefix = `${normalizeLowercaseStringOrEmpty(channel)}:`;
-  if (lower.startsWith(prefix)) {
-    return trimmed.slice(prefix.length).trim();
-  }
-  return trimmed;
-}
-
-function stripKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm|thread):/i, "").trim();
-}
-
 const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> = [
   { kind: "direct", pattern: /^(user:|dm:)/i },
   { kind: "channel", pattern: /^(channel:|conversation:|thread:)/i },
   { kind: "group", pattern: /^(group:|room:)/i },
 ];
 
-function normalizeInferredPeerKind(value: ChatType | undefined): ChatType | undefined {
-  return value === "direct" || value === "group" || value === "channel" ? value : undefined;
-}
-
-function inferPeerKindFromPlugin(params: {
-  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
-  targets: readonly string[];
-}): ChatType | undefined {
-  for (const target of params.targets) {
-    const inferred = normalizeInferredPeerKind(
-      params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
-    );
-    if (inferred) {
-      return inferred;
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
-  for (const target of targets) {
-    for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
-      if (fallback.pattern.test(target)) {
-        return fallback.kind;
-      }
-    }
-  }
-  return undefined;
-}
-
-function inferPeerKindFromCapabilities(
-  plugin: ReturnType<typeof resolveOutboundChannelPlugin>,
-): ChatType | undefined {
-  const chatTypes: ChatType[] = [];
-  for (const chatType of plugin?.capabilities?.chatTypes ?? []) {
-    if (
-      (chatType === "direct" || chatType === "group" || chatType === "channel") &&
-      !chatTypes.includes(chatType)
-    ) {
-      chatTypes.push(chatType);
-    }
-  }
-  return chatTypes.length === 1 ? chatTypes[0] : undefined;
-}
-
 function inferPeerKind(params: {
   channel: ChannelId;
   plugin?: ChannelPlugin;
   target: string;
   resolvedTarget?: ResolvedMessagingTarget;
-}): ChatType | undefined {
+}): ChatType {
   const resolvedKind = params.resolvedTarget?.kind;
   if (resolvedKind === "user") {
     return "direct";
@@ -170,7 +109,7 @@ function inferPeerKind(params: {
     return "channel";
   }
   if (resolvedKind === "group") {
-    const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
+    const plugin = params.plugin ?? getChannelPlugin(params.channel);
     const chatTypes = plugin?.capabilities?.chatTypes ?? [];
     const supportsChannel = chatTypes.includes("channel");
     const supportsGroup = chatTypes.includes("group");
@@ -179,21 +118,33 @@ function inferPeerKind(params: {
     }
     return "group";
   }
-  const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
-  const strippedTarget = stripProviderPrefix(params.target, params.channel).trim();
+  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const strippedTarget = stripTargetProviderPrefix(params.target, params.channel);
   const targets = uniqueStrings([params.target, strippedTarget].filter(Boolean));
-  return (
-    inferPeerKindFromPlugin({ plugin, targets }) ??
-    inferPeerKindFromFallbackPrefixes(targets) ??
-    inferPeerKindFromCapabilities(plugin) ??
-    "direct"
+  for (const target of targets) {
+    const inferred = plugin?.messaging?.inferTargetChatType?.({ to: target });
+    if (inferred === "direct" || inferred === "group" || inferred === "channel") {
+      return inferred;
+    }
+  }
+  for (const target of targets) {
+    const fallback = FALLBACK_TARGET_KIND_PREFIXES.find(({ pattern }) => pattern.test(target));
+    if (fallback) {
+      return fallback.kind;
+    }
+  }
+  const chatTypes = new Set(
+    plugin?.capabilities?.chatTypes?.filter(
+      (kind) => kind === "direct" || kind === "group" || kind === "channel",
+    ),
   );
+  return chatTypes.size === 1 ? (chatTypes.values().next().value ?? "direct") : "direct";
 }
 
 function resolveFallbackSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, params.channel).trim();
+  const trimmed = stripTargetProviderPrefix(params.target, params.channel);
   if (!trimmed) {
     return null;
   }
@@ -203,10 +154,7 @@ function resolveFallbackSession(
     target: params.target,
     resolvedTarget: params.resolvedTarget,
   });
-  if (!peerKind) {
-    return null;
-  }
-  const peerId = stripKindPrefix(trimmed);
+  const peerId = stripOutboundTargetKindPrefix(trimmed);
   if (!peerId) {
     return null;
   }
@@ -218,7 +166,6 @@ function resolveFallbackSession(
     accountId: params.accountId,
     peer,
   });
-  const chatType = peerKind === "direct" ? "direct" : peerKind === "channel" ? "channel" : "group";
   const from =
     peerKind === "direct"
       ? `${params.channel}:${peerId}`
@@ -229,7 +176,7 @@ function resolveFallbackSession(
     baseSessionKey,
     recipientSessionExact: false,
     peer,
-    chatType,
+    chatType: peerKind,
     from,
     to: `${toPrefix}:${peerId}`,
   };
@@ -247,8 +194,8 @@ function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRoutePa
   if (resolvedTarget?.resolutionSource !== "directory") {
     return undefined;
   }
-  const target = stripProviderPrefix(resolvedTarget.to, params.channel).trim();
-  const identifier = stripKindPrefix(target);
+  const target = stripTargetProviderPrefix(resolvedTarget.to, params.channel);
+  const identifier = stripOutboundTargetKindPrefix(target);
   const normalizedDisplay = normalizeLowercaseStringOrEmpty(displayName);
   const identifierDisplays = uniqueStrings([resolvedTarget.to, target, identifier])
     .map(normalizeLowercaseStringOrEmpty)
@@ -256,7 +203,6 @@ function resolveOutboundSessionDisplayName(params: ResolveOutboundSessionRoutePa
   return identifierDisplays.includes(normalizedDisplay) ? undefined : displayName;
 }
 
-/** Resolves the session route used to mirror outbound delivery into conversation state. */
 export async function resolveOutboundSessionRoute(
   params: ResolveOutboundSessionRouteParams,
 ): Promise<OutboundSessionRoute | null> {
@@ -265,7 +211,7 @@ export async function resolveOutboundSessionRoute(
     return null;
   }
   const nextParams = { ...params, target };
-  const plugin = params.plugin ?? resolveOutboundChannelPlugin(params.channel);
+  const plugin = params.plugin ?? getChannelPlugin(params.channel);
   const resolver = plugin?.messaging?.resolveOutboundSessionRoute;
   const route = resolver ? await resolver(nextParams) : resolveFallbackSession(nextParams);
   const displayName = resolveOutboundSessionDisplayName(params);

@@ -19,8 +19,10 @@ const loadBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const tryLoadActivatedBundledPluginPublicSurfaceModuleSync = vi.hoisted(() => vi.fn());
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn());
 
-vi.mock("../plugins/manifest-registry.js", () => ({
+vi.mock("../plugins/manifest-registry-build.js", () => ({
   loadBundledPluginManifestRegistry,
+}));
+vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistryCore,
 }));
 
@@ -259,7 +261,7 @@ describe("plugin-sdk qa-runner-runtime", () => {
     ]);
   });
 
-  it("keeps shipped runtime-api runner contributions available for installed plugins", async () => {
+  it("requires installed runners to expose the dedicated QA surface", async () => {
     const register = vi.fn((qa: Command) => qa);
     loadPluginManifestRegistryCore.mockReturnValue({
       plugins: [
@@ -284,22 +286,9 @@ describe("plugin-sdk qa-runner-runtime", () => {
 
     const module = await import("./qa-runner-runtime.js");
 
-    expect(module.listQaRunnerCliContributions()).toEqual([
-      {
-        pluginId: "qa-legacy",
-        commandName: "legacy",
-        status: "available",
-        registration: { commandName: "legacy", register },
-      },
-    ]);
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenNthCalledWith(1, {
-      dirName: "qa-legacy",
-      artifactBasename: "qa-runner-api.js",
-    });
-    expect(tryLoadActivatedBundledPluginPublicSurfaceModuleSync).toHaveBeenNthCalledWith(2, {
-      dirName: "qa-legacy",
-      artifactBasename: "runtime-api.js",
-    });
+    expect(() => module.listQaRunnerCliContributions()).toThrow(
+      "Unable to resolve bundled plugin public surface qa-legacy/qa-runner-api.js",
+    );
   });
 
   it("prefers the source bundled tree for private qa discovery in repo checkouts", async () => {

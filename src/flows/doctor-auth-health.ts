@@ -4,19 +4,20 @@ import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types
 
 export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Promise<void> {
   ctx.authProfileHealthReady = false;
+  // Auth repair depends on the shared-store owner; its receipt records the held-store guidance.
+  const sharedAuth = ctx.configResult.stateMigrationStepReceipts?.find(
+    (receipt) => receipt.id === "shared-auth-store",
+  );
+  if (sharedAuth?.outcome === "skipped" && sharedAuth.warnings.length > 0) {
+    return;
+  }
   const { repairAuthProfileMigration } = await import("../commands/doctor/auth-profile-repair.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
-  const { maybeRepairLegacyOAuthSidecarProfiles } =
-    await import("../commands/doctor-auth-oauth-sidecar.js");
   const { maybeMigrateLegacyPluginModelCatalogs } =
     await import("../commands/doctor-plugin-model-catalog.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  await maybeRepairLegacyOAuthSidecarProfiles({
-    cfg: ctx.cfg,
-    prompter: ctx.prompter,
-  });
   if (ctx.configResult.openAICodexAuthProfileIdMap === undefined) {
     const authRepair = await repairAuthProfileMigration({
       cfg: ctx.cfg,
@@ -73,9 +74,9 @@ export async function runAuthProfileMigration(ctx: DoctorHealthFlowContext): Pro
   ) {
     const { runRetiredAuthProfileCleanup, runWriteConfigHealth } =
       await import("./doctor-health-contribution-runners.config.js");
-    await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
+    const persisted = await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
     authProfileHealthReady =
-      !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
+      persisted && !ctx.configWriteRefusal && isDeepStrictEqual(ctx.cfg, ctx.cfgForPersistence);
     if (authProfileHealthReady) {
       await runRetiredAuthProfileCleanup(ctx);
     }

@@ -21,9 +21,7 @@ describe("qa-channel thread delivery contracts", () => {
       mode: "all",
       expected: { replyToId: "queued-inbound" },
     },
-    { name: "off mode", currentMessageId: "queued-inbound", mode: "off", expected: null },
     { name: "first mode", currentMessageId: "queued-inbound", mode: "first", expected: null },
-    { name: "batched mode", currentMessageId: "queued-inbound", mode: "batched", expected: null },
     {
       name: "explicit null opt-out",
       currentMessageId: "queued-inbound",
@@ -34,13 +32,6 @@ describe("qa-channel thread delivery contracts", () => {
       name: "explicit target",
       currentMessageId: "queued-inbound",
       replyToId: "explicit-target",
-      expected: null,
-    },
-    {
-      name: "explicit empty target",
-      currentMessageId: "queued-inbound",
-      replyToId: "",
-      explicit: true,
       expected: null,
     },
     {

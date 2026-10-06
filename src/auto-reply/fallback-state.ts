@@ -1,7 +1,7 @@
 /** Formats model-fallback notice state for UI/status messages and persisted transition tracking. */
 import { buildModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,12 +20,12 @@ const TRANSIENT_FALLBACK_REASONS = new Set([
 const TRANSIENT_ERROR_DETAIL_HINT_RE =
   /\b(?:429|5\d\d|too many requests|usage limit|quota|try again in|retry[- ]after|seconds?|minutes?|hours?|temporarily unavailable|overloaded|service unavailable|throttl\w*)\b/i;
 
-function truncateFallbackReasonPart(value: string, max = FALLBACK_REASON_PART_MAX): string {
-  const text = value.replace(/\s+/g, " ").trim();
-  if (text.length <= max) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, max - 1).trimEnd()}…`;
+function truncateFallbackReasonPart(value: string): string {
+  return truncateWithMarker(value.replace(/\s+/g, " ").trim(), FALLBACK_REASON_PART_MAX, {
+    marker: "…",
+    reserve: 1,
+    trimEnd: true,
+  });
 }
 
 function formatFallbackAttemptErrorPreview(attempt: RuntimeFallbackAttempt): string | undefined {
@@ -69,10 +69,6 @@ function formatFallbackAttemptReason(attempt: RuntimeFallbackAttempt): string {
   return truncateFallbackReasonPart(attempt.error || "error");
 }
 
-function formatFallbackAttemptSummary(attempt: RuntimeFallbackAttempt): string {
-  return `${buildModelCatalogRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`;
-}
-
 function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string {
   const firstAttempt = attempts[0];
   const firstReason = firstAttempt
@@ -80,12 +76,6 @@ function buildFallbackReasonSummary(attempts: RuntimeFallbackAttempt[]): string 
     : "selected model unavailable";
   const moreAttempts = attempts.length > 1 ? ` (+${attempts.length - 1} more attempts)` : "";
   return `${truncateFallbackReasonPart(firstReason)}${moreAttempts}`;
-}
-
-function buildFallbackAttemptSummaries(attempts: RuntimeFallbackAttempt[]): string[] {
-  return attempts.map((attempt) =>
-    truncateFallbackReasonPart(formatFallbackAttemptSummary(attempt)),
-  );
 }
 
 /** Builds the visible notice shown when runtime falls back from the selected model. */
@@ -135,37 +125,10 @@ export function buildFallbackClearedNotice(params: {
   return `↪️ Model Fallback cleared: ${selected}`;
 }
 
-type ResolvedFallbackTransition = {
-  selectedModelRef: string;
-  activeModelRef: string;
-  fallbackActive: boolean;
-  fallbackTransitioned: boolean;
-  fallbackCleared: boolean;
-  reasonSummary: string;
-  attemptSummaries: string[];
-  previousState: {
-    selectedModel?: string;
-    activeModel?: string;
-    reason?: string;
-  };
-  nextState: {
-    selectedModel?: string;
-    activeModel?: string;
-    reason?: string;
-  };
-  stateChanged: boolean;
-};
-
 /** Resolves fallback state transitions and the next persisted notice-state fields. */
-export function resolveFallbackTransition(params: {
-  selectedProvider: string;
-  selectedModel: string;
-  activeProvider: string;
-  activeModel: string;
-  attempts: RuntimeFallbackAttempt[];
-  state?: FallbackNoticeState;
-  cfg?: OpenClawConfig;
-}): ResolvedFallbackTransition {
+export function resolveFallbackTransition(
+  params: Parameters<typeof buildFallbackNotice>[0] & { state?: FallbackNoticeState },
+) {
   const selectedModelRef = buildModelCatalogRef(params.selectedProvider, params.selectedModel);
   const activeModelRef = buildModelCatalogRef(params.activeProvider, params.activeModel);
   const previousState = {
@@ -199,7 +162,11 @@ export function resolveFallbackTransition(params: {
       );
   const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
-  const attemptSummaries = buildFallbackAttemptSummaries(params.attempts);
+  const attemptSummaries = params.attempts.map((attempt) =>
+    truncateFallbackReasonPart(
+      `${buildModelCatalogRef(attempt.provider, attempt.model)} ${formatFallbackAttemptReason(attempt)}`,
+    ),
+  );
   const nextState = fallbackActive
     ? {
         selectedModel: selectedModelRef,

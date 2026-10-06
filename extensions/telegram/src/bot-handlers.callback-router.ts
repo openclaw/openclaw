@@ -34,10 +34,11 @@ import type {
   TelegramEventAuthorizationMode,
   TelegramHandlerAuthorization,
 } from "./bot-handlers.inbound-authorization.js";
-import type {
-  RegisterTelegramHandlerParams,
-  TelegramCallbackRouter,
-} from "./bot-handlers.types.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
@@ -53,10 +54,13 @@ import {
   getTelegramCallbackQueryAnswerPromise,
   startTelegramCallbackQueryAnswer,
 } from "./callback-query-answer-state.js";
-import { buildCommandsPaginationKeyboard, buildTelegramModelsMenuButtons } from "./command-ui.js";
+import { buildCommandsPaginationKeyboard } from "./command-ui.js";
+import { escapeTelegramHtml } from "./format-html.js";
+import { markdownToTelegramHtml } from "./format.js";
 import { resolveTelegramInlineButtonsScope } from "./inline-buttons.js";
 import {
   buildModelsKeyboard,
+  buildProviderKeyboard,
   calculateTotalPages,
   parseModelCallbackData,
   resolveModelListCallback,
@@ -91,9 +95,8 @@ export function createTelegramCallbackRouter({
   params: RegisterTelegramHandlerParams;
   message: TelegramCallbackMessageRuntime;
   authorization: TelegramHandlerAuthorization;
-}): TelegramCallbackRouter {
-  const { buildSyntheticTextMessage, buildSyntheticContext, processMessageWithReplyChain } =
-    messageRuntime;
+}) {
+  const { processMessageWithReplyChain } = messageRuntime;
   const {
     resolveTelegramEventAuthorizationContext,
     authorizeTelegramEventSender,
@@ -106,36 +109,24 @@ export function createTelegramCallbackRouter({
     if (!callback) {
       return;
     }
-    let callbackAnswered = false;
     const answerCallbackQuery = async () => {
       await withTelegramApiErrorLogging({
         operation: "answerCallbackQuery",
         runtime,
         fn: () => startTelegramCallbackQueryAnswer(bot, callback.id, false),
       }).catch(() => {});
-      callbackAnswered = true;
     };
-    if (shouldSkipUpdate(ctx)) {
-      const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
-      if (earlyAnswerPromise) {
-        await earlyAnswerPromise.catch(async () => await answerCallbackQuery());
-      } else {
-        await answerCallbackQuery();
-      }
-      return;
-    }
+    const skipUpdate = shouldSkipUpdate(ctx);
     const data = (callback.data ?? "").trim();
     const typedQuestionCallback = parseTelegramQuestionCallbackData(data);
     const earlyAnswerPromise = getTelegramCallbackQueryAnswerPromise(ctx);
     if (earlyAnswerPromise) {
-      try {
-        await earlyAnswerPromise;
-        callbackAnswered = true;
-      } catch {
-        await answerCallbackQuery();
-      }
+      await earlyAnswerPromise.catch(answerCallbackQuery);
     } else {
       await answerCallbackQuery();
+    }
+    if (skipUpdate) {
+      return;
     }
 
     try {
@@ -263,7 +254,6 @@ export function createTelegramCallbackRouter({
         chatTitle: callbackMessage.chat.title,
         isGroup,
         senderId,
-        senderUsername,
         mode: authorizationMode,
         context: eventAuthContext,
       });
@@ -286,7 +276,6 @@ export function createTelegramCallbackRouter({
           chatId,
           isGroup,
           senderId,
-          senderUsername,
           context: eventAuthContext,
         });
       if (typedApprovalCallback) {
@@ -407,22 +396,10 @@ export function createTelegramCallbackRouter({
       if (isTelegramSpooledReplayUpdate(ctx.update)) {
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
       }
-    } finally {
-      if (typedQuestionCallback && !callbackAnswered) {
-        await answerCallbackQuery();
-      }
     }
   };
 
-  return {
-    route: async (ctx) => {
-      if (!ctx.callbackQuery) {
-        return { kind: "ignored" };
-      }
-      await handleCallback(ctx);
-      return { kind: "handled" };
-    },
-  };
+  return { route: handleCallback };
 }
 
 async function handleTelegramModelCallback(params: {
@@ -472,14 +449,16 @@ async function handleTelegramModelCallback(params: {
     }
     const agentId =
       paginationMatch[2]?.trim() ||
-      messageRuntime.resolveTelegramSessionState({
-        chatId,
-        isGroup,
-        threadSpec,
-        botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
-        senderId,
-        runtimeCfg,
-      }).agentId;
+      (
+        await messageRuntime.resolveTelegramSessionState({
+          chatId,
+          isGroup,
+          threadSpec,
+          botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+          senderId,
+          runtimeCfg,
+        })
+      ).agentId;
     const result = await retryModelAction(async () => {
       const skillCommands = telegramDeps.listSkillCommandsForAgents({
         cfg: runtimeCfg,
@@ -498,7 +477,10 @@ async function handleTelegramModelCallback(params: {
           )
         : undefined;
     try {
-      await editCallbackMessage(result.text, keyboard ? { reply_markup: keyboard } : undefined);
+      await editCallbackMessage(markdownToTelegramHtml(result.text), {
+        parse_mode: "HTML",
+        ...(keyboard ? { reply_markup: keyboard } : {}),
+      });
     } catch (editErr) {
       if (!String(editErr).includes("message is not modified")) {
         throw new TelegramRetryableCallbackError(editErr);
@@ -519,7 +501,7 @@ async function handleTelegramModelCallback(params: {
   }
 
   const { sessionState, modelData } = await retryModelAction(async () => {
-    const session = messageRuntime.resolveTelegramSessionState({
+    const session = await messageRuntime.resolveTelegramSessionState({
       chatId,
       isGroup,
       threadSpec,
@@ -537,6 +519,10 @@ async function handleTelegramModelCallback(params: {
     id: provider,
     count: byProvider.get(provider)?.size ?? 0,
   }));
+  const showChangedModelPicker = () =>
+    retryModelAction(() =>
+      editMessageWithButtons(MODEL_PICKER_CHANGED_MESSAGE, buildProviderKeyboard(providerInfos)),
+    );
 
   if (modelCallback.type === "providers" || modelCallback.type === "back") {
     if (providers.length === 0) {
@@ -550,7 +536,7 @@ async function handleTelegramModelCallback(params: {
     await retryModelAction(() =>
       editMessageWithButtons(
         [modelData.refreshWarning, "Select a provider:", notice].filter(Boolean).join("\n\n"),
-        buildTelegramModelsMenuButtons({ providers: providerInfos }),
+        buildProviderKeyboard(providerInfos),
       ),
     );
     return true;
@@ -559,23 +545,13 @@ async function handleTelegramModelCallback(params: {
   if (modelCallback.type === "list" || modelCallback.type === "list-ref") {
     const listSelection = resolveModelListCallback({ callback: modelCallback, providers });
     if (!listSelection) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
+      await showChangedModelPicker();
       return true;
     }
     const { provider, page } = listSelection;
     const modelSet = byProvider.get(provider);
     if (!modelSet || modelSet.size === 0) {
-      await retryModelAction(() =>
-        editMessageWithButtons(
-          MODEL_PICKER_CHANGED_MESSAGE,
-          buildTelegramModelsMenuButtons({ providers: providerInfos }),
-        ),
-      );
+      await showChangedModelPicker();
       return true;
     }
     const models = [...modelSet].toSorted((left, right) => left.localeCompare(right));
@@ -614,12 +590,7 @@ async function handleTelegramModelCallback(params: {
   }
   const selection = resolveModelSelection({ callback: modelCallback, providers, byProvider });
   if (selection.kind !== "resolved" || !byProvider.get(selection.provider)?.has(selection.model)) {
-    await retryModelAction(() =>
-      editMessageWithButtons(
-        MODEL_PICKER_CHANGED_MESSAGE,
-        buildTelegramModelsMenuButtons({ providers: providerInfos }),
-      ),
-    );
+    await showChangedModelPicker();
     return true;
   }
 
@@ -673,7 +644,7 @@ async function handleTelegramModelCallback(params: {
           provider: selection.provider,
           model: selection.model,
           isDefault: isDefaultSelection,
-          runtime: { kind: "clear" },
+          runtime: isDefaultSelection ? { kind: "clear" } : { kind: "unchanged" },
         },
         markLiveSwitchPending: true,
       }),
@@ -689,12 +660,10 @@ async function handleTelegramModelCallback(params: {
           ? "Compatible auth profile retained."
           : "Incompatible auth profile cleared."
         : undefined;
-    const escapeHtml = (text: string) =>
-      text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const actionText = isDefaultSelection
       ? "reset to default"
-      : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
-    const runtimeText = `Runtime set to <b>${escapeHtml(applied.agentRuntime)}</b> from configured policy.`;
+      : `changed to <b>${escapeTelegramHtml(selection.provider)}/${escapeTelegramHtml(selection.model)}</b>`;
+    const runtimeText = `Runtime set to <b>${escapeTelegramHtml(applied.agentRuntime)}</b>${isDefaultSelection ? " from configured policy" : ""}.`;
     const scopeText = isDefaultSelection
       ? `Session model selection cleared.${defaultAuthProfileNotice ? ` ${defaultAuthProfileNotice}` : ""} ${runtimeText} New replies use the agent's configured default.`
       : `Session-only model selection. ${runtimeText} The agent default in openclaw.json is unchanged. This chat keeps the model selection across /new and /reset; use /model default -s to clear the session model selection.`;

@@ -123,6 +123,36 @@ export function setNoAbort() {
   mocks.tryFastAbortFromMessage.mockResolvedValue(noAbortResult);
 }
 
+export function createActiveSlackThread(userId: string) {
+  setNoAbort();
+  const sessionKey = `agent:main:slack:direct:${userId}`;
+  const sessionId = "active-session";
+  sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
+  const activeOperation = createReplyOperation({
+    sessionKey,
+    sessionId,
+    resetTriggered: false,
+    routeThreadId: "500.000",
+  });
+  activeOperation.setPhase("running");
+  return {
+    activeOperation,
+    sessionId,
+    sessionKey,
+    createCtx: (overrides: Partial<MsgContext> = {}) =>
+      buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "slack",
+        OriginatingTo: `user:${userId}`,
+        ChatType: "direct",
+        SessionKey: sessionKey,
+        MessageThreadId: "501.000",
+        ...overrides,
+      }),
+  };
+}
+
 type MockAcpRuntime = AcpRuntime & {
   ensureSession: Mock<(input: AcpRuntimeEnsureInput) => Promise<AcpRuntimeHandle>>;
   runTurn: Mock<(input: AcpRuntimeTurnInput) => AsyncIterable<AcpRuntimeEvent>>;
@@ -159,11 +189,11 @@ export function createAcpRuntime(events: AcpRuntimeEvent[]): MockAcpRuntime {
 
 function createMockAcpSessionManager() {
   return {
-    resolveSession: (params: {
+    resolveSessionAsync: async (params: {
       cfg: OpenClawConfig;
       sessionKey: string;
       agentId?: string;
-    }): AcpSessionResolution => {
+    }): Promise<AcpSessionResolution> => {
       const target = resolveAcpSessionTarget(params);
       const entry = acpMocks.readAcpSessionEntry({
         cfg: params.cfg,
@@ -567,6 +597,7 @@ export const describe0BeforeEach0 = () => {
   sessionBindingMocks.listBySession.mockReset();
   sessionBindingMocks.listBySession.mockReturnValue([]);
   sessionBindingMocks.resolveByConversation.mockReset();
+  sessionBindingMocks.resolveByConversationAsync.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   sessionStoreMocks.currentEntry = undefined;
@@ -648,6 +679,7 @@ export const describe2BeforeEach0 = () => {
     .mockReset()
     .mockReturnValue(placementContextMocks.context);
   sessionBindingMocks.resolveByConversation.mockReset();
+  sessionBindingMocks.resolveByConversationAsync.mockReset();
   sessionBindingMocks.resolveByConversation.mockReturnValue(null);
   sessionBindingMocks.touch.mockReset();
   hookMocks.registry.plugins = [];

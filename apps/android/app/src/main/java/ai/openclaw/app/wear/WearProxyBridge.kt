@@ -30,7 +30,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import java.util.UUID
 import java.util.concurrent.Executor
-import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -84,7 +83,7 @@ internal class WearProxyBridge(
   private val peers = LinkedHashMap<String, Long>()
   private val missingPeers = LinkedHashSet<String>()
   private var peerGeneration = 0L
-  private val nextSequence = AtomicLong()
+  private var nextSequence = 0L
   private val eventStreamId = UUID.randomUUID().toString()
   private val overflowLock = Any()
   private val pendingTerminalEvents = ArrayDeque<WearMessage.Event>()
@@ -144,17 +143,11 @@ internal class WearProxyBridge(
       }
 
       WearBridgeOperation.Overflow -> {
-        val overflow = takeOverflow()
-        var deliveredSequence = lastDeliveredSequence
-        for (terminal in overflow.terminalEvents.sortedBy { it.sequence }) {
-          sendEventPreservingActor(terminal)
-          deliveredSequence = terminal.sequence
+        val events = takeOverflow()
+        for (event in events) {
+          sendEventPreservingActor(event)
         }
-        overflow.resyncEvent?.let { resync ->
-          sendEventPreservingActor(resync)
-          deliveredSequence = resync.sequence
-        }
-        deliveredSequence
+        events.last().sequence
       }
 
       is WearBridgeOperation.Barrier -> {
@@ -238,7 +231,7 @@ internal class WearProxyBridge(
     val event =
       WearMessage.Event(
         streamId = eventStreamId,
-        sequence = nextSequence.incrementAndGet(),
+        sequence = ++nextSequence,
         event = type,
         payload = payload,
       )
@@ -247,7 +240,6 @@ internal class WearProxyBridge(
         resyncRequired = true
         operations.trySend(WearBridgeOperation.Overflow).getOrThrow()
       }
-      resyncRequired = true
       if (terminal) {
         if (pendingTerminalEvents.size == MAX_PENDING_TERMINAL_EVENTS) {
           pendingTerminalEvents.removeFirst()
@@ -267,22 +259,18 @@ internal class WearProxyBridge(
     }
   }
 
-  private fun takeOverflow(): WearOverflowSnapshot =
+  private fun takeOverflow(): List<WearMessage.Event> =
     synchronized(overflowLock) {
-      val resyncEvent =
-        if (resyncRequired) {
+      buildList {
+        addAll(pendingTerminalEvents)
+        add(
           WearMessage.Event(
             streamId = eventStreamId,
-            sequence = nextSequence.incrementAndGet(),
+            sequence = ++nextSequence,
             event = WearEventType.Resync,
-          )
-        } else {
-          null
-        }
-      WearOverflowSnapshot(
-        terminalEvents = pendingTerminalEvents.toList(),
-        resyncEvent = resyncEvent,
-      ).also {
+          ),
+        )
+      }.also {
         pendingTerminalEvents.clear()
         resyncRequired = false
       }
@@ -306,26 +294,21 @@ internal class WearProxyBridge(
     ) : WearBridgeOperation
   }
 
-  private data class WearOverflowSnapshot(
-    val terminalEvents: List<WearMessage.Event>,
-    val resyncEvent: WearMessage.Event?,
-  )
-
   private suspend fun sendEvent(event: WearMessage.Event) {
     val encoded = runCatching { WearProtocolCodec.encode(event) }.getOrNull() ?: return
     val terminalChatEvent = event.isTerminalChatEvent()
     // A terminal reply may need to notify a watch that has not contacted this phone
     // process yet, even while another remembered watch remains healthy.
-    discoverPeers(forceRefresh = terminalChatEvent, bypassNegativeCache = terminalChatEvent)
+    discoverPeers(forceRefresh = terminalChatEvent)
     val initialPeers = peerSnapshot()
     if (initialPeers.isEmpty()) return
-    val initialResult = sendToPeers(initialPeers, encoded)
-    if (initialResult.failed.isEmpty()) return
+    val delivered = sendToPeers(initialPeers, encoded)
+    if (initialPeers.all { it.nodeId in delivered }) return
 
     // Refresh after any stale peer, but do not redeliver the sequence to watches
     // that already accepted it. Newly reachable and recovered peers get one retry.
-    discoverPeers(forceRefresh = true, bypassNegativeCache = true)
-    val retryPeers = peerSnapshot().filterNot { it.nodeId in initialResult.delivered }
+    discoverPeers(forceRefresh = true)
+    val retryPeers = peerSnapshot().filterNot { it.nodeId in delivered }
     sendToPeers(retryPeers, encoded)
   }
 
@@ -348,17 +331,14 @@ internal class WearProxyBridge(
   private suspend fun sendToPeers(
     peers: List<PeerRegistration>,
     data: ByteArray,
-  ): WearPeerSendResult {
+  ): Set<String> {
     val delivered = linkedSetOf<String>()
-    val failed = linkedSetOf<String>()
     for (peer in peers) {
       if (sendToPeer(peer, WearProtocol.EVENT_PATH, data)) {
         delivered += peer.nodeId
-      } else {
-        failed += peer.nodeId
       }
     }
-    return WearPeerSendResult(delivered = delivered, failed = failed)
+    return delivered
   }
 
   private suspend fun sendResponseToPeer(
@@ -373,15 +353,12 @@ internal class WearProxyBridge(
     return true
   }
 
-  private suspend fun discoverPeers(
-    forceRefresh: Boolean,
-    bypassNegativeCache: Boolean,
-  ) {
+  private suspend fun discoverPeers(forceRefresh: Boolean) {
     if (!forceRefresh && hasPeers() && !needsPeerRefresh()) return
     val now = monotonicMillis()
     val previousDiscovery = lastPeerDiscoveryAtMillis
     if (
-      !bypassNegativeCache &&
+      !forceRefresh &&
       previousDiscovery != null &&
       now >= previousDiscovery &&
       now - previousDiscovery < PEER_DISCOVERY_RETRY_MILLIS
@@ -419,13 +396,10 @@ internal class WearProxyBridge(
     try {
       sender.send(peer.nodeId, path, data)
       return true
-    } catch (err: CancellationException) {
+    } catch (err: Throwable) {
       // Custom senders may use cancellation for transport failure. Keep the actor
       // cancellation contract while retrying this peer normally.
-      currentCoroutineContext().ensureActive()
-      markPeerFailed(peer)
-      return false
-    } catch (_: Throwable) {
+      if (err is CancellationException) currentCoroutineContext().ensureActive()
       markPeerFailed(peer)
       return false
     }
@@ -478,11 +452,6 @@ internal class WearProxyBridge(
     }
 
   internal fun peerCountForTests(): Int = synchronized(peerLock) { peers.size }
-
-  private data class WearPeerSendResult(
-    val delivered: Set<String>,
-    val failed: Set<String>,
-  )
 
   private companion object {
     const val MAX_PEERS = 8
@@ -543,7 +512,8 @@ internal class WearChatStreamProjector {
     }
     val delta = (projected["deltaText"] as? JsonPrimitive)?.contentOrNull.orEmpty()
     val replace = (projected["replace"] as? JsonPrimitive)?.contentOrNull == "true"
-    val fullMessage = projectedWearMessageText(projected["message"])
+    // Bound the live tail after reading the snapshot; message transport truncation keeps its prefix.
+    val fullMessage = wearStreamMessageText((payload as? JsonObject)?.get("message"))
     if (streamKey == null && fullMessage == null && !replace) {
       // Events without a session cannot affect a selected watch transcript.
       return projected

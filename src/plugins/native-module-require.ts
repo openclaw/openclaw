@@ -6,6 +6,11 @@ import { isPathInside } from "../infra/path-guards.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
 
+/** Bun's native plugin resolver remains the owner even when Node hooks are available. */
+export function useNodeModuleHooks(): boolean {
+  return !process.versions.bun && typeof Module.registerHooks === "function";
+}
+
 // Resolution and Jiti must accept the same source family, including typed JSX variants.
 export const PLUGIN_SOURCE_MODULE_EXTENSIONS: readonly string[] = [
   ".ts",
@@ -23,7 +28,7 @@ export function isPluginSourceModulePath(modulePath: string): boolean {
 // Failed ESM jobs survive require-cache eviction. Preserve an observed terminal error
 // if a retry hits that job, rather than transforming its rejected graph through Jiti.
 const nativeModuleLoadFailures = new Map<string, unknown>();
-type ResolveFilename = (
+export type ResolveFilename = (
   request: string,
   parent: NodeJS.Module | undefined,
   isMain: boolean,
@@ -254,6 +259,24 @@ export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
 
+export function resolvePluginLoaderTryNative(
+  modulePath: string,
+  options?: {
+    preferBuiltDist?: boolean;
+  },
+): boolean {
+  const nativeExtension = [".js", ".mjs", ".cjs", ".json"].includes(
+    path.extname(modulePath).trim().toLowerCase(),
+  );
+  if (modulePath.replace(/\\/g, "/").includes("/dist/extensions/")) {
+    return nativeExtension;
+  }
+  return (
+    nativeExtension ||
+    (options?.preferBuiltDist === true && modulePath.includes(`${path.sep}dist${path.sep}`))
+  );
+}
+
 function isMissingTargetModuleError(
   error: { code?: unknown; message?: unknown },
   modulePath: string,
@@ -266,11 +289,10 @@ function isMissingTargetModuleError(
 }
 
 function isSourceTransformFallbackError(error: unknown, modulePath: string): boolean {
-  if (!error || typeof error !== "object") {
+  if (!error || typeof error !== "object" || !("code" in error)) {
     return false;
   }
-  const candidate = error as { code?: unknown; message?: unknown };
-  const code = candidate.code;
+  const code = error.code;
   return (
     code === "ERR_REQUIRE_ESM" ||
     code === "ERR_REQUIRE_ASYNC_MODULE" ||
@@ -278,7 +300,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
     code === "ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX" ||
     code === "ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING" ||
     code === "ERR_UNKNOWN_FILE_EXTENSION" ||
-    isMissingTargetModuleError(candidate, modulePath)
+    isMissingTargetModuleError(error, modulePath)
   );
 }
 
@@ -299,17 +321,12 @@ export function tryNativeRequireJavaScriptModule(
 export function tryNativeRequireModule(
   moduleSpecifier: string,
   options: {
-    allowWindows?: boolean;
     aliasMap?:
       | Record<string, string>
       | ((specifier: string, parent?: string) => string | undefined);
     fallbackOnMissingDependency?: boolean;
-    fallbackOnNativeError?: boolean;
   } = {},
 ): { ok: true; moduleExport: unknown } | { ok: false } {
-  if (process.platform === "win32" && options.allowWindows !== true) {
-    return { ok: false };
-  }
   const modulePath = toNativeRequirePath(moduleSpecifier);
   // A process-wide require retains evicted graphs through its parent's children.
   // Keep that parent scoped to this load so retired graphs can be collected.
@@ -348,7 +365,7 @@ export function tryNativeRequireModule(
     ) {
       throw nativeModuleLoadFailures.get(resolvedPath);
     }
-    if (isSourceTransformFallbackError(error, modulePath) || options.fallbackOnNativeError) {
+    if (isSourceTransformFallbackError(error, modulePath)) {
       return { ok: false };
     }
     nativeModuleLoadFailures.set(resolvedPath, error);
@@ -396,21 +413,19 @@ function withNativeRequireAliases<T>(
   const resolveAlias =
     typeof aliasMap === "function" ? aliasMap : (specifier: string) => aliasMap[specifier];
   const originalResolveFilename = moduleWithResolver["_resolveFilename"];
-  const esmHooks = moduleWithResolver.registerHooks?.({
-    resolve(specifier, context, nextResolve) {
-      const parent = context.parentURL?.startsWith("file:")
-        ? fileURLToPath(context.parentURL)
-        : undefined;
-      const aliasTarget = resolveAlias(specifier, parent);
-      if (aliasTarget) {
-        return {
-          shortCircuit: true,
-          url: pathToFileURL(aliasTarget).href,
-        };
-      }
-      return nextResolve(specifier, context);
-    },
-  });
+  const esmHooks = useNodeModuleHooks()
+    ? Module.registerHooks({
+        resolve(specifier, context, nextResolve) {
+          const parent = context.parentURL?.startsWith("file:")
+            ? fileURLToPath(context.parentURL)
+            : undefined;
+          const aliasTarget = resolveAlias(specifier, parent);
+          return aliasTarget
+            ? { shortCircuit: true, url: pathToFileURL(aliasTarget).href }
+            : nextResolve(specifier, context);
+        },
+      })
+    : undefined;
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {

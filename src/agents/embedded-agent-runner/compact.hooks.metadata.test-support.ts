@@ -9,6 +9,11 @@ import type {
   PreparedModelRuntimeLeaseOptions,
 } from "../prepared-model-runtime.types.js";
 
+export type CompactHooksQueuedCompaction = (
+  params: Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[0],
+  host?: Partial<Parameters<typeof import("./compact.queued.js").compactEmbeddedAgentSession>[1]>,
+) => ReturnType<typeof import("./compact.queued.js").compactEmbeddedAgentSession>;
+
 const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
   version: 1,
   hostContractVersion: "test",
@@ -65,6 +70,7 @@ export function mockCompactHooksPluginMetadata(): void {
     createPluginMetadataSnapshotFrame: () =>
       getPluginExecutionFrame() ?? createPluginExecutionFrame({}, undefined),
     withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
+    runOutsidePluginMetadataSnapshotScope: <T>(run: () => T): T => run(),
   }));
 }
 
@@ -104,3 +110,58 @@ export function createCompactHooksPreparedModelRuntime(input: {
     createStores: () => ({ authStorage: {}, modelRegistry: {} }),
   };
 }
+
+export function createCompactHooksAuthStorage() {
+  const runtimeKeys = new Map<string, string>();
+  return {
+    setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {
+      runtimeKeys.set(provider, apiKey);
+    }),
+    getApiKey: vi.fn(async (provider: string) => runtimeKeys.get(provider)),
+  } satisfies MockResolvedModel["authStorage"];
+}
+
+export function createCompactHooksResolvedModel(
+  provider?: string,
+  modelId?: string,
+): MockResolvedModel {
+  return {
+    logicalRef: { provider: provider ?? "openai", model: modelId ?? "fake" },
+    model: {
+      provider: provider ?? "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      id: modelId ?? "fake",
+      input: [],
+    },
+    error: null,
+    authStorage: createCompactHooksAuthStorage(),
+    modelRegistry: {},
+  };
+}
+
+export const resolveCompactHooksApiKeyMock = vi.fn<
+  typeof import("./stream-resolution.js").resolveEmbeddedAgentApiKey
+>(async ({ provider, resolvedApiKey, authStorage }) => {
+  const apiKey = resolvedApiKey?.trim();
+  return apiKey || (await authStorage?.getApiKey(provider));
+});
+
+export type MockResolvedModel = {
+  logicalRef: { provider: string; model: string };
+  model: {
+    provider: string;
+    api: string;
+    baseUrl?: string;
+    id: string;
+    input: unknown[];
+    contextWindow?: number;
+    requestTimeoutMs?: number;
+  };
+  error: null;
+  authStorage: Pick<
+    import("../sessions/auth-storage.js").AuthStorage,
+    "setRuntimeApiKey" | "getApiKey"
+  >;
+  modelRegistry: Record<string, never> | import("../sessions/model-registry.js").ModelRegistry;
+};

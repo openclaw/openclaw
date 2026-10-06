@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   loadCronJobsStoreWithConfigJobsReadOnly,
@@ -22,6 +22,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readWorkshopMigrationRecords } from "./doctor-skill-workshop-sources.js";
 import {
@@ -68,7 +69,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           skillDir: path.join(state.workspaceDir, "skills", "saved"),
         },
       });
-      importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
       const database = openOpenClawStateDatabase({ env: state.env });
       const events = ["2026-09-16T02:00:00Z", "2026-09-16T01:00:00Z"].map((occurredAt) =>
         appendSkillProposalEvent(database.db, {
@@ -80,14 +81,8 @@ describe("read-only Skill Workshop migration inspection", () => {
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
       const before = await snapshotDatabase(databasePath);
       const filesBefore = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
-      const native = requireNodeSqlite();
-      const counters = [
-        vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-        vi.spyOn(native.DatabaseSync.prototype, "exec"),
-        ...(["get", "all", "run", "iterate"] as const).map((method) =>
-          vi.spyOn(native.StatementSync.prototype, method),
-        ),
-      ];
+      requireNodeSqlite();
+      const sql = observeMainThreadSql();
       try {
         const result = await runDoctorLintChecks(
           {
@@ -111,11 +106,9 @@ describe("read-only Skill Workshop migration inspection", () => {
           records: [{ record, ownerAgentId: "main" }],
           appliedEvents: events,
         });
-        expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+        sql.expectIdle();
       } finally {
-        for (const counter of counters) {
-          counter.mockRestore();
-        }
+        sql.restore();
       }
       await closeOpenClawStateDatabaseAsync();
       expect(await snapshotDatabase(databasePath)).toEqual(before);
@@ -143,7 +136,7 @@ describe("read-only Skill Workshop migration inspection", () => {
       await fs.mkdir(path.join(legacy, "scripts"), { recursive: true });
       await fs.writeFile(record.target.skillFile, content);
       await fs.writeFile(path.join(legacy, "scripts", "check.sh"), "printf ready\n");
-      importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+      await importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
       appendSkillProposalEvent(
         openOpenClawStateDatabase({ env: state.env }).db,
         createSkillProposalEvent({
@@ -239,8 +232,8 @@ describe("read-only Skill Workshop migration inspection", () => {
     await withOpenClawTestState({ label: "workshop-remaining-targets" }, async (state) => {
       const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
       const blockedWorkspace = state.path("old-workspace");
-      await fs.mkdir(path.join(blockedWorkspace, ".openclaw"), { recursive: true });
-      await fs.writeFile(path.join(blockedWorkspace, ".openclaw", "workspace-state.json"), "{}");
+      await fs.mkdir(blockedWorkspace, { recursive: true });
+      await fs.writeFile(path.join(blockedWorkspace, "openclaw-workspace-state.json"), "{}");
       const records = [
         { name: "eligible", workspaceDir: state.workspaceDir },
         { name: "blocked", workspaceDir: blockedWorkspace },
@@ -261,7 +254,11 @@ describe("read-only Skill Workshop migration inspection", () => {
           `skill-workshop/proposals/${record.id}/${record.draftFile}`,
           "# Saved\n",
         );
-        importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+        await importLegacySkillProposal({
+          record,
+          ownerAgentId: "main",
+          store: { env: state.env },
+        });
       }
       const [eligible, blocked] = records;
       const inspect = () =>
@@ -335,7 +332,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           }),
         );
         if (proposal) {
-          importLegacySkillProposal({
+          await importLegacySkillProposal({
             record: createAppliedLegacyProposal({
               id: "readonly-workshop-20260907-1234567890",
               title: "Legacy Workshop",
@@ -424,11 +421,15 @@ describe("read-only Skill Workshop migration inspection", () => {
         await fs.mkdir(path.dirname(skillFile), { recursive: true });
         await fs.writeFile(skillFile, content);
         if (version === 15) {
-          seedLegacyV15ProposalRows(state.env, [
+          await seedLegacyV15ProposalRows(state.env, [
             { record, workspaceDir: state.workspaceDir, claimReleasedTime: null },
           ]);
         } else {
-          importLegacySkillProposal({ record, ownerAgentId: "main", store: { env: state.env } });
+          await importLegacySkillProposal({
+            record,
+            ownerAgentId: "main",
+            store: { env: state.env },
+          });
         }
         await closeOpenClawStateDatabaseAsync();
         const databasePath = resolveOpenClawStateSqlitePath(state.env);
@@ -521,7 +522,7 @@ describe("read-only Skill Workshop migration inspection", () => {
           status: sample.status ?? "applied",
           ...(sample.origin ? { origin: sample.origin } : {}),
         };
-        importLegacySkillProposal({
+        await importLegacySkillProposal({
           record,
           ownerAgentId: sample.owner ?? "main",
           store: { env: state.env },

@@ -6,7 +6,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-database-preflight-agent-scheduler.js";
+import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-agent-db-contract.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
@@ -70,6 +70,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
     >({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive),
       workerOptions: {
+        resourceLimits: { maxOldGenerationSizeMb: 512 },
         workerData: {
           type: "sqlite-transcript-archive-v2",
           operation: "canonical-validation-pool",
@@ -132,7 +133,8 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
       }
     },
   });
-  process.on("beforeExit", beforeExit);
+  // Failed exit cleanup retains custody for explicit retries without restarting the event loop.
+  process.once("beforeExit", beforeExit);
   try {
     context.maintenanceScope?.own(execution, "shared-resources", execution.close);
     return await canonicalWorkerPool.run(execution, run);

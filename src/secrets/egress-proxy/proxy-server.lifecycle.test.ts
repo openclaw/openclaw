@@ -86,7 +86,7 @@ async function openTlsTunnel(env = grant.env): Promise<tls.TLSSocket> {
   return socket;
 }
 
-function onClose(socket: Socket | IncomingMessage): Promise<void> {
+function onClose(socket: Socket | IncomingMessage | ServerResponse): Promise<void> {
   return new Promise((resolve) => {
     socket.once("close", () => resolve());
   });
@@ -188,6 +188,154 @@ afterEach(async () => {
 });
 
 describe("secret egress registration lifecycle", () => {
+  it.each(["keep-alive", "close"])(
+    "rejects queued credentials after shared revocation before socket assignment (%s)",
+    async (connection) => {
+      const authority = new Int32Array(new SharedArrayBuffer(4));
+      grant = proxy.registerProcess(
+        [{ name: "SERVICE_API_KEY", sentinel, allowedHosts: ["localhost"] }],
+        () => Atomics.load(authority, 0) === 0,
+      );
+      const queued = createDeferredCore<{ request: http.ClientRequest; agent: https.Agent }>();
+      const { request: requestUpstream } = await vi.importActual<typeof https>("node:https");
+      vi.mocked(https.request).mockImplementation((...args) => {
+        const agent = (args[0] as https.RequestOptions).agent;
+        if (!(agent instanceof https.Agent)) {
+          throw new Error("Expected the grant's HTTPS agent");
+        }
+        agent.maxSockets = 1;
+        agent.maxTotalSockets = 1;
+        const request = requestUpstream(...args);
+        if (request.path === "/queued") {
+          queued.resolve({ request, agent });
+        }
+        return request;
+      });
+      const held = createDeferredCore<ServerResponse>();
+      const paths: string[] = [];
+      origin.removeAllListeners("request");
+      origin.on("request", (request, response) => {
+        paths.push(request.url!);
+        expect(request.headers.authorization).toBe(`Bearer ${value}`);
+        request.resume();
+        request.once("end", () => {
+          if (request.url === "/held") {
+            held.resolve(response);
+          } else {
+            response.end("ok");
+          }
+        });
+      });
+      const first = await openTlsTunnel();
+      first.write(
+        `GET /held HTTP/1.1\r\nHost: localhost:${originPort}\r\nConnection: ${connection}\r\nAuthorization: Bearer ${sentinel}\r\nContent-Length: 0\r\n\r\n`,
+      );
+      const heldResponse = await held.promise;
+      const second = await openTlsTunnel();
+      second.write(
+        `GET /queued HTTP/1.1\r\nHost: localhost:${originPort}\r\nAuthorization: Bearer ${sentinel}\r\nContent-Length: 0\r\n\r\n`,
+      );
+      const { request: pending, agent } = await queued.promise;
+      expect(pending.socket).toBeNull();
+      expect(pending.writableEnded).toBe(true);
+      const pendingClosed = new Promise<void>((resolve) => {
+        pending.once("close", resolve);
+      });
+      const secondClosed = onClose(second);
+      expect(Object.values(agent.requests).flat()).toContain(pending);
+      // Revoke after response guards finish, before Node dispatches the socket queue.
+      // The Worker cleanup message deliberately has not called grant.revoke().
+      agent.prependOnceListener("free", () => Atomics.store(authority, 0, 1));
+      heldResponse.end("ok");
+      await pendingClosed;
+      expect(paths).toEqual(["/held"]);
+      await secondClosed;
+      await sendCredential(await openTlsTunnel(register().env));
+      expect(paths).toEqual(["/held", "/"]);
+    },
+  );
+
+  it("reuses upstream TLS only within a live grant and releases idle connections on revocation", async () => {
+    const peers: Socket[] = [];
+    origin.removeAllListeners("request");
+    origin.on("request", (request, response) => {
+      peers.push(request.socket);
+      expect(request.headers.authorization).toBe(`Bearer ${value}`);
+      expect(request.headers["proxy-authorization"]).toBeUndefined();
+      request.resume();
+      response.writeHead(200, { "Content-Length": 2 });
+      response.end("ok");
+    });
+    const send = async (processGrant: SecretEgressProcessGrant, connection = "keep-alive") => {
+      const url = new URL(processGrant.env.HTTPS_PROXY!);
+      return new Promise<void>((resolve, reject) => {
+        const request = httpRequest(
+          {
+            hostname: url.hostname,
+            port: url.port,
+            path: `https://localhost:${originPort}/`,
+            agent: false,
+            headers: {
+              Connection: connection,
+              Authorization: `Bearer ${sentinel}`,
+              "Proxy-Authorization": `Basic ${Buffer.from(`openclaw:${url.password}`).toString("base64")}`,
+            },
+          },
+          (response) => {
+            let body = "";
+            response.on("data", (chunk: Buffer) => (body += chunk.toString()));
+            response.once("end", () => {
+              expect(response.statusCode).toBe(200);
+              expect(body).toBe("ok");
+              resolve();
+            });
+          },
+        );
+        request.once("error", reject);
+        request.end();
+      });
+    };
+    const connect = vi.spyOn(tls, "connect");
+    const sibling = register();
+    await send(grant);
+    await send(grant);
+    await send(sibling);
+    expect(peers[1]).toBe(peers[0]);
+    expect(peers[2]).not.toBe(peers[0]);
+    const revokedPeerClosed = onClose(peers[0]!);
+    grant.revoke();
+    await revokedPeerClosed;
+    await send(sibling);
+    expect(peers[3]).toBe(peers[2]);
+    // Even a peer-requested reconnect must reuse parsed trust, without retaining
+    // request credentials in TLS options or an agent's persistent options.
+    const siblingPeerClosed = onClose(peers[2]!);
+    await send(sibling, "close");
+    await siblingPeerClosed;
+    await send(sibling);
+    expect(peers[5]).not.toBe(peers[2]);
+    const tlsOptions = connect.mock.calls.map(([options]) => options as tls.ConnectionOptions);
+    expect(tlsOptions).toHaveLength(3);
+    expect(tlsOptions[0]?.secureContext).toBeDefined();
+    for (const option of tlsOptions) {
+      expect(option.secureContext).toBe(tlsOptions[0]?.secureContext);
+      expect(option.ca).toBeUndefined();
+      expect(option.key).toBeUndefined();
+      expect(option.cert).toBeUndefined();
+    }
+    for (const [options] of vi.mocked(https.request).mock.calls) {
+      const agent = (options as https.RequestOptions).agent;
+      expect(agent).toBeInstanceOf(https.Agent);
+      if (agent instanceof https.Agent) {
+        expect(JSON.stringify(agent.options)).not.toContain(value);
+        expect(agent.options).not.toHaveProperty("headers");
+      }
+    }
+    const stoppedPeerClosed = onClose(peers[5]!);
+    await proxy.stop();
+    await stoppedPeerClosed;
+  });
+
   it.each(["header", "body", "url"] as const)(
     "keeps an in-flight %s credential bound to its process snapshot",
     async (location) => {
@@ -493,7 +641,7 @@ describe("secret egress registration lifecycle", () => {
     // OpenSSL uses the native clock. Advance the cache's clock into the leaf's
     // renewal window while real TLS verifies both certificates and the same CA.
     vi.spyOn(Date, "now").mockReturnValue(previous.validToDate.getTime() - 30 * 60_000);
-    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel()]);
+    const renewed = await Promise.all([openTlsTunnel(), openTlsTunnel(register().env)]);
     for (const socket of renewed) {
       await sendCredential(socket);
     }
@@ -578,12 +726,18 @@ describe("secret egress registration lifecycle", () => {
     },
   );
 
-  it("does not reuse a revoked registration's cached TLS bindings on a fresh connection", async () => {
-    await sendCredential(await openTlsTunnel());
+  it("reuses certificates across registrations without reusing revoked TLS bindings", async () => {
+    const generateLeaf = vi.spyOn(proxyCa, "generateLocalProxyLeaf");
+    const grants = [grant, ...Array.from({ length: 4 }, register)];
+    await Promise.all(grants.map(async ({ env }) => sendCredential(await openTlsTunnel(env))));
+    expect(observed).toHaveLength(5);
     grant.revoke();
     grant = proxy.registerProcess();
     await sendCredential(await openTlsTunnel());
-    expect(observed).toEqual([{ authorization: `Bearer ${value}`, body: "" }]);
+    expect(observed).toHaveLength(5);
+    await sendCredential(await openTlsTunnel(register().env));
+    expect(observed).toHaveLength(6);
+    expect(generateLeaf).toHaveBeenCalledTimes(1);
   });
 
   it.each([undefined, 100 * 1024 * 1024 + 1, Number.MAX_SAFE_INTEGER])(
@@ -639,6 +793,8 @@ describe("secret egress registration lifecycle", () => {
       );
       await vi.waitFor(() => expect(bodyReceived.has("cleanup")).toBe(true));
       expect(responses.get("cleanup")?.headersSent).toBe(false);
+      // Client close can precede the proxy response closing and releasing its reservation.
+      const serverClosed = onClose(responses.get("cleanup")!);
       let stopped: Promise<void> | undefined;
       if (action === "disconnect") {
         socket.destroy();
@@ -652,7 +808,7 @@ describe("secret egress registration lifecycle", () => {
           grant = register();
         }
       }
-      await Promise.all([clientClosed, stopped]);
+      await Promise.all([clientClosed, serverClosed, stopped]);
       expect(observed).toEqual([]);
       if (action !== "stop") {
         const next = await openTlsTunnel(register().env);

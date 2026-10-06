@@ -95,8 +95,8 @@ Keep these unique per Gateway instance:
 | Derived browser/CDP ports    | See below                            |
 
 Sharing any of these causes config, state, or port conflicts. Gateway startup
-enforces unique state-directory ownership even when
-`OPENCLAW_ALLOW_MULTI_GATEWAY=1` skips the per-config singleton.
+enforces unique state-directory ownership, including when
+`OPENCLAW_ALLOW_MULTI_GATEWAY=1` is set.
 
 <Warning>
 `OPENCLAW_STATE_DIR` alone does not isolate a managed Gateway service. Service names follow the profile, not the state directory. For onboarding or service-install tests, use a dedicated named profile and unique ports, or an isolated machine. Do not install or restart the default service against a temporary state directory.
@@ -143,7 +143,8 @@ openclaw --profile rescue browser status
 ```
 
 - `gateway status --deep` catches stale launchd/systemd/schtasks services from older installs.
-- `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected in two cases. You intentionally run more than one isolated gateway, or OpenClaw cannot prove that reachable probe targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
+- `doctor --deep` also reports when a recognizable service definition or native service manager could not be inspected. Restore inspection access and rerun Doctor; an incomplete scan does not prove that no other service exists. Inspection warnings never authorize service cleanup.
+- `gateway probe` warning text such as `multiple reachable gateway identities detected` is expected in two cases. You intentionally run more than one isolated gateway, or OpenClaw cannot prove that reachable check targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one gateway with multiple transports, even when transport ports differ.
 
 ## Related
 

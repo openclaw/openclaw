@@ -11,7 +11,7 @@ import {
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([1, 2])("keeps setup selectors in two phone rows with %s agents", async (agentCount) => {
+  it.each([1, 2])("stacks phone setup selectors with %s agents", async (agentCount) => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true },
       async ({ page }) => {
@@ -78,15 +78,17 @@ suite.define(() => {
           const layout = await selectors.evaluateAll((buttons) =>
             buttons.map((button) => {
               const box = button.getBoundingClientRect();
+              // Flex/grid aligns the wrapper; inline button baselines can differ within one row.
+              const item = button.closest(".new-session-page__select")!.getBoundingClientRect();
               return {
-                row: Math.round(box.top + box.height / 2),
+                row: Math.round(item.top + item.height / 2),
                 left: box.left,
                 right: box.right,
                 height: box.height,
               };
             }),
           );
-          expect(new Set(layout.map((box) => box.row)).size).toBe(width <= 560 ? 2 : 1);
+          expect(new Set(layout.map((box) => box.row)).size).toBe(width <= 560 ? layout.length : 1);
           for (const [index, box] of layout.entries()) {
             expect(box.left).toBeGreaterThanOrEqual(0);
             expect(box.right).toBeLessThanOrEqual(width);
@@ -140,8 +142,8 @@ suite.define(() => {
     });
   });
 
-  it("keeps recent sessions visible on phone layouts", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+  it("keeps the mobile composer within reach and lets long prompts scroll", async () => {
+    await suite.withPage({ viewport: { width: 320, height: 568 } }, async ({ page }) => {
       await installMockGateway(page, {
         methodResponses: {
           "sessions.list": {
@@ -163,7 +165,32 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}new`);
       await expect.poll(() => page.locator(".agent-chat__recent").count()).toBe(1);
-      await expect.poll(() => page.locator(".agent-chat__recent").isVisible()).toBe(true);
+      expect(await page.locator(".agent-chat__recent").isVisible()).toBe(false);
+      const scroll = page.locator(".new-session-page__scroll");
+      const composer = page.locator(".new-session-page__composer");
+      const textarea = page.locator(".new-session-page__message");
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(
+        0,
+      );
+      const bottomGap = await composer.evaluate(
+        (element) => innerHeight - element.getBoundingClientRect().bottom,
+      );
+      expect(bottomGap).toBeGreaterThanOrEqual(0);
+      expect(bottomGap).toBeLessThanOrEqual(16);
+
+      await textarea.fill("A line of a longer first prompt.\n".repeat(20));
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      await composer.scrollIntoViewIfNeeded();
+      expect(await scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await textarea.fill("");
+      await waitForLayoutSettled(page, ".new-session-page__composer");
+      expect(await scroll.evaluate((element) => element.scrollHeight - element.clientHeight)).toBe(
+        0,
+      );
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      expect(await page.locator(".agent-chat__recent").isVisible()).toBe(true);
     });
   });
 

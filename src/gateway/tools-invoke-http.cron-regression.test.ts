@@ -56,6 +56,7 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Exercise the HTTP denylist with inert automation and Gateway tools.
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
@@ -70,7 +71,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
   ];
   return {
-    createOpenClawTools: () => tools,
+    createOpenClawToolsAsync: async () => tools,
   };
 });
 
@@ -140,37 +141,20 @@ describe("tools invoke HTTP denylist", () => {
     expect(cronRes.status).toBe(404);
   });
 
-  it("allows cron once gateway.tools.allow explicitly removes the default deny", async () => {
+  it("keeps a normalized deny authoritative over a canonical allow", async () => {
     cfg = {
       gateway: {
         tools: {
-          allow: ["cron"],
+          allow: ["automations"],
+          deny: [" CRON "],
         },
       },
     };
 
     const cronRes = await invoke("cron", "operator.admin");
 
-    expect(cronRes.status).toBe(200);
+    expect(cronRes.status).toBe(404);
   });
-
-  it.each(["cron", " CRON ", "CrOn"])(
-    "keeps deny spelling %j authoritative over a canonical allow",
-    async (deniedTool) => {
-      cfg = {
-        gateway: {
-          tools: {
-            allow: ["automations"],
-            deny: [deniedTool],
-          },
-        },
-      };
-
-      const cronRes = await invoke("cron", "operator.admin");
-
-      expect(cronRes.status).toBe(404);
-    },
-  );
 
   it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {

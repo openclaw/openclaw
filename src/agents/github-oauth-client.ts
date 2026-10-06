@@ -5,6 +5,7 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { resolveConfiguredGitHubApiBaseUrl } from "./github-host.js";
 import { clearNativeGitHubTokenCache } from "./github-read-identity.js";
 import type { GitHubToolAccount } from "./github-tool-account.js";
 
@@ -51,6 +52,7 @@ export function clearGitHubCredentialVerificationCache(): void {
 type GitHubOAuthRequestOptions = {
   signal?: AbortSignal;
   timeoutMs?: number;
+  apiBaseUrl?: string;
 };
 
 type GitHubOAuthDeviceAuthorization = {
@@ -70,18 +72,21 @@ export type GitHubOAuthTokenPair = {
   refreshTokenExpiresInSeconds: number;
 };
 
-type GitHubOAuthErrorCode =
-  | "authorization_pending"
-  | "slow_down"
-  | "expired_token"
-  | "unsupported_grant_type"
-  | "incorrect_client_credentials"
-  | "incorrect_device_code"
-  | "bad_verification_code"
-  | "access_denied"
-  | "device_flow_disabled"
-  | "unverified_user_email"
-  | "bad_refresh_token";
+const GITHUB_OAUTH_ERROR_CODES = [
+  "authorization_pending",
+  "slow_down",
+  "expired_token",
+  "unsupported_grant_type",
+  "incorrect_client_credentials",
+  "incorrect_device_code",
+  "bad_verification_code",
+  "access_denied",
+  "device_flow_disabled",
+  "unverified_user_email",
+  "bad_refresh_token",
+] as const;
+type GitHubOAuthErrorCode = (typeof GITHUB_OAUTH_ERROR_CODES)[number];
+const GITHUB_OAUTH_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_OAUTH_ERROR_CODES);
 
 type GitHubOAuthErrorDetails = {
   errorDescription?: string;
@@ -149,13 +154,8 @@ function readOptionalErrorUri(value: unknown, surface: string): string | undefin
   if (raw === undefined) {
     return undefined;
   }
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw githubOAuthProtocolError(surface);
-  }
-  if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+  const parsed = URL.parse(raw);
+  if (!parsed || parsed.protocol !== "https:" || parsed.username || parsed.password) {
     throw githubOAuthProtocolError(surface);
   }
   return raw;
@@ -219,22 +219,8 @@ function parseGitHubOAuthTokenPair(
   };
 }
 
-const GITHUB_OAUTH_ERROR_CODES = new Set<string>([
-  "authorization_pending",
-  "slow_down",
-  "expired_token",
-  "unsupported_grant_type",
-  "incorrect_client_credentials",
-  "incorrect_device_code",
-  "bad_verification_code",
-  "access_denied",
-  "device_flow_disabled",
-  "unverified_user_email",
-  "bad_refresh_token",
-]);
-
 function isGitHubOAuthErrorCode(value: unknown): value is GitHubOAuthErrorCode {
-  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODES.has(value);
+  return typeof value === "string" && GITHUB_OAUTH_ERROR_CODE_SET.has(value);
 }
 
 function parseGitHubOAuthError(
@@ -310,7 +296,7 @@ async function readGitHubResponse(response: Response, surface: string, timeoutMs
   return parseJsonObject(bytes, surface);
 }
 
-/** Verifies only the supplied credential at GitHub's fixed account endpoint. */
+/** Public credentials use their fixed issuer; other issuers require an explicit endpoint. */
 export async function verifyGitHubCredential(
   token: string,
   options: GitHubOAuthRequestOptions = {},
@@ -321,7 +307,8 @@ export async function verifyGitHubCredential(
     if (/\s/u.test(token)) {
       return { status: "unavailable" };
     }
-    const key = createHash("sha256").update(token).digest("hex");
+    const apiBaseUrl = options.apiBaseUrl ?? resolveConfiguredGitHubApiBaseUrl();
+    const key = createHash("sha256").update(`${apiBaseUrl}\0${token}`).digest("hex");
     const cache = verifiedCredentials;
     const cached = cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
@@ -335,7 +322,7 @@ export async function verifyGitHubCredential(
         1,
       );
       const timeout = AbortSignal.timeout(timeoutMs);
-      const response = await fetch("https://api.github.com/user", {
+      const response = await fetch(`${apiBaseUrl}/user`, {
         method: "GET",
         redirect: "error",
         headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
@@ -450,6 +437,8 @@ export async function pollGitHubOAuthDeviceToken(
     const { code, intervalSeconds, ...details } = parseGitHubOAuthError(body, "device token");
     switch (code) {
       case "authorization_pending":
+      case "expired_token":
+      case "access_denied":
         return { status: code, ...details };
       case "slow_down":
         return {
@@ -457,9 +446,6 @@ export async function pollGitHubOAuthDeviceToken(
           ...details,
           ...(intervalSeconds !== undefined ? { intervalSeconds } : {}),
         };
-      case "expired_token":
-      case "access_denied":
-        return { status: code, ...details };
       default:
         return { status: "error", code, ...details };
     }

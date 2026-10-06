@@ -1,16 +1,14 @@
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runCommandWithTimeout } from "../../process/exec.js";
+import { beforeEach, describe, expect, vi } from "vitest";
+import { createCommandTest } from "../../../test/helpers/command-fixture.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import {
   BUNDLE_HASH,
@@ -23,7 +21,8 @@ import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
+const it = createCommandTest();
 
 describe("worker placement dispatch reclaim", () => {
   let root: string;
@@ -36,9 +35,51 @@ describe("worker placement dispatch reclaim", () => {
     placementStore = createWorkerSessionPlacementStore({ database, now: () => 1_000 });
   });
 
-  afterEach(async () => {
-    closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
+  it("admits an unrelated provider provision after Stop while another provision never settles", async () => {
+    const harness = createHarness(database, placementStore, {
+      workspacePath: root,
+      reconcileChanged: false,
+      reconcileCommitsManifest: false,
+    });
+    const coordinated = coordinateWorkerPlacementDispatch(harness.service, (_request, run) =>
+      run(),
+    );
+    await coordinated.dispatch(REQUEST);
+    const provisionEntered = createDeferredCore();
+    const nextProvisionEntered = createDeferredCore();
+    const provision = createDeferredCore<typeof harness.ready>();
+    const create = vi.mocked(harness.environments.createWithRequest);
+    create
+      .mockClear()
+      .mockImplementationOnce(async () => {
+        provisionEntered.resolve();
+        return await provision.promise;
+      })
+      .mockImplementation(async () => {
+        nextProvisionEntered.resolve();
+        return await provision.promise;
+      });
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "pending-session",
+        sessionKey: "agent:main:pending-session",
+      })
+      .catch(provisionEntered.reject);
+    await provisionEntered.promise;
+    await expect(coordinated.reclaim(REQUEST)).resolves.toMatchObject({ state: "reclaimed" });
+
+    void coordinated
+      .dispatch({
+        ...REQUEST,
+        sessionId: "new-session",
+        sessionKey: "agent:main:new-session",
+      })
+      .catch(nextProvisionEntered.reject);
+    await nextProvisionEntered.promise;
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(placementStore.get("new-session")).toMatchObject({ state: "provisioning" });
+    expect(placementStore.get("pending-session")).toMatchObject({ state: "provisioning" });
   });
 
   it("releases a failed reclaim before an older provisioning recovery without losing accepted work", async () => {
@@ -76,7 +117,7 @@ describe("worker placement dispatch reclaim", () => {
       expect(await outcome).toEqual(new Error("destroy pending"));
       await olderRecovery;
       expect(placementStore.get(REQUEST.sessionId)?.state).toBe("draining");
-      expect(placementStore.listPendingWorkspaceResults()).toEqual([
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
         expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
       ]);
       expect(harness.log.filter((event) => event === "workspace:reconcile")).toHaveLength(1);
@@ -96,7 +137,7 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(REQUEST)).rejects.toThrow("destroy pending");
 
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([
       expect.objectContaining({ workspaceAcceptedAtMs: expect.any(Number) }),
     ]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -105,9 +146,12 @@ describe("worker placement dispatch reclaim", () => {
     expect(harness.placements.current()).toMatchObject({
       state: "draining",
       workspaceBaseManifestRef: harness.reconciledManifestRef,
-      turnClaim: null,
+      turnClaim: { owner: "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { workspaceAcceptedAtMs: expect.any(Number) },
+    ]);
+    expect(harness.environments.destroy).toHaveBeenCalledTimes(2);
     expect(harness.log).toContain("placement:draining");
     expect(harness.log).toContain("workspace:resume");
   });
@@ -164,14 +208,13 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: MANIFEST_REF,
     });
 
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
-    expect(harness.log.slice(-13)).toEqual([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+    expect(harness.log.slice(-12)).toEqual([
       "placement:draining",
+      "workspace",
       "tunnel:attached",
       "workspace:quiesce",
       "workspace:reconcile",
-      "workspace:verify",
-      "workspace:verify-local",
       "workspace:lease",
       "workspace:verify",
       "workspace:verify-local",
@@ -213,6 +256,48 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.getPlacementMove(REQUEST.sessionId)).toBeUndefined();
   });
 
+  it.each(["stop", "move"])(
+    "finishes %s after authority closes during committed environment destruction",
+    async (operation) => {
+      let authorized = true;
+      const harness = createHarness(database, placementStore, {
+        reconcileChanged: false,
+        reconcileCommitsManifest: false,
+        afterDestroy: () => {
+          authorized = false;
+        },
+      });
+      const active = await harness.service.dispatch(REQUEST);
+      const authorize = () => {
+        if (!authorized) {
+          throw new Error("session access revoked after environment destruction");
+        }
+      };
+      const outcome =
+        operation === "stop"
+          ? harness.service.reclaim(REQUEST, authorize)
+          : harness.service.move(
+              {
+                ...REQUEST,
+                source: {
+                  generation: active.generation,
+                  environmentId: active.environmentId,
+                  ownerEpoch: active.activeOwnerEpoch,
+                },
+                target: { kind: "gateway" },
+              },
+              undefined,
+              authorize,
+            );
+      await expect(outcome).resolves.toMatchObject({
+        state: operation === "stop" ? "reclaimed" : "local",
+        turnClaim: null,
+      });
+      expect(harness.environments.destroy).toHaveBeenCalledOnce();
+      expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
+    },
+  );
+
   it("carries session authorization from move source teardown into destination dispatch", async () => {
     const harness = createHarness(database, placementStore, {
       reconcileChanged: false,
@@ -253,7 +338,7 @@ describe("worker placement dispatch reclaim", () => {
         if (draining?.state !== "draining") {
           throw new Error("move source did not enter draining state");
         }
-        const reconciling = placementStore.startReconcile({
+        const reconciling = await placementStore.startReconcile({
           sessionId: draining.sessionId,
           environmentId: draining.environmentId,
           ownerEpoch: draining.activeOwnerEpoch,
@@ -346,7 +431,7 @@ describe("worker placement dispatch reclaim", () => {
     const harness = createHarness(database, placementStore, { workspacePath });
     const active = await harness.service.dispatch(REQUEST);
 
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       sessionId: active.sessionId,
       sessionKey: active.sessionKey,
       agentId: active.agentId,
@@ -368,7 +453,7 @@ describe("worker placement dispatch reclaim", () => {
       target: { kind: "gateway" },
     });
     expect(begun.placement).toMatchObject({ state: "draining" });
-    placementStore.markWorkspaceResultPending(claim);
+    await placementStore.markWorkspaceResultPending(claim);
 
     const restartedStore = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
     const restarted = createHarness(database, restartedStore, { workspacePath });
@@ -384,8 +469,8 @@ describe("worker placement dispatch reclaim", () => {
     "serializes concurrent failed reclaim back to local (coordinated=%s)",
     async (coordinated) => {
       const harness = createHarness(database, placementStore);
-      const requested = placementStore.startDispatch(REQUEST);
-      const failed = placementStore.fail({
+      const requested = await placementStore.startDispatch(REQUEST);
+      const failed = await placementStore.fail({
         sessionId: REQUEST.sessionId,
         expectedGeneration: requested.generation,
         recoveryError: "device worker is offline",
@@ -417,8 +502,8 @@ describe("worker placement dispatch reclaim", () => {
       if (state === "active") {
         await harness.service.dispatch(REQUEST);
       } else {
-        const requested = placementStore.startDispatch(REQUEST);
-        placementStore.fail({
+        const requested = await placementStore.startDispatch(REQUEST);
+        await placementStore.fail({
           sessionId: REQUEST.sessionId,
           expectedGeneration: requested.generation,
           recoveryError: "dispatch failed",
@@ -476,7 +561,7 @@ describe("worker placement dispatch reclaim", () => {
       stagedResultRef: expect.stringMatching(/^refs\/openclaw\/worker-results\/reclaim-/u),
       totalCount: 1,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
@@ -505,12 +590,12 @@ describe("worker placement dispatch reclaim", () => {
 
     expect(harness.placements.current()).toMatchObject({ workspaceResultConflict: priorConflict });
     expect(harness.reportWorkspaceResultConflict).not.toHaveBeenCalled();
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
 
-  it("retires only the exact unclaimed safe placement generation", () => {
-    const claim = placementStore.claimTurn({
+  it("retires only the exact unclaimed safe placement generation", async () => {
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
       claimId: "retirement-claim",
@@ -523,7 +608,7 @@ describe("worker placement dispatch reclaim", () => {
         expectedGeneration: 0,
       }),
     ).toThrow("changed before retirement");
-    placementStore.releaseTurn(claim);
+    await placementStore.releaseTurn(claim);
     placementStore.retireSessionPlacement({
       sessionId: REQUEST.sessionId,
       expectedState: "local",
@@ -531,8 +616,8 @@ describe("worker placement dispatch reclaim", () => {
     });
     expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
 
-    const requested = placementStore.startDispatch(REQUEST);
-    const failed = placementStore.fail({
+    const requested = await placementStore.startDispatch(REQUEST);
+    const failed = await placementStore.fail({
       sessionId: REQUEST.sessionId,
       expectedGeneration: requested.generation,
       recoveryError: "dispatch failed",
@@ -551,13 +636,13 @@ describe("worker placement dispatch reclaim", () => {
     });
   });
 
-  it("retires a reclaimed placement with its child rows and conflict projection", () => {
+  it("retires a reclaimed placement with its child rows and conflict projection", async () => {
     const harness = createHarness(database, placementStore);
-    const active = harness.placements.seedActive(7);
+    const active = await harness.placements.seedActive(7);
     if (active.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    const claim = placementStore.claimTurn({
+    const claim = await placementStore.claimTurn({
       ...REQUEST,
       owner: {
         kind: "worker",
@@ -567,14 +652,16 @@ describe("worker placement dispatch reclaim", () => {
       claimId: "retirement-worker-claim",
       runId: "retirement-worker-run",
     });
+    await placementStore.markWorkspaceResultPending(claim);
     placementStore.recordWorkspaceResultConflict(claim, {
       paths: ["conflicted.txt"],
       stagedResultRef: `refs/openclaw/worker-results/${claim.claimId}`,
     });
-    placementStore.releaseTurn(claim);
+    await placementStore.acceptWorkspaceResult(claim);
+    await placementStore.completeWorkspaceResultAndReleaseTurn(claim);
 
     const basePack = Buffer.from("retirement workspace base pack");
-    placementStore.beginWorkspaceReconciliation(
+    await placementStore.beginWorkspaceReconciliation(
       {
         sessionId: active.sessionId,
         environmentId: active.environmentId,
@@ -593,25 +680,25 @@ describe("worker placement dispatch reclaim", () => {
         basePack,
       },
     );
-    const draining = placementStore.startDrain({
+    const draining = await placementStore.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = placementStore.startReconcile({
+    const reconciling = await placementStore.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    const reclaimed = placementStore.transition({
+    const reclaimed = await placementStore.transition({
       sessionId: active.sessionId,
       from: "reconciling",
       to: "reclaimed",
       expectedGeneration: reconciling.generation,
     });
-    expect(placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toHaveLength(1);
     expect(placementStore.get(active.sessionId)?.workspaceResultConflict).toBeDefined();
 
     placementStore.retireSessionPlacement({
@@ -621,8 +708,8 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(placementStore.get(active.sessionId)).toBeUndefined();
-    expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
-    placementStore.claimTurn({
+    expect(await placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
+    await placementStore.claimTurn({
       ...REQUEST,
       owner: { kind: "local" },
       claimId: "replacement-local-claim",
@@ -655,7 +742,7 @@ describe("worker placement dispatch reclaim", () => {
   it("claims and cancels a reclaim workspace result atomically", async () => {
     const harness = createHarness(database, placementStore);
     const active = await harness.service.dispatch(REQUEST);
-    const claim = placementStore.claimReclaimWorkspaceResult({
+    const claim = await placementStore.claimReclaimWorkspaceResult({
       ...REQUEST,
       owner: {
         kind: "worker",
@@ -669,24 +756,22 @@ describe("worker placement dispatch reclaim", () => {
     expect(placementStore.get(active.sessionId)?.turnClaim).toMatchObject({
       claimId: claim.claimId,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { sessionId: active.sessionId, claimId: claim.claimId },
     ]);
 
-    expect(placementStore.cancelWorkspaceResultAndReleaseTurn(claim)).toMatchObject({
+    expect(await placementStore.cancelWorkspaceResultAndReleaseTurn(claim)).toMatchObject({
       turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
-  it("releases a failed stop claim so reclaim can be retried", async () => {
+  it("releases a failed stop claim so reclaim can be retried", async ({ command }) => {
     const workspacePath = path.join(root, "retry-workspace");
-    await fs.mkdir(workspacePath);
-    const initialized = await runCommandWithTimeout(
-      ["git", "-C", workspacePath, "init", "--quiet"],
-      { timeoutMs: 10_000 },
-    );
-    expect(initialized.code).toBe(0);
+    const initialized = await command.run("git", ["init", "--quiet", workspacePath], {
+      timeout: 10_000,
+    });
+    expect(initialized.status).toBe(0);
     const harness = createHarness(database, placementStore, {
       reconcileFailureCount: 1,
       workspacePath,
@@ -700,7 +785,7 @@ describe("worker placement dispatch reclaim", () => {
 
     await expect(harness.service.reclaim(request)).rejects.toThrow("workspace conflict");
     expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
@@ -715,7 +800,7 @@ describe("worker placement dispatch reclaim", () => {
         await resume.promise;
         authorize?.();
         beforeDrain?.();
-        const placement = begin();
+        const placement = await begin(authorize);
         return placement.state === "reclaimed"
           ? placement
           : await reclaim({ kind: "local", path: "/gateway/workspace" }, placement, authorize);
@@ -743,7 +828,7 @@ describe("worker placement dispatch reclaim", () => {
         expectedGeneration: reclaimed.generation,
       });
       const replacement = createHarness(database, placementStore, { environmentGeneration: 2 });
-      replacement.placements.seedActive(2);
+      await replacement.placements.seedActive(2);
       replacement.markEnvironmentOwnerEpoch(2);
       const settled = await replacement.service.reclaim(REQUEST);
       expect(settled.environmentId).not.toBe(active.environmentId);
@@ -828,7 +913,7 @@ describe("worker placement dispatch reclaim", () => {
       state: "draining",
       turnClaim: null,
     });
-    expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
     await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
     expect(harness.placements.current()).toMatchObject({
@@ -839,7 +924,7 @@ describe("worker placement dispatch reclaim", () => {
   });
 
   it("keeps a changed result fenced when quiescence fails after apply", async () => {
-    const harness = createHarness(database, placementStore, { leaseFailureCount: 1 });
+    const harness = createHarness(database, placementStore, { leaseFailureCall: 2 });
     await harness.service.dispatch(REQUEST);
 
     await expect(
@@ -854,43 +939,40 @@ describe("worker placement dispatch reclaim", () => {
       state: "draining",
       turnClaim: { owner: "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null, stagedResultRef: null },
     ]);
   });
 
-  it.each([1, 2])(
-    "retries an unchanged result when final fence step %i observes a write",
-    async (verifyFailureCall) => {
-      const priorConflict = {
-        paths: ["data.txt"],
-        stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
-      };
-      const harness = createHarness(database, placementStore, {
-        priorWorkspaceResultConflict: priorConflict,
-        reconcileChanged: false,
-        verifyFailureCall,
-      });
-      await harness.service.dispatch(REQUEST);
-      const request = {
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      };
+  it("retries an unchanged result when the final fence observes a write", async () => {
+    const priorConflict = {
+      paths: ["data.txt"],
+      stagedResultRef: "refs/openclaw/worker-results/prior-conflict",
+    };
+    const harness = createHarness(database, placementStore, {
+      priorWorkspaceResultConflict: priorConflict,
+      reconcileChanged: false,
+      verifyFailurePhase: "before-apply",
+    });
+    await harness.service.dispatch(REQUEST);
+    const request = {
+      sessionId: REQUEST.sessionId,
+      sessionKey: REQUEST.sessionKey,
+      agentId: REQUEST.agentId,
+    };
 
-      await expect(harness.service.reclaim(request)).rejects.toThrow(
-        "workspace changed after reconciliation",
-      );
-      expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
-      expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
+    await expect(harness.service.reclaim(request)).rejects.toThrow(
+      "workspace changed after reconciliation",
+    );
+    expect(harness.placements.current()).toMatchObject({ state: "draining", turnClaim: null });
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
 
-      await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
-      expect(harness.placements.current()).toMatchObject({
-        state: "reclaimed",
-        workspaceResultConflict: priorConflict,
-      });
-    },
-  );
+    await expect(harness.service.reclaim(request)).resolves.toMatchObject({ state: "reclaimed" });
+    expect(harness.placements.current()).toMatchObject({
+      state: "reclaimed",
+      workspaceResultConflict: priorConflict,
+    });
+  });
 
   it("keeps a committed failed stop result fenced for recovery", async () => {
     const priorConflict = {
@@ -899,7 +981,9 @@ describe("worker placement dispatch reclaim", () => {
     };
     const harness = createHarness(database, placementStore, {
       priorWorkspaceResultConflict: priorConflict,
-      verifyFails: true,
+      reconcileCommitsManifest: false,
+      reconcileCommitsManifestOnApply: true,
+      verifyFailurePhase: "after-apply",
     });
     await harness.service.dispatch(REQUEST);
 
@@ -916,7 +1000,7 @@ describe("worker placement dispatch reclaim", () => {
       workspaceBaseManifestRef: harness.reconciledManifestRef,
       turnClaim: { owner: "worker" },
     });
-    expect(placementStore.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placementStore.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null, stagedResultRef: null },
     ]);
   });
@@ -928,17 +1012,18 @@ describe("worker placement dispatch reclaim", () => {
     const resume = createDeferredCore();
     const identities = [REQUEST.sessionKey, REQUEST.sessionId];
     const harness = createHarness(database, placementStore, {
+      workspacePath: root,
       reconcileChanged: false,
       reconcileCommitsManifest: false,
       runReclaimBarrier: async ({ authorize, beforeDrain, begin, reclaim }) => {
         queued.resolve();
-        return await runExclusiveSessionLifecycleMutation({
+        return await runExclusiveSessionLifecycleMutation("placement-reclaim", {
           scope,
           identities,
           run: async () => {
             authorize?.();
             beforeDrain?.();
-            const placement = begin();
+            const placement = await begin(authorize);
             return placement.state === "reclaimed"
               ? placement
               : await reclaim({ kind: "local", path: root }, placement, authorize);
@@ -947,23 +1032,13 @@ describe("worker placement dispatch reclaim", () => {
       },
     });
     await harness.service.dispatch(REQUEST);
-    const owner = runExclusiveSessionLifecycleMutation({
+    const owner = runExclusiveSessionLifecycleMutation("placement-reclaim", {
       scope,
       identities,
       run: async () => {
         locked.resolve();
         await resume.promise;
-        let timer: ReturnType<typeof setTimeout> | undefined;
-        try {
-          return await Promise.race([
-            harness.service.reclaim(REQUEST),
-            new Promise<"blocked">((resolve) => {
-              timer = setTimeout(() => resolve("blocked"), 1_000);
-            }),
-          ]);
-        } finally {
-          clearTimeout(timer);
-        }
+        return await harness.service.reclaim(REQUEST);
       },
     });
     await locked.promise;

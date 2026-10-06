@@ -1,14 +1,13 @@
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profile.js";
-import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
-import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
-import { sanitizeCodexToolResponse } from "./tool-progress-normalization.js";
+import type { CodexDynamicToolCallResponse } from "./protocol.js";
+import { sanitizeCodexAgentEventRecord } from "./tool-progress-normalization.js";
 
 export function toTranscriptToolResult(
   response: CodexDynamicToolCallResponse,
 ): Record<string, unknown> {
-  const sanitized = sanitizeCodexToolResponse(response);
+  const sanitized = sanitizeCodexAgentEventRecord({ ...response });
   const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
   const result: Record<string, unknown> = {
     ...sanitized,
@@ -42,35 +41,6 @@ function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
   const label = rawType ? truncateUtf16Safe(rawType, 80) : "unknown";
   const suffix = rawType.length > 80 ? "..." : "";
   return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
-}
-
-type CodexDynamicToolExecutionIdentity = Pick<
-  CodexDynamicToolCallParams,
-  "threadId" | "turnId" | "callId"
->;
-
-export function createCodexDynamicToolExecutionRegistry() {
-  const executions = new Map<string, Promise<CodexDynamicToolRuntimeResponse>>();
-  const keyFor = (call: CodexDynamicToolExecutionIdentity) =>
-    JSON.stringify([call.threadId, call.turnId, call.callId]);
-
-  return {
-    get(call: CodexDynamicToolExecutionIdentity) {
-      return executions.get(keyFor(call));
-    },
-    claim(
-      call: CodexDynamicToolExecutionIdentity,
-      start: () => Promise<CodexDynamicToolRuntimeResponse>,
-    ) {
-      const existing = executions.get(keyFor(call));
-      if (existing) {
-        return { execution: existing, replayed: true } as const;
-      }
-      const execution = start();
-      executions.set(keyFor(call), execution);
-      return { execution, replayed: false } as const;
-    },
-  };
 }
 
 export function resolveCodexDynamicToolDirectNames(

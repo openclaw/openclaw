@@ -1,14 +1,9 @@
-import {
-  defineLegacyConfigMigration,
-  getRecord,
-  type LegacyConfigMigrationSpec,
-} from "../../../config/legacy.shared.js";
+import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[] = [
-  defineLegacyConfigMigration({
+  {
     id: "skills.workshop.autonomous.enabled->mode",
-    describe: "Migrate Skill Workshop autonomy to its three-position mode.",
     legacyRules: [
       {
         path: ["skills", "workshop", "autonomous", "enabled"],
@@ -32,10 +27,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
       }
       delete autonomous.enabled;
     },
-  }),
-  defineLegacyConfigMigration({
+  },
+  {
     id: "skills.workshop.allowSymlinkTargetWrites-retired",
-    describe: "Remove the retired Skill Workshop symlink write option.",
     legacyRules: [
       {
         path: ["skills", "workshop", "allowSymlinkTargetWrites"],
@@ -50,5 +44,5 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SKILLS: LegacyConfigMigrationSpec[
         );
       }
     },
-  }),
+  },
 ];

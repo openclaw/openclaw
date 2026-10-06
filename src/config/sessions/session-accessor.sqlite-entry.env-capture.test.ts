@@ -29,19 +29,21 @@ vi.mock("node:sqlite", () => ({
   },
 }));
 vi.mock("../../auto-reply/internal-turn-source.js", () => ({}));
-vi.mock("../../infra/kysely-sync.js", () => ({}));
 vi.mock("../../infra/sqlite-number.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly-scope.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-readonly.js", () => ({}));
-vi.mock("../../state/openclaw-agent-db.js", () => ({
+vi.mock("../../state/openclaw-agent-db-transaction.js", () => ({
+  runOpenClawAgentWriteWithYieldingAdmission: boundary.commit,
+}));
+vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-agent-db.js")>()),
   getOpenClawAgentDatabaseIfOpen: () => undefined,
   isIncognitoOpenClawAgentSqlitePath: () => false,
   openOpenClawAgentDatabase: boundary.open,
   resolveOpenClawAgentSqlitePath: (options: OpenClawAgentDatabaseOptions) =>
     options.path ?? `${options.env?.OPENCLAW_STATE_DIR}/${options.agentId}.sqlite`,
-  runOpenClawAgentWriteTransaction: boundary.commit,
-  withOpenClawAgentDatabaseAsync: async (
+  withOpenClawAgentDatabaseRuntime: async (
     _options: OpenClawAgentDatabaseOptions,
     run: () => unknown,
   ) => await run(),
@@ -72,7 +74,6 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 vi.mock("./session-accessor.sqlite-normalize.js", () => ({}));
 vi.mock("./session-accessor.sqlite-scope.js", () => ({
-  cloneSessionEntry: (entry: InternalSessionEntry) => structuredClone(entry),
   resolveSqliteScope: (scope: ResolvedSqliteScope) => scope,
   resolveSqliteTranscriptArchiveDirectory: () => "/synthetic/archive",
   runExclusiveSqliteSessionWrite: boundary.queue,

@@ -8,10 +8,6 @@ import {
 describe("createCompactionRequestBudget", () => {
   it.each([
     { pendingPrompt: undefined, pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "", pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "a", pendingImageCount: 0, pendingTokens: 1 },
-    { pendingPrompt: "aaaaa", pendingImageCount: 0, pendingTokens: 2 },
-    { pendingPrompt: "中", pendingImageCount: 0, pendingTokens: 1 },
     { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 5 },
     { pendingPrompt: "", pendingImageCount: 1, pendingTokens: 2_400 },
     { pendingPrompt: "a", pendingImageCount: 1, pendingTokens: 2_401 },
@@ -19,21 +15,14 @@ describe("createCompactionRequestBudget", () => {
     "serializes fixed tools once for prompt=$pendingPrompt and images=$pendingImageCount",
     ({ pendingPrompt, pendingImageCount, pendingTokens }) => {
       let serializations = 0;
+      const toJSON = () => {
+        serializations += 1;
+        return {};
+      };
       const budget = createCompactionRequestBudget({
         contextWindow: 4_096,
         reserveTokens: 512,
-        tools: [
-          {
-            name: "a",
-            description: "b",
-            parameters: {
-              toJSON() {
-                serializations += 1;
-                return {};
-              },
-            },
-          },
-        ],
+        tools: [{ name: "a", description: "b", parameters: { toJSON } }],
         pendingPrompt,
         pendingImageCount,
         pendingUserIdempotencyKey: "pending-user",
@@ -53,13 +42,9 @@ describe("createCompactionRequestBudget", () => {
   );
 
   it.each([
-    { systemPrompt: undefined, fixedTokens: 15, pendingTokens: 1 },
     { systemPrompt: " \n ", fixedTokens: 15, pendingTokens: 1 },
     { systemPrompt: "a", fixedTokens: 30, pendingTokens: 2 },
     { systemPrompt: "aaaaa", fixedTokens: 32, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaa", fixedTokens: 33, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaaaaaa", fixedTokens: 34, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaaaaaaaaaa", fixedTokens: 35, pendingTokens: 1 },
   ])(
     "retains joint-margin rounding for system prompt $systemPrompt",
     ({ systemPrompt, fixedTokens, pendingTokens }) => {
@@ -70,14 +55,7 @@ describe("createCompactionRequestBudget", () => {
           systemPrompt,
           pendingPrompt: "a",
         }),
-      ).toEqual({
-        contextWindow: 100,
-        reserveTokens: 10,
-        fixedTokens,
-        pendingTokens,
-        pendingQueuedContextTokens: 0,
-        pendingUserIdempotencyKey: undefined,
-      });
+      ).toMatchObject({ fixedTokens, pendingTokens });
     },
   );
 

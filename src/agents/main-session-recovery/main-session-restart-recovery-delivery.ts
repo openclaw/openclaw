@@ -5,8 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
   type DeliveryContext,
@@ -74,7 +74,6 @@ export function isRestartRecoveryDeliveryCurrent(params: RestartRecoveryDelivery
   const current = loadSessionEntryReadOnly(params);
   return (
     current?.sessionId === params.sessionId &&
-    current.status === "running" &&
     current.abortedLastRun !== true &&
     current.restartRecoveryDeliveryRunId === params.recoveryRunId &&
     // A retained route is not permission for an automatic resumption notice.

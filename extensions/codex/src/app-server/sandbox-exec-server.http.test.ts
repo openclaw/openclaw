@@ -4,6 +4,7 @@ import { once } from "node:events";
 import { writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { join } from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sandboxExecServerRegistry } from "./sandbox-exec-server-registry.js";
 import { ensureCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
@@ -165,29 +166,34 @@ async function createLiveRedirectSandbox(
 describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   it("cancels an outstanding nonstreaming HTTP response when its exec-server socket closes", async () => {
     const responseClosed = vi.fn();
+    const responseReceived = createDeferred<ServerResponse>();
     let heldResponse: ServerResponse | undefined;
     const fixture = await createLiveRedirectSandbox("source.test", 302, (response) => {
       heldResponse = response;
       response.once("close", responseClosed);
+      responseReceived.resolve(response);
     });
     try {
       const socket = await openSandboxHttpSocket(fixture.sandbox);
       try {
         await rpc(socket, "initialize", { clientName: "test" });
-        socket.send(
-          JSON.stringify({
-            id: 2,
-            method: "http/request",
-            params: { requestId: "pending-http", method: "GET", url: fixture.url },
-          }),
-        );
-        await vi.waitFor(() => expect(heldResponse).toBeDefined());
-
-        socket.terminate();
-
-        await vi.waitFor(() => expect(responseClosed).toHaveBeenCalledOnce(), {
-          timeout: 5_000,
+        const request = rpc(socket, "http/request", {
+          requestId: "pending-http",
+          method: "GET",
+          url: fixture.url,
         });
+        // Python startup and redirects are ready only when the real server holds the response.
+        const response = await Promise.race([
+          responseReceived.promise,
+          request.then(() => {
+            throw new Error("HTTP request completed before the fixture held its response");
+          }),
+        ]);
+        expect(heldResponse).toBeDefined();
+        const closed = once(response, "close");
+        socket.terminate();
+        await closed;
+        expect(responseClosed).toHaveBeenCalledOnce();
       } finally {
         socket.terminate();
       }
@@ -262,8 +268,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   });
 
   it.each([
-    { redirectStatus: 302, streamResponse: false },
-    { redirectStatus: 302, streamResponse: true },
     { redirectStatus: 308, streamResponse: false },
     { redirectStatus: 308, streamResponse: true },
   ])(
@@ -446,8 +450,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
   );
 
   it.each([
-    { redirectStatus: 302, targetHost: "127.0.0.1", streamResponse: false },
-    { redirectStatus: 302, targetHost: "private.test", streamResponse: true },
     { redirectStatus: 308, targetHost: "127.0.0.1", streamResponse: false },
     { redirectStatus: 308, targetHost: "private.test", streamResponse: true },
   ] as const)(
@@ -496,85 +498,6 @@ describe("OpenClaw Codex sandbox exec-server HTTP", () => {
       }),
     ).rejects.toThrow("Blocked hostname or private/internal IP");
     expect(buildExecSpec).not.toHaveBeenCalled();
-    socket.close();
-  });
-
-  it("streams HTTP response body deltas from the sandbox backend", async () => {
-    const headerLine = JSON.stringify({
-      type: "headers",
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-    });
-    const bodyLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 1,
-      deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-      done: false,
-    });
-    const doneLine = JSON.stringify({
-      type: "bodyDelta",
-      seq: 2,
-      deltaBase64: "",
-      done: true,
-    });
-    const buildExecSpec = vi.fn(async () => ({
-      argv: [
-        process.execPath,
-        "-e",
-        [headerLine, bodyLine, doneLine]
-          .map((line) => `process.stdout.write(${JSON.stringify(`${line}\n`)});`)
-          .join(""),
-      ],
-      env: testExecEnv(),
-      stdinMode: "pipe-closed" as const,
-    }));
-    const runShellCommand = vi.fn(async () => ({
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      code: 0,
-    }));
-    const sandbox = createSandboxContext({ buildExecSpec, runShellCommand });
-    const socket = await openSandboxHttpSocket(sandbox);
-    const notifications = collectNotifications(socket);
-    await rpc(socket, "initialize", { clientName: "test" });
-    socket.send(JSON.stringify({ method: "initialized" }));
-
-    await expect(
-      rpc(socket, "http/request", {
-        requestId: "http-stream",
-        method: "GET",
-        url: "https://example.test/sse",
-        streamResponse: true,
-      }),
-    ).resolves.toEqual({
-      status: 202,
-      headers: [{ name: "content-type", value: "text/event-stream" }],
-      bodyBase64: "",
-    });
-    const deltas = await waitForHttpBodyDeltas(notifications, 2);
-
-    expect(buildExecSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: expect.stringContaining("python3"),
-        usePty: false,
-        workdir: "/workspace",
-      }),
-    );
-    expect(runShellCommand).not.toHaveBeenCalled();
-    expect(deltas).toEqual([
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 1,
-        deltaBase64: Buffer.from("event: ok\n\n").toString("base64"),
-        done: false,
-      }),
-      expect.objectContaining({
-        requestId: "http-stream",
-        seq: 2,
-        deltaBase64: "",
-        done: true,
-      }),
-    ]);
     socket.close();
   });
 

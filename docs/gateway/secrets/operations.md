@@ -68,7 +68,7 @@ Behavior:
 - A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
 - Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
-- Channel health and status keep cold accounts visible as configured but unavailable, alongside healthy accounts. Read-only inspection does not resolve inactive credentials or probe cold accounts. `/healthz` still reports Gateway liveness; `/readyz` may report the affected channel as failing until it recovers. Restore the secret, then run `openclaw secrets reload`.
+- Channel health and status keep cold accounts visible as configured but unavailable, alongside healthy accounts. Read-only inspection does not resolve inactive credentials or check cold accounts. `/healthz` still reports Gateway liveness; `/readyz` may report the affected channel as failing until it recovers. Restore the secret, then run `openclaw secrets reload`.
 
 ## Command-path resolution
 
@@ -135,6 +135,8 @@ If you save a plan instead of applying during `configure`, apply that saved plan
     - Unresolved refs.
     - Precedence shadowing (SQLite auth profiles taking priority over `openclaw.json` refs).
     - Store residue (a stored name still has an equivalent plaintext value in config).
+
+    Initially missing generated `models.json` files are skipped. When reading an existing file, audit enforces a 5 MiB limit and reports leaf symlinks, non-regular files, and read or parse failures as `REF_UNRESOLVED`. Parse diagnostics identify the file without echoing its contents.
 
     Exec note: by default, audit skips exec SecretRef resolvability checks to avoid command side effects. Use `openclaw secrets audit --allow-exec` to execute exec providers during audit.
 

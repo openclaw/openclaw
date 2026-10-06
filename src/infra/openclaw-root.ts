@@ -1,10 +1,7 @@
-// Resolves the OpenClaw package root from runtime and package metadata.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPluginCache } from "../plugins/plugin-cache.js";
 import { openClawRootFs, openClawRootFsSync } from "./openclaw-root.fs.runtime.js";
-
-const CORE_PACKAGE_NAMES = new Set(["openclaw"]);
 
 type PackageRootOptions = { cwd?: string; argv1?: string; moduleUrl?: string };
 
@@ -85,7 +82,7 @@ function readPackageNameSync(dir: string): string | null {
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name === "openclaw") {
       return current;
     }
   }
@@ -95,7 +92,7 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
-    if (name && CORE_PACKAGE_NAMES.has(name)) {
+    if (name === "openclaw") {
       return current;
     }
   }
@@ -129,7 +126,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
   if (cached) {
     return [...cached];
   }
-  const normalized = path.resolve(argv1);
+  const normalized = cacheKey;
   const candidates: string[] = [];
 
   // Resolve symlinks for version managers (nvm, fnm, n, Homebrew/Linuxbrew)
@@ -159,7 +156,7 @@ function candidateDirsFromArgv1(argv1: string): string[] {
 
 export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Promise<string | null> {
   const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
+  const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey);
   if (cached?.all) {
@@ -187,7 +184,7 @@ export async function resolveOpenClawPackageRoot(opts: PackageRootOptions): Prom
 // source-checkout cwd that still has them.
 export function resolveOpenClawPackageRootsSync(opts: PackageRootOptions): string[] {
   const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
+  const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey)?.all;
   if (cached) {
@@ -208,7 +205,7 @@ export function resolveOpenClawPackageRootsSync(opts: PackageRootOptions): strin
 
 export function resolveOpenClawPackageRootSync(opts: PackageRootOptions): string | null {
   const candidates = buildCandidates(opts);
-  const cacheKey = createPackageRootCacheKey(candidates);
+  const cacheKey = candidates.join("\0");
   const searches = getPluginCache().sdk.packageSearches;
   const cached = searches.get(cacheKey);
   if (cached?.all) {
@@ -251,19 +248,5 @@ function buildCandidates(opts: PackageRootOptions): string[] {
 }
 
 function dedupeCandidates(candidates: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const candidate of candidates) {
-    const resolved = path.resolve(candidate);
-    if (seen.has(resolved)) {
-      continue;
-    }
-    seen.add(resolved);
-    deduped.push(resolved);
-  }
-  return deduped;
-}
-
-function createPackageRootCacheKey(candidates: readonly string[]): string {
-  return candidates.join("\0");
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
 }

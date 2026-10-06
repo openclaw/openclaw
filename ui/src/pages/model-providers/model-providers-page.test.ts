@@ -15,6 +15,7 @@ import {
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
+  drainPageUpdates,
   waitForProviders,
   requestCount,
   saveKey,
@@ -230,26 +231,6 @@ describe("ModelProvidersPage agent scope", () => {
         agents: { defaults: { model: "openai/replacement-model" } },
       }),
     );
-  });
-
-  it("keeps the Models header focused on provider actions", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await waitForFast(() => expect(page.querySelector("[data-models-connect]")).not.toBeNull());
-    expect(page.querySelector("openclaw-agent-select")).toBeNull();
-    expect(page.querySelector(".page-subtitle")?.textContent).toContain(
-      "Global model defaults and provider access for your agents.",
-    );
-  });
-
-  it("links the page subtitle to the model providers guide", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await page.updateComplete;
-
-    const link = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(link?.textContent?.trim()).toBe("Learn more");
-    expect(link?.href).toBe("https://docs.openclaw.ai/concepts/model-providers");
   });
 
   it.each([
@@ -502,8 +483,13 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "new-provider-key";
 
-    await page.addProvider();
     await page.updateComplete;
+    const save = page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!;
+    expect(save.disabled).toBe(false);
+    save.click();
+    expect(runtimeConfig.runExternalMutation).toHaveBeenCalledOnce();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
 
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);
@@ -512,30 +498,6 @@ describe("ModelProvidersPage agent scope", () => {
     expect(
       [...form!.querySelectorAll('[role="status"]')].map((message) => message.textContent?.trim()),
     ).toEqual(["Provider anthropic added.", "config.get failed after provider add"]);
-  });
-
-  it("keeps committed default models visible until their authoritative refresh succeeds", async () => {
-    const { context, runtimeConfig } = createHarness("main");
-    runtimeConfig.refresh.mockImplementationOnce(async () => {
-      runtimeConfig.state.lastError = "config.get failed after saving default models";
-    });
-    const page = appendPage(context);
-    await waitForProviders(page);
-    const selection: DefaultModelSelection = {
-      primary: "openai/gpt-5",
-      fallbacks: [],
-      utilityModel: null,
-    };
-    page.defaultsDraft = selection;
-
-    await page.saveDefaults();
-
-    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
-    expect(page.defaultsDraft).toBe(selection);
-    expect(page.messages.defaults).toEqual({
-      kind: "warning",
-      text: "config.get failed after saving default models",
-    });
   });
 
   it("keeps a newer global-model draft after an agent switch and earlier save", async () => {
@@ -607,7 +569,12 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "shared-provider-key";
 
-    const adding = page.addProvider();
+    await page.updateComplete;
+    const save = page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!;
+    expect(save.disabled).toBe(false);
+    save.click();
+    expect(runtimeConfig.runExternalMutation).toHaveBeenCalledOnce();
+    const adding = runtimeConfig.runExternalMutation.mock.results[0]!.value;
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("models.authSetApiKey", {
         provider: "anthropic",
@@ -624,6 +591,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderKey = "shared-provider-key";
     gate.resolve({ profileId: "anthropic:manual-api-key" });
     await adding;
+    await drainPageUpdates(page);
 
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);

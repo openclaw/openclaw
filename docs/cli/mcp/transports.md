@@ -10,6 +10,14 @@ read_when:
 These are the transport shapes a saved MCP server definition can use, and the
 OAuth workflow that HTTP transports can authenticate with.
 
+When Codex owns the MCP connection, explicit `connectionTimeoutMs` values control
+startup, including initialization and initial tool discovery, and
+`requestTimeoutMs` values control tool calls. OpenClaw preserves millisecond
+precision when converting these values to Codex's seconds-based settings; unset
+values keep Codex's defaults. The `supportsParallelToolCalls` hint is also
+forwarded. Codex can additionally run tools with a `readOnlyHint` annotation in
+parallel.
+
 ## Stdio transport
 
 Launches a local child process and communicates over stdin/stdout.
@@ -72,6 +80,11 @@ Example:
 ```
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
+
+If a legacy SSE message endpoint returns HTTP 404, or a stateful Streamable HTTP
+session expires, OpenClaw retires that connection and reconnects on the next
+discovery. The failed call is reported without replaying it, because a tool may
+have already changed state before the connection failed.
 
 ## OAuth workflow
 

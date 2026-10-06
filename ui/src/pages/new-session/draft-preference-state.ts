@@ -141,14 +141,6 @@ export class DraftPreferenceState {
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
-    const snapshot = this.read();
-    if (
-      catalog.isTarget(snapshot.data) ||
-      snapshot.data?.group ||
-      snapshot.pendingPlacementSessionKey
-    ) {
-      return null;
-    }
     return this.preferenceModeValue === "remote"
       ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
       : loadNewSessionPreference(this.read().gatewayUrl, agentId);
@@ -244,7 +236,7 @@ export class DraftPreferenceState {
       }
       // Model controls share persistence, but do not replace the submitted checkout intent.
       const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel"].includes(field),
+        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
       );
       const selection = changesPlacement ? {} : writer.selection;
       writer.selection = selection;

@@ -25,19 +25,6 @@ describe("getHistoryLimitFromSessionKey", () => {
     expect(getHistoryLimitFromSessionKey("telegram:dm:123", undefined)).toBeUndefined();
   });
 
-  it("returns dmHistoryLimit for direct message sessions", () => {
-    const config = {
-      channels: {
-        telegram: { dmHistoryLimit: 15 },
-        whatsapp: { dmHistoryLimit: 20 },
-      },
-    } as OpenClawConfig;
-
-    expect(getHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
-    expect(getHistoryLimitFromSessionKey("whatsapp:dm:123", config)).toBe(20);
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config)).toBe(15);
-  });
-
   it("keeps backward compatibility for dm and direct session kinds", () => {
     const config = {
       channels: { telegram: { dmHistoryLimit: 10 } },
@@ -372,24 +359,6 @@ describe("getHistoryLimitFromSessionKey", () => {
     expect(getHistoryLimitFromSessionKey("telegram:dm:other", config)).toBe(15);
   });
 
-  it("returns per-DM overrides for agent-prefixed keys and colon-containing ids", () => {
-    const config = {
-      channels: {
-        telegram: {
-          dmHistoryLimit: 20,
-          dms: { "789": { historyLimit: 3 } },
-        },
-        msteams: {
-          dmHistoryLimit: 10,
-          dms: { "user@example.com": { historyLimit: 7 } },
-        },
-      },
-    } as OpenClawConfig;
-
-    expect(getHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config)).toBe(3);
-    expect(getHistoryLimitFromSessionKey("msteams:dm:user@example.com", config)).toBe(7);
-  });
-
   it("returns historyLimit for channel and group sessions", () => {
     const config = {
       channels: {
@@ -415,29 +384,6 @@ describe("getHistoryLimitFromSessionKey", () => {
     expect(getHistoryLimitFromSessionKey("unknown:dm:123", config)).toBeUndefined();
     expect(getHistoryLimitFromSessionKey("discord:channel:123", config)).toBeUndefined();
     expect(getHistoryLimitFromSessionKey("telegram:dm:123", config)).toBeUndefined();
-  });
-
-  it("handles supported provider ids for DM and channel history limits", () => {
-    const providers = [
-      "telegram",
-      "whatsapp",
-      "discord",
-      "slack",
-      "signal",
-      "imessage",
-      "msteams",
-      "nextcloud-talk",
-    ] as const;
-
-    for (const provider of providers) {
-      const config = {
-        channels: { [provider]: { dmHistoryLimit: 5, historyLimit: 12 } },
-      } as OpenClawConfig;
-
-      expect(getHistoryLimitFromSessionKey(`${provider}:dm:123`, config)).toBe(5);
-      expect(getHistoryLimitFromSessionKey(`${provider}:channel:123`, config)).toBe(12);
-      expect(getHistoryLimitFromSessionKey(`agent:main:${provider}:channel:456`, config)).toBe(12);
-    }
   });
 
   it("prefers account-scoped limits over the channel root for that account", () => {

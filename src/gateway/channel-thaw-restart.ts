@@ -1,5 +1,6 @@
 // Host-thaw channel restart over the public ChannelManager surface.
 import type { ChannelId } from "../channels/plugins/index.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import type { ChannelManager } from "./server-channels.js";
 
 type ThawRestartManager = Pick<
@@ -26,18 +27,6 @@ function snapshotRunningTargets(manager: ThawRestartManager): ThawRestartTarget[
   );
 }
 
-function dedupeTargets(targets: readonly ThawRestartTarget[]): ThawRestartTarget[] {
-  const seen = new Set<string>();
-  return targets.filter((target) => {
-    const key = `${target.channelId}:${target.accountId}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 /**
  * Restarts running listed, non-manually-stopped channel accounts after a host
  * thaw. Dead sockets from a freeze otherwise wait for the slow health sweep.
@@ -49,7 +38,10 @@ export async function restartRunningChannelAccounts(
 ): Promise<ThawRestartTarget[]> {
   const targets =
     selection.kind === "new-thaw"
-      ? dedupeTargets([...(selection.pendingTargets ?? []), ...snapshotRunningTargets(manager)])
+      ? dedupeByKey(
+          [...(selection.pendingTargets ?? []), ...snapshotRunningTargets(manager)],
+          (target) => `${target.channelId}:${target.accountId}`,
+        )
       : [...selection.targets];
   const failedTargets: ThawRestartTarget[] = [];
   for (const [index, target] of targets.entries()) {

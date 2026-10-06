@@ -27,18 +27,19 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { dumpGitBackupDatabase } from "../../snapshot/git-backup-codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import * as stateLease from "../../state/openclaw-state-lease.js";
 import {
   readUserGitHubConnection,
   resolvePersonalGitHubOwner,
   updateUserGitHubConnection,
 } from "../../state/user-github-connections.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForEmail,
   getUserProfileListItem,
-  linkEmail,
-  setUserProfileRole,
 } from "../../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -236,6 +237,7 @@ beforeEach(async () => {
     };
   });
   lifecycle = createGitHubOAuthLifecycle({
+    scheduler: createTestGatewayScheduler(),
     getConfig: () => config,
     getPersistedConfig: () => config,
     warn: vi.fn(),
@@ -453,7 +455,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       await state.writeConfig(config);
       if (kind === "pat") {
         const secretName = "github-setup-11111111111111111111111111111111";
-        writeSecretStoreEntry({
+        await writeSecretStoreEntry({
           scope: { kind: "team" },
           name: secretName,
           value: tokens.accessToken,
@@ -530,7 +532,7 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       ["tools.github.authorize.start", "operator.admin"],
       ["tools.github.configure", "operator.admin"],
       ["secrets.store.set", "operator.admin"],
-      ["sessions.github.publish", "operator.write"],
+      ["sessions.github.publish", "operator.sessions.write"],
     ] as const) {
       const denied = await rpc(alice, method, {
         sessionKey: "agent:main:main",
@@ -843,11 +845,11 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
     });
     expect(dir).toContain(path.join("credentials", "github", "personal"));
     expect((await fs.stat(dir)).mode & 0o077).toBe(0);
-    expect(listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
-    expect(readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
+    expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toEqual([]);
+    expect(await readSecretStoreExecEnvironment({ includeSecretSentinels: true })).toEqual({});
     expect(listGitHubOAuthRecords()).toEqual([]);
     expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
-    purgeExpiredSecretStoreEntries();
+    await purgeExpiredSecretStoreEntries();
     await cleanupRetiredManagedGitHubProfiles({ config });
     expect(await fs.readFile(path.join(dir, "hosts.yml"), "utf8")).toContain(tokens.accessToken);
     const database = openOpenClawStateDatabase();
@@ -863,6 +865,55 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       /synthetic-access|synthetic-refresh|ghp_|credentials/,
     );
   });
+
+  it("skips maintenance leases for fresh personal connections", async () => {
+    const connection = await connect();
+    const lease = vi.spyOn(stateLease, "withOpenClawStateLease");
+    try {
+      await lifecycle.personal.maintain();
+      expect(lease).not.toHaveBeenCalled();
+      expect(network.refresh).not.toHaveBeenCalled();
+      expect(readUserGitHubConnection(owner())).toEqual(connection);
+    } finally {
+      lease.mockRestore();
+    }
+  });
+
+  it.each(["fresh", "disconnected"])(
+    "rechecks %s credentials after acquiring the refresh lease",
+    async (kind) => {
+      const connected = await connect();
+      expireAccessToken();
+      const current =
+        kind === "fresh"
+          ? connected
+          : {
+              ...connected,
+              selection: { kind: "disconnected" as const },
+            };
+      const acquire = stateLease.withOpenClawStateLease;
+      const lease = vi
+        .spyOn(stateLease, "withOpenClawStateLease")
+        .mockImplementation((options, run) =>
+          acquire(options, async (owned) => {
+            updateUserGitHubConnection(
+              owner(),
+              () => current,
+              () => owned.assertOwned(),
+            );
+            return run(owned);
+          }),
+        );
+      try {
+        await lifecycle.personal.refresh(owner());
+        expect(lease).toHaveBeenCalled();
+        expect(network.refresh).not.toHaveBeenCalled();
+        expect(readUserGitHubConnection(owner())).toEqual(current);
+      } finally {
+        lease.mockRestore();
+      }
+    },
+  );
 
   it("preserves rotated tokens across merge and local materialization failure without preserving old action authority", async () => {
     const connection = await connect();

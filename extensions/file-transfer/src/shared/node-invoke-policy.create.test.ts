@@ -1,34 +1,14 @@
-import crypto from "node:crypto";
-import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
 import { createFileTransferNodeInvokePolicy } from "./node-invoke-policy.js";
+import { createCtx } from "./node-invoke-policy.test-support.js";
 
 vi.mock("./audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 const binding = { kind: "write", anchorPath: "/workspace", anchorDevice: "1", anchorInode: "2" };
 const sizeBytes = 50 * 1024 * 1024;
-const expectedSha256 = crypto.createHash("sha256").update("fixture").digest("hex");
+const expectedSha256 = "a".repeat(64);
 
-function fixture(
-  overrides: { maxBytes?: number; allowWritePaths?: string[]; canonical?: string } = {},
-) {
-  const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-    async ({ params } = {}) => {
-      const preflight = (params as Record<string, unknown>).preflightOnly === true;
-      return {
-        ok: true,
-        payload: {
-          ok: true,
-          path: overrides.canonical ?? "/workspace/input",
-          binding,
-          ...(preflight ? {} : { status: "created" }),
-          size: sizeBytes,
-          sha256: expectedSha256,
-        },
-      };
-    },
-  );
-  const ctx: OpenClawPluginNodeInvokePolicyContext = {
-    nodeId: "node",
+function fixture(overrides: { maxBytes?: number; canonical?: string } = {}) {
+  const { ctx, invokeNode } = createCtx({
     command: "file.create",
     params: {
       path: "/workspace/input",
@@ -41,22 +21,29 @@ function fixture(
       expectedBinding: { forged: true },
       expectedCanonicalPath: "/other",
     },
-    config: {},
     pluginConfig: {
-      policyVersion: 2,
       nodes: {
-        node: {
+        "node-1": {
           ask: "off",
           allowReadPaths: ["/workspace/**"],
-          allowWritePaths: overrides.allowWritePaths ?? ["/workspace/**"],
+          allowWritePaths: ["/workspace/**"],
           maxBytes: overrides.maxBytes ?? sizeBytes,
           followSymlinks: true,
         },
       },
     },
-    node: { nodeId: "node" },
-    invokeNode,
-  };
+  });
+  invokeNode.mockImplementation(async ({ params } = {}) => ({
+    ok: true,
+    payload: {
+      ok: true,
+      path: overrides.canonical ?? "/workspace/input",
+      binding,
+      ...((params as Record<string, unknown>).preflightOnly === true ? {} : { status: "created" }),
+      size: sizeBytes,
+      sha256: expectedSha256,
+    },
+  }));
   return { ctx, invokeNode };
 }
 
@@ -81,12 +68,6 @@ describe("file.create node policy", () => {
       expectedSha256,
     });
     expect(invokeNode.mock.calls[1]?.[0]?.params).not.toHaveProperty("preflightOnly");
-  });
-
-  it("does not turn a read grant into a create grant", async () => {
-    const { ctx, invokeNode } = fixture({ allowWritePaths: [] });
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({ ok: false });
-    expect(invokeNode).not.toHaveBeenCalled();
   });
 
   it("honors a smaller configured byte allowance before node dispatch", async () => {

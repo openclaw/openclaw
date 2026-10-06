@@ -31,13 +31,23 @@ import {
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
+import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
+
+export { resolveModelAuthPolicy } from "./model-auth-policy.js";
+
+export function resolveServiceTiers(
+  ctx: ProviderFastModePolicyContext,
+): readonly string[] | undefined {
+  return ctx.runtimeId === "openclaw" ? resolveOpenAIModelServiceTiers(ctx) : undefined;
+}
 
 export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): boolean | undefined {
   if (!ctx.api || !ctx.baseUrl || ctx.runtimeId !== "openclaw") {
     return undefined;
   }
   return (
+    (resolveOpenAIModelServiceTiers(ctx)?.includes("priority") ?? true) &&
     normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
     supportsOpenAIResponsesFastMode(ctx)
   );
@@ -139,12 +149,27 @@ export function projectRealtimeVoicePublicProjection(ctx: {
   config: Record<string, unknown>;
 }): {
   config: Record<string, unknown>;
-  clientHints?: { modelSource: "gateway"; gatewayRelaySupported: false };
+  clientHints?: { modelSource?: "gateway"; gatewayRelaySupported: boolean };
 } {
   const model = normalizeOptionalString(ctx.config.model) ?? ctx.providerConfig.model;
   const modelId = typeof model === "string" ? model : undefined;
-  if (!isOpenAIGptLiveModel(modelId) || isSupportedOpenAIGptLiveModel(modelId)) {
+  if (!isOpenAIGptLiveModel(modelId)) {
     return { config: ctx.config };
+  }
+  if (isSupportedOpenAIGptLiveModel(modelId)) {
+    // Advertise model/transport support, not credential readiness. Session creation
+    // still resolves the selected agent's auth and validates the relay launch.
+    return {
+      config: ctx.config,
+      // GPT-Live owns delegation; forced consult and Azure configs require native Talk.
+      clientHints: {
+        gatewayRelaySupported:
+          ctx.config.consultRouting !== "force-agent-consult" &&
+          !normalizeOptionalString(ctx.providerConfig.baseUrl) &&
+          !normalizeOptionalString(ctx.providerConfig.azureEndpoint) &&
+          !normalizeOptionalString(ctx.providerConfig.azureDeployment),
+      },
+    };
   }
   const { model: _model, ...publicConfig } = ctx.config;
   return {
@@ -182,14 +207,7 @@ function resolveOpenAIEnvironmentBaseUrl(
 }
 
 function isHttpBaseUrl(baseUrl: unknown): boolean {
-  if (typeof baseUrl !== "string") {
-    return false;
-  }
-  try {
-    return new URL(baseUrl.trim()).protocol === "http:";
-  } catch {
-    return false;
-  }
+  return typeof baseUrl === "string" && URL.parse(baseUrl.trim())?.protocol === "http:";
 }
 
 function codexCanReproduceRoute(
@@ -216,7 +234,9 @@ function withRuntimePolicy(
     ...candidate,
     runtimePolicy: {
       compatibleIds: codexCanReproduceRoute(candidate, sourceBaseUrl)
-        ? CODEX_RUNTIME_COMPATIBLE_IDS
+        ? candidate.authRequirement === "api-key"
+          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+          : CODEX_RUNTIME_COMPATIBLE_IDS
         : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
     },
   };
@@ -235,7 +255,9 @@ function route(
   candidate: ProviderModelRouteCandidate,
   sourceBaseUrl?: unknown,
 ): ProviderModelRouteResolution & { kind: "routes" } {
-  const compatibleCandidate = withRuntimePolicy(candidate, sourceBaseUrl);
+  const compatibleCandidate = candidate.runtimePolicy
+    ? candidate
+    : withRuntimePolicy(candidate, sourceBaseUrl);
   return {
     kind: "routes",
     routes: [compatibleCandidate],
@@ -699,3 +721,5 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
       return null;
   }
 }
+
+export { resolveNativeWebSearch } from "./native-web-search-policy.js";

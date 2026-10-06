@@ -13,39 +13,6 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type FeedbackEvent = {
-  type: "custom";
-  event: "feedback";
-  ts: number;
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-};
-
-export function buildFeedbackEvent(params: {
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-}): FeedbackEvent {
-  return {
-    type: "custom",
-    event: "feedback",
-    ts: Date.now(),
-    messageId: params.messageId,
-    value: params.value,
-    comment: params.comment,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    conversationId: params.conversationId,
-  };
-}
-
 type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
@@ -54,7 +21,6 @@ type RunFeedbackReflectionParams = {
   agentId: string;
   conversationId: string;
   conversationKind: "direct" | "group" | "channel";
-  thumbedDownResponse?: string;
   userComment?: string;
   log: MSTeamsMonitorLogger;
 };
@@ -78,7 +44,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
       sessionKey,
       conversationId: params.conversationId,
       conversationKind: params.conversationKind,
-      thumbedDownResponse: params.thumbedDownResponse,
       userComment: params.userComment,
       cooldownMs,
       onRecordError: (err) =>

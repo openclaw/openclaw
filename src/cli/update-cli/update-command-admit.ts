@@ -1,0 +1,419 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  assertNoRetiredOAuthSidecarsBeforeConfigRecovery,
+  listReferencedLegacyOAuthSidecarPaths,
+} from "../../commands/doctor-auth-legacy-paths.js";
+import { planLegacyConfigForUpdateChannel } from "../../commands/doctor/legacy-config-repair.js";
+import { findRetiredConfigUpgradeRequirement } from "../../commands/doctor/shared/retired-config-formats.js";
+import { cloneEnvWithPlatformSemantics } from "../../config/env-vars.js";
+import { createConfigIO } from "../../config/io.js";
+import { resolveStateDir } from "../../config/paths.js";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { compareOpenClawVersions, normalizeOpenClawVersionBase } from "../../config/version.js";
+import { resolveCronJobsStorePathFromConfig } from "../../cron/store/paths.js";
+import { tryReadJson } from "../../infra/json-files.js";
+import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
+import { readPackageVersion } from "../../infra/package-json.js";
+import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import { listRetiredCronStateFiles } from "../../infra/state-migrations.retired-cron-files.js";
+import { listRetiredDeliveryQueueFiles } from "../../infra/state-migrations.retired-delivery-files.js";
+import {
+  assertNoRetiredStateFiles,
+  RetiredStateFormatError,
+} from "../../infra/state-migrations.retired-files.js";
+import { assertNoRetiredRuntimeStateFiles } from "../../infra/state-migrations.retired-runtime-files.js";
+import {
+  isUpdateAdmissionAuthorityEnvKey,
+  parseUpdateAdmissionContext,
+  type UpdateAdmissionContext,
+} from "../../infra/update-admission-contract.js";
+import { channelToNpmTag } from "../../infra/update-channels.js";
+import {
+  UPDATE_ADMISSION_PROTOCOL,
+  type UpdateAdmissionVerdict,
+} from "../../infra/update-run-schema.js";
+import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import {
+  isTrustedForDurableStores,
+  resolvePluginDoctorStateMigrationRecords,
+} from "../../plugins/doctor-contract-registry.js";
+import { assertPluginStateRetention } from "../../plugins/doctor-migration-resources.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../../plugins/installed-plugin-index-record-reader.js";
+import { resolveLegacyInstalledPluginIndexStorePath } from "../../plugins/installed-plugin-index-store-path.js";
+import { defaultRuntime } from "../../runtime.js";
+import { parsePackageOpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
+import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
+import {
+  captureTargetDatabaseSchemaContext,
+  checkTargetDatabaseSchemasForContexts,
+  formatSchemaRefusalLines,
+  hasSchemaRefusal,
+} from "./schema-preflight.js";
+import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
+import { createUpdateConfigFailure } from "./update-command-config-failure.js";
+import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
+
+async function reachesShippedUpdaterTreeLimit(root: string): Promise<boolean> {
+  if (!(await fs.lstat(root)).isDirectory()) {
+    throw new Error("Candidate package root is not a directory.");
+  }
+  // Published drivers count the root and every entry, including hidden npm lockfiles.
+  let entries = 1;
+  const pending = [root];
+  for (let directoryPath = pending.pop(); directoryPath; directoryPath = pending.pop()) {
+    const directory = await fs.opendir(directoryPath);
+    try {
+      for (let entry = await directory.read(); entry; entry = await directory.read()) {
+        // Shipped readers admit exactly 50,000 entries, root included, and refuse the next one.
+        if (++entries > 50_000) {
+          return true;
+        }
+        if (entry.isDirectory() && !entry.isSymbolicLink()) {
+          pending.push(path.join(directoryPath, entry.name));
+        }
+      }
+    } finally {
+      await directory.close();
+    }
+  }
+  return false;
+}
+
+/** Inspect live inputs using this candidate's contracts, without admitting a mutable run. */
+async function inspectUpdateAdmission(
+  context: UpdateAdmissionContext,
+): Promise<UpdateAdmissionVerdict> {
+  return await withArtifactPreservingStateReads(async () => {
+    if (
+      !path.isAbsolute(context.installation.root) ||
+      context.installation.installKind !== "package"
+    ) {
+      throw new Error("Candidate admission requires an explicit package installation root.");
+    }
+    const root = await resolveUpdateRoot({ root: context.installation.root });
+    const candidateRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+    if (!candidateRoot) {
+      throw new Error("Candidate package root is unavailable.");
+    }
+    const manifest = await tryReadJson<unknown>(path.join(candidateRoot, "package.json"), {
+      maxBytes: 1024 * 1024,
+    });
+    if (!isRecord(manifest) || typeof manifest.version !== "string" || !manifest.version.trim()) {
+      throw new Error("Candidate package version is unavailable.");
+    }
+    const candidateVersion = manifest.version;
+    const schemaVersions = parsePackageOpenClawSchemaVersions(manifest);
+    if (!schemaVersions) {
+      throw new Error("Candidate package schema declarations are unavailable.");
+    }
+    const installedVersion = await readPackageVersion(root, { maxBytes: 1024 * 1024 });
+    const env = cloneEnvWithPlatformSemantics(process.env);
+    env.OPENCLAW_VERSION = candidateVersion;
+    env.OPENCLAW_DEV_SOURCE_ROOT = candidateRoot;
+    delete env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    return await withOwnedManagedUpdateEnv(env, async () => {
+      const timeoutMs = context.request.timeoutMs ?? 120_000;
+      const checks = new Map<
+        string,
+        Omit<UpdateAdmissionVerdict["facts"]["checks"][number], "name">
+      >();
+      const reasons: UpdateAdmissionVerdict["reasons"] = [];
+      const warnings: UpdateAdmissionVerdict["warnings"] = [];
+      const legacyConfigWarning = {
+        code: "config-warning",
+        message:
+          "Configuration contains legacy fields that candidate Doctor can repair after installation.",
+      };
+      const refuse = (name: string, code: string, message: string, nextAction?: string) => {
+        checks.set(name, { status: "refuse", detail: message });
+        reasons.push({ code, message, ...(nextAction ? { nextAction } : {}) });
+      };
+      const supervisorComparison = compareOpenClawVersions(
+        normalizeOpenClawVersionBase(context.supervisor.version),
+        "2026.9.8",
+      );
+      if (
+        supervisorComparison !== null &&
+        supervisorComparison <= 0 &&
+        (await reachesShippedUpdaterTreeLimit(candidateRoot))
+      ) {
+        const requested = context.target.spec.trim();
+        const manualSpec = parseRegistryNpmSpec(
+          !requested || requested === "openclaw"
+            ? `openclaw@${context.target.tag?.trim() || channelToNpmTag(context.target.channel)}`
+            : requested.includes("@")
+              ? requested
+              : `openclaw@${requested}`,
+        );
+        refuse(
+          "candidate-tree-size",
+          "installed-updater-tree-limit",
+          "Candidate package has more than 50,000 entries, exceeding the installed updater's supported package size.",
+          manualSpec
+            ? `Run npm i -g ${quoteCliArg(manualSpec.raw)} manually because the installed updater cannot stage packages of this size.`
+            : "Install the requested package manually because the installed updater cannot stage packages of this size.",
+        );
+      }
+      let databaseContext:
+        | Awaited<ReturnType<typeof captureTargetDatabaseSchemaContext>>
+        | undefined;
+      try {
+        assertNoRetiredOAuthSidecarsBeforeConfigRecovery({ env });
+        // Doctor's existing planner supplies a source-bound projection; it never applies it here.
+        const { snapshot, writeOptions } = await createConfigIO({
+          env: cloneEnvWithPlatformSemantics(env),
+          pluginValidation: "core-only",
+          observe: false,
+          shellEnvFallback: "defer",
+          suppressFutureVersionWarning: true,
+        }).readConfigFileSnapshotForWrite();
+        const retired = findRetiredConfigUpgradeRequirement(
+          snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+        );
+        if (retired) {
+          throw new UpdatePreMutationError("invalid-config", retired.message, {
+            nextAction: retired.nextAction,
+          });
+        }
+        const legacyConfigPlan =
+          !snapshot.valid && snapshot.legacyIssues.length
+            ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
+            : undefined;
+        databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+        if (legacyConfigPlan) {
+          warnings.push(legacyConfigWarning);
+        }
+        checks.set("config", { status: warnings.length ? "warn" : "ok" });
+      } catch (error) {
+        if (error instanceof RetiredStateFormatError) {
+          refuse("state-format", "retired-state-format", error.message);
+        } else if (error instanceof UpdatePreMutationError) {
+          refuse(
+            "config",
+            error.reason,
+            error.message,
+            error.nextAction ??
+              "Run openclaw doctor --fix, then correct any remaining configuration errors and retry.",
+          );
+        } else {
+          throw error;
+        }
+        databaseContext = undefined;
+      }
+      let schemasAccepted = false;
+      let pluginInstallRecords: Record<string, PluginInstallRecord> | undefined;
+      const checkDatabaseSchemas = async (
+        schemaContext: NonNullable<typeof databaseContext>,
+      ): Promise<boolean> => {
+        try {
+          const schemas = await checkTargetDatabaseSchemasForContexts(schemaVersions, [
+            schemaContext,
+          ]);
+          if (hasSchemaRefusal(schemas)) {
+            refuse(
+              "database-schema",
+              "database-schema-preflight",
+              formatSchemaRefusalLines(schemas).join("\n"),
+            );
+          } else {
+            checks.set("database-schema", { status: "ok" });
+            return true;
+          }
+        } catch (error) {
+          if (!(error instanceof UpdatePreMutationError)) {
+            throw error;
+          }
+          refuse("database-schema", error.reason, error.message);
+        }
+        return false;
+      };
+      if (databaseContext) {
+        schemasAccepted = await checkDatabaseSchemas(databaseContext);
+        if (schemasAccepted) {
+          const snapshot = databaseContext.configSnapshot;
+          try {
+            // The saved partition reads SQLite; admit its schema before inspecting live files
+            // that published updaters omit from their later rehearsal snapshots.
+            const stateDir = resolveStateDir(databaseContext.env);
+            assertNoRetiredRuntimeStateFiles(stateDir, databaseContext.env);
+            assertNoRetiredStateFiles(
+              "JSON delivery queues",
+              listRetiredDeliveryQueueFiles(stateDir),
+            );
+            assertNoRetiredStateFiles("Plugin install index", [
+              resolveLegacyInstalledPluginIndexStorePath({ stateDir }),
+            ]);
+            assertNoRetiredStateFiles("OAuth credential sidecars", [
+              ...listReferencedLegacyOAuthSidecarPaths(
+                env,
+                snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+              ),
+              ...listReferencedLegacyOAuthSidecarPaths(databaseContext.env, databaseContext.config),
+            ]);
+            assertNoRetiredStateFiles(
+              "Cron state",
+              await listRetiredCronStateFiles(
+                resolveCronJobsStorePathFromConfig(
+                  snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+                  databaseContext.env,
+                ),
+              ),
+            );
+          } catch (error) {
+            if (!(error instanceof RetiredStateFormatError)) {
+              throw error;
+            }
+            refuse("state-format", "retired-state-format", error.message);
+            schemasAccepted = false;
+          }
+        }
+      }
+      if (databaseContext && schemasAccepted) {
+        try {
+          const snapshot = databaseContext.configSnapshot;
+          const retention = {
+            candidateRoot,
+            config:
+              snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+            env: databaseContext.env,
+            stateDir: resolveStateDir(databaseContext.env),
+          };
+          const records = resolvePluginDoctorStateMigrationRecords({
+            ...retention,
+            artifactPreservingReadOnly: true,
+          }).filter(isTrustedForDurableStores);
+          await assertPluginStateRetention(records, retention);
+        } catch (error) {
+          // Published updaters fall back on exit 2; inspection errors need a refusal verdict.
+          refuse("plugin-state-retention", "plugin-state-retention", String(error));
+          schemasAccepted = false;
+        }
+      }
+      // Plugin metadata reads require compatible stores; never let them mask a schema refusal.
+      if (databaseContext && schemasAccepted && !databaseContext.legacyConfigPlan) {
+        const { snapshot, writeOptions } = await createConfigIO({
+          env: cloneEnvWithPlatformSemantics(env),
+          observe: false,
+          suppressFutureVersionWarning: true,
+          shellEnvFallback: "defer",
+        }).readConfigFileSnapshotForWrite();
+        try {
+          if (!snapshot.valid || snapshot.readError) {
+            const legacyConfigPlan = !snapshot.readError
+              ? planLegacyConfigForUpdateChannel(snapshot, writeOptions)
+              : undefined;
+            if (!legacyConfigPlan) {
+              throw createUpdateConfigFailure(snapshot);
+            }
+            databaseContext = await captureTargetDatabaseSchemaContext(env, { legacyConfigPlan });
+            // Plugin repairs can change configured stores; validate the source-bound projection too.
+            schemasAccepted = await checkDatabaseSchemas(databaseContext);
+            warnings.push(legacyConfigWarning);
+          }
+          pluginInstallRecords = writeOptions.basePluginMetadataSnapshot?.index.installRecords;
+          warnings.push(
+            ...snapshot.warnings.map((warning) => ({
+              code: warning.code ?? "config-warning",
+              message: `${warning.path}: ${warning.message}`,
+            })),
+          );
+          if (snapshot.warnings.length || databaseContext.legacyConfigPlan) {
+            checks.set("config", { status: "warn" });
+          }
+        } catch (error) {
+          if (!(error instanceof UpdatePreMutationError)) {
+            throw error;
+          }
+          refuse("config", error.reason, error.message, error.nextAction);
+          databaseContext = undefined;
+        }
+      }
+      const nodeEngines =
+        isRecord(manifest.engines) && typeof manifest.engines.node === "string"
+          ? manifest.engines.node
+          : undefined;
+      const runtimeCompatible =
+        !nodeEngines || nodeVersionSatisfiesEngine(process.versions.node, nodeEngines) === true;
+      // Selection and provisioning require the installed supervisor's execution authority.
+      checks.set("node-runtime", {
+        status: runtimeCompatible ? "ok" : "warn",
+        ...(!runtimeCompatible
+          ? {
+              detail: `Candidate requires Node ${nodeEngines}; selected runtime is Node ${process.versions.node}. The installed updater selects or provisions a compatible runtime.`,
+            }
+          : {}),
+      });
+      if (databaseContext && schemasAccepted) {
+        const pluginWarnings = await preflightConfiguredNpmPluginTargets({
+          config: databaseContext.config,
+          env: databaseContext.env,
+          targetVersion: candidateVersion,
+          channel: context.target.channel,
+          timeoutMs,
+          installRecords:
+            pluginInstallRecords ??
+            loadInstalledPluginIndexInstallRecordsSync({
+              env: databaseContext.env,
+              artifactPreservingReadOnly: true,
+            }),
+        });
+        warnings.push(
+          ...pluginWarnings.map((warning) => ({
+            code: "plugin-availability",
+            message: warning.message,
+          })),
+        );
+        checks.set("plugin-availability", { status: pluginWarnings.length ? "warn" : "ok" });
+      }
+      return {
+        protocol: UPDATE_ADMISSION_PROTOCOL,
+        verdict: reasons.length ? "refuse" : "admit",
+        reasons,
+        warnings,
+        facts: {
+          candidateVersion,
+          installedVersion,
+          nodeEngines,
+          checks: Array.from(checks, ([name, check]) => ({ name, ...check })),
+        },
+      };
+    });
+  });
+}
+
+/** Internal protocol receiver; failures return no verdict and cannot inherit update authority. */
+export async function updateAdmitCommand(contextPath?: string): Promise<void> {
+  try {
+    if (Object.keys(process.env).some(isUpdateAdmissionAuthorityEnvKey)) {
+      throw new Error("Candidate admission requires an authority-free supervisor invocation.");
+    }
+    if (!contextPath || !path.isAbsolute(contextPath)) {
+      throw new Error("Candidate admission context path is missing or invalid.");
+    }
+    const stat = await fs.stat(contextPath);
+    if (!stat.isFile() || stat.size > 1024 * 1024) {
+      throw new Error("Candidate admission context is not a bounded regular file.");
+    }
+    const context = parseUpdateAdmissionContext(JSON.parse(await fs.readFile(contextPath, "utf8")));
+    if (!context) {
+      throw new Error("Candidate admission context is invalid.");
+    }
+    const verdict = await inspectUpdateAdmission(context);
+    defaultRuntime.writeJson(verdict);
+    process.exitCode = verdict.verdict === "admit" ? 0 : 3;
+  } catch (error) {
+    defaultRuntime.error(
+      redactSupportDiagnosticLine(error instanceof Error ? error.message : String(error), {
+        env: process.env,
+        stateDir: resolveStateDir(process.env),
+      }),
+    );
+    process.exitCode = 2;
+  }
+}

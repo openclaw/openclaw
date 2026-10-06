@@ -32,12 +32,6 @@ type AcpClientOptions = {
   verbose?: boolean;
 };
 
-type AcpClientHandle = {
-  client: ClientSideConnection;
-  agent: ChildProcess;
-  sessionId: string;
-};
-
 const ACP_SERVER_KILL_GRACE_MS = 1000;
 const ACP_SERVER_FORCE_KILL_TIMEOUT_MS = 1000;
 
@@ -78,21 +72,6 @@ async function terminateAcpServer(child: ChildProcess): Promise<void> {
     child.kill("SIGKILL");
   }
   await waitForChildExit(child, ACP_SERVER_FORCE_KILL_TIMEOUT_MS);
-}
-
-function toArgs(value: string[] | string | undefined): string[] {
-  if (!value) {
-    return [];
-  }
-  return Array.isArray(value) ? value : [value];
-}
-
-function buildServerArgs(opts: AcpClientOptions): string[] {
-  const args = ["acp", ...toArgs(opts.serverArgs)];
-  if (opts.serverVerbose && !args.includes("--verbose") && !args.includes("-v")) {
-    args.push("--verbose");
-  }
-  return args;
 }
 
 function resolveSelfEntryPath(): string | null {
@@ -143,20 +122,23 @@ function printSessionUpdate(notification: SessionNotification): void {
   }
 }
 
-async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHandle> {
+async function createAcpClient(opts: AcpClientOptions = {}) {
   const cwd = opts.cwd ?? process.cwd();
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
   ensureOpenClawCliOnPath();
-  const serverArgs = buildServerArgs(opts);
+  const serverArgs = ["acp", ...(opts.serverArgs ?? [])];
+  if (opts.serverVerbose && !serverArgs.includes("--verbose") && !serverArgs.includes("-v")) {
+    serverArgs.push("--verbose");
+  }
 
   const entryPath = resolveSelfEntryPath();
   const defaultServerCommand = entryPath ? process.execPath : "openclaw";
   const defaultServerArgs = entryPath ? [entryPath, ...serverArgs] : serverArgs;
   const serverCommand = opts.serverCommand ?? defaultServerCommand;
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : defaultServerArgs;
-  const { getActiveSkillEnvKeys } = await import("../skills/runtime/env-overrides.runtime.js");
+  const { getActiveSkillEnvKeysCore } = await import("../skills/runtime/env-overrides.js");
   const stripProviderAuthEnvVars = shouldStripProviderAuthEnvVarsForAcpServer({
     serverCommand,
     serverArgs: effectiveArgs,
@@ -165,7 +147,7 @@ async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpClientHa
   });
   const stripKeys = buildAcpClientStripKeys({
     stripProviderAuthEnvVars,
-    activeSkillEnvKeys: getActiveSkillEnvKeys(),
+    activeSkillEnvKeys: getActiveSkillEnvKeysCore(),
   });
   const spawnEnv = resolveAcpClientSpawnEnv(process.env, { stripKeys });
   const spawnInvocation = resolveAcpClientSpawnInvocation(

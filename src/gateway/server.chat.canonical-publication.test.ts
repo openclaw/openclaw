@@ -233,7 +233,8 @@ it(
               },
             },
           },
-          tools: { profile: "messaging" },
+          // This provider scripts direct message calls to prove publication, not discovery.
+          tools: { profile: "messaging", toolSearch: false },
           plugins: {
             allow: ["openai"],
             slots: { memory: "none" },

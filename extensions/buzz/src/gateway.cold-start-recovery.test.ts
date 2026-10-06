@@ -2,14 +2,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
+import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelGatewayContext } from "../runtime-api.js";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
 
@@ -218,6 +219,7 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
   const account = resolveBuzzAccount({ cfg });
   const abort = new AbortController();
   const ctx = {
+    scheduler: createTestPluginServiceScheduler(),
     cfg,
     accountId: account.accountId,
     account,
@@ -226,7 +228,7 @@ function startGatewayProcess(channelIds: string[] = [CHANNEL_ID]): {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     getStatus: vi.fn(),
     setStatus: vi.fn(),
-  } as unknown as ChannelGatewayContext<ResolvedBuzzAccount>;
+  } as unknown as ChannelGatewayContextV2<ResolvedBuzzAccount>;
   return { abort, lifecycle: startBuzzGatewayAccount(ctx) };
 }
 

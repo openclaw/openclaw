@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createAssistantMessageEventStream, type Context } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -9,8 +9,17 @@ import {
   loadSessionEntryReadOnly as loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   runWithDeferredSessionSuspension,
   suspendSession,
@@ -101,11 +110,27 @@ async function joinSuspensionWrites() {
 
 afterEach(async () => {
   await joinSuspensionWrites();
+  // Worker lease release still needs the fixture's shared-state database.
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
+  for (const root of tempRoots.dirs) {
+    await closeOpenClawStateDatabaseByPathAsync(
+      resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(root, "final") }),
+    );
+  }
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  expect(
+    hasOpenClawAgentDatabaseAsyncResources(),
+    "fixture workers must settle before root deletion",
+  ).toBe(false);
   tempRoots.cleanup();
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 async function createRun(agentId: string, sessionPersistence?: "durable" | "detached") {
@@ -460,6 +485,7 @@ describe("embedded run detached session metadata", () => {
         );
       }
       const before = loadSessionEntry(scope);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const databaseBefore = existing ? await fs.readFile(database) : undefined;
       const open = vi.spyOn(SessionManager, "open");
@@ -531,10 +557,9 @@ describe("embedded run detached session metadata", () => {
           await expect(run).rejects.toBeInstanceOf(Error);
           expect(manager.getEntries()).toEqual(historyAtSummary);
         } else {
-          await run.catch(() => {});
+          await expect(run).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
           const compaction = await compact.mock.results[0]?.value;
           expect(compaction, compaction?.reason).toMatchObject({ ok: true, compacted: true });
-          await expect(run).resolves.toMatchObject({ payloads: [{ text: "Blue Heron." }] });
         }
       } finally {
         replacement?.close();
@@ -545,6 +570,7 @@ describe("embedded run detached session metadata", () => {
       expect(open).not.toHaveBeenCalled();
       expect(resolveTarget).not.toHaveBeenCalled();
       expect.soft(loadSessionEntry(scope)).toEqual(before);
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       if (existing) {
         expect(await fs.readFile(database)).toEqual(databaseBefore);

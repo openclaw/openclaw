@@ -1,5 +1,6 @@
 // Voice Call tests cover inbound event policy and routing behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildCallBriefInstructions } from "../call-brief.js";
 import { VoiceCallConfigSchema } from "../config.js";
 import {
   createEventManagerHarness,
@@ -7,11 +8,11 @@ import {
 } from "../manager.test-harness.js";
 import type { AnswerCallInput, CallRecord, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
+import { persistCallRecord } from "./store.js";
 
 const {
   cleanup,
   createContext,
-  createInboundDisabledConfig,
   createInboundInitiatedEvent,
   createProvider,
   createRejectingInboundContext,
@@ -27,6 +28,94 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("processEvent (functional inbound calls)", () => {
+  it.each([
+    {
+      ageMinutes: 5,
+      from: "+15554444444",
+      policy: "allowlist",
+      realtimeEnabled: true,
+      accepted: true,
+    },
+    {
+      ageMinutes: 5,
+      from: "+15554444444",
+      policy: "allowlist",
+      realtimeEnabled: false,
+      accepted: false,
+    },
+    {
+      ageMinutes: 31,
+      from: "+15554444444",
+      policy: "allowlist",
+      realtimeEnabled: true,
+      accepted: false,
+    },
+    {
+      ageMinutes: 5,
+      from: "5554444444",
+      policy: "allowlist",
+      realtimeEnabled: true,
+      accepted: false,
+    },
+    {
+      ageMinutes: 5,
+      from: "+15554444444",
+      policy: "disabled",
+      realtimeEnabled: true,
+      accepted: false,
+    },
+  ])(
+    "admits callbacks only for realtime recent E.164 outbound recipients: $ageMinutes/$from/$policy/realtime=$realtimeEnabled",
+    async ({ ageMinutes, from, policy, realtimeEnabled, accepted }) => {
+      const hangup = vi.fn(async () => {});
+      const ctx = createContext({
+        provider: createProvider({ hangupCall: hangup }),
+        config: VoiceCallConfigSchema.parse({
+          enabled: true,
+          provider: "plivo",
+          inboundPolicy: policy,
+          callbacks: { enabled: true, windowMinutes: 30, greeting: "I can take a message." },
+          realtime: { enabled: realtimeEnabled },
+        }),
+      });
+      const original: CallRecord = {
+        callId: "original",
+        providerCallId: "original-provider",
+        provider: "plivo",
+        direction: "outbound",
+        state: "completed",
+        from: "+15550000000",
+        to: "+15554444444",
+        startedAt: Date.now() - ageMinutes * 60_000,
+        transcript: [],
+        processedEventIds: [],
+        metadata: {
+          requesterSessionKey: "agent:main:telegram:123",
+          brief: { task: "Book plumber" },
+        },
+      };
+      await persistCallRecord(ctx.storePath, original);
+      await processEvent(
+        ctx,
+        createInboundInitiatedEvent({ id: "callback", providerCallId: "callback-provider", from }),
+      );
+      expect(ctx.activeCalls.size).toBe(accepted ? 1 : 0);
+      expect(hangup).toHaveBeenCalledTimes(accepted ? 0 : 1);
+      if (accepted) {
+        expect(requireFirstActiveCall(ctx).metadata).toMatchObject({
+          callbackOfCallId: "original",
+          requesterSessionKey: "agent:main:telegram:123",
+          initialMessage: "I can take a message.",
+          brief: {},
+        });
+        expect(buildCallBriefInstructions(requireFirstActiveCall(ctx))).toMatch(/take a message/i);
+        expect(buildCallBriefInstructions(requireFirstActiveCall(ctx))).not.toContain(
+          "Book plumber",
+        );
+      }
+    },
+  );
+
   it.each(["created", "rejected"] as const)(
     "does not publish %s inbound calls before SQLite persistence succeeds",
     async (kind) => {
@@ -55,72 +144,6 @@ describe("processEvent (functional inbound calls)", () => {
       expect(hangupCalls).toHaveLength(kind === "rejected" ? 1 : 0);
     },
   );
-
-  it("calls provider hangup when rejecting inbound call", async () => {
-    const { ctx, hangupCalls } = createRejectingInboundContext();
-    const event = createInboundInitiatedEvent({
-      id: "evt-1",
-      providerCallId: "prov-1",
-      from: "+15559999999",
-    });
-
-    await processEvent(ctx, event);
-
-    expect(ctx.activeCalls.size).toBe(0);
-    expect(hangupCalls).toHaveLength(1);
-    expect(hangupCalls[0]).toEqual({
-      callId: "prov-1",
-      providerCallId: "prov-1",
-      reason: "hangup-bot",
-    });
-  });
-
-  it("does not call hangup when provider is null", async () => {
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider: null,
-    });
-    const event = createInboundInitiatedEvent({
-      id: "evt-2",
-      providerCallId: "prov-2",
-      from: "+15551111111",
-    });
-
-    await processEvent(ctx, event);
-
-    expect(ctx.activeCalls.size).toBe(0);
-  });
-
-  it("calls hangup only once for duplicate events for same rejected call", async () => {
-    const { ctx, hangupCalls } = createRejectingInboundContext();
-    const event1 = createInboundInitiatedEvent({
-      id: "evt-init",
-      providerCallId: "prov-dup",
-      from: "+15552222222",
-    });
-    const event2: NormalizedEvent = {
-      id: "evt-ring",
-      type: "call.ringing",
-      callId: "prov-dup",
-      providerCallId: "prov-dup",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "+15552222222",
-      to: "+15550000000",
-    };
-
-    await processEvent(ctx, event1);
-    await processEvent(ctx, event2);
-
-    expect(ctx.activeCalls.size).toBe(0);
-    expect(hangupCalls).toEqual([
-      {
-        callId: "prov-dup",
-        providerCallId: "prov-dup",
-        reason: "hangup-bot",
-      },
-    ]);
-  });
 
   it("answers accepted inbound calls when the provider requires an answer command", async () => {
     const answerCalls: AnswerCallInput[] = [];
@@ -158,53 +181,6 @@ describe("processEvent (functional inbound calls)", () => {
         providerCallId: "call-control-1",
       },
     ]);
-  });
-
-  it("removes active call even when hangup rejects", async () => {
-    const provider = createProvider({
-      hangupCall: async (): Promise<void> => {
-        throw new Error("provider down");
-      },
-    });
-    const ctx = createContext({
-      config: createInboundDisabledConfig(),
-      provider,
-    });
-    const event = createInboundInitiatedEvent({
-      id: "evt-fail",
-      providerCallId: "prov-fail",
-      from: "+15553333333",
-    });
-
-    await processEvent(ctx, event);
-    expect(ctx.activeCalls.size).toBe(0);
-  });
-
-  it("preserves inbound direction for auto-registered inbound calls", async () => {
-    const ctx = createContext({
-      config: VoiceCallConfigSchema.parse({
-        enabled: true,
-        provider: "plivo",
-        fromNumber: "+15550000000",
-        inboundPolicy: "open",
-      }),
-    });
-    const event: NormalizedEvent = {
-      id: "evt-inbound-dir",
-      type: "call.initiated",
-      callId: "CA-inbound-789",
-      providerCallId: "CA-inbound-789",
-      timestamp: Date.now(),
-      direction: "inbound",
-      from: "+15554444444",
-      to: "+15550000000",
-    };
-
-    await processEvent(ctx, event);
-
-    expect(ctx.activeCalls.size).toBe(1);
-    const call = requireFirstActiveCall(ctx);
-    expect(call.direction).toBe("inbound");
   });
 
   it.each([

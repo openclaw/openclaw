@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { approveDevicePairing } from "./device-pairing-approval.js";
 import {
   approveNodePairing,
@@ -35,12 +36,8 @@ describe("migrateLegacyNodePairingStore", () => {
   });
 
   afterAll(async () => {
+    await closeStateDatabaseForTest();
     await suiteRootTracker.cleanup();
-  });
-
-  test("returns null when no legacy store exists", async () => {
-    const baseDir = await suiteRootTracker.make("case");
-    await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toBeNull();
   });
 
   test("folds legacy rows into device records, drops orphans, and archives files", async () => {

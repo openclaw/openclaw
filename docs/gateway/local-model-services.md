@@ -7,14 +7,14 @@ read_when:
 title: "Local model services"
 ---
 
-`models.providers.<id>.localService` starts a provider-owned local model server on demand. When a model or embedding request selects that provider, OpenClaw probes the health endpoint, starts the process if it is down, waits for readiness, then sends the request. Use it to avoid keeping expensive local servers running all day.
+`models.providers.<id>.localService` starts a provider-owned local model server on demand. When a model or embedding request selects that provider, OpenClaw checks the health endpoint, starts the process if it is down, waits for readiness, then sends the request. Use it to avoid keeping expensive local servers running all day.
 
 ## How it works
 
 1. A model or embedding request resolves to a configured provider.
-2. If that provider has `localService`, OpenClaw probes `healthUrl`.
-3. On a successful probe, OpenClaw uses the already-running server.
-4. On a failed probe, OpenClaw spawns `command` with `args`.
+2. If that provider has `localService`, OpenClaw checks `healthUrl`.
+3. On a successful check, OpenClaw uses the already-running server.
+4. On a failed check, OpenClaw spawns `command` with `args`.
 5. OpenClaw polls the health endpoint until `readyTimeoutMs` expires.
 6. The request goes through the normal model or embedding transport.
 7. If OpenClaw started the process and `idleStopMs` is set, it stops the process after the last in-flight request has been idle that long.
@@ -22,6 +22,10 @@ title: "Local model services"
 OpenClaw does not install launchd, systemd, Docker, or any daemon for this. The server is a plain child process of whichever OpenClaw process first needed it.
 
 Startup is serialized per configured provider and command/argument/env set, so concurrent chat and embedding requests for the same service do not spawn duplicate servers. Each request holds its own lease until response handling completes, so idle shutdown waits for every in-flight model and embedding request. Configured provider aliases remain distinct: two aliases can point at different GPU hosts without collapsing onto the same Ollama, LM Studio, or OpenAI-compatible adapter id.
+
+OpenClaw waits for any idle shutdown already in progress when it closes local services. A new request for the same service waits for that stop before acquiring a replacement. Shutdown errors remain visible; subsequent requests recheck the owned process before starting a replacement.
+
+Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
 
 If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
 

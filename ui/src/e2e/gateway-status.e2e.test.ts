@@ -100,46 +100,6 @@ suite.define(() => {
     );
   });
 
-  it.each([390, 1280])(
-    "keeps recovery available after a sidebar download failure at %ipx",
-    async (width) => {
-      await suite.withPage(
-        {
-          viewport: { width, height: 844 },
-          colorScheme: "dark",
-          locale: "en-US",
-          serviceWorkers: "block",
-        },
-        async ({ page }) => {
-          let blockedSidebarRequests = 0;
-          await page.route(/\/assets\/app-sidebar-[^/]+\.js(?:\?.*)?$/u, async (route) => {
-            blockedSidebarRequests += 1;
-            await route.abort("failed");
-          });
-          const gateway = await installMockGateway(page);
-          await page.goto(`${suite.server.baseUrl}new`);
-          await waitForControlUiGatewayReady(page);
-          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-          await expect.poll(() => blockedSidebarRequests).toBeGreaterThan(0);
-          expect(await page.locator(".sidebar-identity-card").isVisible()).toBe(false);
-
-          await gateway.setOnline(false);
-          const connectionStatus = page.locator(".shell-connection-status");
-          await connectionStatus
-            .locator(".gateway-status__label")
-            .getByText("Reconnecting…", { exact: true })
-            .waitFor({ state: "visible" });
-          const socketCount = await gateway.getSocketCount();
-          await connectionStatus.getByRole("button", { name: /Retry now/ }).click();
-          await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-          await gateway.setOnline(true);
-          await waitForControlUiGatewayReady(page);
-          await expect.poll(() => connectionStatus.count()).toBe(0);
-        },
-      );
-    },
-  );
-
   it("keeps reconnect status clear of the composer in a compact native window", async () => {
     await suite.withPage(
       {
@@ -227,8 +187,8 @@ suite.define(() => {
         expect(await footer.locator(".sidebar-identity-card [role=status]").count()).toBe(0);
         const announcement = footer.getByRole("status");
         expect(await announcement.textContent()).toContain("Reconnecting…");
-        expect(await announcement.textContent()).toContain("2 in outbox");
-        expect(await footer.textContent()).toContain("2 in outbox");
+        expect(await announcement.textContent()).not.toContain("in outbox");
+        expect(await footer.textContent()).not.toContain("in outbox");
         expect(await page.locator(".chat-queue__item").count()).toBe(2);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -236,7 +196,7 @@ suite.define(() => {
         const mobileStatus = page.locator(".shell-connection-status");
         await mobileStatus.waitFor({ state: "visible" });
         await expect.poll(() => connectionStatusOverlapsComposer(page)).toBe(false);
-        expect(await mobileStatus.textContent()).toContain("2 in outbox");
+        expect(await mobileStatus.textContent()).not.toContain("in outbox");
         await page.setViewportSize({ width: 1280, height: 900 });
         await footer.waitFor({ state: "visible" });
 
@@ -244,8 +204,37 @@ suite.define(() => {
         const menu = page.locator("wa-dropdown.sidebar-identity-menu");
         await menu.getByText("Alex", { exact: true }).waitFor();
         await menu.getByText("Studio Gateway", { exact: true }).waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "outbox-account-menu.png"),
+            animations: "disabled",
+          });
+        }
+        expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
+        expect(await page.locator(".chat-queue__item").count()).toBe(2);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await page.keyboard.press("Escape");
+        await menu.waitFor({ state: "hidden" });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.getByRole("button", { name: "Expand sidebar" }).click();
+        await footer.locator(".sidebar-identity-card").click();
+        await menu.getByText("Alex", { exact: true }).waitFor();
+        const retry = menu.locator('wa-dropdown-item[value="command:retry-connect"]');
+        await retry.waitFor();
+        expect(await menu.locator(".sidebar-identity-menu__outbox").count()).toBe(0);
+        const bounds = await retry.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
+        expect(await footer.textContent()).not.toContain("in outbox");
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "outbox-account-menu-mobile.png"),
+            animations: "disabled",
+          });
+        }
         const socketCount = await gateway.getSocketCount();
-        await menu.locator('wa-dropdown-item[value="command:retry-connect"]').click();
+        await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);
         await waitForControlUiGatewayReady(page);

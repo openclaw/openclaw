@@ -1,3 +1,4 @@
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 
 export type ReplyExpectation = "required" | "optional";
@@ -18,16 +19,29 @@ export type ReplyCompletion =
       readonly outcome: Exclude<ReplyCompletionEvidence, "empty"> | "silent";
     };
 
+/** Returns true when a lifecycle turn must not redefine session-stable reply policy. */
+export function isSyntheticSourceReplyTurn(params: {
+  inputProvenance?: InputProvenance;
+  isHeartbeat?: boolean;
+}): boolean {
+  return (
+    params.isHeartbeat === true ||
+    params.inputProvenance?.kind === "inter_session" ||
+    params.inputProvenance?.kind === "internal_system"
+  );
+}
 /** Resolve legacy runtime inputs once; explicit host requiredness always wins. */
 export function resolveReplyExpectation(params: {
   terminalReplyExpectation?: ReplyExpectation;
   allowEmptyAssistantReplyAsSilent?: boolean;
   trigger?: EmbeddedRunTrigger;
+  inputProvenance?: InputProvenance;
 }): ReplyExpectation {
   return (
     params.terminalReplyExpectation ??
-    ((params.allowEmptyAssistantReplyAsSilent ??
-    (params.trigger !== undefined && params.trigger !== "user" && params.trigger !== "manual"))
+    (isSyntheticSourceReplyTurn(params) ||
+    (params.allowEmptyAssistantReplyAsSilent ??
+      (params.trigger !== undefined && params.trigger !== "user" && params.trigger !== "manual"))
       ? "optional"
       : "required")
   );

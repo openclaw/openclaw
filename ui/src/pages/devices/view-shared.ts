@@ -1,4 +1,3 @@
-// Devices page owns these pure view helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { html, type TemplateResult } from "lit";
@@ -10,7 +9,7 @@ import { deviceIcons } from "../../components/icons-devices.ts";
 import { icons } from "../../components/icons.ts";
 import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
 
-export type NodeTargetOption = {
+type NodeTargetOption = {
   id: string;
   label: string;
 };
@@ -25,6 +24,10 @@ type ConfigAgentOption = {
 export function resolveConfigAgents(config: Record<string, unknown> | null): ConfigAgentOption[] {
   const agentsNode = isRecord(config?.agents) ? config.agents : null;
   const entries = isRecord(agentsNode?.entries) ? agentsNode.entries : {};
+  const defaults = isRecord(agentsNode?.defaults) ? agentsNode.defaults : null;
+  const systemAgent = isRecord(defaults?.systemAgent) ? defaults.systemAgent : null;
+  const ownerId = normalizeOptionalString(systemAgent?.agentId);
+  const soleAgentId = Object.keys(entries).length === 1 ? Object.keys(entries)[0] : undefined;
   const agents: ConfigAgentOption[] = [];
 
   for (const [id, entry] of Object.entries(entries)) {
@@ -32,7 +35,7 @@ export function resolveConfigAgents(config: Record<string, unknown> | null): Con
       continue;
     }
     const name = normalizeOptionalString(entry.name);
-    const isDefault = entry.default === true;
+    const isDefault = id === (ownerId ?? soleAgentId);
     agents.push({ id, name, isDefault, record: entry });
   }
 

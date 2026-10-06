@@ -47,7 +47,8 @@ export function createSessionRowProjectionBackfill(params: {
         continue;
       }
       activeId = id;
-      const current = () => !disposed && params.current(row);
+      // Same-lifecycle publications retain the generation but supersede these transcript facts.
+      const current = () => !disposed && !queued.has(id) && params.current(row);
       let interrupted = false;
       const shouldCommit = () => {
         if (!canRunSessionListBackgroundWork()) {

@@ -93,21 +93,15 @@ enum IconOverrideSelection: String, CaseIterable, Identifiable {
         }
     }
 
-    func toIconState() -> IconState {
-        let map: (ToolKind) -> ActivityKind = { .tool($0) }
+    func fixedIconState() -> IconState? {
         switch self {
-        case .system: return .idle
-        case .idle: return .idle
-        case .mainBash: return .workingMain(map(.bash))
-        case .mainRead: return .workingMain(map(.read))
-        case .mainWrite: return .workingMain(map(.write))
-        case .mainEdit: return .workingMain(map(.edit))
-        case .mainOther: return .workingMain(map(.other))
-        case .otherBash: return .workingOther(map(.bash))
-        case .otherRead: return .workingOther(map(.read))
-        case .otherWrite: return .workingOther(map(.write))
-        case .otherEdit: return .workingOther(map(.edit))
-        case .otherOther: return .workingOther(map(.other))
+        case .system: nil
+        case .idle: .idle
+        case .mainBash, .otherBash: .overridden(.tool(.bash))
+        case .mainRead, .otherRead: .overridden(.tool(.read))
+        case .mainWrite, .otherWrite: .overridden(.tool(.write))
+        case .mainEdit, .otherEdit: .overridden(.tool(.edit))
+        case .mainOther, .otherOther: .overridden(.tool(.other))
         }
     }
 }

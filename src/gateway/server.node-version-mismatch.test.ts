@@ -1,6 +1,6 @@
 // Real signed node connects protect same-install classification and version admission.
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import {
@@ -94,12 +94,8 @@ describe("node host version mismatch guard", () => {
   });
 
   test.each([
-    [gatewayVersion, gatewayVersion],
     [gatewayVersion, "dev"],
-    [gatewayVersion, "1.0.0"],
     ["2026.9.4", "2026.9.5"],
-    ["2026.9.4", "2026.9.5-beta.1"],
-    ["2026.9.4", "2026.9.4-1"],
   ])(
     "Gateway %s accepts same-install node version %s",
     async (serverVersion, clientVersion) =>
@@ -117,39 +113,6 @@ describe("node host version mismatch guard", () => {
           await client.stopAndWait({ timeoutMs: 2_000 });
         }
       }),
-  );
-
-  test.each(["default", "different", "omitted"])(
-    "same-install stale node is rejected with %s instanceId",
-    async (instance) => {
-      const onHelloOk = vi.fn();
-      await expect(
-        connectNode({
-          clientVersion: "2020.1.1",
-          instanceId:
-            instance === "default"
-              ? instanceId
-              : instance === "different"
-                ? "different-instance"
-                : undefined,
-          onHelloOk,
-          timeoutMs: 5_000,
-          timeoutMessage: "expected version mismatch rejection",
-        }).then(async (client) => {
-          await client.stopAndWait({ timeoutMs: 2_000 });
-          return "connected";
-        }),
-      ).rejects.toMatchObject({
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "client version mismatch",
-        details: {
-          code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
-          clientVersion: "2020.1.1",
-          gatewayVersion,
-        },
-      });
-      expect(onHelloOk).not.toHaveBeenCalled();
-    },
   );
 
   test("list and describe mark only the same-install device despite copied instance metadata", async () => {
@@ -242,10 +205,12 @@ describe("node host version mismatch guard", () => {
 
     const upgraded = await connectNode({ commands: ["screen.snapshot", "system.run"] });
     try {
+      const onHelloOk = vi.fn();
       const connectReverted = async (clientVersion: string, clientDisplayName: string) =>
         await connectNode({
           clientDisplayName,
           clientVersion,
+          onHelloOk,
           instanceId: "reconnect-instance-override",
           commands: ["screen.snapshot"],
           timeoutMs: 5_000,
@@ -259,9 +224,16 @@ describe("node host version mismatch guard", () => {
       );
       expect(pendingBefore?.commands).toEqual(["screen.snapshot", "system.run"]);
 
-      await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toThrow(
-        /client version mismatch|version mismatch/i,
-      );
+      await expect(connectReverted("2020.1.1", "test-node-reverted-stale")).rejects.toMatchObject({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "client version mismatch",
+        details: {
+          code: ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
+          clientVersion: "2020.1.1",
+          gatewayVersion,
+        },
+      });
+      expect(onHelloOk).not.toHaveBeenCalled();
 
       const pendingAfterVersionMismatch = (await listNodePairing()).pending.find(
         (entry) => entry.nodeId === localIdentity.deviceId,

@@ -3,6 +3,11 @@ import {
   readProviderJsonArrayFieldResponse,
   readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist as resolveMediaSsrfPolicy,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist as isUrlAllowed,
+} from "openclaw/plugin-sdk/ssrf-policy";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -22,15 +27,12 @@ import {
   applyAuthorizationHeaderForUrl,
   encodeGraphShareId,
   GRAPH_ROOT,
-  isUrlAllowed,
   type MSTeamsAttachmentDownloadLogger,
   type MSTeamsAttachmentFetchPolicy,
   type MSTeamsAttachmentResolveFn,
   normalizeContentType,
   resolveMSTeamsMediaKind,
-  resolveMediaSsrfPolicy,
   resolveAttachmentFetchPolicy,
-  resolveRequestUrl,
   safeFetchWithPolicy,
 } from "./shared.js";
 import type {
@@ -53,15 +55,6 @@ function createGraphHostedContentFact(item: GraphHostedContent): MSTeamsInboundM
     ...(item.id ? { sourceId: item.id } : {}),
   };
 }
-
-type GraphAttachment = {
-  id?: string | null;
-  contentType?: string | null;
-  contentUrl?: string | null;
-  name?: string | null;
-  thumbnailUrl?: string | null;
-  content?: unknown;
-};
 
 export function buildMSTeamsGraphMessageUrl(params: {
   conversationType?: string | null;
@@ -144,7 +137,7 @@ async function fetchGraphCollection(params: {
   }
 }
 
-function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
+function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachmentLike {
   let content: unknown = att.content;
   if (typeof content === "string") {
     try {
@@ -163,16 +156,11 @@ function normalizeGraphAttachment(att: GraphAttachment): MSTeamsAttachmentLike {
   };
 }
 
-/**
- * Download all hosted content from a Teams message (images, documents, etc.).
- * Renamed from downloadGraphHostedImages to support all file types.
- */
 async function downloadGraphHostedContent(params: {
   accessToken: string;
   messageUrl: string;
   maxBytes: number;
   fetchFn?: typeof fetch;
-  preserveFilenames?: boolean;
   ssrfPolicy?: SsrFPolicy;
   logger?: MSTeamsAttachmentDownloadLogger;
   deadline?: MSTeamsRequestDeadline;
@@ -256,7 +244,6 @@ export async function downloadMSTeamsGraphMedia(params: {
   allowHosts?: string[];
   authAllowHosts?: string[];
   fetchFn?: typeof fetch;
-  fetchFnSupportsDispatcher?: boolean;
   resolveFn?: MSTeamsAttachmentResolveFn;
   deadline?: MSTeamsRequestDeadline;
   /** When true, embeds original filename in stored path for later extraction. */
@@ -295,8 +282,8 @@ export async function downloadMSTeamsGraphMedia(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const sharePointMedia: MSTeamsInboundMedia[] = [];
   const downloadedReferenceUrls = new Set<string>();
-  let messageAttachments: GraphAttachment[] = [];
-  let referenceAttachments: GraphAttachment[] = [];
+  let messageAttachments: MSTeamsAttachmentLike[] = [];
+  let referenceAttachments: MSTeamsAttachmentLike[] = [];
   let messageStatus: number | undefined;
   try {
     const { response: msgRes, release } = await fetchWithSsrFGuard({
@@ -314,7 +301,7 @@ export async function downloadMSTeamsGraphMedia(params: {
       if (msgRes.ok) {
         let msgData: {
           body?: { content?: string; contentType?: string };
-          attachments?: GraphAttachment[];
+          attachments?: MSTeamsAttachmentLike[];
         };
         try {
           msgData = await readProviderJsonResponse<typeof msgData>(
@@ -394,8 +381,6 @@ export async function downloadMSTeamsGraphMedia(params: {
         maxBytes: params.maxBytes,
         contentTypeHint: "application/octet-stream",
         preserveFilenames: params.preserveFilenames,
-        ssrfPolicy,
-        useDirectFetch: true,
         fetchImpl: async (input, init) => {
           const requestUrl = resolveRequestUrl(input);
           const headers = ensureUserAgentHeader(init?.headers);
@@ -409,7 +394,6 @@ export async function downloadMSTeamsGraphMedia(params: {
             url: requestUrl,
             policy,
             fetchFn,
-            fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
             requestInit: {
               ...init,
               headers,
@@ -434,7 +418,6 @@ export async function downloadMSTeamsGraphMedia(params: {
     messageUrl,
     maxBytes: params.maxBytes,
     fetchFn: params.fetchFn,
-    preserveFilenames: params.preserveFilenames,
     ssrfPolicy,
     logger: params.logger,
     deadline: params.deadline,
@@ -464,7 +447,6 @@ export async function downloadMSTeamsGraphMedia(params: {
       allowHosts: policy.allowHosts,
       authAllowHosts: policy.authAllowHosts,
       fetchFn: params.fetchFn,
-      fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
       resolveFn: params.resolveFn,
       deadline: params.deadline,
       preserveFilenames: params.preserveFilenames,

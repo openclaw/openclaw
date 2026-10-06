@@ -1,9 +1,7 @@
 import { afterEach, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  createReplyOperation,
-  isReplyRunEvidenceStale,
-} from "../../../auto-reply/reply/reply-run-registry.js";
+import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
+import { isReplyRunEvidenceStale } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
@@ -56,6 +54,7 @@ function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
     runId,
     sessionFile: "/tmp/queued-run.jsonl",
     sessionId: "queued-session",
+    sessionPersistence: "detached",
     timeoutMs: 60_000,
     workspaceDir: "/tmp",
     ...overrides,
@@ -270,6 +269,7 @@ describe("queued embedded run context liveness", () => {
       expect(changed).toHaveBeenCalledExactlyOnceWith({
         sessionKey: "agent:main:subagent:queued",
         agentId: undefined,
+        scope: "runtime",
       });
       changed.mockClear();
       clock.mockReturnValue(admissionAt);
@@ -285,8 +285,8 @@ describe("queued embedded run context liveness", () => {
       });
       expect(getAgentRunContext(params.runId)?.lastActiveAt).toBe(admissionAt);
       expect(changed.mock.calls).toEqual([
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
-        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
+        [{ sessionKey: "agent:main:subagent:queued", agentId: undefined, scope: "runtime" }],
       ]);
       expect(localTurn).not.toHaveBeenCalled();
 

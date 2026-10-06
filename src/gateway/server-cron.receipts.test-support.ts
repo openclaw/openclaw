@@ -3,12 +3,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { CronService } from "../cron/service.js";
+import { CronService } from "../cron/service.js";
 import type { CronServiceState } from "../cron/service/state.js";
 import { findActiveCronRunReceiptInDatabase } from "../cron/store/run-receipt-store.js";
 import type { CronJobCreate } from "../cron/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { RunExit } from "../process/supervisor/types.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -25,7 +31,10 @@ type GatewayCronReceiptTestHarness = {
     spawn: Mock<() => Promise<WatchedRun & { runId: string }>>;
   };
   createCronConfig: (name: string) => OpenClawConfig;
-  loadCronService: (cfg: OpenClawConfig) => CronFixture;
+  loadCronService: (
+    cfg: OpenClawConfig,
+    overrides?: { scheduler: GatewayScheduler },
+  ) => CronFixture;
   getCronDeps: (service: CronFixture) => Pick<CronServiceState["deps"], "runCommandJob">;
   getConcreteCron: (service: CronFixture) => CronService;
   addCronJob: (
@@ -69,7 +78,18 @@ export function registerGatewayCronReceiptTests({
       const cleanupGuardRegistered = createDeferred();
       const receiptRecheckRegistered = createDeferred();
       const { spawn } = mockCronSupervisor(...watched);
-      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"));
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler({
+        ...clock.clock,
+        arm: (run, delayMs) => {
+          const cancel = clock.clock.arm(run, delayMs);
+          if (delayMs === 2_000) {
+            receiptRecheckRegistered.resolve();
+          }
+          return cancel;
+        },
+      });
+      const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"), { scheduler });
       const runCommandJob = vi.fn<NonNullable<CronServiceState["deps"]["runCommandJob"]>>(
         async () => ({ status: "ok", summary: "next payload" }),
       );
@@ -110,8 +130,6 @@ export function registerGatewayCronReceiptTests({
           const timer = schedule(callback, delay, ...args);
           if (delay === 20_000) {
             cleanupGuardRegistered.resolve();
-          } else if (delay === 2_000) {
-            receiptRecheckRegistered.resolve();
           }
           return timer;
         });
@@ -183,14 +201,22 @@ export function registerGatewayCronReceiptTests({
           expect(handoff.current().activeJobIds()).toEqual([]);
         }
         releaseRunner.resolve({ status: "ok", summary: "late cleanup completed" });
+        // Worker receipt completion must settle before the separate polling clock advances.
+        await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
         if (action === "run" || action === "replace") {
           // The registered receipt owner rechecks active fences every two seconds.
           await vi.advanceTimersByTimeAsync(2_000);
+          await clock.advanceBy(2_000);
           await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(2), {
             timeout: 5_000,
           });
           await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
           expect(reserved).toHaveBeenCalledTimes(2);
+          const completion = expectDefined(runs.mock.results.at(-1), "rearmed on-exit run");
+          if (completion.type !== "return") {
+            throw new Error("Rearmed on-exit run did not return a completion");
+          }
+          await completion.value;
           if (action === "run") {
             expect(runCommandJob.mock.calls[1]?.[0].job.payload).toMatchObject({
               kind: "command",
@@ -200,7 +226,6 @@ export function registerGatewayCronReceiptTests({
           expect(state.cron.getJob(job.id)?.enabled).toBe(false);
           expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
         } else {
-          await vi.waitFor(() => expect(activeReceipt()).toBeUndefined());
           expect(reserved).toHaveBeenCalledOnce();
           expect(runCommandJob).toHaveBeenCalledOnce();
         }
@@ -214,6 +239,151 @@ export function registerGatewayCronReceiptTests({
         } finally {
           timers.mockRestore();
           vi.useRealTimers();
+        }
+      }
+    },
+  );
+}
+
+export function registerGatewayCronHandoffTests({
+  createWatchedRun,
+  mockCronSupervisor,
+  createCronConfig,
+  loadCronService,
+  getConcreteCron,
+  addCronJob,
+  runExit,
+  requestHeartbeatAndWaitMock,
+  enqueueSystemEventMock,
+}: Omit<GatewayCronReceiptTestHarness, "getCronDeps"> & {
+  requestHeartbeatAndWaitMock: Mock<(...args: unknown[]) => Promise<HeartbeatRunResult>>;
+  enqueueSystemEventMock: Mock;
+}) {
+  it.each(["start", "start failure", "stop"] as const)(
+    "holds adopted on-exit work until the previous scheduler drains (%s)",
+    async (outcome) => {
+      const watched = [createWatchedRun(false), createWatchedRun(false)] as const;
+      const exits = [watched[0].exit, watched[1].exit] as const;
+      const firstStarted = createDeferred();
+      const secondStarted = createDeferred();
+      const releaseFirst = createDeferred();
+      const releaseSecond = createDeferred();
+      const { spawn } = mockCronSupervisor(...watched);
+      requestHeartbeatAndWaitMock
+        .mockReset()
+        .mockImplementationOnce(async () => {
+          firstStarted.resolve();
+          await releaseFirst.promise;
+          return { status: "ran", durationMs: 1 };
+        })
+        .mockImplementationOnce(async () => {
+          secondStarted.resolve();
+          await releaseSecond.promise;
+          return { status: "ran", durationMs: 1 };
+        });
+      const cfg = createCronConfig("server-cron-on-exit-handoff");
+      // Only the two on-exit wakes belong to this handoff fixture.
+      cfg.agents = { defaults: { heartbeat: { every: "0m" } } };
+      const previous = loadCronService(cfg);
+      const start =
+        outcome === "start failure"
+          ? vi
+              .spyOn(CronService.prototype, "start")
+              .mockRejectedValueOnce(new Error("start failed"))
+          : undefined;
+      const next = loadCronService(cfg);
+      const nextRun = vi.spyOn(getConcreteCron(next), "runOnExit");
+      let adoption: void | Promise<void> = undefined;
+      try {
+        const jobs = [];
+        for (const name of ["first", "second"]) {
+          jobs.push(
+            await addCronJob(
+              previous,
+              name,
+              { kind: "systemEvent", text: "done" },
+              {
+                schedule: { kind: "on-exit", command: "true" },
+                sessionTarget: "main",
+                wakeMode: "now",
+              },
+            ),
+          );
+        }
+        await previous.reconcileExitWatchers();
+        expect(spawn).toHaveBeenCalledTimes(2);
+        exits[0].resolve(runExit({ reason: "exit", exitCode: 0 }));
+        await firstStarted.promise;
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+        const oldHandoff = expectDefined(
+          await previous.prepareExitWatcherHandoff?.(),
+          "previous handoff",
+        );
+        const nextHandoff = expectDefined(await next.prepareExitWatcherHandoff?.(), "next handoff");
+        adoption = nextHandoff.adopt(oldHandoff.current());
+        exits[1].resolve(
+          runExit({ reason: "exit", exitCode: 7, stdout: "completed before reload" }),
+        );
+        await waitForImmediate();
+        expect(nextRun).not.toHaveBeenCalled();
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+
+        releaseFirst.resolve();
+        await adoption;
+        await oldHandoff.stopOwner();
+        expect(nextRun).not.toHaveBeenCalled();
+        expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+        const secondId = expectDefined(jobs[1], "second job").id;
+        if (outcome !== "stop") {
+          if (outcome === "start failure") {
+            await expect(next.cron.start()).rejects.toThrow("start failed");
+            expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+          }
+          await next.cron.start();
+          await secondStarted.promise;
+          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledTimes(2);
+          expect(nextRun).toHaveBeenCalledOnce();
+          expect(requestHeartbeatAndWaitMock).toHaveBeenNthCalledWith(
+            2,
+            expect.objectContaining({ reason: "cron:" + secondId }),
+            expect.anything(),
+          );
+          releaseSecond.resolve();
+          const completion = expectDefined(nextRun.mock.results[0], "adopted on-exit run");
+          if (completion.type !== "return") {
+            throw new Error("Adopted on-exit run did not return a completion");
+          }
+          await completion.value;
+          expect(next.cron.getJob(secondId)?.state.lastRunStatus).toBe("ok");
+          expect(enqueueSystemEventMock).toHaveBeenLastCalledWith(
+            expect.stringContaining("completed before reload"),
+            expect.anything(),
+          );
+          expect(spawn).toHaveBeenCalledTimes(2);
+        } else {
+          await next.cron.stopAndDrain?.();
+          expect(requestHeartbeatAndWaitMock).toHaveBeenCalledOnce();
+          expect(
+            (await next.cron.list({ includeDisabled: true })).find((job) => job.id === secondId)
+              ?.enabled,
+          ).toBe(true);
+          expect(nextHandoff.current().activeJobIds()).toEqual([]);
+        }
+      } finally {
+        releaseFirst.resolve();
+        releaseSecond.resolve();
+        for (const exit of exits) {
+          exit.resolve(runExit());
+        }
+        try {
+          await adoption;
+          await next.cron.stopAndDrain?.();
+          await previous.cron.stopAndDrain?.();
+        } finally {
+          nextRun.mockRestore();
+          start?.mockRestore();
+          // The stop case deliberately leaves its second heartbeat unconsumed.
+          requestHeartbeatAndWaitMock.mockReset();
         }
       }
     },

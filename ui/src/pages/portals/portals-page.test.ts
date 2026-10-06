@@ -11,7 +11,6 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { resolvePortalUrl } from "./portal-url.ts";
 
 const probePortalReachable = vi.hoisted(() =>
   vi.fn<() => Promise<"reachable" | "unreachable" | "blocked">>(),
@@ -27,16 +26,17 @@ const portal = {
   port: 3000,
   listenPort: 43_123,
   tokenQuery: "openclaw_portal=secret-token",
-  url: "http://127.0.0.1:43123/app?openclaw_portal=secret-token",
-  publicUrl: "http://127.0.0.1:43123/app",
+  url: "https://preview.example.test:8443/context/app?view=one%2Ftwo&openclaw_portal=secret-token#section",
+  publicUrl: "https://preview.example.test:8443/context/app?view=one%2Ftwo#section",
   path: "/app",
   description: "Use the seeded test account.",
   createdAtMs: 1_000,
 } satisfies PortalSummary;
 
 function createContext(
-  methods: string[],
+  methods: string[] | null,
   request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+  scopes = ["operator.write"],
 ) {
   const requestMock = vi.fn(request);
   const client = { request: requestMock } as unknown as GatewayBrowserClient;
@@ -45,13 +45,16 @@ function createContext(
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods(methods, ["operator.write"]),
+    hello: methods
+      ? gatewayHelloForMethods(methods, scopes)
+      : { ...gatewayHelloForMethods([], scopes), features: undefined },
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
     lastErrorCode: null,
   };
   const eventListeners = new Set<(event: GatewayEventFrame) => void>();
+  const snapshotListeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const gateway = {
     snapshot,
     connection: {
@@ -60,7 +63,10 @@ function createContext(
       bootstrapToken: "",
       password: "",
     },
-    subscribe: () => () => undefined,
+    subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
+      snapshotListeners.add(listener);
+      return () => snapshotListeners.delete(listener);
+    },
     subscribeEvents(listener: (event: GatewayEventFrame) => void) {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);
@@ -68,6 +74,12 @@ function createContext(
   } as unknown as ApplicationContext["gateway"];
   return {
     context: { gateway } as unknown as ApplicationContext,
+    updateSnapshot(update: Partial<ApplicationGatewaySnapshot>) {
+      Object.assign(snapshot, update);
+      for (const listener of snapshotListeners) {
+        listener(snapshot);
+      }
+    },
     emitPortals(portals: PortalSummary[]) {
       for (const listener of eventListeners) {
         listener({ type: "event", event: "portal.changed", payload: { portals } });
@@ -95,6 +107,7 @@ afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 beforeEach(() => {
@@ -102,6 +115,76 @@ beforeEach(() => {
 });
 
 describe("PortalsPage", () => {
+  it.each([undefined, "pending-machine"])(
+    "does not read portal state without operator.read (environment: %s)",
+    async (environmentId) => {
+      const source = createContext(
+        ["portal.list", "environments.status"],
+        async () => {
+          throw new Error("unauthorized portal read");
+        },
+        ["operator.sessions.read", "operator.sessions.write"],
+      );
+      const page = await mountPage(source.context, undefined, environmentId);
+      await page.updateComplete;
+      expect(source.request).not.toHaveBeenCalled();
+      expect(page.textContent).toContain("This action requires operator.read access.");
+      expect(page.textContent).not.toContain("unauthorized portal read");
+      expect(page.textContent).not.toContain("This gateway does not support portals.");
+      expect(page.textContent).not.toContain("Starting your machine");
+    },
+  );
+
+  it.each([undefined, "pending-machine"])(
+    "retains read access without a method catalog (environment: %s)",
+    async (environmentId) => {
+      const source = createContext(
+        null,
+        async () =>
+          environmentId
+            ? { id: environmentId, type: "worker", status: "available" }
+            : { portals: [] },
+        ["operator.read"],
+      );
+      await mountPage(source.context, undefined, environmentId);
+      await vi.waitFor(() =>
+        expect(source.request).toHaveBeenCalledWith(
+          environmentId ? "environments.status" : "portal.list",
+          environmentId ? { environmentId } : {},
+        ),
+      );
+    },
+  );
+
+  it.each([undefined, "pending-machine"])(
+    "drops portal state and stops reads after reconnect without read scope (environment: %s)",
+    async (environmentId) => {
+      vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+      const methods = ["portal.list", "environments.status"];
+      const source = createContext(methods, async () =>
+        environmentId
+          ? { id: environmentId, type: "worker", status: "starting" }
+          : { portals: [portal] },
+      );
+      const page = await mountPage(source.context, undefined, environmentId);
+      await vi.waitFor(() => expect(source.request).toHaveBeenCalledTimes(1));
+      source.updateSnapshot({ phase: "reconnecting" });
+      await page.updateComplete;
+      expect(page.textContent).not.toContain("This action requires operator.read access.");
+      source.updateSnapshot({
+        phase: "connected",
+        hello: gatewayHelloForMethods(methods, ["operator.sessions.read"]),
+      });
+      await page.updateComplete;
+      source.emitPortals([portal]);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(source.request).toHaveBeenCalledTimes(1);
+      expect(page.textContent).toContain("This action requires operator.read access.");
+      expect(page.querySelector("iframe")).toBeNull();
+      expect(page.textContent).not.toContain("Starting your machine");
+    },
+  );
+
   it("shows machine startup before selecting only the portal explicitly opened for its app", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     let environment: EnvironmentSummary = {
@@ -200,48 +283,53 @@ describe("PortalsPage", () => {
     });
   });
 
-  it("renders the portal list and refetches it after replacement events", async () => {
-    const source = createContext(["portal.list", "portal.close"], async (method) => {
-      if (method === "portal.list") {
-        return { portals: [portal] } satisfies PortalListResult;
-      }
-      return { closed: true };
-    });
-    const page = await mountPage(source.context);
+  it.each(["reachable", "blocked"] as const)(
+    "renders %s previews and refetches the portal list after replacement events",
+    async (reachability) => {
+      probePortalReachable.mockResolvedValue(reachability);
+      const source = createContext(["portal.list", "portal.close"], async (method) => {
+        if (method === "portal.list") {
+          return { portals: [portal] } satisfies PortalListResult;
+        }
+        return { closed: true };
+      });
+      const page = await mountPage(source.context);
 
-    await vi.waitFor(() => {
+      await vi.waitFor(() => {
+        expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
+      });
+      expect(page.querySelector(".portals-rail__item")?.textContent).toContain("Port 3000");
+      expect(page.querySelector(".portals-rail__item")?.textContent).toContain(
+        "Use the seeded test account.",
+      );
+      const frame = page.querySelector("iframe");
+      expect(frame?.getAttribute("src")).toBe(portal.url);
+      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(portal.url);
+      expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
+      expect(frame?.getAttribute("sandbox")).toBe(
+        "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
+      );
+      expect(probePortalReachable).toHaveBeenCalledWith(portal.url);
+      expect(page.textContent).not.toContain("Portal not reachable from this browser");
+
+      source.emitPortals([{ ...portal, url: "https://event.example.test/untrusted" }]);
+
+      await vi.waitFor(() => {
+        expect(source.request).toHaveBeenCalledTimes(2);
+      });
+      expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
       expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-    });
-    expect(page.querySelector(".portals-rail__item")?.textContent).toContain("Port 3000");
-    expect(page.querySelector(".portals-rail__item")?.textContent).toContain(
-      "Use the seeded test account.",
-    );
-    const frame = page.querySelector("iframe");
-    expect(frame?.getAttribute("src")).toBe(
-      "https://gateway.example.test:43123/app?openclaw_portal=secret-token",
-    );
-    expect(frame?.getAttribute("referrerpolicy")).toBe("no-referrer");
-    expect(frame?.getAttribute("sandbox")).toBe(
-      "allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts",
-    );
-    expect(probePortalReachable).toHaveBeenCalledWith(
-      "https://gateway.example.test:43123/app?openclaw_portal=secret-token",
-    );
-
-    source.emitPortals([]);
-
-    await vi.waitFor(() => {
-      expect(source.request).toHaveBeenCalledTimes(2);
-    });
-    expect(source.request).toHaveBeenLastCalledWith("portal.list", {});
-    expect(page.querySelector(".portals-rail__title")?.textContent).toBe("Seeded app");
-  });
+      expect(page.querySelector("iframe")?.getAttribute("src")).toBe(portal.url);
+    },
+  );
 
   it("requires write access instead of opening a portal without credentials", async () => {
     const { tokenQuery: _tokenQuery, url: _url, ...redactedPortal } = portal;
-    const source = createContext(["portal.list"], async () => ({
-      portals: [redactedPortal as PortalSummary],
-    }));
+    const source = createContext(
+      ["portal.list"],
+      async () => ({ portals: [redactedPortal as PortalSummary] }),
+      ["operator.read"],
+    );
     const page = await mountPage(source.context);
 
     await vi.waitFor(() => {
@@ -282,17 +370,109 @@ describe("PortalsPage", () => {
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
 
-  it("still mounts the preview when policy blocks the probe", async () => {
-    // A CSP-refused probe never reached the network, so it must not be reported
-    // as an unreachable portal: frames obey frame-src and can still load.
-    probePortalReachable.mockResolvedValue("blocked");
-    const source = createContext(["portal.list", "portal.close"], async () => ({
-      portals: [portal],
-    }));
-    const page = await mountPage(source.context);
+  it.each([
+    {
+      controlUi: "http://localhost:18789/portals",
+      gateway: "wss://gateway.example.test/control",
+      ingress: true,
+    },
+    {
+      controlUi: "http://localhost:18789/portals",
+      gateway: "ws://127.0.0.1:18789/control",
+      ingress: false,
+    },
+    {
+      controlUi: "https://127.0.0.1:18789/portals",
+      gateway: "ws://127.0.0.1:18789/control",
+      ingress: false,
+    },
+  ])(
+    "explains HTTP portal access from $controlUi via $gateway without probing",
+    async ({ controlUi, gateway, ingress }) => {
+      vi.stubGlobal("location", new URL(controlUi));
+      const localPortal = {
+        ...portal,
+        url: "http://127.0.0.1:43123/app?openclaw_portal=secret-token",
+        publicUrl: "http://127.0.0.1:43123/app",
+      };
+      const source = createContext(["portal.list", "portal.close"], async () => ({
+        portals: [localPortal],
+      }));
+      source.context.gateway.connection.gatewayUrl = gateway;
+      const page = await mountPage(source.context);
+      await vi.waitFor(() =>
+        expect(page.textContent).toContain(
+          ingress ? "Remote portal ingress required" : "Open this HTTP portal in a new tab",
+        ),
+      );
+      if (ingress) {
+        expect(page.textContent).toContain("gateway.portals.ingress");
+      }
+      expect(page.querySelector("iframe")).toBeNull();
+      expect(probePortalReachable).not.toHaveBeenCalled();
+      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
+        localPortal.url,
+      );
+      const link = page.querySelector(".portals-preview__notice-url");
+      expect(link?.getAttribute("href")).toBe(localPortal.url);
+      expect(link?.getAttribute("target")).toBe("_blank");
+    },
+  );
 
-    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
-    expect(page.textContent).not.toContain("Portal not reachable from this browser");
+  it.each([
+    { host: "127.0.0.1", gateway: "wss://localhost:18789/control" },
+    { host: "192.168.1.20", gateway: "ws://192.168.1.20:18789/control" },
+  ])(
+    "preserves the service-published HTTP URL on $host via $gateway",
+    async ({ host, gateway }) => {
+      vi.stubGlobal("location", new URL(`http://${host}:18789/portals`));
+      const localPortal = {
+        ...portal,
+        url: `http://${host}:43123/app?openclaw_portal=secret-token`,
+        publicUrl: `http://${host}:43123/app`,
+      };
+      const source = createContext(["portal.list"], async () => ({ portals: [localPortal] }));
+      source.context.gateway.connection.gatewayUrl = gateway;
+      const page = await mountPage(source.context);
+      await vi.waitFor(() =>
+        expect(page.querySelector("iframe")?.getAttribute("src")).toBe(localPortal.url),
+      );
+      expect(probePortalReachable).toHaveBeenCalledWith(localPortal.url);
+      expect(page.querySelector(".portals-preview__url")?.getAttribute("href")).toBe(
+        localPortal.url,
+      );
+      expect(page.textContent).not.toContain("Remote portal ingress required");
+    },
+  );
+
+  it("does not publish a late probe from the previous Gateway", async () => {
+    let completeOldProbe!: (result: "reachable") => void;
+    probePortalReachable
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            completeOldProbe = resolve;
+          }),
+      )
+      .mockResolvedValueOnce("unreachable");
+    const first = createContext(["portal.list"], async () => ({ portals: [portal] }));
+    const provider = createApplicationContextProvider(first.context);
+    const page = document.createElement("openclaw-portals-page");
+    provider.append(page);
+    document.body.append(provider);
+    await page.updateComplete;
+    await vi.waitFor(() => expect(probePortalReachable).toHaveBeenCalledTimes(1));
+
+    const second = createContext(["portal.list"], async () => ({ portals: [portal] }));
+    provider.setContext(second.context);
+    await vi.waitFor(() =>
+      expect(page.textContent).toContain("Portal not reachable from this browser"),
+    );
+    completeOldProbe("reachable");
+    await page.updateComplete;
+    expect(page.querySelector("iframe")).toBeNull();
+    expect(page.textContent).toContain("Portal not reachable from this browser");
+    expect(probePortalReachable).toHaveBeenCalledTimes(2);
   });
 
   it("shows the empty prompts and an unsupported note without calling the method", async () => {
@@ -305,17 +485,5 @@ describe("PortalsPage", () => {
     expect(page.textContent).toContain("Make the server available in a portal.");
     expect(page.textContent).toContain("This gateway does not support portals.");
     expect(source.request).not.toHaveBeenCalled();
-  });
-});
-
-describe("resolvePortalUrl", () => {
-  it("uses the resolved gateway host and scheme with the portal listener port", () => {
-    expect(
-      resolvePortalUrl(
-        portal,
-        "wss://gateway.example.test:18789/control",
-        "http://control-ui.example.test",
-      ),
-    ).toBe("https://gateway.example.test:43123/app?openclaw_portal=secret-token");
   });
 });

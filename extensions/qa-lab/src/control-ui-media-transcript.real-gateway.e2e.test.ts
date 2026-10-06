@@ -9,6 +9,7 @@ import { expect, it } from "vitest";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.ts";
 import type { AssistantMessage, Model } from "../../../packages/ai/src/types.ts";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
+import { waitForControlUiGatewayReady } from "../../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
 import {
   controlUiSessionUrl,
   navigateToControlUiSession,
@@ -402,6 +403,21 @@ suite.define(() => {
               { gatewayUrl: gateway.gateway.wsUrl, token: gateway.gateway.token },
             );
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:qa:main"));
+            await waitForControlUiGatewayReady(page);
+            // Exercise media delivery only after the target session owns its composer;
+            // cold startup can still replace the initial empty draft before this point.
+            await page.waitForFunction(() => {
+              const pane = document.querySelector<
+                HTMLElement & {
+                  state?: { connected: boolean; sessionKey: string; chatLoading: boolean };
+                }
+              >("openclaw-chat-pane.chat-pane-cache__pane--visible");
+              return (
+                pane?.state?.connected === true &&
+                pane.state.sessionKey === "agent:qa:main" &&
+                !pane.state.chatLoading
+              );
+            });
             const composer = page.locator(".agent-chat__composer-combobox textarea");
             await composer.fill("Reply exactly `Slides ready\nMEDIA:./slides.pptx`");
             await page.getByRole("button", { name: "Send message" }).click();

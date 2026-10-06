@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -7,6 +8,7 @@ export function createFeishuBroadcastIngressSettlement(params: {
   replayClaim?: ChannelReplayClaimHandle;
   onReplayCommitError?: (error: unknown) => void;
   onAdopted?: () => void;
+  trackTask?: (task: Promise<void>) => void;
 }): {
   createLane: (replayClaim?: ChannelReplayClaimHandle) => {
     lifecycle: FeishuIngressLifecycle;
@@ -19,12 +21,13 @@ export function createFeishuBroadcastIngressSettlement(params: {
 } {
   type LaneState = {
     replayClaim?: ChannelReplayClaimHandle;
+    adopting?: boolean;
     status: "pending" | "deferred" | "adopted" | "completed" | "failed" | "abandoned";
   };
 
   const lanes = new Set<LaneState>();
   const failures: unknown[] = [];
-  const fallbackAbortSignal = new AbortController().signal;
+  const fallbackAbort = new AbortController();
   let fanoutSettled = false;
   let terminal: "adopted" | "abandoned" | undefined;
   let adoption: Promise<void> | undefined;
@@ -32,6 +35,13 @@ export function createFeishuBroadcastIngressSettlement(params: {
   let finalizing = false;
   let deferred = false;
   let replayReleased = false;
+  const settlement = createDeferred<void>();
+  params.trackTask?.(settlement.promise);
+  const finishSettlement = () => {
+    if (![...lanes].some((lane) => lane.adopting)) {
+      settlement.resolve();
+    }
+  };
 
   const beginFinalizing = () => {
     if (finalizing) {
@@ -70,6 +80,8 @@ export function createFeishuBroadcastIngressSettlement(params: {
       await params.lifecycle?.onAbandoned();
     } finally {
       terminal = "abandoned";
+      fallbackAbort.abort(error);
+      finishSettlement();
     }
   };
   const abandon = async (error: unknown) => {
@@ -87,8 +99,8 @@ export function createFeishuBroadcastIngressSettlement(params: {
     await activeAbandonment;
   };
   const runAdoption = async () => {
-    beginFinalizing();
     try {
+      beginFinalizing();
       await params.lifecycle?.onAdopted();
       terminal = "adopted";
       try {
@@ -104,6 +116,8 @@ export function createFeishuBroadcastIngressSettlement(params: {
     } catch (error) {
       await runAbandonment(error).catch(() => undefined);
       throw error;
+    } finally {
+      finishSettlement();
     }
   };
   const adopt = async () => {
@@ -150,14 +164,12 @@ export function createFeishuBroadcastIngressSettlement(params: {
     createLane: (replayClaim) => {
       const lane: LaneState = { replayClaim, status: "pending" };
       lanes.add(lane);
-      const releaseLane = (error: unknown) => {
-        lane.replayClaim?.release({ error });
-      };
       return {
         lifecycle: {
-          abortSignal: params.lifecycle?.abortSignal ?? fallbackAbortSignal,
+          abortSignal: params.lifecycle?.abortSignal ?? fallbackAbort.signal,
           onAdopted: async () => {
             if (
+              terminal ||
               lane.status === "adopted" ||
               lane.status === "completed" ||
               lane.status === "failed" ||
@@ -166,14 +178,22 @@ export function createFeishuBroadcastIngressSettlement(params: {
               return;
             }
             lane.status = "adopted";
-            beginFinalizing();
+            lane.adopting = true;
             try {
-              await lane.replayClaim?.commit();
-            } catch (error) {
-              reportReplayCommitError(error);
+              beginFinalizing();
+              try {
+                await lane.replayClaim?.commit();
+              } catch (error) {
+                reportReplayCommitError(error);
+              }
+              lane.status = "completed";
+              await maybeSettle();
+            } finally {
+              lane.adopting = false;
+              if (terminal) {
+                finishSettlement();
+              }
             }
-            lane.status = "completed";
-            await maybeSettle();
           },
           onDeferred: () => {
             if (lane.status !== "pending") {
@@ -194,31 +214,28 @@ export function createFeishuBroadcastIngressSettlement(params: {
               return;
             }
             lane.status = "abandoned";
-            releaseLane(new Error("feishu-broadcast-turn-abandoned"));
+            lane.replayClaim?.release({ error: new Error("feishu-broadcast-turn-abandoned") });
             await maybeSettle();
           },
         },
         onDispatchComplete: async (dispatched) => {
-          if (!dispatched && lane.status === "pending") {
-            const error = new Error("feishu broadcast lane was not dispatched");
-            lane.status = "failed";
-            failures.push(error);
-            releaseLane(error);
-            return;
-          }
           if (lane.status !== "pending") {
             return;
           }
-          const error = new Error("feishu broadcast dispatch returned before turn adoption");
+          const error = new Error(
+            dispatched
+              ? "feishu broadcast dispatch returned before turn adoption"
+              : "feishu broadcast lane was not dispatched",
+          );
           lane.status = "failed";
           failures.push(error);
-          releaseLane(error);
+          lane.replayClaim?.release({ error });
         },
         onDispatchFailed: async (error) => {
           failures.push(error);
           if (lane.status !== "completed") {
             lane.status = "failed";
-            releaseLane(error);
+            lane.replayClaim?.release({ error });
           }
           await maybeSettle();
         },

@@ -1,6 +1,7 @@
 import type { MediaPlaceholderTextFact } from "openclaw/plugin-sdk/channel-inbound";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeIMessageMessageId } from "../message-guid.js";
 import { getIMessageRuntime } from "../runtime.js";
 import {
   IMESSAGE_SENT_ECHOES_TTL_MS,
@@ -10,29 +11,9 @@ import {
   resolveIMessageEchoMediaKey,
   type PersistedEchoEntry,
 } from "../state-contract.js";
-import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
+import { normalizeIMessageEchoText } from "./echo-text-corruption.js";
 
 type PersistedEchoStore = PluginStateKeyedStore<PersistedEchoEntry>;
-
-function normalizeText(text: string | undefined): string | undefined {
-  if (!text) {
-    return undefined;
-  }
-  // Match the in-memory echo-cache key so a reflected echo with a leading attributedBody
-  // corruption marker still matches the clean stored send (the persisted sibling of #93511).
-  const normalized = stripLeadingEchoTextCorruptionMarkers(
-    text.replace(/\r\n?/g, "\n").trim(),
-  ).trim();
-  return normalized || undefined;
-}
-
-function normalizeMessageId(messageId: string | undefined): string | undefined {
-  const normalized = messageId?.trim();
-  if (!normalized || normalized === "ok" || normalized === "unknown") {
-    return undefined;
-  }
-  return normalized;
-}
 
 let persistenceFailureLogged = false;
 function reportFailure(scope: string, err: unknown): void {
@@ -120,9 +101,9 @@ export async function rememberPersistedIMessageEcho(params: {
   ttlMs?: number;
   pending?: boolean;
 }): Promise<string | undefined> {
-  const text = normalizeText(params.text);
+  const text = normalizeIMessageEchoText(params.text);
   const media = normalizeMedia(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   const entry: PersistedEchoEntry = {
     scope: params.scope,
     timestamp: Date.now(),
@@ -159,9 +140,9 @@ export async function hasPersistedIMessageEcho(params: {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
 }): Promise<boolean> {
-  const text = normalizeText(params.text);
+  const text = normalizeIMessageEchoText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
-  const messageId = normalizeMessageId(params.messageId);
+  const messageId = normalizeIMessageMessageId(params.messageId);
   if (!text && !mediaKey && !messageId) {
     return false;
   }

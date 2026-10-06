@@ -7,15 +7,17 @@ import WebKit
 @MainActor
 private final class DashboardAppLinkRecorder: NSObject, WKScriptMessageHandler {
     var urls: [String] = []
+    let received = AsyncTestGate()
 
     func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
         #expect(message.world === DashboardAppLinkMessageHandler.world)
         #expect(message.frameInfo.isMainFrame)
         if let url = message.body as? String { self.urls.append(url) }
+        self.received.open()
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 @MainActor
 struct DashboardAppLinkBridgeTests {
     @Test(arguments: ["_self", "_blank"])
@@ -23,7 +25,7 @@ struct DashboardAppLinkBridgeTests {
         let server = try await DashboardHTTPFixture.start(
             html: "<html><body><a id='launch' href='openclaw://dashboard' target='\(target)'>Open</a></body></html>")
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })
@@ -40,9 +42,8 @@ struct DashboardAppLinkBridgeTests {
             contentWorld: DashboardAppLinkMessageHandler.world,
             name: DashboardAppLinkMessageHandler.name)
         controller.show(url: server.url(), auth: auth)
-        try await self.waitUntil {
-            !controller.webView.isLoading && controller.canDeliverNativeCommands
-        }
+        try await DashboardTestWait.document(controller, "app-link document")
+        #expect(controller.canDeliverNativeCommands)
         let pageHasHandler = try await controller.webView.callAsyncJavaScript(
             "return typeof window.webkit.messageHandlers.openclawAppLink !== 'undefined';",
             in: nil, contentWorld: .page) as? Bool
@@ -69,15 +70,8 @@ struct DashboardAppLinkBridgeTests {
             isARepeat: false,
             keyCode: 36))
         controller.webView.keyDown(with: enter)
-        try await self.waitUntil { !recorder.urls.isEmpty }
+        await recorder.received.wait()
+        try Task.checkCancellation()
         #expect(recorder.urls == ["openclaw://dashboard"])
-    }
-
-    private func waitUntil(_ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now + .seconds(5)
-        while !condition() {
-            guard ContinuousClock.now < deadline else { throw URLError(.timedOut) }
-            try await Task.sleep(for: .milliseconds(10))
-        }
     }
 }

@@ -25,6 +25,11 @@ openclaw message <subcommand> [flags]
 - Channel-prefixed targets (for example `discord:channel:123`) resolve the
   owning plugin without an explicit `--channel`.
 
+With an explicit channel, Gateway-owned actions such as `read --channel discord`
+validate config without running local state migrations. They require a reachable
+Gateway. Local actions, broadcasts, dry-runs, and commands that need local channel
+discovery retain local config and plugin preparation.
+
 ## Agent ownership
 
 `openclaw message` uses the configured
@@ -82,8 +87,13 @@ leading indentation. Existing empty-message validation still applies.
 Ordinary message and caption delivery still trims trailing whitespace.
 
 Local message actions run the loaded plugins' shutdown hooks before exiting, including
-after an action fails. Cleanup has a 2.5-second overall budget and does not change
-the action's exit status. `message read` skips these shutdown hooks.
+after an action fails. These hooks have a 2.5-second overall budget and do not change
+the action's exit status. `message read` skips these shutdown hooks. The executable
+then drains shared-state database workers within its existing five-second cleanup
+budget. If plugin disposal is still pending, it records a deferral and schedules that
+drain after disposal settles, preserving state for unfinished writes without making
+the command wait again. Cleanup warnings preserve the action's result; they do not
+claim the unfinished cleanup completed.
 
 ## SecretRef resolution
 
@@ -144,7 +154,8 @@ openclaw message send --channel discord \
 ```
 
 - `--media <path-or-url>`: attach image/audio/video/document (local path or
-  URL).
+  URL). Repeat to send multiple files in order; Telegram groups consecutive
+  photos into [albums](/channels/telegram/media#photo-albums).
 - `--presentation <json>`: shared payload with `text`, `context`, `divider`,
   `chart`, `table`, `buttons`, and `select` blocks, rendered per channel
   capability. See [Message Presentation](/plugins/message-presentation).
@@ -202,6 +213,11 @@ openclaw message send --channel telegram --target 123456789 --message "Open app:
 ```bash
 openclaw message send --channel telegram --target @mychat \
   --media ./diagram.png --force-document
+```
+
+```bash
+openclaw message send --channel telegram --target @mychat \
+  --message "Trip photos" --media ./photo-1.jpg --media ./photo-2.jpg
 ```
 
 ```bash

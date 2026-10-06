@@ -1,4 +1,3 @@
-// Control UI view renders the Logbook automatic work journal tab.
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -351,7 +350,7 @@ export function renderLogbook(props: LogbookProps) {
   // The tab only renders while the plugin's descriptor is advertised, so
   // enablement gating lives in the shell; connectivity is the only guard here.
   const active = props.connected;
-  configureLogbookPolling(state, active ? props.client : null, active);
+  configureLogbookPolling(state, active ? props.client : null);
   if (active && !state.timeline && !state.loading && !state.error) {
     void loadLogbook(state, props.client);
   }

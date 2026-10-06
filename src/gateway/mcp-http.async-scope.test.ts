@@ -18,6 +18,10 @@ vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools
 
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import {
+  readOperatorToolGatewayAuthority,
+  runWithOperatorToolGatewayAuthority,
+} from "./operator-tool-gateway-authority.js";
 
 const completed = { content: [{ type: "text", text: "tracked tool completed" }] };
 const executionScopes: Array<AbortSignal | undefined> = [];
@@ -90,33 +94,44 @@ async function startFromCaller() {
 }
 
 describe("MCP HTTP work ownership", () => {
-  it.each([false, true])(
-    "serves fresh request scopes after its creator closes (replacement=%s)",
-    async (replace) => {
-      if (replace) {
-        const predecessor = await startFromCaller();
-        await Promise.all([closeMcpLoopbackServer(), closeMcpLoopbackServer()]);
-        await predecessor.drain();
-      }
-      const creator = await startFromCaller();
-      await creator.drain();
-      expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
-      expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
-      expect(resolveTools).toHaveBeenCalledTimes(1);
-      expect(constructionScopes[0]).toBeDefined();
-      expect(constructionScopes[0]?.aborted).toBe(false);
-      expect(constructionScopes[0]).not.toBe(creator.signal);
-      expect(executionScopes[0]).toBeDefined();
-      expect(executionScopes[1]).toBeDefined();
-      expect(executionScopes[0]).not.toBe(executionScopes[1]);
-      for (const signal of executionScopes) {
-        expect(signal).not.toBe(constructionScopes[0]);
-        expect(signal?.aborted).toBe(true);
-      }
-      await closeMcpLoopbackServer();
-      expect(constructionScopes[0]?.aborted).toBe(true);
-    },
-  );
+  it("does not inherit an expired operator-tool invocation from its listener creator", async () => {
+    const lifetime = new AbortController();
+    execute.mockImplementation(() => {
+      const inherited = readOperatorToolGatewayAuthority();
+      inherited?.signal.throwIfAborted();
+      expect(inherited).toBeUndefined();
+      return completed;
+    });
+    await runWithOperatorToolGatewayAuthority(
+      { scopes: ["operator.write"], signal: lifetime.signal },
+      () => ensureMcpLoopbackServer(),
+    );
+    lifetime.abort(new Error("operator tool invocation authority expired"));
+    expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
+  });
+
+  it("serves fresh request scopes after its replacement creator closes", async () => {
+    const predecessor = await startFromCaller();
+    await Promise.all([closeMcpLoopbackServer(), closeMcpLoopbackServer()]);
+    await predecessor.drain();
+    const creator = await startFromCaller();
+    await creator.drain();
+    expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
+    expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
+    expect(resolveTools).toHaveBeenCalledTimes(1);
+    expect(constructionScopes[0]).toBeDefined();
+    expect(constructionScopes[0]?.aborted).toBe(false);
+    expect(constructionScopes[0]).not.toBe(creator.signal);
+    expect(executionScopes[0]).toBeDefined();
+    expect(executionScopes[1]).toBeDefined();
+    expect(executionScopes[0]).not.toBe(executionScopes[1]);
+    for (const signal of executionScopes) {
+      expect(signal).not.toBe(constructionScopes[0]);
+      expect(signal?.aborted).toBe(true);
+    }
+    await closeMcpLoopbackServer();
+    expect(constructionScopes[0]?.aborted).toBe(true);
+  });
 
   it("joins accepted tool cleanup without closing a replacement listener", async () => {
     const releaseCleanup = createDeferred();

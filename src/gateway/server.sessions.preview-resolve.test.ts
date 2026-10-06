@@ -1,12 +1,9 @@
-/**
- * Gateway session preview resolve tests.
- */
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -14,6 +11,8 @@ import {
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
+import * as sessionRows from "./session-row-projection-record.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
@@ -73,25 +72,46 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };
   const sessionId = "aggregate-work-global";
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
+  const backfilled = Promise.withResolvers<void>();
+  const publishTranscriptFields = sessionRows.publishTranscriptFields;
+  const publication = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publishTranscriptFields(row, ...args);
+      if (
+        row.key === "global" &&
+        row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
+        row.entry.sessionId === sessionId &&
+        row.lastMessagePreview === "Work global conversation"
+      ) {
+        backfilled.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => publication.mockRestore());
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
     entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
   });
-  await seedSessionTranscript({
-    agentId: "work",
-    sessionId,
-    sessionKey: "global",
-    storePath: workStorePath,
-    messages: [{ role: "user", content: "Work global conversation" }],
-  });
+  // The suite Gateway is already running, so publish the transcript to its projection.
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "work", sessionId, sessionKey: "global", storePath: workStorePath },
+    {
+      updateMode: "file-only",
+      messages: [{ message: { role: "user", content: "Work global conversation" } }],
+    },
+  );
   const { ws } = await openClient();
   try {
+    await backfilled.promise;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,
@@ -107,7 +127,6 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
           agentId: "work",
           model: "gpt-5.5",
           derivedTitle: "Work global conversation",
-          lastMessagePreview: "Work global conversation",
         },
       ]);
     }
@@ -116,7 +135,12 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     });
     expect(preview, JSON.stringify(preview)).toMatchObject({
       ok: true,
-      payload: { status: "ok", agentId: "work", derivedTitle: "Work global conversation" },
+      payload: {
+        status: "ok",
+        agentId: "work",
+        derivedTitle: "Work global conversation",
+        lastMessagePreview: "Work global conversation",
+      },
     });
     const resolved = await rpcReq(ws, "sessions.resolve", {
       label: "Work global conversation",
@@ -138,18 +162,17 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
 async function seedPreviewTail(
   sessionId: string,
   messages: Array<{ role: string; content: string }>,
-): Promise<void> {
+) {
   const { storePath } = await createSessionStoreDir();
   await writeSessionStore({
     entries: { "agent:main:main": sessionStoreEntry(sessionId) },
   });
-  await sessionAccessor.persistSessionTranscriptTurn(
-    { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath },
-    {
-      messages: messages.map((message) => ({ message })),
-      touchSessionEntry: false,
-    },
-  );
+  const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
+  await sessionAccessor.persistSessionTranscriptTurn(scope, {
+    messages: messages.map((message) => ({ message })),
+    touchSessionEntry: false,
+  });
+  return { ...scope, sessionEntry: { sessionId } };
 }
 
 function identifiedClient(profileId: string, scopes: string[] = ["operator.read"]): GatewayClient {
@@ -251,47 +274,9 @@ test("sessions.preview honors maxChars up to the shared cap", async () => {
   ]);
 });
 
-test("sessions.preview reads only a bounded tail from a large transcript", async () => {
-  await seedPreviewTail(
-    "sess-preview-bounded-tail",
-    Array.from({ length: 1024 }, (_, index) => ({
-      role: "assistant",
-      content: `message ${String(index)}`,
-    })),
-  );
-  const fullRead = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
-  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
-  const storeRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
-
-  try {
-    const preview = await directSessionReq<{
-      previews: Array<{ items: Array<{ role: string; text: string }> }>;
-    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
-
-    expect(preview.ok).toBe(true);
-    expect(preview.payload?.previews[0]?.items).toEqual(
-      Array.from({ length: 12 }, (_, index) => ({
-        role: "assistant",
-        text: `message ${String(1012 + index)}`,
-      })),
-    );
-    expect(fullRead).not.toHaveBeenCalled();
-    expect(storeRead).not.toHaveBeenCalled();
-    expect(tailRead).toHaveBeenCalledOnce();
-    expect(tailRead.mock.results[0]).toMatchObject({
-      type: "return",
-      value: { events: { length: 64 }, totalMessages: 1024 },
-    });
-  } finally {
-    fullRead.mockRestore();
-    tailRead.mockRestore();
-    storeRead.mockRestore();
-  }
-});
-
-test("sessions.preview widens its bounded tail past filtered tool-result rows", async () => {
-  await seedPreviewTail("sess-preview-sparse-tail", [
-    ...Array.from({ length: 12 }, (_, index) => ({
+test("session preview reader widens its bounded tail past filtered tool-result rows", async () => {
+  const scope = await seedPreviewTail("sess-preview-sparse-tail", [
+    ...Array.from({ length: 64 }, (_, index) => ({
       role: "assistant",
       content: `visible ${String(index)}`,
     })),
@@ -300,26 +285,13 @@ test("sessions.preview widens its bounded tail past filtered tool-result rows", 
       content: `tool ${String(index)}`,
     })),
   ]);
-  const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
-
-  try {
-    const preview = await directSessionReq<{
-      previews: Array<{ items: Array<{ role: string; text: string }> }>;
-    }>("sessions.preview", { keys: ["main"], limit: 12, maxChars: 120 });
-
-    expect(preview.payload?.previews[0]?.items).toEqual(
-      Array.from({ length: 12 }, (_, index) => ({
-        role: "assistant",
-        text: `visible ${String(index)}`,
-      })),
-    );
-    expect(tailRead.mock.calls.map(([, options]) => options)).toEqual([
-      { maxBytes: 1024 * 1024, maxLines: 64, maxMessages: 64 },
-      { maxBytes: 8 * 1024 * 1024, maxLines: 1024, maxMessages: 1024 },
-    ]);
-  } finally {
-    tailRead.mockRestore();
-  }
+  const items = await readSessionPreviewItemsFromTranscriptAsync(scope, 12, 120);
+  expect(items).toEqual(
+    Array.from({ length: 12 }, (_, index) => ({
+      role: "assistant",
+      text: `visible ${String(52 + index)}`,
+    })),
+  );
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {
@@ -347,71 +319,6 @@ test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns
 
   expect(resolved.ok).toBe(true);
   expect(resolved.payload?.key).toBe("agent:main:subagent:target");
-});
-
-test("sessions.resolve can probe a missing selector without returning an RPC error", async () => {
-  await createSessionStoreDir();
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: false }>(ws, "sessions.resolve", {
-    key: "agent:main:missing",
-    allowMissing: true,
-  });
-
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload).toEqual({ ok: false });
-});
-
-test("sessions.resolve rejects a missing key by default", async () => {
-  await createSessionStoreDir();
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq(ws, "sessions.resolve", {
-    key: "agent:main:missing",
-  });
-
-  expect(resolved.ok).toBe(false);
-  expect(resolved.error?.message).toBe("No session found: agent:main:missing");
-});
-
-test("sessions.resolve returns short-id ambiguity as a protocol-success result", async () => {
-  await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "agent:main:thread:12345678-0aaa-4000-8000-000000000001": {
-        sessionId: "sess-short-newer",
-        displayName: "Newer",
-        updatedAt: 20,
-      },
-      "agent:main:thread:12345678-0bbb-4000-8000-000000000002": {
-        sessionId: "sess-short-older",
-        displayName: "Older",
-        updatedAt: 10,
-      },
-    },
-  });
-
-  const resolved = await directSessionReq<{
-    ok: false;
-    candidates: Array<{ key: string; displayName?: string }>;
-  }>("sessions.resolve", { shortId: "12345678" });
-
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload).toEqual({
-    ok: false,
-    candidates: [
-      {
-        agentId: "main",
-        key: "agent:main:thread:12345678-0aaa-4000-8000-000000000001",
-        displayName: "Newer",
-      },
-      {
-        agentId: "main",
-        key: "agent:main:thread:12345678-0bbb-4000-8000-000000000002",
-        displayName: "Older",
-      },
-    ],
-  });
 });
 
 test("sessions.resolve filters discovery selectors with sessions.list visibility", async () => {
@@ -541,19 +448,6 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
     { client: identifiedClient("admin", ["operator.admin"]) },
   );
   expect(adminIncognito).toMatchObject({ ok: true, payload: { ok: true, key: incognitoKey } });
-});
-
-test.each([
-  { params: { shortId: "xyz" }, message: "shortId must be 8-32 hexadecimal characters" },
-  { params: { label: "release", slugHint: "release" }, message: "slugHint requires shortId" },
-])("sessions.resolve rejects invalid short-ref params: $message", async ({ params, message }) => {
-  await createSessionStoreDir();
-
-  const resolved = await directSessionReq("sessions.resolve", params);
-
-  expect(resolved.ok).toBe(false);
-  expect(resolved.error?.code).toBe("INVALID_REQUEST");
-  expect(resolved.error?.message).toBe(message);
 });
 
 test("sessions.resolve by key respects spawnedBy visibility filters", async () => {

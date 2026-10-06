@@ -11,7 +11,6 @@ import {
   withPluginCache,
 } from "../../../plugins/plugin-cache.js";
 import {
-  completePluginMetadataSnapshot,
   isPluginMetadataSnapshotCompatible,
   loadPluginMetadataSnapshot,
   rebasePluginMetadataSnapshotManifestRegistry,
@@ -20,6 +19,7 @@ import {
 
 export type DoctorPluginMetadataSnapshotState = {
   current?: PluginMetadataSnapshot;
+  inventoryChanged?: boolean;
 };
 
 type DoctorPluginMetadataSnapshotScope = {
@@ -45,42 +45,27 @@ export function resolveConfigWideDoctorPluginMetadataSnapshot(params: {
     // may describe the pre-repair manifest and must not restore stale owners.
     allowCurrent: false,
   });
-  const snapshot = rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
+  const snapshot =
+    manifestRegistry === params.snapshot.manifestRegistry
+      ? params.snapshot
+      : rebasePluginMetadataSnapshotManifestRegistry(params.snapshot, manifestRegistry);
   configWideDoctorSnapshots.add(snapshot);
   return snapshot;
 }
 
-/** Promotes validation-scoped metadata to a complete immutable Doctor snapshot. */
-export function completeDoctorPluginMetadataSnapshot(params: {
-  snapshot?: PluginMetadataSnapshot;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-}): PluginMetadataSnapshot | undefined {
-  const snapshot = completePluginMetadataSnapshot(params);
-  return snapshot
-    ? resolveConfigWideDoctorPluginMetadataSnapshot({
-        snapshot,
-        config: params.config,
-        env: params.env,
-      })
-    : undefined;
-}
-
 /** Reuses one exact immutable plugin metadata generation per Doctor workspace. */
 export function createDoctorPluginMetadataSnapshotScope(params: {
-  baseSnapshot?: PluginMetadataSnapshot;
   getBaseSnapshot?: () => PluginMetadataSnapshot | undefined;
   env?: NodeJS.ProcessEnv;
   getDeferredPluginIds?: () => readonly string[];
 }): DoctorPluginMetadataSnapshotScope {
   const env = params.env ?? process.env;
   const snapshotsByWorkspace = new Map<string | undefined, PluginMetadataSnapshot>();
-  const readBaseSnapshot = () => params.getBaseSnapshot?.() ?? params.baseSnapshot;
   let currentBaseSnapshot: PluginMetadataSnapshot | undefined;
   let cache = createPluginCache();
 
   const refreshBaseSnapshot = () => {
-    const nextBaseSnapshot = readBaseSnapshot();
+    const nextBaseSnapshot = params.getBaseSnapshot?.();
     if (nextBaseSnapshot === currentBaseSnapshot) {
       return;
     }

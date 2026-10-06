@@ -18,7 +18,8 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isScalar, isSeq, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
-import { rebuildMdRaw, setMdOcPath } from "./edit.js";
+import { setMdOcPath } from "./edit.js";
+import { rebuildMdRaw } from "./emit.js";
 import type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 import { insertJsoncOcPath, setJsoncOcPath } from "./jsonc/edit.js";
 import { resolveJsoncOcPath } from "./jsonc/resolve.js";
@@ -29,6 +30,7 @@ import type { OcPath } from "./oc-path.js";
 import { formatOcPath, isPattern, OcPathError, parseArrayIndexSegment } from "./oc-path.js";
 import { resolveMdOcPath } from "./resolve.js";
 import { guardSentinel } from "./sentinel.js";
+import { slugify } from "./slug.js";
 import type { YamlAst } from "./yaml/ast.js";
 import { insertYamlOcPath, setYamlOcPath } from "./yaml/edit.js";
 import { resolveYamlOcPath } from "./yaml/resolve.js";
@@ -53,6 +55,8 @@ export type OcMatch =
     }
   | { readonly kind: "node"; readonly descriptor: NodeDescriptor; readonly line: number }
   | { readonly kind: "insertion-point"; readonly container: ContainerKind; readonly line: number };
+
+type InsertionMatch = Extract<OcMatch, { kind: "insertion-point" }>;
 
 type LeafType = "string" | "number" | "boolean" | "null";
 
@@ -105,26 +109,13 @@ interface InsertionInfo {
 }
 
 function detectInsertion(path: OcPath): InsertionInfo | null {
-  const segments: Array<{ slot: "section" | "item" | "field"; value: string }> = [];
-  if (path.section !== undefined) {
-    segments.push({ slot: "section", value: path.section });
-  }
-  if (path.item !== undefined) {
-    segments.push({ slot: "item", value: path.item });
-  }
-  if (path.field !== undefined) {
-    segments.push({ slot: "field", value: path.field });
-  }
-  if (segments.length === 0) {
+  const slot = path.field !== undefined ? "field" : path.item !== undefined ? "item" : "section";
+  const value = path[slot];
+  if (!value?.startsWith("+")) {
     return null;
   }
 
-  const last = expectDefined(segments.at(-1), "non-empty insertion path segments");
-  if (!last.value.startsWith("+")) {
-    return null;
-  }
-
-  const rest = last.value.slice(1);
+  const rest = value.slice(1);
   const marker: InsertionInfo["marker"] =
     rest.length === 0
       ? "+"
@@ -134,9 +125,9 @@ function detectInsertion(path: OcPath): InsertionInfo | null {
 
   const parentPath: OcPath = {
     file: path.file,
-    ...(last.slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
-    ...(last.slot !== "item" && path.item !== undefined ? { item: path.item } : {}),
-    ...(last.slot !== "field" && path.field !== undefined ? { field: path.field } : {}),
+    ...(slot !== "section" && path.section !== undefined ? { section: path.section } : {}),
+    ...(slot !== "item" && path.item !== undefined ? { item: path.item } : {}),
+    ...(slot !== "field" && path.field !== undefined ? { field: path.field } : {}),
     ...(path.session !== undefined ? { session: path.session } : {}),
   };
   return { parentPath, marker };
@@ -158,17 +149,16 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
     return resolveInsertion(ast, insertion);
   }
 
-  switch (ast.kind) {
-    case "md":
-      return resolveMdToUniversal(ast, path);
-    case "jsonc":
-      return resolveJsoncToUniversal(ast, path);
-    case "jsonl":
-      return resolveJsonlToUniversal(ast, path);
-    case "yaml":
-      return resolveYamlToUniversal(ast, path);
+  if (ast.kind === "md") {
+    return resolveMdToUniversal(ast, path);
   }
-  return null;
+  if (ast.kind === "jsonc") {
+    return resolveJsoncToUniversal(ast, path);
+  }
+  if (ast.kind === "jsonl") {
+    return resolveJsonlToUniversal(ast, path);
+  }
+  return resolveYamlToUniversal(ast, path);
 }
 
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
@@ -176,19 +166,16 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root":
-      return { kind: "root", ast, line: 1 };
-    case "frontmatter":
-      return { kind: "leaf", valueText: m.node.value, leafType: "string", line: m.node.line };
-    case "block":
-      return { kind: "node", descriptor: "md-block", line: m.node.line };
-    case "item":
-      return { kind: "node", descriptor: "md-item", line: m.node.line };
-    case "item-field":
-      return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
+  if (m.kind === "root") {
+    return { kind: "root", ast, line: 1 };
   }
-  return null;
+  if (m.kind === "frontmatter") {
+    return { kind: "leaf", valueText: m.node.value, leafType: "string", line: m.node.line };
+  }
+  if (m.kind === "block" || m.kind === "item") {
+    return { kind: "node", descriptor: `md-${m.kind}`, line: m.node.line };
+  }
+  return { kind: "leaf", valueText: m.value, leafType: "string", line: m.node.line };
 }
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
@@ -206,21 +193,15 @@ function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
 }
 
 function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
-  switch (value.kind) {
-    case "object":
-      return { kind: "node", descriptor: "jsonc-object", line };
-    case "array":
-      return { kind: "node", descriptor: "jsonc-array", line };
-    case "string":
-      return { kind: "leaf", valueText: value.value, leafType: "string", line };
-    case "number":
-      return { kind: "leaf", valueText: String(value.value), leafType: "number", line };
-    case "boolean":
-      return { kind: "leaf", valueText: String(value.value), leafType: "boolean", line };
-    case "null":
-      return { kind: "leaf", valueText: "null", leafType: "null", line };
+  if (value.kind === "object" || value.kind === "array") {
+    return { kind: "node", descriptor: `jsonc-${value.kind}`, line };
   }
-  return { kind: "leaf", valueText: "null", leafType: "null", line };
+  return {
+    kind: "leaf",
+    valueText: value.kind === "null" ? "null" : String(value.value),
+    leafType: value.kind,
+    line,
+  };
 }
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
@@ -247,19 +228,13 @@ function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root":
-      return { kind: "root", ast, line: 1 };
-    case "scalar":
-      return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
-    case "pair":
-      return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
-    case "map":
-      return { kind: "node", descriptor: "yaml-map", line: yamlLine(ast, m.path) };
-    case "seq":
-      return { kind: "node", descriptor: "yaml-seq", line: yamlLine(ast, m.path) };
+  if (m.kind === "root") {
+    return { kind: "root", ast, line: 1 };
   }
-  return null;
+  if (m.kind === "scalar" || m.kind === "pair") {
+    return yamlScalarToMatch(m.value, yamlLine(ast, m.path));
+  }
+  return { kind: "node", descriptor: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
 }
 
 function yamlScalarToMatch(value: unknown, line: number): OcMatch {
@@ -319,21 +294,20 @@ function yamlLine(ast: YamlAst, path: readonly string[]): number {
   return ast.lineCounter.linePos(range[0]).line;
 }
 
-function resolveInsertion(ast: OcAst, info: InsertionInfo): OcMatch | null {
-  switch (ast.kind) {
-    case "md":
-      return resolveMdInsertion(ast, info);
-    case "jsonc":
-      return resolveJsoncInsertion(ast, info);
-    case "jsonl":
-      return resolveJsonlInsertion(ast, info);
-    case "yaml":
-      return resolveYamlInsertion(ast, info);
+function resolveInsertion(ast: OcAst, info: InsertionInfo): InsertionMatch | null {
+  if (ast.kind === "md") {
+    return resolveMdInsertion(ast, info);
   }
-  return null;
+  if (ast.kind === "jsonc") {
+    return resolveJsoncInsertion(ast, info);
+  }
+  if (ast.kind === "jsonl") {
+    return resolveJsonlInsertion(ast, info);
+  }
+  return resolveYamlInsertion(ast, info);
 }
 
-function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
+function resolveMdInsertion(ast: MdAst, info: InsertionInfo): InsertionMatch | null {
   const p = info.parentPath;
   if (p.section === undefined) {
     return { kind: "insertion-point", container: "md-file", line: 1 };
@@ -351,7 +325,7 @@ function resolveMdInsertion(ast: MdAst, info: InsertionInfo): OcMatch | null {
   return null;
 }
 
-function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): OcMatch | null {
+function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): InsertionMatch | null {
   const m = resolveJsoncOcPath(ast, info.parentPath);
   if (m === null) {
     return null;
@@ -377,7 +351,7 @@ function resolveJsoncInsertion(ast: JsoncAst, info: InsertionInfo): OcMatch | nu
   return null;
 }
 
-function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | null {
+function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): InsertionMatch | null {
   // jsonl insertion only makes sense at file level (`oc://FILE/+`).
   // Surfaced line is lastLine+1 so consumers render correctly.
   if (info.parentPath.section !== undefined) {
@@ -387,31 +361,25 @@ function resolveJsonlInsertion(ast: JsonlAst, info: InsertionInfo): OcMatch | nu
   return { kind: "insertion-point", container: "jsonl-file", line: lastLine + 1 };
 }
 
-function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): OcMatch | null {
+function resolveYamlInsertion(ast: YamlAst, info: InsertionInfo): InsertionMatch | null {
   const m = resolveYamlOcPath(ast, info.parentPath);
   if (m === null) {
     return null;
   }
-  switch (m.kind) {
-    case "root": {
-      const root = ast.doc.contents;
-      if (isMap(root)) {
-        return { kind: "insertion-point", container: "yaml-map", line: 1 };
-      }
-      if (isSeq(root)) {
-        return { kind: "insertion-point", container: "yaml-seq", line: 1 };
-      }
-      return null;
+  if (m.kind === "root") {
+    const root = ast.doc.contents;
+    if (isMap(root)) {
+      return { kind: "insertion-point", container: "yaml-map", line: 1 };
     }
-    case "map":
-      return { kind: "insertion-point", container: "yaml-map", line: yamlLine(ast, m.path) };
-    case "seq":
-      return { kind: "insertion-point", container: "yaml-seq", line: yamlLine(ast, m.path) };
-    case "pair":
-    case "scalar":
-      return null;
+    if (isSeq(root)) {
+      return { kind: "insertion-point", container: "yaml-seq", line: 1 };
+    }
+    return null;
   }
-  return null;
+  if (m.kind === "pair" || m.kind === "scalar") {
+    return null;
+  }
+  return { kind: "insertion-point", container: `yaml-${m.kind}`, line: yamlLine(ast, m.path) };
 }
 
 /**
@@ -435,73 +403,35 @@ export function setOcPath(
   }
   const insertion = detectInsertion(path);
   if (insertion !== null) {
-    switch (ast.kind) {
-      case "md":
-        guardSentinel(value, () => formatOcPath(path));
-        return setMdInsertion(ast, insertion, value);
-      case "jsonc":
-        return setJsoncInsertion(ast, insertion, value);
-      case "jsonl":
-        return setJsonlInsertion(ast, insertion, value);
-      case "yaml":
-        return setYamlInsertion(ast, insertion, value);
+    if (ast.kind === "md") {
+      guardSentinel(value, () => formatOcPath(path));
+      return setMdInsertion(ast, insertion, value);
     }
-  }
-  switch (ast.kind) {
-    case "md": {
-      const r = setMdOcPath(ast, path, value);
-      return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+    if (ast.kind === "jsonc") {
+      return setJsoncInsertion(ast, insertion, value);
     }
-    case "jsonc":
-      return setStructuredLeaf(ast, path, value, options, resolveJsoncOcPath, setJsoncOcPath);
-    case "jsonl":
-      return setStructuredLeaf(
-        ast,
-        path,
-        value,
-        options,
-        resolveJsonlOcPath,
-        setJsonlOcPath,
-        () => {
-          // jsonl line replacement: value must be JSON for the whole line.
-          const parsed = tryParseJson(value);
-          if (parsed === undefined) {
-            return {
-              ok: false,
-              reason: "parse-error",
-              detail: "line replacement requires JSON value",
-            };
-          }
-          const parsedValue = jsonToJsoncValue(parsed);
-          if (parsedValue === null) {
-            return {
-              ok: false,
-              reason: "parse-error",
-              detail: "line replacement requires finite JSON value",
-            };
-          }
-          const r = setJsonlOcPath(ast, path, parsedValue);
-          return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
-        },
-      );
-    case "yaml":
-      return setYamlLeaf(ast, path, value);
+    if (ast.kind === "jsonl") {
+      return setJsonlInsertion(ast, insertion, value);
+    }
+    return setYamlInsertion(ast, insertion, value);
   }
-  return { ok: false, reason: "not-writable" };
+  if (ast.kind === "md") {
+    return setMdOcPath(ast, path, value);
+  }
+  if (ast.kind === "jsonc" || ast.kind === "jsonl") {
+    return setStructuredLeaf(ast, path, value, options);
+  }
+  return setYamlLeaf(ast, path, value);
 }
 
-// Resolve → reject root/line → coerce by existing leaf type → set →
-// wrap. The optional `onLine` handles jsonl's whole-line replacement.
-function setStructuredLeaf<A extends OcAst>(
-  ast: A,
+function setStructuredLeaf(
+  ast: JsoncAst | JsonlAst,
   path: OcPath,
   value: string,
   options: SetOcPathOptions,
-  resolve: (a: A, p: OcPath) => StructuredLeafMatch | null,
-  set: (a: A, p: OcPath, c: JsoncValue) => SetOpResult<A>,
-  onLine?: () => SetResult,
 ): SetResult {
-  const existing = resolve(ast, path);
+  const existing =
+    ast.kind === "jsonc" ? resolveJsoncOcPath(ast, path) : resolveJsonlOcPath(ast, path);
   if (existing === null) {
     return { ok: false, reason: "unresolved" };
   }
@@ -512,8 +442,13 @@ function setStructuredLeaf<A extends OcAst>(
       detail: "root replacement is not supported via setOcPath",
     };
   }
+  const set = (replacement: JsoncValue) =>
+    ast.kind === "jsonc"
+      ? setJsoncOcPath(ast, path, replacement)
+      : setJsonlOcPath(ast, path, replacement);
   if (existing.kind === "line") {
-    return onLine !== undefined ? onLine() : { ok: false, reason: "not-writable" };
+    const parsed = parseJsonInput(value, "line replacement");
+    return parsed.ok ? set(parsed.value) : parsed;
   }
   const leafValue = existing.kind === "object-entry" ? existing.node.value : existing.node;
   const coerced =
@@ -527,8 +462,7 @@ function setStructuredLeaf<A extends OcAst>(
       detail: `cannot coerce "${value}" to ${leafValue.kind}`,
     };
   }
-  const r = set(ast, path, coerced);
-  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+  return set(coerced);
 }
 
 function parseJsoncReplacement(valueText: string, existing: JsoncValue): JsoncValue | null {
@@ -543,17 +477,6 @@ function parseJsoncReplacement(valueText: string, existing: JsoncValue): JsoncVa
   return existing.line === undefined ? parsedValue : { ...parsedValue, line: existing.line };
 }
 
-type StructuredLeafMatch =
-  | { readonly kind: "root" }
-  | { readonly kind: "line" }
-  | { readonly kind: "object-entry"; readonly node: { readonly value: JsoncValue } }
-  | { readonly kind: "value"; readonly node: JsoncValue };
-
-type SetFailureReason = Extract<SetResult, { ok: false }>["reason"];
-type SetOpResult<A> =
-  | { readonly ok: true; readonly ast: A }
-  | { readonly ok: false; readonly reason: Exclude<SetFailureReason, "wildcard-not-allowed"> };
-
 function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResult {
   const p = info.parentPath;
   // file-level: append a section. Value is the heading text; body empty.
@@ -567,7 +490,7 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
         ...ast.blocks,
         {
           heading: value,
-          slug: slugifyHeading(value),
+          slug: slugify(value),
           line: 0,
           bodyText: "",
           items: [],
@@ -618,21 +541,20 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): SetResu
       kvMatch === null ? undefined : expectDefined(kvMatch[1], "Markdown item key capture");
     const kvValue =
       kvMatch === null ? undefined : expectDefined(kvMatch[2], "Markdown item value capture");
+    const bodyPrefix = block.bodyText.length === 0 ? "" : block.bodyText.replace(/\n*$/, "\n");
     const newItem = {
       text: value,
-      slug: slugifyHeading(kvKey ?? value),
-      line: 0,
+      slug: slugify(kvKey ?? value),
+      line: block.line + bodyPrefix.split("\n").length,
       ...(kvKey !== undefined && kvValue !== undefined
         ? { kv: { key: kvKey.trim(), value: kvValue.trim() } }
         : {}),
     };
-    const newBodyText =
-      block.bodyText.length === 0 ? itemLine : block.bodyText.replace(/\n*$/, "\n") + itemLine;
     const newBlocks = ast.blocks.slice();
     newBlocks[blockIdx] = {
       ...block,
       items: [...block.items, newItem],
-      bodyText: newBodyText,
+      bodyText: bodyPrefix + itemLine,
     };
     return { ok: true, ast: rebuildMdRaw({ ...ast, blocks: newBlocks }) };
   }
@@ -646,21 +568,9 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
     return { ok: false, reason: "unresolved" };
   }
 
-  const parsed = tryParseJson(value);
-  if (parsed === undefined) {
-    return { ok: false, reason: "parse-error", detail: "jsonc insertion requires JSON value" };
-  }
-  const newJsoncValue = jsonToJsoncValue(parsed);
-  if (newJsoncValue === null) {
-    return {
-      ok: false,
-      reason: "parse-error",
-      detail: "jsonc insertion requires finite JSON value",
-    };
-  }
-
-  if (containerMatch.kind !== "insertion-point") {
-    return { ok: false, reason: "unresolved" };
+  const parsed = parseJsonInput(value, "jsonc insertion");
+  if (!parsed.ok) {
+    return parsed;
   }
 
   if (containerMatch.container === "jsonc-array") {
@@ -669,16 +579,13 @@ function setJsoncInsertion(ast: JsoncAst, info: InsertionInfo, value: string): S
       return { ok: false, reason: "type-mismatch", detail: "cannot insert by key into array" };
     }
     const index = info.marker === "+" ? -1 : info.marker.index;
-    const r = insertJsoncOcPath(ast, info.parentPath, index, newJsoncValue);
-    return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+    return insertJsoncOcPath(ast, info.parentPath, index, parsed.value);
   }
 
   if (typeof info.marker !== "object" || info.marker.kind !== "keyed") {
     return { ok: false, reason: "type-mismatch", detail: "jsonc object insertion requires +key" };
   }
-  const key = info.marker.key;
-  const r = insertJsoncOcPath(ast, info.parentPath, key, newJsoncValue);
-  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+  return insertJsoncOcPath(ast, info.parentPath, info.marker.key, parsed.value);
 }
 
 function setJsonlInsertion(ast: JsonlAst, info: InsertionInfo, value: string): SetResult {
@@ -689,19 +596,8 @@ function setJsonlInsertion(ast: JsonlAst, info: InsertionInfo, value: string): S
       detail: "jsonl insertion only supports oc://FILE/+ append",
     };
   }
-  const parsed = tryParseJson(value);
-  if (parsed === undefined) {
-    return { ok: false, reason: "parse-error", detail: "jsonl line append requires JSON value" };
-  }
-  const parsedValue = jsonToJsoncValue(parsed);
-  if (parsedValue === null) {
-    return {
-      ok: false,
-      reason: "parse-error",
-      detail: "jsonl line append requires finite JSON value",
-    };
-  }
-  return { ok: true, ast: appendJsonlLine(ast, parsedValue) };
+  const parsed = parseJsonInput(value, "jsonl line append");
+  return parsed.ok ? { ok: true, ast: appendJsonlLine(ast, parsed.value) } : parsed;
 }
 
 function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
@@ -724,16 +620,14 @@ function setYamlLeaf(ast: YamlAst, path: OcPath, value: string): SetResult {
       detail: `cannot coerce "${value}" to ${typeof current}`,
     };
   }
-  const r = setYamlOcPath(ast, path, coerced);
-  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+  return setYamlOcPath(ast, path, coerced);
 }
 
 function setYamlInsertion(ast: YamlAst, info: InsertionInfo, value: string): SetResult {
   if (ast.doc.errors.length > 0) {
     return { ok: false, reason: "parse-error" };
   }
-  const r = insertYamlOcPath(ast, info.parentPath, info.marker, parseYamlInput(value));
-  return r.ok ? { ok: true, ast: r.ast } : { ok: false, reason: r.reason };
+  return insertYamlOcPath(ast, info.parentPath, info.marker, parseYamlInput(value));
 }
 
 function coerceYamlValue(value: string, current: unknown): unknown {
@@ -799,6 +693,20 @@ function tryParseJson(value: string): unknown {
   }
 }
 
+function parseJsonInput(
+  value: string,
+  operation: string,
+): { readonly ok: true; readonly value: JsoncValue } | Extract<SetResult, { ok: false }> {
+  const parsed = tryParseJson(value);
+  if (parsed === undefined) {
+    return { ok: false, reason: "parse-error", detail: `${operation} requires JSON value` };
+  }
+  const node = jsonToJsoncValue(parsed);
+  return node === null
+    ? { ok: false, reason: "parse-error", detail: `${operation} requires finite JSON value` }
+    : { ok: true, value: node };
+}
+
 function jsonToJsoncValue(v: unknown): JsoncValue | null {
   // Synthetic values omit `line` — only the parser sets line metadata.
   if (v === null) {
@@ -845,12 +753,3 @@ function jsonToJsoncValue(v: unknown): JsoncValue | null {
   // JSON.parse never produces undefined / function / symbol.
   throw new Error(`unsupported JSON value type: ${typeof v}`);
 }
-
-function slugifyHeading(s: string): string {
-  return s
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

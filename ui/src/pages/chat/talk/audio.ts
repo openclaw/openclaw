@@ -1,21 +1,4 @@
-export function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    const chunk = bytes.subarray(offset, offset + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-function base64ToBytes(value: string): Uint8Array {
-  const binary = atob(value);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
-}
+import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 
 export function floatToPcm16(samples: Float32Array): Uint8Array {
   const bytes = new Uint8Array(samples.length * 2);
@@ -108,39 +91,14 @@ export class RealtimeTalkPcmInputPump {
   }
 }
 
-class RealtimeTalkAudioLevelMeter {
-  private level = 0;
-  private noiseFloor = 0.01;
-
-  sample(samples: Float32Array): number {
-    const frame = measureRealtimeTalkAudioFrame(samples);
-    const signal = 0.65 * frame.rms + 0.35 * frame.peak;
-    if (signal <= Math.max(0.02, this.noiseFloor * 2)) {
-      this.noiseFloor = 0.95 * this.noiseFloor + 0.05 * signal;
-    }
-    const gatedSignal = Math.max(0, signal - this.noiseFloor * 1.5);
-    const target = Math.min(1, Math.sqrt(gatedSignal / 0.18));
-    const smoothing = target > this.level ? 0.65 : 0.18;
-    this.level = smoothing * target + (1 - smoothing) * this.level;
-    if (this.level < 0.01) {
-      this.level = 0;
-    }
-    return this.level;
-  }
-
-  reset(): void {
-    this.level = 0;
-    this.noiseFloor = 0.01;
-  }
-}
-
 export class RealtimeTalkMediaStreamMeter {
   private context: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private analyser: AnalyserNode | null = null;
   private timer: ReturnType<typeof globalThis.setInterval> | null = null;
   private ownsContext = false;
-  private readonly levelMeter = new RealtimeTalkAudioLevelMeter();
+  private level = 0;
+  private noiseFloor = 0.01;
   private readonly samples = new Float32Array(512);
   private lastLevel = -1;
 
@@ -184,7 +142,8 @@ export class RealtimeTalkMediaStreamMeter {
     }
     this.context = null;
     this.ownsContext = false;
-    this.levelMeter.reset();
+    this.level = 0;
+    this.noiseFloor = 0.01;
     this.lastLevel = -1;
     if (notify) {
       this.onLevel(0);
@@ -197,7 +156,19 @@ export class RealtimeTalkMediaStreamMeter {
     }
     this.samples.fill(0);
     this.analyser.getFloatTimeDomainData(this.samples);
-    const level = Math.round(this.levelMeter.sample(this.samples) * 100) / 100;
+    const frame = measureRealtimeTalkAudioFrame(this.samples);
+    const signal = 0.65 * frame.rms + 0.35 * frame.peak;
+    if (signal <= Math.max(0.02, this.noiseFloor * 2)) {
+      this.noiseFloor = 0.95 * this.noiseFloor + 0.05 * signal;
+    }
+    const gatedSignal = Math.max(0, signal - this.noiseFloor * 1.5);
+    const target = Math.min(1, Math.sqrt(gatedSignal / 0.18));
+    const smoothing = target > this.level ? 0.65 : 0.18;
+    this.level = smoothing * target + (1 - smoothing) * this.level;
+    if (this.level < 0.01) {
+      this.level = 0;
+    }
+    const level = Math.round(this.level * 100) / 100;
     if (level === this.lastLevel) {
       return;
     }
@@ -220,8 +191,8 @@ export function estimateBase64DecodedByteLength(value: string): number {
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
 
-const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 10;
-const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 320;
+const REALTIME_TALK_PCM_OUTPUT_MAX_QUEUED_SECONDS = 60;
+const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 4_096;
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 

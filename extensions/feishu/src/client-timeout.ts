@@ -1,4 +1,7 @@
-import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asPositiveFiniteNumber,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { FeishuConfig } from "./types.js";
 
 /** Default HTTP timeout for Feishu API requests (30 seconds). */
@@ -12,32 +15,10 @@ type FeishuClientTimeoutConfig = {
 };
 
 export function resolveConfiguredHttpTimeoutMs(creds: FeishuClientTimeoutConfig): number {
-  const clampTimeout = (value: number): number => {
-    const rounded = Math.floor(value);
-    return Math.min(Math.max(rounded, 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
-  };
-
-  const fromDirectField = creds.httpTimeoutMs;
-  if (
-    typeof fromDirectField === "number" &&
-    Number.isFinite(fromDirectField) &&
-    fromDirectField > 0
-  ) {
-    return clampTimeout(fromDirectField);
-  }
-
-  const envRaw = process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR];
-  if (envRaw) {
-    const envValue = parseStrictPositiveInteger(envRaw);
-    if (envValue !== undefined) {
-      return clampTimeout(envValue);
-    }
-  }
-
-  const fromConfig = creds.config?.httpTimeoutMs;
-  const timeout = fromConfig;
-  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) {
-    return FEISHU_HTTP_TIMEOUT_MS;
-  }
-  return clampTimeout(timeout);
+  const timeout =
+    asPositiveFiniteNumber(creds.httpTimeoutMs) ??
+    parseStrictPositiveInteger(process.env[FEISHU_HTTP_TIMEOUT_ENV_VAR]) ??
+    asPositiveFiniteNumber(creds.config?.httpTimeoutMs) ??
+    FEISHU_HTTP_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(timeout), 1), FEISHU_HTTP_TIMEOUT_MAX_MS);
 }

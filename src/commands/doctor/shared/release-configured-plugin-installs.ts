@@ -25,48 +25,21 @@ import {
 import { VERSION } from "../../../version.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
+import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
+import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
-
-const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
-  // Codex can be selected as a harness for OpenAI models without a plugin entry.
-  codex: "codex",
-};
 
 type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
   channelIds: string[];
 };
 
-function isPluginsGloballyDisabled(cfg: OpenClawConfig): boolean {
-  return cfg.plugins?.enabled === false;
-}
-
 function isDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   const deny = cfg.plugins?.deny;
   return Array.isArray(deny) && deny.includes(pluginId);
-}
-
-function collectBlockedPluginIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  const deny = cfg.plugins?.deny;
-  if (Array.isArray(deny)) {
-    for (const pluginId of deny) {
-      const normalized = normalizeId(pluginId);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  const entries = asNullableRecord(cfg.plugins?.entries);
-  for (const [pluginId, entry] of Object.entries(entries ?? {})) {
-    if (asNullableRecord(entry)?.enabled === false && pluginId.trim()) {
-      ids.add(pluginId.trim());
-    }
-  }
-  return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
 function isPluginEntryDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
@@ -139,58 +112,39 @@ function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   });
 }
 
-function collectAgentHarnessRuntimePluginIds(
-  cfg: OpenClawConfig,
-  _env: NodeJS.ProcessEnv,
-): string[] {
-  return collectConfiguredAgentHarnessRuntimes(cfg)
-    .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
-    .filter((pluginId): pluginId is string => Boolean(pluginId))
-    .toSorted((left, right) => left.localeCompare(right));
-}
-
-function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+function collectWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   if (cfg.tools?.web?.search?.enabled === false) {
     return [];
   }
   const providerId = cfg.tools?.web?.search?.provider;
-  if (typeof providerId !== "string") {
-    return [];
-  }
-  const entry = resolveWebSearchInstallCatalogEntry({ providerId });
-  return entry?.pluginId ? [entry.pluginId] : [];
+  const entry =
+    typeof providerId === "string"
+      ? resolveWebSearchInstallCatalogEntry({ providerId })
+      : undefined;
+  return [
+    ...(entry?.pluginId ? [entry.pluginId] : []),
+    ...resolveWebSearchInstallCatalogEntriesForEnv(env).map((candidate) => candidate.pluginId),
+  ];
 }
 
-function collectEnvWebSearchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.search?.enabled === false) {
-    return [];
-  }
-  return resolveWebSearchInstallCatalogEntriesForEnv(env).map((entry) => entry.pluginId);
-}
-
-function collectWebFetchPluginIds(cfg: OpenClawConfig): string[] {
+function collectWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
   const webFetch = cfg.tools?.web?.fetch;
   if (webFetch?.enabled === false) {
     return [];
   }
   const providerId = normalizeId(webFetch?.provider)?.toLowerCase();
-  if (!providerId) {
-    return [];
-  }
-  return resolveOfficialExternalProviderContractPluginIds({
-    contract: "webFetchProviders",
-    providerIds: new Set([providerId]),
-  });
-}
-
-function collectEnvWebFetchPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  if (cfg.tools?.web?.fetch?.enabled === false) {
-    return [];
-  }
-  return resolveOfficialExternalWebProviderContractPluginIdsForEnv({
-    contract: "webFetchProviders",
-    env,
-  });
+  return [
+    ...(providerId
+      ? resolveOfficialExternalProviderContractPluginIds({
+          contract: "webFetchProviders",
+          providerIds: new Set([providerId]),
+        })
+      : []),
+    ...resolveOfficialExternalWebProviderContractPluginIdsForEnv({
+      contract: "webFetchProviders",
+      env,
+    }),
+  ];
 }
 
 function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
@@ -198,20 +152,6 @@ function collectSpeechPluginIds(cfg: OpenClawConfig): string[] {
     contract: "speechProviders",
     providerIds: collectConfiguredSpeechProviderIds(cfg),
   });
-}
-
-function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
-  const acp = asNullableRecord(cfg.acp);
-  if (!acp) {
-    return [];
-  }
-  const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
-  const configured =
-    acp.enabled === true || asNullableRecord(acp.dispatch)?.enabled === true || backend === "acpx";
-  if (!configured || (backend && backend !== "acpx")) {
-    return [];
-  }
-  return ["acpx"];
 }
 
 function collectAllowOnlyOfficialPluginIds(cfg: OpenClawConfig): string[] {
@@ -247,17 +187,18 @@ function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, plugin
 function shouldRunConfiguredPluginInstallReleaseStep(params: {
   currentVersion?: string | null;
   touchedVersion?: string | null;
-  releaseVersion?: string;
 }): boolean {
-  const releaseVersion = params.releaseVersion ?? CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION;
   const currentComparedToRelease = compareOpenClawVersions(
     params.currentVersion ?? VERSION,
-    releaseVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
   );
   if (currentComparedToRelease === null || currentComparedToRelease < 0) {
     return false;
   }
-  const touchedComparedToRelease = compareOpenClawVersions(params.touchedVersion, releaseVersion);
+  const touchedComparedToRelease = compareOpenClawVersions(
+    params.touchedVersion,
+    CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION,
+  );
   return touchedComparedToRelease === null || touchedComparedToRelease < 0;
 }
 
@@ -269,7 +210,7 @@ function collectReleaseConfiguredPluginIds(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set<string>();
   const channelIds = new Set<string>();
-  if (isPluginsGloballyDisabled(params.cfg)) {
+  if (params.cfg.plugins?.enabled === false) {
     return { pluginIds: [], channelIds: [] };
   }
 
@@ -279,37 +220,17 @@ function collectReleaseConfiguredPluginIds(params: {
   })) {
     addEligiblePluginId(params.cfg, pluginIds, candidate.pluginId);
   }
-  for (const pluginId of collectMaterialPluginEntryIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectSlotPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectConfiguredProviderPluginIds({ cfg: params.cfg, env })) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectEnvWebSearchPluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectWebFetchPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectEnvWebFetchPluginIds(params.cfg, env)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectSpeechPluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
-    addEligiblePluginId(params.cfg, pluginIds, pluginId);
-  }
-  for (const pluginId of collectAllowOnlyOfficialPluginIds(params.cfg)) {
+  for (const pluginId of [
+    ...collectMaterialPluginEntryIds(params.cfg),
+    ...collectSlotPluginIds(params.cfg),
+    ...collectConfiguredProviderPluginIds({ cfg: params.cfg, env }),
+    ...collectConfiguredAgentHarnessRuntimes(params.cfg).filter((id) => id === "codex"),
+    ...collectWebSearchPluginIds(params.cfg, env),
+    ...collectWebFetchPluginIds(params.cfg, env),
+    ...collectSpeechPluginIds(params.cfg),
+    ...(acpxRuntimeIsConfigured(params.cfg) ? ["acpx"] : []),
+    ...collectAllowOnlyOfficialPluginIds(params.cfg),
+  ]) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
@@ -349,69 +270,33 @@ export async function maybeRunConfiguredPluginInstallReleaseStep(params: {
     currentVersion: params.currentVersion,
     touchedVersion: params.touchedVersion,
   });
-  if (!shouldRunReleaseStep) {
-    if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
-      return { changes: [], warnings: [], completed: false, touchedConfig: false };
-    }
-    const repaired = await repairMissingPluginInstallsForIds({
-      cfg: params.cfg,
-      pluginIds: configured.pluginIds,
-      channelIds: configured.channelIds,
-      blockedPluginIds: collectBlockedPluginIds(params.cfg),
-      env,
-    });
-    const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
-    const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
-      updateInProgress,
-      details: repaired.deferredRepairDetails ?? [],
-      warnings: repaired.warnings,
-    });
-    return {
-      changes: repaired.changes,
-      warnings,
-      completed: repaired.warnings.length === 0,
-      touchedConfig: false,
-      ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
-      ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
-    };
-  }
   if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
     // No configured plugins or channels means no backfill happened, so there is nothing to stamp.
     // The Doctor state runner persists config whenever touchedConfig is true, which would rewrite
     // an operator's authored file - or create one that never existed - for zero repair work.
-    return { changes: [], warnings: [], completed: true, touchedConfig: false };
+    return { changes: [], warnings: [], completed: shouldRunReleaseStep, touchedConfig: false };
   }
   const repaired = await repairMissingPluginInstallsForIds({
     cfg: params.cfg,
     pluginIds: configured.pluginIds,
     channelIds: configured.channelIds,
-    blockedPluginIds: collectBlockedPluginIds(params.cfg),
+    blockedPluginIds: [...collectBlockedPluginIdSet(params.cfg)].toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     env,
   });
-  const completed = repaired.warnings.length === 0 && !updateInProgress;
+  const completed = repaired.warnings.length === 0 && (!shouldRunReleaseStep || !updateInProgress);
   const warnings = [...repaired.warnings, ...(repaired.notices ?? [])];
-  const postInstallDoctorResult = createPostInstallDoctorResultForDeferredRepair({
-    updateInProgress,
-    details: repaired.deferredRepairDetails ?? [],
-    warnings: repaired.warnings,
-  });
+  const postInstallDoctorResult =
+    updateInProgress && repaired.warnings.length === 0 && repaired.deferredRepairDetails?.length
+      ? createDeferredConfiguredPluginRepairDoctorResult(repaired.deferredRepairDetails)
+      : undefined;
   return {
     changes: repaired.changes,
     warnings,
     completed,
-    touchedConfig: completed,
+    touchedConfig: shouldRunReleaseStep && completed,
     ...(repaired.pluginInventoryChanged ? { pluginInventoryChanged: true as const } : {}),
     ...(postInstallDoctorResult ? { postInstallDoctorResult } : {}),
   };
-}
-
-function createPostInstallDoctorResultForDeferredRepair(params: {
-  updateInProgress: boolean;
-  details: readonly string[];
-  warnings: readonly string[];
-}): UpdatePostInstallDoctorResult | undefined {
-  if (!params.updateInProgress || params.warnings.length > 0 || params.details.length === 0) {
-    return undefined;
-  }
-  return createDeferredConfiguredPluginRepairDoctorResult(params.details);
 }

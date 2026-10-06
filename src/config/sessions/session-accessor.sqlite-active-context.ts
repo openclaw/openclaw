@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import { withCurrentProjectionSnapshot } from "./session-accessor.sqlite-active-projection.js";
 import type {
+  SessionTranscriptBoundedActiveContext,
   SessionTranscriptReadScope,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
@@ -19,10 +20,8 @@ import {
   readUnindexedHistoryControls,
   resolveTranscriptBoundaryWindow,
 } from "./session-accessor.sqlite-reset-window.js";
-import {
-  readTranscriptContextVersionInTransaction,
-  type SessionTranscriptContextVersion,
-} from "./session-accessor.sqlite-transcript-state.js";
+import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   DEFAULT_VISIBLE_MESSAGE_MAX_BYTES,
   DEFAULT_VISIBLE_MESSAGE_MAX_MESSAGES,
@@ -30,23 +29,15 @@ import {
   MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   normalizeVisibleMessageLimit,
 } from "./session-accessor.sqlite-visible-cursor.js";
-import { projectResetBoundaryNavigationSql } from "./session-model-context-projection.js";
+import { readCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-
-export type SessionTranscriptBoundedActiveContext = {
-  activeLeafEntryId: string | null;
-  version: SessionTranscriptContextVersion;
-  opaqueParents: Map<string, string | null>;
-  parents: Map<string, string | null>;
-  firstKeptRanges: Map<string, { startIndex: number; endIndex: number }>;
-  persistedSuffixStartSeq: number;
-  boundaryCount: number;
-  events: TranscriptEvent[];
-  serializedBytes: number;
-  totalEvents: number;
-  transcriptMutationAt: number | null;
-  truncated: boolean;
-};
+import {
+  transcriptEventJsonSql,
+  transcriptEventNavigationSql,
+  transcriptEventResetNavigationSql,
+} from "./transcript-payload.js";
 
 function readBoundedRetentionRanges(
   projection: CurrentTranscriptProjection,
@@ -71,7 +62,7 @@ function readBoundedRetentionRanges(
     (id) => !sequences.has(id),
   );
   if (missing.length > 0) {
-    const lastSelectedSeq = Math.max(...rows.map((row) => row.seq));
+    const lastSelectedSeq = rows.reduce((maximum, row) => Math.max(maximum, row.seq), -Infinity);
     const db = getActiveTranscriptKysely(projection.database);
     const anchors = executeSqliteQuerySync(
       projection.database.db,
@@ -96,7 +87,7 @@ function readBoundedRetentionRanges(
     const unresolved = new Set(cuts.map((cut) => cut.firstKeptEntryId));
     for (const row of iterateUnindexedActiveTranscriptNavigation(projection, {
       eventIds: [...unresolved],
-      maxRawSeq: Math.max(...cuts.map((cut) => cut.seq)) - 1,
+      maxRawSeq: cuts.reduce((maximum, cut) => Math.max(maximum, cut.seq), -Infinity) - 1,
       first: true,
     })) {
       const id = typeof row.event.id === "string" ? row.event.id : undefined;
@@ -163,9 +154,9 @@ function readUnindexedLogicalParents(
       .select((eb) => [
         "active.event_seq",
         "previous.event_seq as parent_seq",
-        projectResetBoundaryNavigationSql(eb.fn.coalesce("parent.event_json", eb.val("null"))).as(
-          "parent_json",
-        ),
+        eb.fn
+          .coalesce(transcriptEventResetNavigationSql("parent"), eb.val("null"))
+          .as("parent_json"),
       ])
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.event_seq", "in", contextSequences),
@@ -185,7 +176,13 @@ function readUnindexedLogicalParents(
 /** Reads one byte-bounded active branch without materializing abandoned transcript history. */
 export function readSessionTranscriptBoundedActiveContextCore(
   scope: SessionTranscriptReadScope,
-  options: { maxBytes: number; maxEvents: number; ignoreReadFence?: boolean },
+  options: {
+    maxBytes: number;
+    maxEvents: number;
+    ignoreReadFence?: boolean;
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+  },
 ): SessionTranscriptBoundedActiveContext {
   const maxBytes = normalizeVisibleMessageLimit(
     options.maxBytes,
@@ -199,7 +196,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
     MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
     "maxEvents",
   );
-  return withCurrentProjectionSnapshot(scope, (projection) => {
+  const read = (projection: CurrentTranscriptProjection): SessionTranscriptBoundedActiveContext => {
     const db = getActiveTranscriptKysely(projection.database);
     const fence = options.ignoreReadFence
       ? undefined
@@ -215,27 +212,21 @@ export function readSessionTranscriptBoundedActiveContextCore(
     const header = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       transcript
-        .select("seq")
+        .select([
+          "seq",
+          /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
+          sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
+        ])
         .where(
           /* kysely-allow-raw: the canonical transcript event type is stored inside event_json. */
-          sql<string>`json_extract(event_json, '$.type')`,
+          sql<string>`json_extract(${transcriptEventNavigationSql()}, '$.type')`,
           "=",
           "session",
         )
         .orderBy("seq", "asc")
         .limit(1),
     );
-    const headerBytes = header
-      ? executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          transcript
-            .select(
-              /* kysely-allow-raw: reject an oversized header before acquiring its JSON payload. */
-              sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
-            )
-            .where("seq", "=", header.seq),
-        )!.serialized_bytes
-      : 0;
+    const headerBytes = header?.serialized_bytes ?? 0;
     if (headerBytes > maxBytes) {
       throw new RangeError("Session transcript header exceeds the active-context byte limit");
     }
@@ -258,8 +249,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         )
         .select([
           "active.event_seq",
+          "active.active_position",
           /* kysely-allow-raw: active-context byte caps exclude rows before fetching or parsing. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
         ])
         .where("active.session_id", "=", projection.resolved.sessionId)
         .$if(fence !== undefined, (query) =>
@@ -276,20 +268,18 @@ export function readSessionTranscriptBoundedActiveContextCore(
         .orderBy("active.active_position", "desc")
         .limit(maxEvents + 1),
     );
-    const selectedSequences: number[] = [];
+    const selectedRows: { event_seq: number; active_position: number }[] = [];
     let serializedBytes = headerBytes;
     let truncated = false;
     for (const row of metadata) {
-      if (
-        selectedSequences.length >= maxEvents ||
-        serializedBytes + row.serialized_bytes > maxBytes
-      ) {
+      if (selectedRows.length >= maxEvents || serializedBytes + row.serialized_bytes > maxBytes) {
         truncated = true;
         break;
       }
-      selectedSequences.push(row.event_seq);
+      selectedRows.push(row);
       serializedBytes += row.serialized_bytes;
     }
+    const selectedSequences = selectedRows.map((row) => row.event_seq);
     let boundary = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       db
@@ -325,7 +315,7 @@ export function readSessionTranscriptBoundedActiveContextCore(
           "boundary.seq",
           "boundary.boundary_count",
           /* kysely-allow-raw: count boundaries without carrying payloads through the window query. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
+          sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
         ]),
     );
     let boundaryCount = boundary?.boundary_count ?? 0;
@@ -366,7 +356,9 @@ export function readSessionTranscriptBoundedActiveContextCore(
         ? []
         : executeSqliteQuerySync(
             projection.database.db,
-            transcript.select(["seq", "event_json"]).where("seq", "in", payloadSequences),
+            transcript
+              .select(["seq", transcriptEventJsonSql(projection.database.db).as("event_json")])
+              .where("seq", "in", payloadSequences),
           ).rows
       ).map((row) => [row.seq, JSON.parse(row.event_json)]),
     );
@@ -425,6 +417,37 @@ export function readSessionTranscriptBoundedActiveContextCore(
       }
       events.push(event);
     }
+    const firstSelected = selectedRows.findLast(
+      (row) => typeof asOptionalRecord(payloads.get(row.event_seq))?.id === "string",
+    );
+    const anchorEntry = firstSelected
+      ? asOptionalRecord(payloads.get(firstSelected.event_seq))
+      : undefined;
+    const injectedEntry =
+      injectedBoundarySeq === undefined
+        ? undefined
+        : asOptionalRecord(payloads.get(injectedBoundarySeq));
+    const anchors = [
+      ...(boundary && isIndexedSessionEntry(injectedEntry) && injectedEntry.type === "compaction"
+        ? [{ activePosition: boundary.active_position, id: injectedEntry.id, entry: injectedEntry }]
+        : []),
+      ...(firstSelected && typeof anchorEntry?.id === "string"
+        ? [
+            {
+              activePosition: firstSelected.active_position,
+              id: anchorEntry.id,
+              entry: anchorEntry,
+            },
+          ]
+        : []),
+    ];
+    const cacheTtlProjectionPrefixes = anchors.flatMap((anchor) => {
+      const prefix = readCacheTtlProjectionPrefix(projection, {
+        ...anchor,
+        beforeRawSeq: fence?.beforeRawSeq,
+      });
+      return prefix ? [prefix] : [];
+    });
     const activeLeafEntryId = fence
       ? fence.admission.effectiveParentId
       : projection.state.leafEventId;
@@ -447,10 +470,15 @@ export function readSessionTranscriptBoundedActiveContextCore(
       persistedSuffixStartSeq: contextSequences[0] ?? (header ? header.seq + 1 : 0),
       boundaryCount,
       events,
+      cacheTtlProjectionPrefixes,
       serializedBytes,
       totalEvents: projection.state.activeEventCount,
       transcriptMutationAt: version.updatedAt,
       truncated,
     };
+  };
+  return withCurrentProjectionSnapshot(scope, read, {
+    readOnly: options.readOnly,
+    resolvedScope: options.resolvedScope,
   });
 }

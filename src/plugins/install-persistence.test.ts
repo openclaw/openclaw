@@ -17,7 +17,9 @@ import {
   configWriteMock,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
   applyPluginUninstallDirectoryRemovalMock,
+  readConfigFileSnapshotForWriteMock,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -34,6 +36,12 @@ function requireMockCallArg(
   return arg;
 }
 
+function mockEnabledPlugin(pluginId: string): OpenClawConfig {
+  const config = { plugins: { entries: { [pluginId]: { enabled: true } } } };
+  enablePluginInConfigMock.mockReturnValue({ config, enabled: true });
+  return config;
+}
+
 function expectRuntimeLogIncludes(fragment: string) {
   expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
@@ -43,6 +51,14 @@ const installWriteOptions = {
   expectedConfigPath: "/tmp/openclaw.json",
   ownedConfigPathForWrite: "/tmp/openclaw.json",
 };
+
+function installSnapshot(config: OpenClawConfig) {
+  readConfigFileSnapshotForWriteMock.mockResolvedValue({
+    snapshot: { ...createTestConfigSnapshot(config), hash: "config-1" },
+    writeOptions: installWriteOptions,
+  });
+  return { config, baseHash: "config-1", writeOptions: installWriteOptions };
+}
 
 describe("persistPluginInstall", () => {
   beforeEach(() => {
@@ -176,8 +192,7 @@ describe("persistPluginInstall", () => {
 
     const next = await persistPluginInstall({
       snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
+        ...installSnapshot(baseConfig),
         writeOptions: {
           assertConfigPathForWrite: installWriteOptions.assertConfigPathForWrite,
           expectedConfigPath: "/tmp/openclaw.json",
@@ -236,29 +251,14 @@ describe("persistPluginInstall", () => {
 
   it("persists installs even when runtime cache invalidation fails", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    const enabledConfig = mockEnabledPlugin("alpha");
     clearPluginRegistryLoadCacheMock.mockImplementation(() => {
       throw new Error("cache unavailable");
     });
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "alpha",
       install: {
         source: "npm",
@@ -274,19 +274,8 @@ describe("persistPluginInstall", () => {
 
   it("removes a replaced managed install directory before refreshing the registry", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          codex: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    mockEnabledPlugin("codex");
     setInstalledPluginIndexInstallRecords({
       codex: {
         source: "clawhub",
@@ -319,11 +308,7 @@ describe("persistPluginInstall", () => {
     });
 
     await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "codex",
       install: {
         source: "npm",
@@ -362,19 +347,8 @@ describe("persistPluginInstall", () => {
 
   it("preserves replaced install directories when the new install path overlaps", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          codex: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    mockEnabledPlugin("codex");
     setInstalledPluginIndexInstallRecords({
       codex: {
         source: "npm",
@@ -384,11 +358,7 @@ describe("persistPluginInstall", () => {
     });
 
     await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "codex",
       install: {
         source: "npm",
@@ -403,19 +373,8 @@ describe("persistPluginInstall", () => {
 
   it("preserves replaced npm install directories across generation updates", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          codex: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    mockEnabledPlugin("codex");
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-persist-"));
     const previousProjectRoot = path.join(tempRoot, "npm", "projects", "codex-v1");
     const previousInstallPath = path.join(
@@ -469,11 +428,7 @@ describe("persistPluginInstall", () => {
 
     try {
       await persistPluginInstall({
-        snapshot: {
-          config: baseConfig,
-          baseHash: "config-1",
-          writeOptions: installWriteOptions,
-        },
+        snapshot: installSnapshot(baseConfig),
         pluginId: "codex",
         install: {
           source: "npm",
@@ -508,19 +463,8 @@ describe("persistPluginInstall", () => {
 
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          discord: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    const enabledConfig = mockEnabledPlugin("discord");
     buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         {
@@ -534,11 +478,7 @@ describe("persistPluginInstall", () => {
     });
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "discord",
       install: {
         source: "npm",
@@ -567,19 +507,8 @@ describe("persistPluginInstall", () => {
 
   it("does not warn when the config-selected source is inside the npm install path", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          discord: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    mockEnabledPlugin("discord");
     buildPluginSnapshotReportMock.mockReturnValue({
       plugins: [
         {
@@ -593,11 +522,7 @@ describe("persistPluginInstall", () => {
     });
 
     await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "discord",
       install: {
         source: "npm",
@@ -611,27 +536,12 @@ describe("persistPluginInstall", () => {
 
   it("invalidates runtime cache even when registry refresh fails", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    const enabledConfig = mockEnabledPlugin("alpha");
     refreshPluginRegistryMock.mockRejectedValueOnce(new Error("registry unavailable"));
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "alpha",
       install: {
         source: "npm",
@@ -648,26 +558,11 @@ describe("persistPluginInstall", () => {
 
   it("skips runtime cache invalidation when the caller opts out", async () => {
     const { persistPluginInstall } = await import("./install-persistence.js");
-    const baseConfig = {
-      plugins: {
-        entries: {},
-      },
-    } as OpenClawConfig;
-    const enabledConfig = {
-      plugins: {
-        entries: {
-          alpha: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
-    enablePluginInConfigMock.mockReturnValue({ config: enabledConfig, enabled: true });
+    const baseConfig: OpenClawConfig = { plugins: { entries: {} } };
+    const enabledConfig = mockEnabledPlugin("alpha");
 
     const next = await persistPluginInstall({
-      snapshot: {
-        config: baseConfig,
-        baseHash: "config-1",
-        writeOptions: installWriteOptions,
-      },
+      snapshot: installSnapshot(baseConfig),
       pluginId: "alpha",
       install: {
         source: "npm",

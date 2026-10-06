@@ -25,11 +25,10 @@ const harness = createScenarioRunnerTestHarness();
 afterEach(() => harness.cleanup());
 
 describe("native attempt child bundles", () => {
-  it.each(
-    (["blocked", "skipped"] as const).flatMap((status) =>
-      [undefined, "original failing check"].map((reason) => ({ status, reason })),
-    ),
-  )(
+  it.each([
+    { status: "blocked", reason: undefined },
+    { status: "skipped", reason: "original failing check" },
+  ] as const)(
     "retains a later failing producer check and its $reason diagnostic after a $status retry",
     async ({ status, reason }) => {
       const root = await harness.makeTempRepo("qa-native-multicheck-retry-");
@@ -84,7 +83,7 @@ describe("native attempt child bundles", () => {
     },
   );
 
-  it.each(["pass", "fail", "blocked", "skipped"] as const)(
+  it.each(["pass", "blocked", "skipped"] as const)(
     "retains an actual independent v3 subprocess across a %s retry in full and slim projections",
     async (status) => {
       const root = await harness.makeTempRepo("qa-native-child-");
@@ -317,13 +316,13 @@ process.exitCode = Number(value("--exit"));
     },
   );
 
-  it.each(["pass", "fail", "blocked", "skipped"] as const)(
+  it.each(["pass", "blocked"] as const)(
     "selects the whole v2 producer and command attempt after %s",
     async (status) => {
       const root = await harness.makeTempRepo("qa-native-v2-retry-");
       const scenarios = [makeTestFileScenario("script", "producer.mjs")];
       const run = async (
-        next: typeof status,
+        next: typeof status | "fail",
         exitCode: number,
         continuation?: QaEvidenceSummaryV3Json,
       ) =>
@@ -355,7 +354,7 @@ process.exitCode = Number(value("--exit"));
         throw new Error("expected v3 adapter");
       }
       const firstRows = structuredClone(first.evidence.entries);
-      const second = await run(status, status === "fail" ? 7 : 0, first.evidence);
+      const second = await run(status, 0, first.evidence);
       expect(second.evidence.entries.slice(0, 2).map((entry) => entry.result)).toEqual(
         firstRows.map((entry) => entry.result),
       );

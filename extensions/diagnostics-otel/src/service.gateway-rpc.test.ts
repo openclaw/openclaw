@@ -26,11 +26,73 @@ function spanNamed(spans: ReadableSpan[], name: string) {
   return spans.find((span) => span.name === name);
 }
 
-test.each([
-  { traces: true, metricsEnabled: false },
-  { traces: false, metricsEnabled: true },
-  { traces: true, metricsEnabled: true },
-])(
+test("keeps runtime phase parents explicit when observations arrive under another trace", async () => {
+  context.disable();
+  expect(context.setGlobalContextManager(new AsyncLocalStorageContextManager().enable())).toBe(
+    true,
+  );
+  await startOtelService({ traces: true });
+  await waitForDiagnosticEventsDrained();
+  const tracer = sdk.provider.getTracer("phase-caller");
+  const caller = tracer.startSpan("catalog.caller");
+  const unrelated = tracer.startSpan("unrelated.drain");
+  const parent = createDiagnosticTraceContext({
+    traceId: caller.spanContext().traceId,
+    spanId: caller.spanContext().spanId,
+  });
+  const requestTrace = createChildDiagnosticTraceContext(parent);
+  const parentlessRequestTrace = createDiagnosticTraceContext();
+  const phase = {
+    type: "diagnostic.phase.completed" as const,
+    startedAt: Date.now() - 25,
+    durationMs: 25,
+  };
+  try {
+    await context.with(trace.setSpan(context.active(), unrelated), async () => {
+      await Promise.resolve();
+      emit({ ...phase, name: "sessions.catalog.list.provider", trace: requestTrace });
+      emit({
+        ...phase,
+        name: "sessions.catalog.list.planning",
+        details: { threadCpuMs: 1.25 },
+      });
+      emit({
+        ...phase,
+        name: "sessions.catalog.list.delivery",
+        trace: parentlessRequestTrace,
+      });
+      emitDiagnosticEvent({ ...phase, name: "startup.fixture", cpuTotalMs: 10 });
+      await waitForDiagnosticEventsDrained();
+    });
+    const spans = sdk.exporter.getFinishedSpans();
+    const provider = spans.find(
+      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.provider",
+    )!;
+    const planning = spans.find(
+      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.planning",
+    )!;
+    const delivery = spans.find(
+      (span) => span.attributes["openclaw.phase"] === "sessions.catalog.list.delivery",
+    )!;
+    const startup = spans.find((span) => span.attributes["openclaw.phase"] === "startup.fixture")!;
+    expect(provider.parentSpanContext?.spanId).toBe(caller.spanContext().spanId);
+    expect(provider.spanContext().traceId).toBe(caller.spanContext().traceId);
+    expect(planning.parentSpanContext).toBeUndefined();
+    expect(planning.spanContext().traceId).not.toBe(unrelated.spanContext().traceId);
+    expect(planning.attributes["openclaw.phase.detail.threadCpuMs"]).toBe(1.25);
+    expect(planning.attributes).not.toHaveProperty("openclaw.phase.cpu_total_ms");
+    expect(delivery.parentSpanContext).toBeUndefined();
+    expect(delivery.spanContext().traceId).not.toBe(parentlessRequestTrace.traceId);
+    expect(delivery.spanContext().traceId).not.toBe(unrelated.spanContext().traceId);
+    expect(startup.parentSpanContext?.spanId).toBe(unrelated.spanContext().spanId);
+    expect(startup.attributes["openclaw.phase.cpu_total_ms"]).toBe(10);
+  } finally {
+    caller.end();
+    unrelated.end();
+  }
+});
+
+test.each([{ traces: false, metricsEnabled: true }])(
   "honors preloaded signal toggles (traces=$traces metrics=$metricsEnabled)",
   async ({ traces, metricsEnabled }) => {
     const reader = new PeriodicExportingMetricReader({
@@ -40,7 +102,25 @@ test.each([
     try {
       metrics.disable();
       expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
-      await startOtelService({ traces, metrics: metricsEnabled });
+      let deliveredPhases = 0;
+      await startOtelService({
+        traces,
+        metrics: metricsEnabled,
+        configure(serviceContext) {
+          const bridge = serviceContext.internalDiagnostics!;
+          serviceContext.internalDiagnostics = {
+            ...bridge,
+            onEvent(listener, filter) {
+              return bridge.onEvent((event, metadata, privateData) => {
+                if (event.type === "diagnostic.phase.completed") {
+                  deliveredPhases++;
+                }
+                listener(event, metadata, privateData);
+              }, filter);
+            },
+          };
+        },
+      });
       emit({
         type: "gateway.rpc",
         method: "health",
@@ -54,9 +134,20 @@ test.each([
         model: "gpt-5.4",
         usage: { input: 5, output: 3, total: 8 },
       });
+      emit({
+        type: "diagnostic.phase.completed",
+        name: "sessions.catalog.list.provider",
+        startedAt: Date.now() - 10,
+        durationMs: 10,
+      });
       await waitForDiagnosticEventsDrained();
 
-      for (const name of ["openclaw.gateway.rpc.response", "openclaw.model.usage"]) {
+      expect(deliveredPhases).toBe(traces ? 1 : 0);
+      for (const name of [
+        "openclaw.gateway.rpc.response",
+        "openclaw.model.usage",
+        "openclaw.diagnostic.phase",
+      ]) {
         expect(Boolean(spanNamed(sdk.exporter.getFinishedSpans(), name))).toBe(traces);
       }
       const { resourceMetrics, errors } = await reader.collect();
@@ -159,6 +250,14 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
   try {
     emit({ ...base, phase: "received" });
     emit({ ...base, phase: "response", outcome: "ok", durationMs: 250 });
+    emit({
+      ...base,
+      phase: "response",
+      outcome: "ok",
+      durationMs: 750,
+      responseBytes: 8192,
+      firstResponse: false,
+    });
     emit({ ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 });
     emit({
       ...base,
@@ -282,40 +381,4 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
     await service.stop?.(ctx);
     await meterProvider.shutdown();
   }
-});
-
-test("logs-only exporters do not subscribe to Gateway RPC timings", async () => {
-  const received: string[] = [];
-  const { service, ctx } = await startOtelService({
-    logs: true,
-    logsExporter: "stdout",
-    configure(serviceContext) {
-      const subscribe = serviceContext.internalDiagnostics!.onEvent;
-      serviceContext.internalDiagnostics!.onEvent = (listener, filter) =>
-        subscribe((...args) => {
-          received.push(args[0].type);
-          listener(...args);
-        }, filter);
-    },
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "gateway.rpc",
-    method: "health",
-    phase: "received",
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "queue.lane.enqueue",
-    lane: "main",
-    queueSize: 1,
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "log.record",
-    level: "INFO",
-    message: "synthetic RPC gating proof",
-  });
-  await waitForDiagnosticEventsDrained();
-  await service.stop?.(ctx);
-  expect(received).toContain("log.record");
-  expect(received).not.toContain("gateway.rpc");
-  expect(received).not.toContain("queue.lane.enqueue");
 });

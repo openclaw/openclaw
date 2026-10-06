@@ -1,4 +1,3 @@
-// Shared skill status rendering and classification helpers.
 import { html, nothing } from "lit";
 import type { SkillStatusEntry } from "../api/types.ts";
 import { t } from "../i18n/index.ts";

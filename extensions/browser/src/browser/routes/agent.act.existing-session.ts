@@ -1,12 +1,11 @@
 /** Existing-session action waits, navigation verification, and deadline ownership. */
 import { setTimeout as sleep } from "node:timers/promises";
 import { EXISTING_SESSION_NAVIGATION_RECHECK_DELAYS_MS } from "../act-policy.js";
+import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
   ChromeMcpDocumentUnavailableError,
   evaluateChromeMcpScript,
   withChromeMcpDocument,
-  type ChromeMcpOperationOptions,
-  type ChromeMcpProfileOptions,
 } from "../chrome-mcp.js";
 import { normalizeBrowserEvaluateFunctionSource } from "../evaluate-source.js";
 import {
@@ -45,14 +44,7 @@ export function createExistingSessionDeadline(
   };
 }
 
-export type ExistingSessionOperation = ChromeMcpOperationOptions & {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-};
-
-async function readExistingSessionLocationHref(params: ExistingSessionOperation): Promise<string> {
+async function readExistingSessionLocationHref(params: ChromeMcpTargetOperation): Promise<string> {
   const currentUrl = await evaluateChromeMcpScript({
     ...params,
     fn: "() => window.location.href",
@@ -68,7 +60,7 @@ async function readExistingSessionLocationHref(params: ExistingSessionOperation)
 }
 
 export async function assertExistingSessionPostInteractionNavigationAllowed(
-  params: ExistingSessionOperation &
+  params: ChromeMcpTargetOperation &
     BrowserNavigationPolicyOptions & {
       listTabs: () => Promise<Array<{ targetId: string; url: string }>>;
       initialTabTargetIds: ReadonlySet<string>;
@@ -116,11 +108,7 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       signal: params.signal,
       ...navigationPolicy,
     });
-    if (currentUrl === lastObservedUrl) {
-      sawStableAllowedUrl = true;
-    } else {
-      sawStableAllowedUrl = false;
-    }
+    sawStableAllowedUrl = currentUrl === lastObservedUrl;
     lastObservedUrl = currentUrl;
   }
 
@@ -151,7 +139,6 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
       }
     } catch {
       params.signal?.throwIfAborted();
-      // Probe failed — fall through to throw
     }
   }
 
@@ -201,7 +188,7 @@ function buildExistingSessionWaitPredicate(params: {
 }
 
 export async function waitForExistingSessionCondition(
-  params: ExistingSessionOperation & {
+  params: ChromeMcpTargetOperation & {
     timeMs?: number;
     text?: string;
     textGone?: string;
@@ -233,7 +220,7 @@ export async function waitForExistingSessionCondition(
             deadline.throwIfAborted();
             const url = await document.evaluate(`(root) => {
             const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-            return boundDocument === globalThis.document ? globalThis.location.href : null;
+            return boundDocument === document ? location.href : null;
           }`);
             deadline.throwIfAborted();
             if (typeof url !== "string" || !url.trim()) {
@@ -261,7 +248,9 @@ export async function waitForExistingSessionCondition(
           deadline.throwIfAborted();
           const outcome = await document.evaluate(`async (root) => {
           const boundDocument = root?.nodeType === 9 ? root : root?.ownerDocument;
-          if (boundDocument !== globalThis.document) return { kind: "navigation" };
+          if (boundDocument !== document || location.href !== ${JSON.stringify(currentUrl)}) {
+            return { kind: "navigation" };
+          }
           try {
             return { kind: "result", ready: Boolean(await (${predicate})) };
           } catch (error) {

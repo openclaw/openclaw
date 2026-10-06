@@ -8,14 +8,15 @@ import {
   INBOUND_METADATA_MARKERS,
   stripInboundMetadata,
 } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { RUNTIME_CONTEXT_HEADER } from "../../llm/types.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
 import { escapeRegExp } from "../../shared/regexp.js";
 import {
   assistantTraceTextFilter,
+  legacyBracketToolCallTextFilter,
+  minimaxToolCallTextFilter,
   plainToolCallTextFilter,
-  stripLegacyBracketToolCallBlocks,
-  stripMinimaxToolCallXml,
-  stripToolCallXmlTags,
+  toolCallXmlTextFilter,
 } from "../../shared/text/assistant-visible-text.js";
 import {
   findCodeRegions,
@@ -252,20 +253,19 @@ export function userFacingTextFilters(
         streaming ? "<" : INTERNAL_RUNTIME_CONTEXT_BEGIN,
         INTERNAL_RUNTIME_CONTEXT_END,
         OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+        // Activate before any ambiguous carrier prefix can reach a user-visible stream.
+        streaming ? RUNTIME_CONTEXT_HEADER.charAt(0) : RUNTIME_CONTEXT_HEADER,
       ],
     },
     { transform: stripInboundMetadata, activationTokens: INBOUND_METADATA_MARKERS },
-    { transform: stripMinimaxToolCallXml, activationTokens: ["<"] },
-    {
-      transform: (text) => stripToolCallXmlTags(text, { stripFunctionCallsXmlPayloads: true }),
-      activationTokens: ["<"],
-    },
+    minimaxToolCallTextFilter,
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }),
     {
       transform: stripInternalPlaceholderLines,
       activationTokens: [EXEC_NO_OUTPUT_PLACEHOLDER, "[tool calls omitted]"],
     },
     ...(errorContext ? [assistantTraceTextFilter] : []),
-    { transform: stripLegacyBracketToolCallBlocks, activationTokens: ["["] },
+    legacyBracketToolCallTextFilter,
     plainToolCallTextFilter,
     leadingEmptyLinesTextFilter,
     duplicateParagraphTextFilter,

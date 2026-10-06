@@ -230,41 +230,113 @@ function normalizeTelegramTestUserbotCredentialPayload(
       `Credential payload for kind "${kind}" must use schemaVersion 1 and environment "test".`,
     );
   }
+  const normalizeUser = (user: Record<string, unknown>) => {
+    const testerUserId = requirePayloadString(user, "testerUserId", kind, createFailure);
+    if (!TELEGRAM_USER_ID_RE.test(testerUserId)) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" has invalid tester identity.`,
+      );
+    }
+    const tdlibArchiveBase64 = requirePayloadString(
+      user,
+      "tdlibArchiveBase64",
+      kind,
+      createFailure,
+    );
+    if (!BASE64_RE.test(tdlibArchiveBase64) || tdlibArchiveBase64.length % 4 !== 0) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" has invalid tdlibArchiveBase64.`,
+      );
+    }
+    const tdlibArchiveSha256 = requirePayloadString(
+      user,
+      "tdlibArchiveSha256",
+      kind,
+      createFailure,
+    ).toLowerCase();
+    if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" has invalid tdlibArchiveSha256.`,
+      );
+    }
+    return {
+      testerUserId,
+      tdlibArchiveBase64,
+      tdlibArchiveSha256,
+      tdlibVersion: requirePayloadString(user, "tdlibVersion", kind, createFailure),
+    };
+  };
   const groupId = requirePayloadString(payload, "groupId", kind, createFailure);
   const sutBotId = requirePayloadString(payload, "sutBotId", kind, createFailure);
-  const testerUserId = requirePayloadString(payload, "testerUserId", kind, createFailure);
   if (!TELEGRAM_CHAT_ID_RE.test(groupId)) {
     throwPayloadError(createFailure, `Credential payload for kind "${kind}" has invalid groupId.`);
   }
-  if (!TELEGRAM_USER_ID_RE.test(sutBotId) || !TELEGRAM_USER_ID_RE.test(testerUserId)) {
+  if (!TELEGRAM_USER_ID_RE.test(sutBotId)) {
     throwPayloadError(
       createFailure,
-      `Credential payload for kind "${kind}" has invalid bot or tester identity.`,
+      `Credential payload for kind "${kind}" has invalid bot identity.`,
     );
   }
-  const tdlibArchiveBase64 = requirePayloadString(
-    payload,
-    "tdlibArchiveBase64",
-    kind,
-    createFailure,
-  );
-  if (!BASE64_RE.test(tdlibArchiveBase64) || tdlibArchiveBase64.length % 4 !== 0) {
+  const primary = normalizeUser(payload);
+  const forumGroupId =
+    payload.forumGroupId === undefined
+      ? undefined
+      : requirePayloadString(payload, "forumGroupId", kind, createFailure);
+  if (forumGroupId && !/^-\d+$/u.test(forumGroupId)) {
     throwPayloadError(
       createFailure,
-      `Credential payload for kind "${kind}" has invalid tdlibArchiveBase64.`,
+      `Credential payload for kind "${kind}" has invalid forumGroupId.`,
     );
   }
-  const tdlibArchiveSha256 = requirePayloadString(
-    payload,
-    "tdlibArchiveSha256",
-    kind,
-    createFailure,
-  ).toLowerCase();
-  if (!SHA256_HEX_RE.test(tdlibArchiveSha256)) {
+  const forumTopicId = payload.forumTopicId;
+  if (
+    forumTopicId !== undefined &&
+    (!Number.isSafeInteger(forumTopicId) || Number(forumTopicId) <= 0)
+  ) {
     throwPayloadError(
       createFailure,
-      `Credential payload for kind "${kind}" has invalid tdlibArchiveSha256.`,
+      `Credential payload for kind "${kind}" has invalid forumTopicId.`,
     );
+  }
+  let participants: Array<ReturnType<typeof normalizeUser> & { alias: string }> | undefined;
+  if (payload.participants !== undefined) {
+    if (!Array.isArray(payload.participants)) {
+      throwPayloadError(
+        createFailure,
+        `Credential payload for kind "${kind}" has invalid participants.`,
+      );
+    }
+    const aliases = new Set(["primary"]);
+    const identities = new Set([primary.testerUserId]);
+    participants = payload.participants.map((value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throwPayloadError(
+          createFailure,
+          `Credential payload for kind "${kind}" has invalid participant.`,
+        );
+      }
+      const participant = value as Record<string, unknown>;
+      const alias = requirePayloadString(participant, "alias", kind, createFailure);
+      if (!/^[a-z][a-z0-9-]*$/u.test(alias) || aliases.has(alias)) {
+        throwPayloadError(
+          createFailure,
+          `Credential payload for kind "${kind}" requires distinct lowercase participant aliases.`,
+        );
+      }
+      const user = normalizeUser(participant);
+      if (identities.has(user.testerUserId)) {
+        throwPayloadError(
+          createFailure,
+          `Credential payload for kind "${kind}" requires distinct participant identities.`,
+        );
+      }
+      aliases.add(alias);
+      identities.add(user.testerUserId);
+      return { alias, ...user };
+    });
   }
   return {
     schemaVersion: 1,
@@ -276,10 +348,10 @@ function normalizeTelegramTestUserbotCredentialPayload(
       "",
     ),
     sutBotId,
-    testerUserId,
-    tdlibArchiveBase64,
-    tdlibArchiveSha256,
-    tdlibVersion: requirePayloadString(payload, "tdlibVersion", kind, createFailure),
+    ...primary,
+    ...(forumGroupId ? { forumGroupId } : {}),
+    ...(forumTopicId === undefined ? {} : { forumTopicId: Number(forumTopicId) }),
+    ...(participants ? { participants } : {}),
   } satisfies Record<string, unknown>;
 }
 

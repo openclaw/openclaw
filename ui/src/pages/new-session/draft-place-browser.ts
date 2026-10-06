@@ -11,9 +11,10 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { folderDisplayName, isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
+import { isAbsolutePath, isKnownWorkspacePath } from "./path.ts";
 import { PICKER_INPUT_DEBOUNCE_MS, PlaceBrowserState } from "./place-browser-state.ts";
 import { projectCloneInput, type DraftRemoteProject } from "./project-chip.ts";
 import { recentPlaces, type RecentPlaceSource } from "./recent-places.ts";
@@ -56,6 +57,7 @@ export class DraftPlaceBrowser {
   private browserRegistrationId: number | null = null;
   private browserRegistrationCounter = 0;
   private openPopoverValue: DraftPickerKind | null = null;
+  private focusRequestId = 0;
   // Independent hide animations can overlap; keep every trigger fenced until its own completes.
   private readonly hidingPopovers = new Set<DraftPickerKind>();
   private projectSearchTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
@@ -65,7 +67,7 @@ export class DraftPlaceBrowser {
   private readonly projectSearchTask: Task<readonly unknown[], ProjectsSearchRemoteResult>;
 
   constructor(
-    host: ReactiveControllerHost,
+    private readonly host: ReactiveControllerHost,
     private readonly gateway: DraftGatewayState,
     private readonly read: () => DraftPlaceBrowserSnapshot,
     private readonly callbacks: DraftPlaceBrowserCallbacks,
@@ -140,8 +142,31 @@ export class DraftPlaceBrowser {
     return this.projectCatalog?.snapshot.ready ?? false;
   }
 
+  get projectsLoading(): boolean {
+    return this.projectCatalog?.loading ?? false;
+  }
+
   get projectRecents(): readonly ProjectRecent[] | undefined {
     return this.projectCatalog?.snapshot.result?.recents;
+  }
+
+  get githubHost(): string | undefined {
+    return this.projectCatalog?.snapshot.result?.githubHost;
+  }
+
+  get defaultRemoteProject(): DraftRemoteProject | null {
+    const configured = this.projectCatalog?.snapshot.result?.defaultRepository;
+    return configured
+      ? {
+          identity: configured.identity,
+          cloneUrl: configured.url,
+          ...(configured.ref ? { defaultBranch: configured.ref } : {}),
+        }
+      : null;
+  }
+
+  get defaultRemoteProjectProfileId(): string {
+    return this.projectCatalog?.snapshot.result?.defaultRepository?.profileId ?? "";
   }
 
   get projectId(): string {
@@ -187,8 +212,7 @@ export class DraftPlaceBrowser {
     ) {
       return null;
     }
-    const error = this.projectSearchTask.error;
-    return formatUiError(error);
+    return formatUiError(this.projectSearchTask.error);
   }
 
   get browserOpen(): boolean {
@@ -297,14 +321,11 @@ export class DraftPlaceBrowser {
       recentPlaces(params.sessions, {
         workspace: params.workspace,
         allowGatewayFolder,
-      }).map((recent) => {
-        const item: ProjectRecent = {
-          kind: "folder",
-          folder: recent.folder,
-          displayName: folderDisplayName(recent.folder),
-        };
-        return item;
-      })
+      }).map<ProjectRecent>((recent) => ({
+        kind: "folder",
+        folder: recent.folder,
+        displayName: pathDisplayName(recent.folder),
+      }))
     );
   }
 
@@ -372,21 +393,18 @@ export class DraftPlaceBrowser {
   }
 
   showRoot() {
+    const wasBrowsing = this.browserOpenValue;
     this.resetBrowser(false);
+    if (wasBrowsing) {
+      this.focusProjectView('[data-value="browse"]');
+    }
   }
 
   selectGatewayBrowser(path?: string) {
     this.browserOpenValue = true;
-    this.loadBrowser(path && isAbsolutePath(path) ? path : undefined);
-  }
-
-  loadBrowser(path: string | undefined) {
-    const snapshot = this.read().context?.gateway.snapshot;
-    if (snapshot?.phase !== "connected" || !snapshot.client || !this.browserOpenValue) {
-      return;
-    }
     this.browserProjectPathValue = null;
-    void this.browser.navigate(path);
+    void this.browser.navigate(path && isAbsolutePath(path) ? path : undefined, "initial");
+    this.focusProjectView(".new-session-page__browser-path");
   }
 
   async registerBrowserProject(path: string) {
@@ -485,6 +503,7 @@ export class DraftPlaceBrowser {
   }
 
   disconnect() {
+    this.focusRequestId += 1;
     this.environmentQueryValue = "";
     this.browser.reset();
     this.clearProjectSearchTimer();
@@ -496,6 +515,7 @@ export class DraftPlaceBrowser {
   }
 
   private resetBrowser(closePopover: boolean) {
+    this.focusRequestId += 1;
     this.browser.reset();
     this.browserOpenValue = false;
     this.browserProjectPathValue = null;
@@ -509,6 +529,30 @@ export class DraftPlaceBrowser {
   private clearProjectSearchTimer() {
     globalThis.clearTimeout(this.projectSearchTimer);
     this.projectSearchTimer = undefined;
+  }
+
+  private focusProjectView(selector: string) {
+    const requestId = ++this.focusRequestId;
+    const origin = this.callbacks.activeElement();
+    void this.host.updateComplete.then(() => {
+      if (
+        requestId !== this.focusRequestId ||
+        this.openPopoverValue !== "project" ||
+        this.hidingPopovers.has("project")
+      ) {
+        return;
+      }
+      const active = this.callbacks.activeElement();
+      if (active && active !== origin && active !== this.callbacks.body()) {
+        return;
+      }
+      const target = this.callbacks
+        .querySelector(".new-session-page__project-popover")
+        ?.querySelector<HTMLElement>(selector);
+      if (target?.isConnected) {
+        target.focus({ preventScroll: true });
+      }
+    });
   }
 
   private restorePopoverTrigger(id: string, popoverSelector: string) {

@@ -8,7 +8,11 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { downloadBrowserDocument, type BrowserRequestClient } from "./browser-client.ts";
+import {
+  downloadBrowserDocument,
+  type BrowserDashboardTarget,
+  type BrowserRequestClient,
+} from "./browser-client.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 registerBrowserEnglish();
@@ -18,6 +22,7 @@ interface BrowserPanelDownloadHost {
     readonly isConnected: boolean;
     readonly resourceBasePath: string;
     readonly authToken: string | null;
+    readonly dashboardTarget?: BrowserDashboardTarget;
     requestUpdate(): void;
   };
   readonly operations: { captureClient(): BrowserRequestClient | null };
@@ -50,15 +55,18 @@ export class BrowserPanelDownload {
     if (!url) {
       return null;
     }
-    try {
-      return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
-    } catch {
-      return null;
-    }
+    const protocol = URL.parse(url)?.protocol;
+    return protocol === "http:" || protocol === "https:" ? url : null;
   }
 
   get available(): boolean {
-    return !this.pending && !this.panel.pendingNewTab && !this.panel.loading && this.url !== null;
+    return (
+      !this.panel.host.dashboardTarget?.sessionScoped &&
+      !this.pending &&
+      !this.panel.pendingNewTab &&
+      !this.panel.loading &&
+      this.url !== null
+    );
   }
 
   cancel(): void {

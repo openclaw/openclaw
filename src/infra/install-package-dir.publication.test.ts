@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -21,6 +22,7 @@ describe("installPackageDir publication failure", () => {
   });
 
   afterEach(async () => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     await fixtureRootTracker.cleanup();
   });
@@ -118,7 +120,81 @@ describe("installPackageDir publication failure", () => {
     },
   );
 
-  it.each(["unchanged", "replaced", "backup removed"] as const)(
+  it("awaits planning hooks and restores the original after a publication assertion returns a Promise", async () => {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("async-publication-assertion");
+    const { sourceDir, targetDir } = await createExistingInstallFixture(fixtureRoot);
+    const original = await fs.lstat(targetDir, { bigint: true });
+    const phases: string[] = [];
+    let backupDir = "";
+    let armed = false;
+    let refusals = 0;
+    const rename = vi.spyOn(fs, "rename");
+    const result = await installPackageDir(
+      requestDeferredPackageDirInstall(
+        {
+          sourceDir,
+          targetDir,
+          mode: "update",
+          timeoutMs: 1_000,
+          copyErrorPrefix: "failed to copy plugin",
+          hasDeps: false,
+          sourceHardlinks: "package-manager",
+          depsLogMessage: "",
+          afterCopy: async (directory: string) => {
+            expect(await fs.readFile(path.join(directory, "marker.txt"), "utf8")).toBe("new");
+            phases.push("copied");
+          },
+          afterInstall: async (directory: string) => {
+            expect(await fs.readFile(path.join(directory, "marker.txt"), "utf8")).toBe("new");
+            phases.push("installed");
+            return { ok: true as const };
+          },
+          afterBackup: async (directory: string) => {
+            backupDir = directory;
+            expect(await fs.readFile(path.join(directory, "marker.txt"), "utf8")).toBe("old");
+            phases.push("backed up");
+            armed = true;
+            return { ok: true as const };
+          },
+          beforePersistentApply(): unknown {
+            if (armed) {
+              refusals += 1;
+              return Promise.resolve();
+            }
+            return undefined;
+          },
+        },
+        // Publication-only refusal leaves the original transaction owner authorized to restore.
+        () => {},
+      ),
+    );
+
+    expect(phases).toEqual(["copied", "installed", "backed up"]);
+    expect(result).toEqual({
+      ok: false,
+      error: "failed to copy plugin: TypeError: mutation authority must be synchronous",
+    });
+    expect(refusals).toBe(1);
+    expect(
+      rename.mock.calls.map(([from, to]) => [
+        normalizeComparablePath(String(from)),
+        normalizeComparablePath(String(to)),
+      ]),
+    ).toEqual([
+      [normalizeComparablePath(targetDir), normalizeComparablePath(backupDir)],
+      [normalizeComparablePath(backupDir), normalizeComparablePath(targetDir)],
+    ]);
+    expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
+      dev: original.dev,
+      ino: original.ino,
+    });
+    expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("old");
+    expect(await fs.readFile(path.join(sourceDir, "marker.txt"), "utf8")).toBe("new");
+    await expect(fs.lstat(backupDir)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it.each(["unchanged", "replaced", "replaced-during-cleanup", "backup removed"] as const)(
     "retries backup cleanup after restoration publication (%s)",
     async (retryState) => {
       await fixtureRootTracker.setup();
@@ -164,8 +240,8 @@ describe("installPackageDir publication failure", () => {
         if (
           restored &&
           !injected &&
-          normalizeComparablePath(String(args[0])) ===
-            normalizeComparablePath(path.join(backupDir, "marker.txt"))
+          normalizeComparablePath(path.dirname(String(args[0]))) ===
+            normalizeComparablePath(backupDir)
         ) {
           injected = true;
           throw cleanupError;
@@ -187,16 +263,41 @@ describe("installPackageDir publication failure", () => {
       expect(await fs.readFile(path.join(targetDir, "settings.json"), "utf8")).toBe(
         '{"original":true}\n',
       );
+      // The dependency's initial cleanup need not visit backup files in lexical order.
+      expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
+      expect(await fs.readFile(path.join(backupDir, "settings.json"), "utf8")).toBe(
+        '{"original":true}\n',
+      );
 
-      if (retryState === "replaced") {
+      const replaceTarget = async () => {
         await fs.rename(targetDir, path.join(fixtureRoot, "retained-original"));
         await fs.mkdir(targetDir);
         await fs.writeFile(path.join(targetDir, "marker.txt"), "successor");
+      };
+      if (retryState === "replaced") {
+        await replaceTarget();
       } else if (retryState === "backup removed") {
         await fs.rm(backupDir, { recursive: true });
       }
-      const targetIdentity = await fs.lstat(targetDir, { bigint: true });
-      if (retryState !== "replaced") {
+      let targetIdentity = await fs.lstat(targetDir, { bigint: true });
+      let replacedDuringCleanup = false;
+      if (retryState === "replaced-during-cleanup") {
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: async (operation, target) => {
+            if (
+              !replacedDuringCleanup &&
+              operation === "remove" &&
+              normalizeComparablePath(target) ===
+                normalizeComparablePath(path.join(backupDir, "settings.json"))
+            ) {
+              replacedDuringCleanup = true;
+              await replaceTarget();
+              targetIdentity = await fs.lstat(targetDir, { bigint: true });
+            }
+          },
+        });
+      }
+      if (retryState === "unchanged" || retryState === "backup removed") {
         await transaction.rollback();
         await expect(fs.lstat(backupDir)).rejects.toHaveProperty("code", "ENOENT");
         expect(await fs.readFile(path.join(targetDir, "settings.json"), "utf8")).toBe(
@@ -204,10 +305,21 @@ describe("installPackageDir publication failure", () => {
         );
       } else {
         await expect(transaction.rollback()).rejects.toThrow();
-        expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
+        if (retryState === "replaced-during-cleanup") {
+          expect(replacedDuringCleanup).toBe(true);
+          expect(await fs.readFile(path.join(backupDir, "settings.json"), "utf8")).toBe(
+            '{"original":true}\n',
+          );
+          await expect(fs.lstat(path.join(backupDir, "marker.txt"))).rejects.toHaveProperty(
+            "code",
+            "ENOENT",
+          );
+        } else {
+          expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
+        }
       }
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe(
-        retryState === "replaced" ? "successor" : "old",
+        retryState === "replaced" || retryState === "replaced-during-cleanup" ? "successor" : "old",
       );
       expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
         dev: targetIdentity.dev,

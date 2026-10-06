@@ -69,7 +69,6 @@ enum OpenClawBrand {
     static let uiAccentForeground = adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102))
     static let uiAccentHot = adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86))
     static let uiAccentHotForeground = adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115))
-    static let uiTeal = adaptiveUIColor(light: (0, 196, 176), dark: (0, 196, 176))
     static let uiVoid = adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17))
     static let uiObsidian = adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28))
     static let uiTextSecondary = adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191))
@@ -87,7 +86,6 @@ enum OpenClawBrand {
     static let accentForeground = Color(uiColor: Self.uiAccentForeground)
     static let accentHot = Color(uiColor: Self.uiAccentHot)
     static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
-    static let teal = Color(uiColor: Self.uiTeal)
     static let void = Color(uiColor: Self.uiVoid)
     static let obsidian = Color(uiColor: Self.uiObsidian)
     static let textSecondary = Color(uiColor: Self.uiTextSecondary)
@@ -102,8 +100,6 @@ enum OpenClawBrand {
     static let providerOpenAI = Color(red: 16 / 255.0, green: 163 / 255.0, blue: 127 / 255.0)
     static let providerAnthropic = Color(red: 217 / 255.0, green: 119 / 255.0, blue: 87 / 255.0)
     static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
-    static let graphite = void
-    static let graphiteElevated = obsidian
     static let activationCanvas = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15)))
     static let activationSurface = Color(uiColor: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30)))
     static let activationSecondaryActionTop = Color(uiColor: adaptiveUIColor(
@@ -133,8 +129,8 @@ enum OpenClawBrand {
     static var sheetBackground: LinearGradient {
         LinearGradient(
             colors: [
-                graphite,
-                graphiteElevated.opacity(0.96),
+                void,
+                obsidian.opacity(0.96),
                 Color(uiColor: .systemBackground),
             ],
             startPoint: .topLeading,
@@ -253,33 +249,24 @@ extension View {
             }
     }
 
-    func openClawCraftSurface(cornerRadius: CGFloat = 24, shadow: Bool = true) -> some View {
-        self.modifier(OpenClawCraftSurfaceModifier(cornerRadius: cornerRadius, shadow: shadow))
-    }
-}
-
-private struct OpenClawCraftSurfaceModifier: ViewModifier {
-    let cornerRadius: CGFloat
-    let shadow: Bool
-
-    func body(content: Content) -> some View {
-        content
+    func openClawCraftSurface(cornerRadius: CGFloat = 24) -> some View {
+        self
             .background {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(OpenClawBrand.activationSurface)
                     .shadow(
-                        color: self.shadow ? Color.black.opacity(0.07) : .clear,
+                        color: Color.black.opacity(0.07),
                         radius: 16,
                         x: 0,
                         y: 8)
             }
             .overlay(alignment: .top) {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(0.36), lineWidth: 0.5)
                     .blendMode(.plusLighter)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: self.cornerRadius, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(OpenClawBrand.activationHairline, lineWidth: 0.5)
             }
     }
@@ -426,8 +413,6 @@ struct OpenClawSecondaryActionButtonStyle: ButtonStyle {
 
 struct OpenClawCloseButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
-    var minWidth: CGFloat = 36
-    var height: CGFloat = 36
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -437,8 +422,8 @@ struct OpenClawCloseButtonStyle: ButtonStyle {
                     ? OpenClawBrand.activationPrimaryAction
                     : Color.secondary)
             .fixedSize(horizontal: true, vertical: false)
-            .frame(minWidth: self.minWidth)
-            .frame(height: self.height)
+            .frame(minWidth: 36)
+            .frame(height: 36)
             .padding(.horizontal, 7)
             .background {
                 Capsule(style: .continuous)

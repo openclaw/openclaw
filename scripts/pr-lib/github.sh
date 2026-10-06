@@ -28,6 +28,11 @@ unset pr_gh_snapshot_root pr_gh_source_scripts pr_gh_snapshot_path
 pr_gh_run() (
   local route="$1" filter="" filtered=0
   shift
+  if [ -n "${PR_REPOSITORY_URL:-}" ] &&
+    [ "${GH_REPO:-}" = "${PR_REPOSITORY_SELECTOR:-}" ] &&
+    [ "${GH_HOST:-}" = "${PR_REPOSITORY_HOST:-}" ]; then
+    export GH_REPO="$PR_REPOSITORY_URL"
+  fi
   local args=()
   case "${1:-}:${2:-}" in
     pr:view|repo:view)
@@ -54,17 +59,17 @@ pr_gh_run() (
 
 pr_gh() { pr_gh_run read "$@"; }
 
-pr_gh_plain() { pr_gh_run plain "$@"; }
+pr_gh_plain() { pr_gh_run "${pr_gh_quota_route:-plain}" "$@"; }
+
+pr_gh_quota_read() {
+  local pr_gh_quota_route=plain-quota
+  pr_gh_plain "$@"
+}
+
+pr_gh_quota_exhausted() {
+  printf '%s\n' "$1" | jq -e '. == {graphqlQuotaExhausted:true}' >/dev/null 2>&1
+}
 
 pr_gh_writer_login() {
-  local response exit_code=0
-  local args=(api)
-  [ -z "${1:-}" ] || args+=(--hostname "$1")
-  # Included headers keep this identity probe on the protected native CLI route.
-  response=$(pr_gh_plain "${args[@]}" user --include 2>&1) || exit_code=$?
-  if [ "$exit_code" -eq 75 ] || [ "$exit_code" -eq 77 ]; then
-    printf '%s\n' "$response" >&2
-    return "$exit_code"
-  fi
-  printf '%s' "$response" | node "${BASH_SOURCE[0]%/*}/gh-api-preflight.mjs" "$exit_code"
+  pr_gh_plain writer-login "$@"
 }

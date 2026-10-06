@@ -1,29 +1,38 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { withInProcessAgentRuntimeIdentity } from "../../../gateway/in-process-agent-runtime-identity.js";
+import {
+  bindInProcessSessionRun,
+  type PreparedSessionRun,
+} from "../../../gateway/in-process-session-run.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { isGatewayRpcUnavailableError } from "../../../gateway/transport-error.js";
 import type { WorkerTurnExecutionIdentity } from "../../../gateway/worker-environments/placement-turn-claim-events.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
-import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "../../tools/gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "../../tools/gateway-session-spawn-context.js";
 import { runWithGatewaySessionSpawnParentExecutionIdentity } from "../../tools/gateway-session-spawn-execution-identity.js";
 import { callGatewayTool } from "../../tools/gateway.js";
-import { resolveSubagentRunTimerDelayMs } from "../registry/subagent-run-timeout.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { applySubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { readSubagentGatewayExecutionIdentity } from "./subagent-spawn-execution-identity.js";
 import {
   ADMIN_SCOPE,
   callGateway,
+  dispatchGatewayMethodInProcess,
+  hasInProcessGatewayContext,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./subagent-spawn.runtime.js";
 
@@ -35,12 +44,27 @@ const SUBAGENT_AGENT_RECONCILE_TIMEOUT_MS = 6_400;
 type SubagentGatewayResponse = Awaited<ReturnType<typeof callGateway>>;
 type SubagentGatewayDispatchMode = "in_process" | "out_of_process";
 
+/** Captures the request's Gateway binding and operator owner before spawn preparation awaits. */
+export function captureSubagentSpawnGatewayContext() {
+  const gatewayCaller = getGatewayToolCallerIdentity();
+  const gatewayScope = getPluginRuntimeGatewayRequestScope();
+  const gatewayContextResolver =
+    gatewayCaller?.gatewayContextResolver ??
+    gatewayScope?.resolveGatewayContext ??
+    gatewayScope?.context?.resolveGatewayContext;
+  const operatorAuthority =
+    resolveGatewayToolOperatorSelection().operatorAuthority ??
+    gatewayScope?.client?.internal?.operatorRunAuthority;
+  return { gatewayContextResolver, operatorAuthority };
+}
+
 async function callSubagentGatewayWithDispatchMode(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   options?: {
     agentRunTracking?: "native_subagent";
     gatewayContextResolver?: GatewayContextResolver;
+    preparedLaunch?: PreparedSessionRun;
   },
 ): Promise<{ response: SubagentGatewayResponse; dispatchMode: SubagentGatewayDispatchMode }> {
   const { sessionSpawnContext, parentExecutionIdentityToken } =
@@ -63,15 +87,13 @@ async function callSubagentGatewayWithDispatchMode(
     authorizedParams,
   );
   const allowModelOverride = authorization !== undefined;
-  const deps = getSubagentSpawnDeps();
   const gatewayCaller = getGatewayToolCallerIdentity();
   const gatewayContextResolver =
     options?.gatewayContextResolver ??
     gatewayCaller?.gatewayContextResolver ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   // A closed owner still requires in-process rejection, never a new socket route.
-  const hasInProcessGateway =
-    gatewayContextResolver !== undefined || deps.hasInProcessGatewayContext();
+  const hasInProcessGateway = gatewayContextResolver !== undefined || hasInProcessGatewayContext();
   const needsOutOfProcessModelOverrideAuth = allowModelOverride && !hasInProcessGateway;
   const scopes =
     params.scopes ??
@@ -84,7 +106,10 @@ async function callSubagentGatewayWithDispatchMode(
     ...(scopes != null ? { scopes } : {}),
   };
   if (hasInProcessGateway && isRecord(request.params)) {
-    const requestParams = request.params;
+    const requestParams =
+      request.method === "agent" && options?.preparedLaunch
+        ? bindInProcessSessionRun(request.params, options.preparedLaunch)
+        : request.params;
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     // Agent launches are host-owned even when the parent request came from CLI/HTTP.
@@ -94,10 +119,10 @@ async function callSubagentGatewayWithDispatchMode(
     const dispatch = async (workerIdentity?: WorkerTurnExecutionIdentity) => {
       // Cleanup can lose its worker claim while awaiting a session lifecycle drain.
       const assertDispatchCurrent = workerIdentity
-        ? () => {
-            request.assertDispatchCurrent?.();
-            workerIdentity.receiptAuthority();
-          }
+        ? composeSessionSourceAssertion([
+            request.assertDispatchCurrent,
+            workerIdentity.receiptAuthority,
+          ])
         : request.assertDispatchCurrent;
       assertDispatchCurrent?.();
       const operationalRunInstance = gatewayCaller?.workerTurnClaim
@@ -123,7 +148,7 @@ async function callSubagentGatewayWithDispatchMode(
               sessionSpawnContext,
             }
           : undefined;
-      return await deps.dispatchGatewayMethodInProcess(
+      return await dispatchGatewayMethodInProcess(
         request.method,
         requestParams,
         withInProcessAgentRuntimeIdentity(
@@ -185,7 +210,7 @@ async function callSubagentGatewayWithDispatchMode(
             ),
           ),
         )
-      : deps.callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
+      : callGateway(typeof timeoutMs === "number" ? { ...request, timeoutMs } : request);
   };
   // Only agent launches have an idempotency key backed by authoritative Gateway state.
   // Other methods must not repeat after a transport-ambiguous failure.
@@ -248,19 +273,21 @@ export async function callNativeSubagentGateway(
   params: Parameters<typeof callGateway>[0],
   authorization?: SubagentLaunchAuthorization,
   gatewayContextResolver?: GatewayContextResolver,
+  preparedLaunch?: PreparedSessionRun,
 ): Promise<{
   response: SubagentGatewayResponse;
-  taskRowOwnership: "required" | "gateway_best_effort";
+  registrationRequired: boolean;
 }> {
   const result = await callSubagentGatewayWithDispatchMode(params, authorization, {
     agentRunTracking: "native_subagent",
     gatewayContextResolver,
+    preparedLaunch,
   });
   return {
     response: result.response,
     // The trusted marker exists only on direct dispatch. A WebSocket fallback keeps the
     // ordinary Gateway CLI policy: tracking is best-effort and never rejects an accepted run.
-    taskRowOwnership: result.dispatchMode === "in_process" ? "required" : "gateway_best_effort",
+    registrationRequired: result.dispatchMode === "in_process",
   };
 }
 
@@ -271,7 +298,8 @@ export function readGatewayRunId(
 }
 
 export function resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds: number): number {
-  const runTimeoutMs = resolveSubagentRunTimerDelayMs(runTimeoutSeconds) ?? 0;
+  const runTimeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(runTimeoutSeconds, { floorSeconds: true }) ?? 0;
   if (runTimeoutMs <= 0) {
     return DEFAULT_SUBAGENT_AGENT_GATEWAY_TIMEOUT_MS;
   }

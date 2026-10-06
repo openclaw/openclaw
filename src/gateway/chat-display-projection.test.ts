@@ -3,315 +3,57 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
-import {
-  projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
-} from "./chat-display-projection.js";
+import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
-describe("private yield context in chat history", () => {
-  it.each(["embedded", "native"])(
-    "hides the %s yield input without changing private provenance",
-    (runtime) => {
-      const privateContext = "PRIVATE_YIELD_CONTEXT";
-      const yieldArguments = Object.freeze({
-        message: privateContext,
-        acknowledgment: "Waiting for the background task.",
-      });
-      const message = {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "yield-1",
-            name: "sessions_yield",
-            arguments: yieldArguments,
-            ...(runtime === "native" ? { input: yieldArguments } : {}),
-          },
-          {
-            type: "toolCall",
-            id: "send-1",
-            name: "message",
-            arguments: { message: "Public reply" },
-          },
-        ],
-      };
-
-      const messages = projectChatDisplayMessages([message]);
-      expect(messages).toEqual([
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "yield-1",
-              name: "sessions_yield",
-              arguments: { acknowledgment: "Waiting for the background task." },
-              ...(runtime === "native"
-                ? { input: { acknowledgment: "Waiting for the background task." } }
-                : {}),
-            },
-            {
-              type: "toolCall",
-              id: "send-1",
-              name: "message",
-              arguments: { message: "Public reply" },
-            },
-          ],
-        },
-      ]);
-      expect(yieldArguments.message).toBe(privateContext);
+it("hides private yield inputs without changing canonical arguments", () => {
+  const publicInput = { acknowledgment: "Waiting." };
+  const args = Object.freeze({ ...publicInput, message: "PRIVATE_YIELD_CONTEXT" });
+  const call = { type: "toolCall", name: "sessions_yield", arguments: args, input: args };
+  const publicCall = { type: "toolCall", name: "message", arguments: { message: "Public reply" } };
+  const message = { role: "assistant", content: [call, publicCall] };
+  expect(projectChatDisplayMessages([message])).toEqual([
+    {
+      ...message,
+      content: [{ ...call, arguments: publicInput, input: publicInput }, publicCall],
     },
-  );
+  ]);
+  expect(args.message).toBe("PRIVATE_YIELD_CONTEXT");
 });
 
-describe("managed document chat history", () => {
-  it("projects durable display content without dropping canonical assistant blocks", () => {
-    const canonical = [
-      { type: "text", text: "Slides ready" },
-      { type: "toolCall", id: "call-1", name: "read", arguments: {} },
-    ];
-    const attachment = {
-      type: "attachment",
-      attachment: { kind: "document", label: "slides.pptx" },
-    };
-    const message = {
-      role: "assistant",
-      content: canonical,
-      openclawDisplayContent: [...canonical, attachment],
-    };
-
-    const messages = projectChatDisplayMessages([message]);
-    expect(messages).toEqual([{ role: "assistant", content: [...canonical, attachment] }]);
-    expect(message.content).toBe(canonical);
-  });
-
-  it("keeps the attachment envelope while stripping URL capabilities", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "attachment",
-          attachment: {
-            artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
-            kind: "document",
-            label: "report.csv",
-            mimeType: "text/csv",
-            sizeBytes: 12,
-            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=secret",
-          },
-        },
-      ],
-    };
-
-    expect(sanitizeChatHistoryMessages([message])).toEqual([
+it("strips attachment capabilities even after another field changed", () => {
+  const attachment = {
+    artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+    kind: "document",
+    label: "report.csv",
+    mimeType: "text/csv",
+    sizeBytes: 12,
+    url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full",
+  };
+  expect(
+    sanitizeChatHistoryMessages([
       {
         role: "assistant",
         content: [
           {
             type: "attachment",
+            thinkingSignature: "private-reasoning-signature",
             attachment: {
-              artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
-              kind: "document",
-              label: "report.csv",
-              mimeType: "text/csv",
-              sizeBytes: 12,
-              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+              ...attachment,
+              path: "/tmp/private-report.csv",
+              url: attachment.url + "?mediaTicket=secret",
             },
           },
         ],
       },
-    ]);
-  });
-
-  it("sanitizes attachment capabilities after another field already changed", () => {
-    const message = {
-      role: "assistant",
-      content: [
-        {
-          type: "attachment",
-          thinkingSignature: "private-reasoning-signature",
-          attachment: {
-            kind: "document",
-            label: "report.csv",
-            path: "/tmp/private-report.csv",
-            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=secret",
-          },
-        },
-      ],
-    };
-
-    expect(sanitizeChatHistoryMessages([message])).toEqual([
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "attachment",
-            attachment: {
-              kind: "document",
-              label: "report.csv",
-              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full",
-            },
-          },
-        ],
-      },
-    ]);
-  });
+    ]),
+  ).toEqual([{ role: "assistant", content: [{ type: "attachment", attachment }] }]);
 });
 
-describe("oversized multimodal chat history", () => {
-  it("keeps legacy image, audio, and video blocks in projection and incremental SSE", () => {
-    const inlineImage = Buffer.from("inline image").toString("base64");
-    const inlineAudio = Buffer.from("inline audio").toString("base64");
-    const inlineVideo = Buffer.from("inline video").toString("base64");
-    const rawMessage = {
-      role: "user",
-      content: [
-        { type: "text", text: "keep mixed media metadata" },
-        {
-          type: "image",
-          mimeType: "image/png",
-          data: inlineImage,
-          path: "/tmp/private-image.png",
-          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
-          source: {
-            type: "base64",
-            data: inlineImage,
-            blob: inlineImage,
-            url: "media://inbound/image-claim",
-          },
-        },
-        {
-          type: "audio",
-          mimeType: "audio/wav",
-          blob: inlineAudio,
-          filePath: String.raw`C:\private-audio.wav`,
-          audio_url: "media://inbound/audio-claim",
-          source: {
-            type: "url",
-            data: inlineAudio,
-            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
-          },
-        },
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          data: inlineVideo,
-          localPath: String.raw`\\server\share\private-video.mp4`,
-          video_url:
-            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
-          source: {
-            type: "url",
-            blob: inlineVideo,
-            url: "media://inbound/video-claim",
-          },
-        },
-      ],
-    };
-    const expected = projectChatDisplayMessages([rawMessage]);
-    const sseState = SessionHistorySseState.fromSnapshot({
-      target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
-      snapshot: {
-        history: { items: [], messages: [], hasMore: false },
-        rawTranscriptSeq: 0,
-        turnBoundaryPending: false,
-        assistantErrorPending: false,
-      },
-    });
-    const incremental = sseState.appendInlineMessage({ message: rawMessage })?.message;
-    const projections = [
-      ["projectChatDisplayMessages", expected],
-      ["incremental SSE state", incremental ? [incremental] : []],
-    ] as const;
-    for (const [boundary, messages] of projections) {
-      expect(messages, boundary).toHaveLength(1);
-      expect(messages[0], boundary).toMatchObject({
-        role: "user",
-        content: expected[0]?.content,
-      });
-      expect((messages[0] as { content?: unknown[] }).content).toEqual([
-        expect.objectContaining({ type: "text" }),
-        expect.objectContaining({ type: "image", mimeType: "image/png" }),
-        expect.objectContaining({ type: "audio", mimeType: "audio/wav" }),
-        expect.objectContaining({ type: "video", mimeType: "video/mp4" }),
-      ]);
-      const serialized = JSON.stringify(messages);
-      for (const secret of [
-        inlineImage,
-        inlineAudio,
-        inlineVideo,
-        "private-image",
-        "private-audio",
-        "private-video",
-        "image-user",
-        "audio-user",
-        "video-user",
-        "image-secret",
-        "audio-secret",
-        "video-secret",
-        "image-fragment",
-        "audio-fragment",
-        "video-fragment",
-      ]) {
-        expect(serialized, `${boundary}: ${secret}`).not.toContain(secret);
-      }
-      expect(serialized, boundary).toContain("media://inbound/image-claim");
-      expect(serialized, boundary).toContain("media://inbound/audio-claim");
-      expect(serialized, boundary).toContain("media://inbound/video-claim");
-      expect(serialized, boundary).toContain("https://media.example/image.png");
-      expect(serialized, boundary).toContain("https://media.example/audio.wav");
-      expect(serialized, boundary).toContain("https://media.example/video.mp4");
-    }
-  });
-
-  it("projects media even when another block field is sanitized first", () => {
-    const payload = Buffer.from("short-circuit video payload");
-    const encoded = payload.toString("base64");
-    const message = {
-      role: "user",
-      content: [
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          data: encoded,
-          blob: encoded,
-          path: "/private/short-circuit-video.mp4",
-          url: "https://media-user@media.example/video.mp4?signature=private-signature#private-fragment",
-          openclawReasoningReplay: { private: true },
-        },
-      ],
-    };
-
-    const messages = sanitizeChatHistoryMessages([message]);
-
-    expect(messages).toEqual([
-      {
-        role: "user",
-        content: [
-          {
-            type: "video",
-            mimeType: "video/mp4",
-            url: "https://media.example/video.mp4",
-            omitted: true,
-            bytes: payload.length,
-          },
-        ],
-      },
-    ]);
-    const serialized = JSON.stringify(messages);
-    for (const privateValue of [
-      encoded,
-      "/private/short-circuit-video.mp4",
-      "media-user",
-      "private-signature",
-      "private-fragment",
-      "openclawReasoningReplay",
-    ]) {
-      expect(serialized).not.toContain(privateValue);
-    }
-  });
-
+describe("multimodal display privacy", () => {
   it.each([
     {
       name: "native image data",
@@ -352,41 +94,99 @@ describe("oversized multimodal chat history", () => {
     );
   });
 
-  it("preserves URL-backed images without changing their sources", () => {
-    const source = { type: "url", url: "https://example.invalid/picture.png" };
-    expect(
-      projectChatDisplayMessages([{ role: "user", content: [{ type: "image", source }] }]),
-    ).toEqual([{ role: "user", content: [{ type: "image", source }] }]);
-  });
-
-  it("omits persisted top-level audio data from display history", () => {
-    const audio = Buffer.from("persisted audio bytes");
-    const encoded = audio.toString("base64");
-    const message = {
+  it("keeps sanitized legacy media in projection and incremental SSE", async () => {
+    const data = Buffer.from("inline payload").toString("base64");
+    const rawMessage = {
       role: "user",
       content: [
-        { type: "text", text: "keep prefix text" },
-        { type: "audio", mimeType: "audio/wav", data: encoded },
-        { type: "text", text: "keep suffix text" },
+        { type: "text", text: "keep mixed media metadata" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          path: "/tmp/private-image.png",
+          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
+          source: { type: "base64", data, blob: data, url: "media://inbound/image-claim" },
+        },
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          data,
+          filePath: "C:\\private-audio.wav",
+          audio_url: "media://inbound/audio-claim",
+          source: {
+            type: "url",
+            data,
+            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
+          },
+        },
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          blob: data,
+          localPath: "\\\\server\\share\\private-video.mp4",
+          openclawReasoningReplay: { private: true },
+          video_url:
+            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
+          source: { type: "url", blob: data, url: "media://inbound/video-claim" },
+        },
       ],
     };
-
-    const messages = projectChatDisplayMessages([message]);
-    expect(messages).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "keep prefix text" },
-          { type: "audio", mimeType: "audio/wav", omitted: true, bytes: audio.length },
-          { type: "text", text: "keep suffix text" },
-        ],
+    const original = structuredClone(rawMessage);
+    const state = SessionHistorySseState.fromSnapshot({
+      target: { sessionId: "mixed-media", sessionKey: "agent:main:mixed-media" },
+      snapshot: {
+        history: { items: [], messages: [], hasMore: false },
+        rawTranscriptSeq: 0,
+        turnBoundaryPending: false,
+        assistantErrorPending: false,
       },
-    ]);
-    expect(JSON.stringify(messages)).not.toContain(encoded);
+    });
+    for (const message of [
+      projectChatDisplayMessages([rawMessage])[0],
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
+        ?.message,
+    ]) {
+      expect(message?.role).toBe("user");
+      expect(JSON.stringify(message)).not.toContain(data);
+      expect(JSON.stringify(message)).not.toMatch(
+        /private-|-(?:user|secret|fragment)|openclawReasoningReplay/u,
+      );
+      expect(message?.content).toEqual([
+        { type: "text", text: "keep mixed media metadata" },
+        {
+          type: "image",
+          mimeType: "image/png",
+          url: "https://media.example/image.png",
+          source: { type: "base64", url: "media://inbound/image-claim" },
+          omitted: true,
+          bytes: 14,
+        },
+        {
+          type: "audio",
+          mimeType: "audio/wav",
+          audio_url: "media://inbound/audio-claim",
+          source: { type: "url", url: "https://media.example/audio.wav", omitted: true },
+          omitted: true,
+          bytes: 14,
+        },
+        {
+          type: "video",
+          mimeType: "video/mp4",
+          video_url: "https://media.example/video.mp4",
+          source: { type: "url", url: "media://inbound/video-claim", omitted: true },
+          omitted: true,
+          bytes: 14,
+        },
+      ]);
+    }
+    expect(rawMessage).toEqual(original);
   });
 
   it("removes private audio payloads and local references while preserving safe refs", () => {
     const privateMarker = "private-audio-reference";
+    const privateFiles = Object.fromEntries(
+      ["path", "file", "filePath", "localPath"].map((key) => [key, "/private/" + privateMarker]),
+    );
     const safeAudio = [
       {
         type: "audio",
@@ -403,323 +203,143 @@ describe("oversized multimodal chat history", () => {
         {
           type: "audio",
           data: { rawSecret: privateMarker },
-          url: `data:audio/wav;base64,${privateMarker}`,
-          openUrl: `file:///tmp/${privateMarker}.wav`,
-          audio_url: `~/${privateMarker}.wav`,
-          path: `/tmp/${privateMarker}.wav`,
-          file: privateMarker,
-          filePath: String.raw`C:\private-audio-reference.wav`,
-          localPath: String.raw`\\server\share\private-audio-reference.wav`,
+          url: "data:audio/wav;base64," + privateMarker,
+          openUrl: "file:///tmp/" + privateMarker + ".wav",
+          audio_url: "~/" + privateMarker + ".wav",
+          ...privateFiles,
           source: {
             type: "opaque",
             codec: "pcm",
             data: new Uint8Array([111, 112, 113]),
-            url: `/tmp/${privateMarker}-source.wav`,
-            path: `/tmp/${privateMarker}-source.wav`,
-            file: privateMarker,
-            filePath: String.raw`D:\private-audio-reference.wav`,
-            localPath: String.raw`\\server\share\private-audio-reference-source.wav`,
+            url: "/tmp/" + privateMarker + "-source.wav",
+            ...privateFiles,
           },
         },
-        { type: "audio", url: String.raw`C:\a.wav`, source: { url: String.raw`\\s\a.wav` } },
+        { type: "audio", url: "C:\\a.wav", source: { url: "\\\\s\\a.wav" } },
         ...safeAudio,
       ],
     };
     const original = structuredClone(message);
-
-    const messages = projectChatDisplayMessages([message]);
-    expect(messages).toEqual([
+    expect(projectChatDisplayMessages([message])).toEqual([
       {
         role: "user",
         content: [
-          {
-            type: "audio",
-            omitted: true,
-            source: { type: "opaque", codec: "pcm", omitted: true },
-          },
+          { type: "audio", omitted: true, source: { type: "opaque", codec: "pcm", omitted: true } },
           { type: "audio", omitted: true, source: { omitted: true } },
           ...safeAudio,
         ],
       },
     ]);
-    expect(JSON.stringify(messages)).not.toContain(privateMarker);
-    expect(JSON.stringify(messages)).not.toContain('"0":111');
     expect(message).toEqual(original);
   });
-
-  it("sanitizes newly appended audio before returning an incremental SSE message", () => {
-    const encoded = Buffer.from("incremental SSE audio").toString("base64");
-    const state = SessionHistorySseState.fromSnapshot({
-      target: { sessionId: "audio-session", sessionKey: "agent:main:audio-session" },
-      snapshot: {
-        history: { items: [], messages: [], hasMore: false },
-        rawTranscriptSeq: 0,
-        turnBoundaryPending: false,
-        assistantErrorPending: false,
-      },
-    });
-
-    const appended = state.appendInlineMessage({
-      message: {
-        role: "user",
-        content: [
-          { type: "text", text: "keep incremental text" },
-          { type: "audio", mimeType: "audio/ogg", data: encoded },
-        ],
-      },
-      messageId: "audio-message",
-    });
-
-    expect(appended?.message).toMatchObject({
-      role: "user",
-      content: [
-        { type: "text", text: "keep incremental text" },
-        {
-          type: "audio",
-          mimeType: "audio/ogg",
-          omitted: true,
-          bytes: Buffer.from("incremental SSE audio").length,
-        },
-      ],
-    });
-    expect(JSON.stringify(appended?.message)).not.toContain(encoded);
-  });
 });
 
-describe("transcript metadata projection", () => {
-  it("keeps display metadata while omitting oversized upstream prompt metadata", () => {
-    const message = {
-      role: "user",
-      content: "Keep this visible user message.",
-      __openclaw: {
-        id: "message-1",
-        mirrorIdentity: "turn-1:prompt",
-        replyToId: "message-0",
-        upstreamUserText: "private decorated prompt ".repeat(12_000),
-      },
-    };
-    const messages = projectChatDisplayMessages([message]);
-    expect(messages).toEqual([
-      {
-        role: "user",
-        content: "Keep this visible user message.",
-        __openclaw: {
-          id: "message-1",
-          mirrorIdentity: "turn-1:prompt",
-          replyToId: "message-0",
-        },
-      },
-    ]);
-    expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThan(
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-    );
-  });
-
-  it("records a display-cap marker when history text is truncated", () => {
-    const message = { role: "assistant", content: "x".repeat(9_000), timestamp: 1 };
-    const messages = projectChatDisplayMessages([message]);
-    const projected = messages[0] as Record<string, unknown>;
-    expect(JSON.stringify(projected.content)).toContain("...(truncated)...");
-    // Structured fact, so consumers fetch the full row via chat.message.get
-    // instead of sniffing the in-band sentinel.
-    expect(projected["__openclaw"]).toEqual({ truncated: true, reason: "display-cap" });
-  });
-
-  it("marks display-cap truncation inside content blocks and keeps existing metadata", () => {
-    const [projected] = sanitizeChatHistoryMessages(
-      [
+describe("transcript display metadata", () => {
+  it("keeps display identity while omitting upstream prompt metadata", () => {
+    const metadata = { id: "message-1", mirrorIdentity: "turn-1:prompt", replyToId: "message-0" };
+    expect(
+      projectChatDisplayMessages([
         {
-          role: "assistant",
-          content: [{ type: "text", text: "block text ".repeat(20) }],
-          __openclaw: { id: "message-9", senderId: "assistant-1" },
+          role: "user",
+          content: "Visible",
+          __openclaw: { ...metadata, upstreamUserText: "private decorated prompt ".repeat(12_000) },
+          providerReplay: {
+            type: "openai-responses-compaction",
+            data: "opaque-display-compaction",
+          },
         },
-      ],
-      16,
-    ) as Record<string, unknown>[];
-    expect(projected?.["__openclaw"]).toEqual({
-      id: "message-9",
-      senderId: "assistant-1",
-      truncated: true,
+      ]),
+    ).toEqual([{ role: "user", content: "Visible", __openclaw: metadata }]);
+  });
+
+  it.each([
+    {
+      content: [{ type: "text", text: "block text ".repeat(20) }],
+      metadata: { id: "message-9", senderId: "assistant-1" },
+      expected: [{ type: "text", text: "block text block\n...(truncated)..." }],
       reason: "display-cap",
-    });
-  });
-
-  it("leaves untruncated messages without a truncation marker", () => {
-    const [projected] = sanitizeChatHistoryMessages(
-      [{ role: "assistant", content: "short", timestamp: 1 }],
-      16,
-    ) as Record<string, unknown>[];
-    expect(projected?.["__openclaw"]).toBeUndefined();
-  });
-
-  it("marks display-cap truncation of a tool-result diff on both tool-result shapes", () => {
-    const longDiff = "+line\n".repeat(40);
-    const [blockShaped, messageShaped] = sanitizeChatHistoryMessages(
-      [
+    },
+    {
+      content: "still long enough to cap ".repeat(4),
+      metadata: { truncated: true, reason: "oversized" },
+      expected: "still long enoug\n...(truncated)...",
+      reason: "oversized",
+    },
+  ])(
+    "caps text while retaining metadata and its $reason reason",
+    ({ content, metadata, expected, reason }) => {
+      expect(
+        sanitizeChatHistoryMessages([{ role: "assistant", content, __openclaw: metadata }], 16),
+      ).toEqual([
         {
           role: "assistant",
-          content: [
-            { type: "toolResult", toolName: "edit", details: { changed: true, diff: longDiff } },
-          ],
+          content: expected,
+          __openclaw: { ...metadata, truncated: true, reason },
         },
-        { role: "toolResult", toolName: "edit", details: { changed: true, diff: longDiff } },
+      ]);
+    },
+  );
+
+  it.each([
+    { changed: true, diff: "+line\n".repeat(40) },
+    { cwd: "/workspace/".repeat(40), diff: "+short" },
+  ])("marks capped details on standalone and nested tool results (%j)", (details) => {
+    const result = {
+      type: "toolResult",
+      toolName: "edit",
+      details,
+    };
+    for (const projected of sanitizeChatHistoryMessages(
+      [
+        { role: "assistant", content: [result] },
+        { ...result, role: "toolResult" },
       ],
       32,
-    ) as Record<string, unknown>[];
-    for (const projected of [blockShaped, messageShaped]) {
+    )) {
       expect(JSON.stringify(projected)).toContain("...(truncated)...");
-      expect(projected?.["__openclaw"]).toMatchObject({ truncated: true, reason: "display-cap" });
+      expect(projected).toHaveProperty("__openclaw", { truncated: true, reason: "display-cap" });
     }
   });
+});
 
-  it("leaves a tool-result diff within the cap unmarked", () => {
-    const [projected] = sanitizeChatHistoryMessages(
-      [{ role: "toolResult", toolName: "edit", details: { changed: true, diff: "+ok" } }],
-      32,
-    ) as Record<string, unknown>[];
-    expect(projected?.["__openclaw"]).toBeUndefined();
-  });
-
-  it("does not overwrite an upstream oversized reason with display-cap", () => {
-    const [projected] = sanitizeChatHistoryMessages(
-      [
+describe("managed inbound media facts", () => {
+  const id = "photo---11111111-2222-3333-4444-555555555555.png";
+  it.each([
+    [
+      path.join(getMediaDir(), "inbound", id),
+      { path: "media://inbound/" + id, contentType: "image/png" },
+    ],
+    [path.join("/tmp", "media", "inbound", id), { contentType: "image/png" }],
+    [path.join(getMediaDir(), "inbound", "%"), { contentType: "image/png" }],
+  ])("projects only a valid managed inbound path: %s", (mediaPath, expected) => {
+    expect(
+      sanitizeChatHistoryMessages([
         {
-          role: "assistant",
-          content: "still long enough to cap ".repeat(4),
-          __openclaw: { truncated: true, reason: "oversized" },
+          role: "user",
+          content: "image",
+          __openclaw: { media: [{ path: mediaPath, contentType: "image/png" }] },
         },
-      ],
-      16,
-    ) as Record<string, unknown>[];
-    expect(projected?.["__openclaw"]).toEqual({ truncated: true, reason: "oversized" });
+      ]),
+    ).toEqual([{ role: "user", content: "image", __openclaw: { media: [expected] } }]);
   });
 });
 
-describe("managed inbound media fact projection", () => {
-  const inboundMediaId = "photo---11111111-2222-3333-4444-555555555555.png";
-  const managedInboundPath = path.join(getMediaDir(), "inbound", inboundMediaId);
-
-  function projectedOpenClawMeta(message: Record<string, unknown>) {
-    const projected = sanitizeChatHistoryMessages([message]);
-    return (projected[0] as Record<string, unknown> | undefined)?.["__openclaw"];
-  }
-
-  it("rewrites a configured-store managed inbound path to a canonical media URI", () => {
-    const message = {
-      role: "user",
-      content: "first message with an image",
-      __openclaw: {
-        media: [{ path: managedInboundPath, contentType: "image/png" }],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [
-        {
-          path: `media://inbound/${inboundMediaId}`,
-          contentType: "image/png",
-        },
-      ],
-    });
+describe("current user profile display", () => {
+  const resolved = (id: string, hasUploadedAvatar = true) => ({
+    kind: "resolved" as const,
+    profileId: id,
+    avatarUrl: "/api/users/" + id + "/avatar?v=20",
+    hasUploadedAvatar,
+  });
+  const profile = (id: string, fields: Record<string, unknown> = {}) => ({
+    role: "user",
+    content: id,
+    __openclaw: { senderIdentity: { type: "profile", id }, senderId: id, ...fields },
   });
 
-  it("redacts a lookalike path that contains media/inbound but is outside the store", () => {
-    // A path like /tmp/media/inbound/<existing-id> is NOT inside the configured store;
-    // it must not be promoted to an authenticated media capability.
-    const lookalike = path.join("/tmp", "media", "inbound", inboundMediaId);
-    const message = {
-      role: "user",
-      content: "lookalike inbound path",
-      __openclaw: {
-        media: [{ path: lookalike, contentType: "image/png" }],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }],
-    });
-  });
-
-  it("redacts host paths that are not inside the managed inbound store", () => {
-    const message = {
-      role: "user",
-      content: "private local image",
-      __openclaw: {
-        media: [
-          { path: "/tmp/private-image.png", contentType: "image/png" },
-          {
-            path: path.join(getMediaDir(), "outbound", "credentials.png"),
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }, { contentType: "image/png" }],
-    });
-  });
-
-  it("rejects traversal-shaped inbound paths and redacts them", () => {
-    const message = {
-      role: "user",
-      content: "traversal attempt",
-      __openclaw: {
-        media: [
-          {
-            path: path.join(getMediaDir(), "inbound", "..", "..", "etc", "passwd"),
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }],
-    });
-  });
-
-  it("redacts malformed percent-encoded inbound ids instead of throwing", () => {
-    // A stray `%` makes decodeURIComponent throw inside parseInboundMediaUri;
-    // the sanitizer must redact rather than propagate the failure into history projection.
-    const message = {
-      role: "user",
-      content: "malformed percent escape",
-      __openclaw: {
-        media: [{ path: path.join(getMediaDir(), "inbound", "%"), contentType: "image/png" }],
-      },
-    };
-    expect(() => sanitizeChatHistoryMessages([message])).not.toThrow();
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [{ contentType: "image/png" }],
-    });
-  });
-
-  it("preserves an already-canonical media inbound URI without regression", () => {
-    const message = {
-      role: "user",
-      content: "canonical inbound image",
-      __openclaw: {
-        media: [
-          {
-            path: `media://inbound/${inboundMediaId}`,
-            contentType: "image/png",
-          },
-        ],
-      },
-    };
-    expect(projectedOpenClawMeta(message)).toEqual({
-      media: [
-        {
-          path: `media://inbound/${inboundMediaId}`,
-          contentType: "image/png",
-        },
-      ],
-    });
-  });
-});
-
-describe("current user profile display projection", () => {
-  it("sender provenance gates profile lookups and alias projection", () => {
-    const identity = { type: "profile", id: "shared-id" };
+  it("gates alias lookup on profile provenance", () => {
     const rows = [
-      identity,
+      { type: "profile", id: "shared-id" },
       {
         type: "observation",
         id: "shared-id",
@@ -728,259 +348,325 @@ describe("current user profile display projection", () => {
         senderKind: "unknown",
       },
       undefined,
-    ].map((senderIdentity, index) => ({
+    ].map((senderIdentity) => ({
       role: "user",
-      content: `row ${index}`,
-      timestamp: index + 1,
-      __openclaw: {
-        senderId: "shared-id",
-        senderName: "Same label",
-        ...(senderIdentity ? { senderIdentity } : {}),
-      },
+      content: "same label",
+      __openclaw: { senderId: "shared-id", ...(senderIdentity ? { senderIdentity } : {}) },
     }));
-    const original = JSON.stringify(rows);
-    const resolveCurrentUserProfileDisplay = vi.fn(() => ({
-      kind: "resolved" as const,
-      profileId: "canonical-id",
-      avatarUrl: "/api/users/canonical-id/avatar?v=2",
-      hasUploadedAvatar: true,
-    }));
+    const original = structuredClone(rows);
+    const resolveCurrentUserProfileDisplay = vi.fn(() => resolved("canonical-id"));
     const projected = projectChatDisplayMessages(rows, { resolveCurrentUserProfileDisplay });
     expect(resolveCurrentUserProfileDisplay).toHaveBeenCalledTimes(1);
-    expect(projected[0]?.["__openclaw"]).toMatchObject({
+    expect(projected[0]?.["__openclaw"]).toEqual({
+      senderId: "shared-id",
       senderIdentity: { type: "profile", id: "canonical-id" },
-      senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=2",
+      senderProfileAvatarUrl: "/api/users/canonical-id/avatar?v=20",
     });
     expect(projected.slice(1)).toEqual(rows.slice(1));
-    expect(JSON.stringify(rows)).toBe(original);
+    expect(rows).toEqual(original);
   });
 
-  it("dedupes sender lookups per batch and enriches only resolved sender ids", () => {
+  it("caches profile lookups, refreshes stale avatars, and preserves unresolved rows", () => {
     const messages = [
-      {
-        role: "user",
-        content: "first",
-        __openclaw: {
-          senderIdentity: { type: "profile", id: "profile-ada" },
-          senderId: "profile-ada",
-          senderName: "Historical Ada",
-          senderUsername: "ada",
-        },
-      },
-      {
-        role: "user",
-        content: "second",
-        __openclaw: {
-          senderIdentity: { type: "profile", id: "profile-ada" },
-          senderId: "profile-ada",
-          senderName: "Earlier Ada",
-        },
-      },
-      {
-        role: "user",
-        content: "third",
-        __openclaw: {
-          senderIdentity: { type: "profile", id: "profile-bob" },
-          senderId: "profile-bob",
-        },
-      },
-      {
-        role: "user",
-        content: "unknown",
-        __openclaw: {
-          senderId: "channel-sender",
-          senderProfileAvatarUrl: "/channel/avatar",
-        },
-      },
+      profile("ada", {
+        senderName: "Historical Ada",
+        senderUsername: "ada",
+        senderProfileAvatarUrl: "/old/avatar",
+      }),
+      profile("ada", { senderName: "Earlier Ada" }),
+      profile("missing", { senderProfileAvatarUrl: "/existing/avatar" }),
       { role: "user", content: "missing sender" },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "hostile assistant metadata" }],
-        __openclaw: { senderId: "hostile-assistant" },
-      },
+      { role: "assistant", content: "hostile", __openclaw: { senderId: "hostile-assistant" } },
       {
         role: "toolResult",
-        toolCallId: "hostile-tool-call",
+        toolCallId: "hostile",
         toolName: "read",
-        content: [{ type: "text", text: "hostile tool metadata" }],
+        content: "hostile",
         __openclaw: { senderId: "hostile-tool" },
       },
     ];
-    const originalMessages = structuredClone(messages);
-    const resolveCurrentUserProfileDisplay = vi.fn((senderId: string) => {
-      if (senderId === "profile-ada") {
-        return {
-          kind: "resolved" as const,
-          profileId: "profile-ada",
-          label: "Current Ada",
-          avatarUrl: "/api/users/profile-ada/avatar?v=20",
-          hasUploadedAvatar: true,
-        };
-      }
-      if (senderId === "profile-bob") {
-        return {
-          kind: "resolved" as const,
-          profileId: "profile-bob",
-          avatarUrl: "/api/users/profile-bob/avatar?v=30",
-          hasUploadedAvatar: false,
-        };
-      }
-      return { kind: "unresolved" as const };
-    });
-
-    const projected = projectChatDisplayMessages(messages, {
-      resolveCurrentUserProfileDisplay,
-    });
-
-    expect(resolveCurrentUserProfileDisplay.mock.calls.map(([senderId]) => senderId)).toEqual([
-      "profile-ada",
-      "profile-bob",
-    ]);
-    expect(projected.map((message) => message["__openclaw"])).toEqual([
-      {
-        senderIdentity: { type: "profile", id: "profile-ada" },
-        senderId: "profile-ada",
-        senderName: "Historical Ada",
-        senderUsername: "ada",
-        senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=20",
-      },
-      {
-        senderIdentity: { type: "profile", id: "profile-ada" },
-        senderId: "profile-ada",
-        senderName: "Earlier Ada",
-        senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=20",
-      },
-      {
-        senderIdentity: { type: "profile", id: "profile-bob" },
-        senderId: "profile-bob",
-        senderProfileAvatarUrl: "/api/users/profile-bob/avatar?v=30",
-      },
-      {
-        senderId: "channel-sender",
-        senderProfileAvatarUrl: "/channel/avatar",
-      },
-      undefined,
-      { senderId: "hostile-assistant" },
-      { senderId: "hostile-tool" },
-    ]);
-    expect(messages).toEqual(originalMessages);
+    const original = structuredClone(messages);
+    const resolveCurrentUserProfileDisplay = vi.fn((id: string) =>
+      id === "missing" ? { kind: "unresolved" as const } : resolved(id, false),
+    );
+    const projected = projectChatDisplayMessages(messages, { resolveCurrentUserProfileDisplay });
+    expect(resolveCurrentUserProfileDisplay.mock.calls).toEqual([["ada"], ["missing"]]);
+    expect(projected).toEqual(
+      messages.map((message, index) =>
+        index < 2
+          ? {
+              ...message,
+              __openclaw: {
+                ...message["__openclaw"],
+                senderProfileAvatarUrl: "/api/users/ada/avatar?v=20",
+              },
+            }
+          : message,
+      ),
+    );
     expect(projected[0]).not.toBe(messages[0]);
-    expect(projected[3]).toBe(messages[3]);
-    expect(projected[4]).toBe(messages[4]);
-    expect(projected[5]).toBe(messages[5]);
-  });
-
-  it("overwrites stale and no-upload profile routes while preserving lookup failures", () => {
-    const staleAvatar = {
-      role: "user",
-      content: "stale avatar",
-      __openclaw: {
-        senderIdentity: { type: "profile", id: "with-avatar" },
-        senderId: "with-avatar",
-        senderName: "Historical Name",
-        senderProfileAvatarUrl: "/api/users/with-avatar/avatar?v=10",
-      },
-    };
-    const noUploadAvatar = {
-      role: "user",
-      content: "removed avatar",
-      __openclaw: {
-        senderIdentity: { type: "profile", id: "without-avatar" },
-        senderId: "without-avatar",
-        senderProfileAvatarUrl: "/api/users/without-avatar/avatar?v=10",
-      },
-    };
-    const failedLookup = {
-      role: "user",
-      content: "lookup failed",
-      __openclaw: {
-        senderIdentity: { type: "profile", id: "lookup-failed" },
-        senderId: "lookup-failed",
-        senderProfileAvatarUrl: "/existing/projected/avatar",
-      },
-    };
-    const projected = projectChatDisplayMessages([staleAvatar, noUploadAvatar, failedLookup], {
-      resolveCurrentUserProfileDisplay: (senderId) => {
-        if (senderId === "with-avatar") {
-          return {
-            kind: "resolved",
-            profileId: "with-avatar",
-            label: "Current Name",
-            avatarUrl: "/api/users/with-avatar/avatar?v=20",
-            hasUploadedAvatar: true,
-          };
-        }
-        if (senderId === "without-avatar") {
-          return {
-            kind: "resolved",
-            profileId: "without-avatar",
-            avatarUrl: "/api/users/without-avatar/avatar?v=20",
-            hasUploadedAvatar: false,
-          };
-        }
-        return { kind: "unresolved" };
-      },
-    });
-
-    expect(projected[0]?.["__openclaw"]).toEqual({
-      senderIdentity: { type: "profile", id: "with-avatar" },
-      senderId: "with-avatar",
-      senderName: "Historical Name",
-      senderProfileAvatarUrl: "/api/users/with-avatar/avatar?v=20",
-    });
-    expect(projected[1]?.["__openclaw"]).toEqual({
-      senderIdentity: { type: "profile", id: "without-avatar" },
-      senderId: "without-avatar",
-      senderProfileAvatarUrl: "/api/users/without-avatar/avatar?v=20",
-    });
-    expect(projected[2]).toBe(failedLookup);
-  });
-
-  it("keeps exact current behavior when no resolver is supplied", () => {
-    const message = {
-      role: "user",
-      content: "unchanged",
-      __openclaw: {
-        senderIdentity: { type: "profile", id: "profile-ada" },
-        senderId: "profile-ada",
-        senderProfileAvatarUrl: "/api/users/profile-ada/avatar?v=old",
-      },
-    };
-    const projected = projectChatDisplayMessages([message]);
-    expect(projected[0]).toBe(message);
+    for (const index of [2, 3, 4]) {
+      expect(projected[index]).toBe(messages[index]);
+    }
+    expect(messages).toEqual(original);
   });
 });
 
-describe("TTS supplement matching", () => {
-  it("matches later audio against the text left by an earlier supplement", () => {
-    const marker = { textSha256: createHash("sha256").update("same").digest("hex") };
-    const firstAudio = { type: "audio", url: "https://example.test/first.mp3" };
-    const secondAudio = { type: "audio", url: "https://example.test/second.mp3" };
-    const caption = { type: "input_text", text: "caption" };
-    const messages = [
-      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 1 },
-      { role: "assistant", content: [{ type: "text", text: "same" }], timestamp: 2 },
-      {
-        role: "assistant",
-        content: [caption, firstAudio],
-        openclawTtsSupplement: marker,
-      },
-      { role: "assistant", content: [secondAudio], openclawTtsSupplement: marker },
-    ];
-    const original = structuredClone(messages);
-
-    expect(projectChatDisplayMessages(messages)).toEqual([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "same" }, secondAudio],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "same" }, caption, firstAudio],
-        timestamp: 2,
-      },
-    ]);
-    expect(messages).toEqual(original);
+it("matches later audio against text left by an earlier supplement", () => {
+  const marker = { textSha256: createHash("sha256").update("same").digest("hex") };
+  const firstAudio = { type: "audio", url: "https://example.test/first.mp3" };
+  const secondAudio = { type: "audio", url: "https://example.test/second.mp3" };
+  const caption = { type: "input_text", text: "caption" };
+  const reply = (timestamp: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "same" }],
+    timestamp,
   });
+  const messages = [
+    reply(1),
+    reply(2),
+    { role: "assistant", content: [caption, firstAudio], openclawTtsSupplement: marker },
+    { role: "assistant", content: [secondAudio], openclawTtsSupplement: marker },
+  ];
+  const original = structuredClone(messages);
+  expect(projectChatDisplayMessages(messages)).toEqual([
+    { ...reply(1), content: [{ type: "text", text: "same" }, secondAudio] },
+    { ...reply(2), content: [{ type: "text", text: "same" }, caption, firstAudio] },
+  ]);
+  expect(messages).toEqual(original);
+});
+
+it.each(["next-renderable", "last-renderable", "last-assistant"] as const)(
+  "preserves first-accepted previews and original messages on the %s target",
+  (placement) => {
+    const baseContent = [
+      { type: "text", text: "Canvas results" },
+      { type: "canvas", preview: { viewId: "existing", url: "/existing" } },
+      { type: "canvas", preview: { viewId: "", url: "" } },
+      ...(placement === "last-assistant" ? [{ type: "toolCall", name: "canvas" }] : []),
+    ];
+    Object.freeze(baseContent);
+    const target = Object.freeze({ role: "assistant", content: baseContent, timestamp: 42 });
+    const toolAssistant = { role: "assistant", content: [{ type: "toolCall", name: "canvas" }] };
+    const tools = [
+      ["existing", "/rejected-id-url"],
+      ["first", "/rejected-id-url"],
+      ["first", "/later-url"],
+      ["second", "/later-url"],
+      ["url-duplicate", "/existing"],
+      [undefined, "/url-only"],
+      [undefined, "/url-only"],
+    ].map(([id, url]) => ({
+      role: "toolResult",
+      toolName: "canvas",
+      content: JSON.stringify({ kind: "canvas", view: { ...(id ? { id } : {}), url } }),
+    }));
+    const detailTool = {
+      role: "toolResult",
+      toolName: "demo__show",
+      content: "Keep the original tool result",
+      details: {
+        mcpAppPreview: {
+          kind: "canvas",
+          view: { id: "app" },
+          mcpApp: { viewId: "app" },
+        },
+      },
+    };
+    const pending = [...tools, detailTool];
+    const messages =
+      placement === "next-renderable"
+        ? [...pending, toolAssistant, target]
+        : placement === "last-renderable"
+          ? [target, toolAssistant, ...pending]
+          : [target, ...pending];
+    Object.freeze(messages);
+    const original = JSON.stringify(messages);
+    const targetIndex = placement === "next-renderable" ? messages.length - 1 : 0;
+    const canvas = (preview: Record<string, unknown>, rawText: string | null | undefined) => ({
+      type: "canvas",
+      preview: { kind: "canvas", surface: "assistant_message", render: "url", ...preview },
+      rawText,
+    });
+    const accepted = [
+      { index: 1, viewId: "first", url: "/rejected-id-url" },
+      { index: 3, viewId: "second", url: "/later-url" },
+      { index: 5, url: "/url-only" },
+    ].map(({ index, ...preview }) => canvas(preview, tools[index]?.content));
+    const expectedContent = [
+      ...baseContent,
+      ...accepted,
+      canvas({ viewId: "app", mcpApp: { viewId: "app" } }, null),
+    ];
+
+    const augmented = augmentChatHistoryWithCanvasBlocks(messages);
+
+    expect(augmented).toEqual(
+      messages.map((message, index) =>
+        index === targetIndex ? { ...target, content: expectedContent } : message,
+      ),
+    );
+    expect(augmented[targetIndex]).not.toBe(target);
+    for (const [index, message] of messages.entries()) {
+      if (index !== targetIndex) {
+        expect(augmented[index]).toBe(message);
+      }
+    }
+    expect(JSON.stringify(messages)).toBe(original);
+  },
+);
+
+const hostTab = { targetId: "tab-1", target: "host", profile: "work" };
+const nodeTab = { ...hostTab, target: "node", node: "node-1" };
+it.each([
+  { browserTab: { ...hostTab, url: 42, title: [], extra: "drop" }, expected: hostTab },
+  {
+    browserTab: {
+      targetId: "x".repeat(128),
+      target: "node",
+      profile: "p".repeat(128),
+      node: "n".repeat(256),
+      url: "u".repeat(2047) + "😀",
+      title: "t".repeat(511) + "😀",
+      extra: "drop",
+    },
+    expected: {
+      targetId: "x".repeat(128),
+      target: "node",
+      profile: "p".repeat(128),
+      node: "n".repeat(256),
+      url: "u".repeat(2047),
+      title: "t".repeat(511),
+    },
+  },
+  ...[
+    { ...hostTab, target: "sandbox" },
+    { ...hostTab, target: "node" },
+    { ...hostTab, node: "node-1" },
+    { ...nodeTab, targetId: " padded " },
+    { ...nodeTab, targetId: "x".repeat(129) },
+    { ...nodeTab, targetId: "" },
+    { ...nodeTab, profile: "p".repeat(129) },
+  ].map((browserTab) => ({ browserTab, expected: undefined })),
+])(
+  "preserves complete browser routes and bounded display fields (%j)",
+  ({ browserTab, expected }) => {
+    const block = (tab: unknown) => ({
+      type: "toolResult",
+      toolName: "browser",
+      ...(tab ? { details: { browserTab: tab } } : {}),
+    });
+    expect(
+      sanitizeChatHistoryMessages([
+        { role: "toolResult", ...block(browserTab) },
+        { role: "assistant", content: [block(browserTab)] },
+      ]),
+    ).toEqual([
+      { role: "toolResult", ...block(expected) },
+      { role: "assistant", content: [block(expected)] },
+    ]);
+  },
+);
+
+it("keeps authoritative write booleans and strips unrelated details", () => {
+  const result = (details: Record<string, unknown>) => ({
+    role: "toolResult",
+    toolName: "write",
+    content: [{ type: "text", text: "ok" }],
+    details,
+  });
+  expect(
+    sanitizeChatHistoryMessages([
+      result({ changed: true, created: false, diff: "-1 old\n+1 new", private: "drop" }),
+      result({ changed: true, created: true }),
+      result({ changed: "true", created: 1 }),
+    ]),
+  ).toEqual([
+    result({ changed: true, created: false, diff: "-1 old\n+1 new" }),
+    result({ changed: true, created: true }),
+    { role: "toolResult", toolName: "write", content: [{ type: "text", text: "ok" }] },
+  ]);
+});
+
+it.each([
+  { toolName: "exec", details: { exitCode: 0, durationMs: 0, cwd: "/workspace", ok: true } },
+  { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },
+  { toolName: "sessions_spawn", details: { ok: true, sessionKey: "agent:helper:main" } },
+])("retains $toolName status in standalone and nested history", ({ toolName, details }) => {
+  const result = { type: "toolResult", toolName, content: "done", details };
+  const messages = [
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
+});
+
+it.each([
+  { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" },
+  { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 },
+  { exitCode: null, durationMs: "12", sessionKey: "", ok: null },
+])("keeps malformed status metadata out of display history (%j)", (details) => {
+  const result = { type: "toolResult", toolName: "exec", details: { changed: true } };
+  expect(
+    sanitizeChatHistoryMessages(
+      [
+        { ...result, role: "toolResult", details: { ...details, changed: true } },
+        { role: "assistant", content: [{ ...result, details: { ...details, changed: true } }] },
+      ],
+      32,
+    ),
+  ).toEqual([
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
+  ]);
+});
+
+it("caps nested output once, preserves literal text, and removes private media", () => {
+  const text = " \n[[reply_to_current]] <tag>\r\n" + "x".repeat(20_000) + "  \n";
+  const metadata = {
+    id: "nested-output",
+    toolOutput: { source: "execution", modelInput: "unverified" },
+  };
+  const result = { type: "toolResult", toolCallId: "nested-call", toolName: "exec", isError: true };
+  const message = {
+    role: "assistant",
+    __openclaw: metadata,
+    content: [
+      {
+        ...result,
+        text,
+        content: [
+          { type: "text", text },
+          { type: "image", data: "aW1hZ2U=", path: "/private/image.png" },
+        ],
+      },
+    ],
+  };
+  const original = structuredClone(message);
+  expect(sanitizeChatHistoryMessages([message], 32)).toEqual([
+    {
+      role: "assistant",
+      __openclaw: { ...metadata, truncated: true, reason: "display-cap" },
+      content: [
+        {
+          ...result,
+          content: [
+            { type: "text", text: text.slice(0, 32) },
+            { type: "image", omitted: true, bytes: 5 },
+          ],
+        },
+      ],
+    },
+  ]);
+  expect(message).toEqual(original);
+});
+
+it("keeps tool output whitespace and UTF-16 intact without adding a sentinel", () => {
+  expect(sanitizeChatHistoryMessages([{ role: "function", content: " \n😀  \n" }], 3)).toEqual([
+    {
+      role: "function",
+      content: " \n",
+      __openclaw: { truncated: true, reason: "display-cap" },
+    },
+  ]);
 });

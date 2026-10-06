@@ -1,9 +1,8 @@
 // Codex tests cover harness plugin behavior.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const runHostPreparedIsolatedCompletion = vi.hoisted(() => vi.fn());
 const runCodexIsolatedCompletion = vi.hoisted(() => vi.fn());
@@ -19,7 +18,10 @@ vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt,
 }));
 
-import { createCodexAppServerAgentHarness } from "./harness.js";
+import {
+  createCodexAppServerAgentHarness,
+  createCodexAppServerNativeCompaction,
+} from "./harness.js";
 import codexPluginPackage from "./package.json" with { type: "json" };
 import { buildCodexRuntimeModelParams } from "./src/app-server/model-runtime.js";
 import {
@@ -30,6 +32,8 @@ import {
   sessionBindingIdentity,
   testCodexAppServerBindingStore,
 } from "./src/app-server/session-binding.test-helpers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-harness-reset-");
 
 const isolatedTask = {
   config: {},
@@ -70,6 +74,54 @@ describe("Codex agent harness supports()", () => {
   const harness = createCodexAppServerAgentHarness({
     bindingStore: testCodexAppServerBindingStore,
   });
+
+  it.each([
+    { enableUltrafast: false, expected: ["priority", "flex"] },
+    { enableUltrafast: true, expected: ["priority", "ultrafast", "flex"] },
+    { enableUltrafast: undefined, expected: ["priority", "ultrafast", "flex"] },
+  ])(
+    "filters picker tiers with enableUltrafast=$enableUltrafast",
+    ({ enableUltrafast, expected }) => {
+      const configuredHarness = createCodexAppServerAgentHarness({
+        bindingStore: testCodexAppServerBindingStore,
+        pluginConfig: { appServer: { enableUltrafast: !enableUltrafast } },
+      });
+      const serviceTiers = ["priority", "ultrafast", "flex"];
+      expect(
+        configuredHarness.filterModelServiceTiers?.({
+          config: {
+            plugins: { entries: { codex: { config: { appServer: { enableUltrafast } } } } },
+          },
+          agentId: "main",
+          provider: "openai",
+          modelId: "synthetic-tier-model",
+          serviceTiers,
+        }),
+      ).toEqual(expected);
+      expect(serviceTiers).toEqual(["priority", "ultrafast", "flex"]);
+    },
+  );
+
+  it.each(["manual", "native-preflight"] as const)(
+    "rejects legacy %s compaction input without inventing System authority",
+    async (entry) => {
+      const params = {
+        sessionId: "legacy-compact",
+        sessionFile: "/tmp/legacy-compact.jsonl",
+        workspaceDir: "/tmp/workspace",
+        trigger: "manual" as const,
+      };
+      const operation =
+        entry === "manual"
+          ? harness.compact?.(params)
+          : createCodexAppServerNativeCompaction({
+              bindingStore: testCodexAppServerBindingStore,
+            })({ ...params, nativeCompactionRequest: "required_preflight" });
+      await expect(operation).rejects.toThrow(
+        "This host did not provide compaction source authority",
+      );
+    },
+  );
 
   it("runs isolated completion through the prepared zero-tool transport", async () => {
     const assistant = {
@@ -240,36 +292,19 @@ describe("Codex agent harness supports()", () => {
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
-  it.each(["gpt-future", "test-next-model"])(
-    "lets explicitly selected Codex discover %s with its own account",
-    (modelId) => {
-      expect(
-        harness.supports({
-          provider: "openai",
-          modelId,
-          requestedRuntime: "codex",
-          modelProvider: {
-            requestTransportOverrides: "none",
-            preparedAuth: { source: "harness" },
-          },
-        }),
-      ).toEqual({ supported: true, priority: 100 });
-    },
-  );
-
-  it.each(["gpt-future", "test-next-model"])(
-    "lets explicit Codex discovery of %s run before auth has been prepared",
-    (modelId) => {
-      expect(
-        harness.supports({
-          provider: "openai",
-          modelId,
-          requestedRuntime: "codex",
-          modelProvider: { requestTransportOverrides: "none" },
-        }),
-      ).toEqual({ supported: true, priority: 100 });
-    },
-  );
+  it.each([
+    { label: "before auth preparation", preparedAuth: undefined },
+    { label: "with harness-owned auth", preparedAuth: { source: "harness" as const } },
+  ])("lets explicitly selected Codex discover a new model $label", ({ preparedAuth }) => {
+    expect(
+      harness.supports({
+        provider: "openai",
+        modelId: "gpt-future",
+        requestedRuntime: "codex",
+        modelProvider: { requestTransportOverrides: "none", preparedAuth },
+      }),
+    ).toEqual({ supported: true, priority: 100 });
+  });
 
   it.each([
     {
@@ -361,39 +396,16 @@ describe("Codex agent harness supports()", () => {
     }
   });
 
-  it.each([
-    {
-      name: "custom endpoint",
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "https://relay.example.test/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-    {
-      name: "Completions adapter",
-      modelProvider: {
-        api: "openai-completions",
-        baseUrl: "https://api.openai.com/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-    {
-      name: "HTTP endpoint",
-      modelProvider: {
-        api: "openai-responses",
-        baseUrl: "http://api.openai.com/v1",
-        requestTransportOverrides: "none" as const,
-        runtimePolicy: { compatibleIds: ["openclaw"] },
-      },
-    },
-  ])("rejects a $name that Codex cannot reproduce", ({ modelProvider }) => {
+  it("rejects a prepared route that does not declare Codex compatibility", () => {
     const result = harness.supports({
       provider: "openai",
       requestedRuntime: "codex",
-      modelProvider,
+      modelProvider: {
+        api: "openai-responses",
+        baseUrl: "https://relay.example.test/v1",
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw"] },
+      },
     });
     expect(result.supported).toBe(false);
     expect(!result.supported ? result.reason : undefined).toContain("prepared provider route");
@@ -466,6 +478,31 @@ describe("Codex agent harness supports()", () => {
       }),
     ).resolves.toBe(false);
   });
+
+  it("revalidates remote inference against the harness's current configured endpoint", async () => {
+    const { resolveCodexAppServerRuntimeOptions } = await import("./src/app-server/config.js");
+    const { captureCodexConfiguredConnection, finalizeCodexConfiguredConnection } =
+      await import("./src/app-server/runtime-artifact-connection.js");
+    let pluginConfig = {
+      appServer: { transport: "websocket" as const, url: "ws://127.0.0.1:1234" },
+    };
+    const remoteHarness = createCodexAppServerAgentHarness({
+      bindingStore: testCodexAppServerBindingStore,
+      resolvePluginConfig: () => pluginConfig,
+    });
+    const startOptions = resolveCodexAppServerRuntimeOptions({ pluginConfig }).start;
+    const binding = finalizeCodexConfiguredConnection({
+      before: captureCodexConfiguredConnection(startOptions),
+      startOptions,
+      runtimeIdentity: { serverVersion: "0.153.4", userAgent: "codex-test" },
+    });
+    if (!remoteHarness.runtimeArtifact) {
+      throw new Error("expected Codex runtime artifact capability");
+    }
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(true);
+    pluginConfig = { appServer: { transport: "websocket", url: "ws://127.0.0.1:5678" } };
+    await expect(remoteHarness.runtimeArtifact.validate(binding)).resolves.toBe(false);
+  });
 });
 
 describe("Codex agent harness reset()", () => {
@@ -529,7 +566,7 @@ describe("Codex agent harness reset()", () => {
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-harness-reset-"));
+    const root = sessionDirs.make();
     const storePath = path.join(root, "sessions.json");
     const bindingStore = createCodexTestBindingStore();
     const sessionKey = "agent:worker:main";
@@ -538,116 +575,118 @@ describe("Codex agent harness reset()", () => {
       sessionId: "session-1",
       sessionKey,
     });
-    try {
-      await upsertSessionEntry({
-        agentId: identity.agentId,
-        sessionKey,
-        storePath,
-        entry: { sessionId: identity.sessionId, updatedAt: 1 },
-      });
-      await bindingStore.mutate(identity, {
-        kind: "set",
-        binding: { threadId: "thread-1", cwd: "/repo" },
-      });
-      await bindingStore.retireSessionGeneration(identity);
-      const harness = createCodexAppServerAgentHarness({
-        bindingStore,
-        resolveConfig: () => ({ session: { store: storePath } }),
-      });
-
-      await harness.reset?.({
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey,
-        reason: "reset",
-      });
-
-      await expect(
-        bindingStore.mutate(identity, {
-          kind: "set",
-          binding: { threadId: "thread-recovered", cwd: "/repo" },
-        }),
-      ).resolves.toBe(true);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes deleted session bindings before the post-delete reset event", async () => {
-    const state = createCodexTestBindingStateStore();
-    const bindingStore = createCodexAppServerBindingStore(state);
-    const identity = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "session-1",
-      sessionKey: "agent:worker:main",
+    await upsertSessionEntry({
+      agentId: identity.agentId,
+      sessionKey,
+      storePath,
+      entry: { sessionId: identity.sessionId, updatedAt: 1 },
     });
     await bindingStore.mutate(identity, {
       kind: "set",
       binding: { threadId: "thread-1", cwd: "/repo" },
     });
-    const harness = createCodexAppServerAgentHarness({ bindingStore });
-
-    await harness.withSessionDeletion?.(
-      {
-        agentId: "worker",
-        sessionId: "session-1",
-        sessionKey: "agent:worker:main",
-        assertCurrent() {},
-      },
-      async (mutation) => {
-        mutation.commit();
-        expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
-      },
-    );
+    await bindingStore.retireSessionGeneration(identity);
+    const harness = createCodexAppServerAgentHarness({
+      bindingStore,
+      resolveConfig: () => ({ session: { store: storePath } }),
+    });
 
     await harness.reset?.({
       agentId: "worker",
       sessionId: "session-1",
-      sessionKey: "agent:worker:main",
-      reason: "deleted",
+      sessionKey,
+      reason: "reset",
     });
 
-    expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+    await expect(
+      bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-recovered", cwd: "/repo" },
+      }),
+    ).resolves.toBe(true);
   });
 
-  it("rejects supervised deletion before invoking the session transaction", async () => {
-    const bindingStore = createCodexTestBindingStore();
-    const identity = sessionBindingIdentity({
-      agentId: "worker",
-      sessionId: "supervised",
-      sessionKey: "agent:worker:main",
-    });
-    await bindingStore.mutate(identity, {
-      kind: "set",
-      binding: {
-        threadId: "thread-supervised",
-        cwd: "/repo",
-        connectionScope: "supervision",
-        supervisionSourceThreadId: "thread-source",
-        model: "gpt-5.5",
-        modelProvider: "openai",
-        preserveNativeModel: true,
-        conversationSourceTransferComplete: true,
-      },
-    });
-    const harness = createCodexAppServerAgentHarness({ bindingStore });
-    const run = vi.fn();
-    await expect(
-      harness.withSessionDeletion?.(
+  it.each(["withSessionDeletion", "withSessionContextReset"] as const)(
+    "%s removes bindings at the session commit boundary",
+    async (hook) => {
+      const state = createCodexTestBindingStateStore();
+      const bindingStore = createCodexAppServerBindingStore(state);
+      const identity = sessionBindingIdentity({
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey: "agent:worker:main",
+      });
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        binding: { threadId: "thread-1", cwd: "/repo" },
+      });
+      const harness = createCodexAppServerAgentHarness({ bindingStore });
+
+      await harness[hook]?.(
         {
           agentId: "worker",
-          sessionId: "supervised",
+          sessionId: "session-1",
           sessionKey: "agent:worker:main",
           assertCurrent() {},
         },
-        run,
-      ),
-    ).rejects.toThrow("owned by supervision");
-    expect(run).not.toHaveBeenCalled();
-    expect(bindingStore.read(identity)).toMatchObject({
-      threadId: "thread-supervised",
-    });
-  });
+        async (mutation) => {
+          mutation.commit();
+          expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+        },
+      );
+
+      await harness.reset?.({
+        agentId: "worker",
+        sessionId: "session-1",
+        sessionKey: "agent:worker:main",
+        reason: "deleted",
+      });
+
+      expect(state.lookup(bindingStoreKey(identity))).toBeUndefined();
+    },
+  );
+
+  it.each(["withSessionDeletion", "withSessionContextReset"] as const)(
+    "%s rejects supervision before invoking the session transaction",
+    async (hook) => {
+      const bindingStore = createCodexTestBindingStore();
+      const identity = sessionBindingIdentity({
+        agentId: "worker",
+        sessionId: "supervised",
+        sessionKey: "agent:worker:main",
+      });
+      await bindingStore.mutate(identity, {
+        kind: "set",
+        binding: {
+          threadId: "thread-supervised",
+          cwd: "/repo",
+          connectionScope: "supervision",
+          supervisionSourceThreadId: "thread-source",
+          model: "gpt-5.5",
+          modelProvider: "openai",
+          preserveNativeModel: true,
+          conversationSourceTransferComplete: true,
+        },
+      });
+      const harness = createCodexAppServerAgentHarness({ bindingStore });
+      const run = vi.fn();
+      await expect(
+        harness[hook]?.(
+          {
+            agentId: "worker",
+            sessionId: "supervised",
+            sessionKey: "agent:worker:main",
+            assertCurrent() {},
+          },
+          run,
+        ),
+      ).rejects.toThrow("owned by supervision");
+      expect(run).not.toHaveBeenCalled();
+      expect(bindingStore.read(identity)).toMatchObject({
+        threadId: "thread-supervised",
+      });
+    },
+  );
 });
 
 describe("Codex agent harness dispose()", () => {

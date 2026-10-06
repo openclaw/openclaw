@@ -12,18 +12,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { threadStartResult as nativeThreadStartResult } from "./codex-app-server.test-fixtures.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThreadStartParams } from "./protocol.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
 import { createCodexTestModel } from "./test-support.js";
-import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle.js";
+import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import { createAppServerOptions as createBaseAppServerOptions } from "./thread-lifecycle.test-fixtures.js";
 
 function startOrResumeThread(
   params: Omit<Parameters<typeof startOrResumeThreadImpl>[0], "bindingStore">,
 ) {
-  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
+  return startOrResumeThreadImpl({ ...params, bindingStore });
 }
 
 let tempDir: string;
+let bindingStore: ReturnType<typeof createCodexTestBindingStore>;
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
@@ -50,7 +51,6 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
   return {
     ...createBaseAppServerOptions(),
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
   };
 }
 
@@ -66,6 +66,7 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
 
 describe("Codex app-server dynamic tool schema boundary contract", () => {
   beforeEach(async () => {
+    bindingStore = createCodexTestBindingStore();
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
   });
 

@@ -1,4 +1,3 @@
-// Matrix helper module supports event helpers behavior.
 import type { MatrixEvent } from "matrix-js-sdk/lib/matrix.js";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixRawEvent } from "./types.js";
@@ -21,9 +20,8 @@ export function matrixEventToRaw(
   opts: { contentMode?: MatrixEventContentMode } = {},
 ): MatrixRawEvent {
   const originalContent = event.getOriginalContent<Record<string, unknown>>();
-  const content = (
-    opts.contentMode === "original" ? originalContent : event.getContent<Record<string, unknown>>()
-  ) as Record<string, unknown>;
+  const content =
+    opts.contentMode === "original" ? originalContent : event.getContent<Record<string, unknown>>();
   const relation = originalContent["m.relates_to"] || event.getWireContent()["m.relates_to"];
   const normalizedContent =
     relation && !Object.hasOwn(content, "m.relates_to")

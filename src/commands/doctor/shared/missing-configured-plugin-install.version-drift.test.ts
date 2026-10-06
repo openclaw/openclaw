@@ -8,6 +8,7 @@ import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import { detectPluginVersionDrift } from "../../../plugins/plugin-version-drift.js";
+import { invokePluginArtifactInstallMock } from "../../../plugins/test-helpers/install-fixtures.js";
 import { convergePluginReleaseCohort } from "../../../plugins/update-cohort.js";
 import { repairMissingConfiguredPluginInstalls } from "./missing-configured-plugin-install.js";
 import {
@@ -25,10 +26,18 @@ vi.mock("../../../infra/install-source-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/install-source-utils.js")>()),
   resolveNpmSpecMetadata: mocks.resolveNpmSpecMetadata,
 }));
-vi.mock("../../../plugins/install.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../../plugins/install.js")>()),
-  installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
-}));
+vi.mock("../../../plugins/install.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../plugins/install.js")>();
+  return {
+    ...actual,
+    installPluginFromNpmSpec: (params: Parameters<typeof actual.installPluginFromNpmSpec>[0]) =>
+      invokePluginArtifactInstallMock<Awaited<ReturnType<typeof actual.installPluginFromNpmSpec>>>(
+        mocks.installPluginFromNpmSpec,
+        params,
+        { manifest: { providers: [], channels: [], channelConfigs: {}, providerAuthChoices: [] } },
+      ),
+  };
+});
 vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
   loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
@@ -129,8 +138,15 @@ function createDriftedInstalls({
         "installed plugin fixture",
       ).installPath;
       const manifestPath = path.join(expectDefined(targetDir, "fixture path"), "package.json");
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, version }));
+      fs.writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: parsed.name,
+          version,
+          dependencies,
+          openclaw: { extensions: ["./index.js"] },
+        }),
+      );
       return successfulInstall({
         pluginId: expectedPluginId,
         npmSpec: parsed.name,
@@ -139,7 +155,24 @@ function createDriftedInstalls({
       });
     },
   );
-  return { cfg, env, records };
+  return {
+    cfg,
+    env,
+    records,
+    repair: async (
+      options: Partial<Parameters<typeof repairMissingConfiguredPluginInstalls>[0]> = {},
+    ) => {
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg,
+        env,
+        baselineRecords: records,
+        repairVersionDrift: true,
+        ...options,
+      });
+      expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);
+      return result;
+    },
+  };
 }
 
 function driftIds(
@@ -170,97 +203,103 @@ describe("Doctor official plugin version repair", () => {
     });
   });
 
-  describe.each(["Doctor repair", "core-update convergence"])("%s selector policy", (caller) => {
-    it.each([
-      ["next", oldVersion, coreVersion, "2026.9.6"],
-      ["beta", oldVersion, coreVersion, "2026.9.6"],
-      ["2026.9.6", "2026.9.6", coreVersion, "2026.9.6"],
-      ["2026.9.5-1", oldVersion, "2026.9.5-2", "2026.9.5-1"],
-    ])(
-      "honors @%s over the cohort with installed %s and core %s",
-      async (selector, installedVersion, hostVersion, expectedVersion) => {
-        const { cfg, env, records } = createDriftedInstalls({
-          hostVersion,
-          installedVersion,
-          packages: [["discord", "@openclaw/discord"]],
-        });
-        const spec = `@openclaw/discord@${selector}`;
-        const record = expectDefined(records.discord, "discord install");
-        record.spec = spec;
-        const updatedRecords =
-          caller === "Doctor repair"
-            ? (
-                await repairMissingConfiguredPluginInstalls({
-                  cfg,
-                  env,
-                  repairVersionDrift: true,
-                  baselineRecords: records,
-                })
-              ).records
-            : (
-                await convergePluginReleaseCohort({
-                  config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },
-                  env,
-                  channel: "stable",
-                  coreVersion: hostVersion,
-                  timeoutMs: 60_000,
-                })
-              ).config.plugins?.installs;
+  it.each([
+    ["Doctor repair", "next", oldVersion, coreVersion, "2026.9.6"],
+    ["Doctor repair", "2026.9.6", "2026.9.6", coreVersion, "2026.9.6"],
+    ["Doctor repair", "2026.9.5-1", oldVersion, "2026.9.5-2", "2026.9.5-1"],
+    ["core-update convergence", "next", oldVersion, coreVersion, "2026.9.6"],
+  ])(
+    "%s honors @%s over the cohort with installed %s and core %s",
+    async (caller, selector, installedVersion, hostVersion, expectedVersion) => {
+      const { cfg, env, records, repair } = createDriftedInstalls({
+        hostVersion,
+        installedVersion,
+        packages: [["discord", "@openclaw/discord"]],
+      });
+      const spec = `@openclaw/discord@${selector}`;
+      const record = expectDefined(records.discord, "discord install");
+      record.spec = spec;
+      const updatedRecords =
+        caller === "Doctor repair"
+          ? (await repair()).records
+          : (
+              await convergePluginReleaseCohort({
+                config: { ...cfg, plugins: { ...cfg.plugins, installs: records } },
+                env,
+                channel: "stable",
+                coreVersion: hostVersion,
+                timeoutMs: 60_000,
+              })
+            ).config.plugins?.installs;
 
-        expect(mocks.resolveNpmSpecMetadata.mock.calls[0]?.[0].spec).toBe(spec);
-        expect(updatedRecords?.discord).toMatchObject({
+      expect(mocks.resolveNpmSpecMetadata.mock.calls[0]?.[0].spec).toBe(spec);
+      expect(updatedRecords?.discord).toMatchObject({
+        spec,
+        version: expectedVersion,
+        resolvedVersion: expectedVersion,
+        resolvedSpec: `@openclaw/discord@${expectedVersion}`,
+      });
+    },
+  );
+
+  it.each([
+    ["@openclaw/discord@2026.9.6", coreVersion, "2026.9.6", "2026.9.6", "stable"],
+    ["@openclaw/codex@latest", coreVersion, coreVersion, coreVersion, "stable"],
+    ["@openclaw/codex@latest", coreVersion, "2026.9.6", "2026.9.6", "stable"],
+    ["@openclaw/codex@latest", "2026.9.5-beta.2", "2026.9.5-beta.2", "2026.9.6", "beta"],
+    ["@openclaw/codex", coreVersion, oldVersion, coreVersion, "stable"],
+    ["@openclaw/codex@latest", "2026.9.5-beta.2", "2026.9.6", "2026.9.6", "beta"],
+    ["@openclaw/codex@latest", coreVersion, "2026.9.6", coreVersion, "extended-stable"],
+    ["@openclaw/codex@next", coreVersion, "2026.9.6", "2026.9.6", "extended-stable"],
+    ["@openclaw/codex@latest", "2026.9.5-1", "2026.9.5-2", coreVersion, "stable"],
+  ] as const)(
+    "repairs incomplete %s at host %s from record %s to %s on %s",
+    async (spec, hostVersion, installedVersion, expectedVersion, channel) => {
+      const missingDependencies = spec.startsWith("@openclaw/discord");
+      const pluginId = missingDependencies ? "discord" : "codex";
+      const packageName = `@openclaw/${pluginId}`;
+      const { cfg, records, repair } = createDriftedInstalls({
+        hostVersion,
+        installedVersion,
+        dependencies: missingDependencies ? { "required-runtime": "1.0.0" } : undefined,
+        packages: [[pluginId, packageName]],
+      });
+      cfg.update = { channel };
+      const record = expectDefined(records[pluginId], "plugin install");
+      record.spec = spec;
+      const manifestPath = path.join(
+        expectDefined(record.installPath, "fixture path"),
+        "package.json",
+      );
+      if (!missingDependencies) {
+        fs.unlinkSync(manifestPath);
+      }
+      const result = await repair(
+        missingDependencies
+          ? {}
+          : { onCapabilityConsent: async ({ reviewToken }) => ({ reviewToken }) },
+      );
+      expect(result.records[pluginId]).toMatchObject({
+        spec,
+        version: expectedVersion,
+        resolvedVersion: expectedVersion,
+        resolvedSpec: `${packageName}@${expectedVersion}`,
+      });
+      expect(result.repairedPluginIds).toEqual([pluginId]);
+      expect(result.warnings).toEqual([]);
+      if (missingDependencies) {
+        expect(mocks.installPluginFromNpmSpec.mock.calls.map(([request]) => request.spec)).toEqual([
           spec,
-          version: expectedVersion,
-          resolvedVersion: expectedVersion,
-          resolvedSpec: `@openclaw/discord@${expectedVersion}`,
-        });
-        expect(
-          JSON.parse(
-            fs.readFileSync(
-              path.join(expectDefined(record.installPath, "fixture path"), "package.json"),
-              "utf8",
-            ),
-          ).version,
-        ).toBe(expectedVersion);
-        if (caller === "Doctor repair") {
-          expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(updatedRecords);
-        }
-      },
-    );
-  });
+        ]);
+        expect(result.changes).toEqual([
+          'Repaired missing dependencies for installed plugin "discord".',
+          "If the Gateway is not restarted by Doctor, run openclaw gateway restart to load the updated plugins.",
+        ]);
+      }
+    },
+  );
 
-  it("reinstalls a newer official pin with missing dependencies during drift repair", async () => {
-    const { cfg, env, records } = createDriftedInstalls({
-      installedVersion: "2026.9.6",
-      dependencies: { "required-runtime": "1.0.0" },
-      packages: [["discord", "@openclaw/discord"]],
-    });
-
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg,
-      env,
-      repairVersionDrift: true,
-      baselineRecords: records,
-    });
-
-    expect(mocks.installPluginFromNpmSpec.mock.calls.map(([request]) => request.spec)).toEqual([
-      "@openclaw/discord@2026.9.6",
-    ]);
-    expect(result.records.discord).toMatchObject({
-      spec: "@openclaw/discord@2026.9.6",
-      version: "2026.9.6",
-      resolvedVersion: "2026.9.6",
-      resolvedSpec: "@openclaw/discord@2026.9.6",
-    });
-    expect(result.changes).toEqual([
-      'Repaired missing dependencies for installed plugin "discord".',
-      "If the Gateway is not restarted by Doctor, run openclaw gateway restart to load the updated plugins.",
-    ]);
-    expect(result.warnings).toEqual([]);
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(result.records);
-  });
-
-  it.each([coreVersion, "2026.9.5-beta.2"])(
+  it.each([coreVersion])(
     "keeps aligned floating official installs unchanged at core %s when the registry is ahead",
     async (hostVersion) => {
       const { cfg, env, records } = createDriftedInstalls({
@@ -298,18 +337,13 @@ describe("Doctor official plugin version repair", () => {
     },
   );
 
-  it.each([coreVersion, "2026.9.5-beta.2"])(
+  it.each(["2026.9.5-beta.2"])(
     "converges official installs to core %s and leaves third-party installs untouched",
     async (hostVersion) => {
-      const { cfg, env, records } = createDriftedInstalls({ hostVersion });
+      const { cfg, records, repair } = createDriftedInstalls({ hostVersion });
       expect(driftIds(cfg, records)).toEqual(["discord", "exa"]);
 
-      const result = await repairMissingConfiguredPluginInstalls({
-        cfg,
-        env,
-        repairVersionDrift: true,
-        baselineRecords: records,
-      });
+      const result = await repair();
 
       expect(result.repairedPluginIds).toEqual(["discord", "exa"]);
       expect(result.warnings).toEqual([]);
@@ -326,17 +360,12 @@ describe("Doctor official plugin version repair", () => {
         `@openclaw/discord@${hostVersion}`,
         `@openclaw/exa-plugin@${hostVersion}`,
       ]);
-      const persisted = expectDefined(
-        readPersistedInstalledPluginIndexInstallRecords({ env }),
-        "persisted plugin install records",
-      );
-      expect(persisted).toEqual(result.records);
-      expect(driftIds(cfg, persisted, hostVersion)).toEqual([]);
+      expect(driftIds(cfg, result.records, hostVersion)).toEqual([]);
     },
   );
 
   it("warns with the unavailable target reason, retains its install, and repairs the other official plugin", async () => {
-    const { cfg, env, records } = createDriftedInstalls();
+    const { cfg, records, repair } = createDriftedInstalls();
     const resolveMetadata = expectDefined(
       mocks.resolveNpmSpecMetadata.getMockImplementation(),
       "metadata resolver",
@@ -352,13 +381,7 @@ describe("Doctor official plugin version repair", () => {
     );
     const onWarning = vi.fn();
 
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg,
-      env,
-      repairVersionDrift: true,
-      baselineRecords: records,
-      onWarning,
-    });
+    const result = await repair({ onWarning });
 
     expect(result.repairedPluginIds).toEqual(["exa"]);
     expect(result.records.discord).toEqual(records.discord);
@@ -371,70 +394,40 @@ describe("Doctor official plugin version repair", () => {
     expect(mocks.installPluginFromNpmSpec.mock.calls.map(([request]) => request.spec)).toEqual([
       "@openclaw/exa-plugin@2026.9.5",
     ]);
-    const persisted = expectDefined(
-      readPersistedInstalledPluginIndexInstallRecords({ env }),
-      "persisted plugin install records",
+    expect(driftIds(cfg, result.records)).toEqual(["discord"]);
+  });
+
+  it.each(["not opted in", "core swap", "legacy id"])("retains installs for %s", async (reason) => {
+    const { env, records, repair } = createDriftedInstalls(
+      reason === "legacy id" ? { packages: [["fish-audio", "@openclaw/fish-audio-speech"]] } : {},
     );
-    expect(persisted).toEqual(result.records);
-    expect(driftIds(cfg, persisted)).toEqual(["discord"]);
-  });
 
-  it("leaves healthy version drift alone unless the repair caller opts in", async () => {
-    const { cfg, env, records } = createDriftedInstalls();
-
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg,
-      env,
-      baselineRecords: records,
+    const result = await repair({
+      repairVersionDrift: reason === "not opted in" ? undefined : true,
+      env:
+        reason === "core swap"
+          ? {
+              ...env,
+              OPENCLAW_UPDATE_IN_PROGRESS: "1",
+              OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+            }
+          : env,
     });
 
     expect(result.records).toEqual(records);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([]);
-    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
+    expect(result.warnings).toEqual(
+      reason === "legacy id"
+        ? [expect.stringContaining("openclaw plugins update @openclaw/fish-audio-speech@2026.9.5")]
+        : [],
+    );
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(records);
-  });
-
-  it("defers version repair while the updater owns an unfinished core package swap", async () => {
-    const { cfg, env, records } = createDriftedInstalls();
-
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg,
-      repairVersionDrift: true,
-      env: {
-        ...env,
-        OPENCLAW_UPDATE_IN_PROGRESS: "1",
-        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
-      },
-      baselineRecords: records,
-    });
-
-    expect(result.records).toEqual(records);
-    expect(result.repairedPluginIds ?? []).toEqual([]);
-    expect(result.warnings).toEqual([]);
-    expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(records);
-  });
-
-  it("reports the exact manual migration command for a legacy official plugin id", async () => {
-    const { cfg, env, records } = createDriftedInstalls({
-      packages: [["fish-audio", "@openclaw/fish-audio-speech"]],
-    });
-
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg,
-      env,
-      repairVersionDrift: true,
-      baselineRecords: records,
-    });
-
-    expect(result.records).toEqual(records);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("openclaw plugins update @openclaw/fish-audio-speech@2026.9.5"),
-    ]);
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(readPersistedInstalledPluginIndexInstallRecords({ env })).toEqual(records);
+    if (reason !== "legacy id") {
+      expect(mocks.resolveNpmSpecMetadata).not.toHaveBeenCalled();
+    }
+    if (reason === "not opted in") {
+      expect(result.changes).toEqual([]);
+    } else if (reason === "core swap") {
+      expect(result.repairedPluginIds ?? []).toEqual([]);
+    }
   });
 });

@@ -1,11 +1,8 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSensitiveConfigPath } from "../../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../../api/types.ts";
-import {
-  countSensitiveConfigValues,
-  hintForPath,
-  redactedPlaceholder,
-} from "../../components/config-form.shared.ts";
+import { hasSensitiveConfigData, hintForPath } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
 import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-types.ts";
@@ -21,12 +18,9 @@ export function formatConfigDiffPath(path: ConfigDiffPath): string {
 }
 
 function computeDiff(
-  original: Record<string, unknown> | null,
-  current: Record<string, unknown> | null,
+  original: Record<string, unknown>,
+  current: Record<string, unknown>,
 ): ConfigDiffEntry[] {
-  if (!original || !current) {
-    return [];
-  }
   const changes: ConfigDiffEntry[] = [];
   let visited = 0;
 
@@ -37,10 +31,7 @@ function computeDiff(
   }
 
   function arrayValuesDiffer(orig: unknown[], curr: unknown[], depth: number): boolean {
-    if (orig.length !== curr.length) {
-      return true;
-    }
-    if (orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
+    if (orig.length !== curr.length || orig.length > MAX_CONFIG_DIFF_ARRAY_COMPARE_ITEMS) {
       return true;
     }
     for (let index = 0; index < orig.length; index += 1) {
@@ -107,14 +98,8 @@ function computeDiff(
     if (orig === curr) {
       return;
     }
-    if (typeof orig !== typeof curr) {
+    if (typeof orig !== typeof curr || typeof orig !== "object" || orig === null || curr === null) {
       pushChange(path, orig, curr);
-      return;
-    }
-    if (typeof orig !== "object" || orig === null || curr === null) {
-      if (orig !== curr) {
-        pushChange(path, orig, curr);
-      }
       return;
     }
     if (Array.isArray(orig) || Array.isArray(curr)) {
@@ -150,23 +135,13 @@ export function computeRawDiff(
     return viewState.rawDiffCache.diff;
   }
   try {
-    const originalValue = parseJson5Text(original);
-    const currentValue = parseJson5Text(current);
-    if (
-      !originalValue ||
-      !currentValue ||
-      typeof originalValue !== "object" ||
-      typeof currentValue !== "object" ||
-      Array.isArray(originalValue) ||
-      Array.isArray(currentValue)
-    ) {
+    const originalValue = asNullableRecord(parseJson5Text(original));
+    const currentValue = asNullableRecord(parseJson5Text(current));
+    if (!originalValue || !currentValue) {
       viewState.rawDiffCache = { original, current, diff: [] };
       return [];
     }
-    const diff = computeDiff(
-      originalValue as Record<string, unknown>,
-      currentValue as Record<string, unknown>,
-    );
+    const diff = computeDiff(originalValue, currentValue);
     viewState.rawDiffCache = { original, current, diff };
     return diff;
   } catch {
@@ -180,7 +155,8 @@ export function computeRawDiff(
   }
 }
 
-function truncateValue(value: unknown, maxLen = 40): string {
+function truncateValue(value: unknown): string {
+  const maxLen = 40;
   if (Array.isArray(value)) {
     return t(value.length === 1 ? "configView.itemCount" : "configView.itemCountPlural", {
       count: String(value.length),
@@ -193,10 +169,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   } catch {
     str = String(value);
   }
-  if (str.length <= maxLen) {
-    return str;
-  }
-  return truncateUtf16Safe(str, maxLen - 3) + "...";
+  return str.length <= maxLen ? str : truncateUtf16Safe(str, maxLen - 3) + "...";
 }
 
 function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {
@@ -234,9 +207,9 @@ export function renderRawDiffValue(
   uiHints: ConfigUiHints,
   rawRevealed: boolean,
 ): string {
-  const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
+  const hasSensitiveValue = hasSensitiveConfigData(value, path, uiHints);
   if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
-    return redactedPlaceholder();
+    return t("configForm.redactedPlaceholder");
   }
   return truncateValue(value);
 }

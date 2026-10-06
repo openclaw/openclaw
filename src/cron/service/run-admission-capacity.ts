@@ -1,10 +1,6 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import type { CronServiceState } from "./state.js";
 
-export function resolveRunConcurrency(): number {
-  return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
-}
-
 function acquireCronRunSlot(state: CronServiceState): () => void {
   state.runAdmission.active += 1;
   let released = false;
@@ -24,7 +20,7 @@ function dispatchWaiters(state: CronServiceState): void {
     cancelCronRunAdmissionWaiters(state);
     return;
   }
-  const maxConcurrentRuns = resolveRunConcurrency();
+  const maxConcurrentRuns = DEFAULT_CRON_MAX_CONCURRENT_RUNS;
   while (admission.active < maxConcurrentRuns) {
     const waiter = admission.waiters.shift();
     if (!waiter) {
@@ -53,7 +49,7 @@ export function tryAcquireCronRunSlots(
   if (state.stopped || requested <= 0 || state.runAdmission.waiters.length > 0) {
     return [];
   }
-  const available = Math.max(0, resolveRunConcurrency() - state.runAdmission.active);
+  const available = Math.max(0, DEFAULT_CRON_MAX_CONCURRENT_RUNS - state.runAdmission.active);
   return Array.from({ length: Math.min(requested, available) }, () => acquireCronRunSlot(state));
 }
 
@@ -70,7 +66,7 @@ async function acquireCronRunAdmission(
   if (state.stopped || signal?.aborted) {
     return null;
   }
-  if (admission.waiters.length === 0 && admission.active < resolveRunConcurrency()) {
+  if (admission.waiters.length === 0 && admission.active < DEFAULT_CRON_MAX_CONCURRENT_RUNS) {
     return acquireCronRunSlot(state);
   }
   return await new Promise<(() => void) | null>((resolve) => {

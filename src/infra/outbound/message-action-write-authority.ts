@@ -1,17 +1,15 @@
-import type {
-  ChannelMessageActionContext,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelMessageActionContext } from "../../channels/plugins/types.public.js";
 import { validateExplicitMessageAccountSelection } from "./message-account-selection.js";
 import { enforceMessageActionAllowlist } from "./outbound-policy.js";
 
 /** Admit preparation and execution against the same invocation configuration. */
-export function prepareMessageActionWriteAuthority(params: {
+export async function prepareMessageActionWriteAuthority(params: {
   context: ChannelMessageActionContext & { accountId: string };
   plugin: ChannelPlugin;
   hasRegistrationAuthority: boolean;
   assertCurrent: () => void;
-}): ChannelMessageActionContext {
+}): Promise<ChannelMessageActionContext> {
   const { context, plugin } = params;
   const { action, channel, accountId } = context;
   if (
@@ -31,7 +29,8 @@ export function prepareMessageActionWriteAuthority(params: {
   // still checking the live job, caller, and selected plugin before every request.
   const cfg = context.cfg;
   enforceMessageActionAllowlist({ cfg, agentId: context.agentId, action });
-  validateExplicitMessageAccountSelection({ cfg, channel, accountId, plugin });
+  await validateExplicitMessageAccountSelection({ cfg, channel, accountId, plugin });
+  assertCurrent();
   const available = plugin.actions?.describeMessageTool({
     cfg,
     accountId,

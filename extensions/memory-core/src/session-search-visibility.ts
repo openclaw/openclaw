@@ -1,7 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
-  buildSessionEntry,
-  loadArchivedSessions,
+  readSessionResetRecallCutoff,
+  loadArchivedSessionsAsync,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   resolveCanonicalMainSessionKey,
@@ -9,6 +9,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { sessionDeliveryOrigin } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   extractTranscriptIdentityFromSessionsMemoryHit,
@@ -27,7 +28,6 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readSessionArchiveReasonFromHitPath,
-  readSessionResetRecallCutoffMetadata,
   type SessionResetRecallCutoff,
 } from "./session-reset-recall-metadata.js";
 
@@ -190,6 +190,27 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
       })
     : undefined;
   const scopedAgentId = params.agentId?.trim() || requesterAgentId;
+
+  const archiveNames = [
+    ...new Set(
+      params.hits.flatMap((hit) => {
+        const identity =
+          hit.source === "sessions"
+            ? extractTranscriptIdentityFromSessionsMemoryHit(hit.path)
+            : undefined;
+        const archiveName = hit.path.replace(/\\/g, "/").split("/").at(-1);
+        return identity?.archived && archiveName ? [archiveName] : [];
+      }),
+    ),
+  ];
+  const archives = archiveNames.length
+    ? await loadArchivedSessionsAsync({
+        agentId: scopedAgentId,
+        archiveNames,
+        storePath: resolveStorePath(params.cfg.session?.store, { agentId: scopedAgentId }),
+      })
+    : [];
+  const archivedSessionsByName = new Map(archives.map((archive) => [archive.archiveName, archive]));
   const guard = params.requesterSessionKey
     ? await createSessionVisibilityGuard({
         action: "history",
@@ -213,24 +234,6 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.cfg,
     scopedAgentId ? { agentId: scopedAgentId } : {},
   );
-  const archiveNames = [
-    ...new Set(
-      params.hits.flatMap((hit) => {
-        const identity =
-          hit.source === "sessions"
-            ? extractTranscriptIdentityFromSessionsMemoryHit(hit.path)
-            : undefined;
-        const archiveName = hit.path.replace(/\\/g, "/").split("/").at(-1);
-        return identity?.archived && archiveName ? [archiveName] : [];
-      }),
-    ),
-  ];
-  const archivedSessionsByName = new Map(
-    loadArchivedSessions({ agentId: scopedAgentId, archiveNames, storePath }).map((archive) => [
-      archive.archiveName,
-      archive,
-    ]),
-  );
 
   const conversationRecall = params.conversationRecall;
   const trustedAgentScope = Boolean(
@@ -250,15 +253,12 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!recallAgentId || !sessionId || !anchorSessionKey) {
       return Promise.resolve<SessionResetRecallCutoff>({ state: "invalid" });
     }
-    anchorResetCutoffPromise = buildSessionEntry(`${sessionId}.jsonl`, {
+    anchorResetCutoffPromise = readSessionResetRecallCutoff({
       agentId: recallAgentId,
       sessionId,
       sessionKey: anchorSessionKey,
       storePath,
-      updatedAtMs: anchorEntry?.updatedAt,
-    })
-      .then(readSessionResetRecallCutoffMetadata)
-      .catch(() => ({ state: "invalid" }));
+    }).catch(() => ({ state: "invalid" }));
     return anchorResetCutoffPromise;
   };
   const recallAuthorized = Boolean(

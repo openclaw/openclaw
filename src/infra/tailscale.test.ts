@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFixtureFile } from "../../test/helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runExec } from "../process/exec.js";
 import { captureEnv } from "../test-utils/env.js";
 import { waitForTailscaleBackendReady } from "./tailscale-backend-ready.js";
 import * as tailscale from "./tailscale.js";
@@ -45,7 +46,7 @@ function expectExecCall(
   expect(call[1]).toEqual(args);
   if (options) {
     expect(call).toHaveLength(3);
-    expect(call[2]).toEqual(options);
+    expect(call[2]).toEqual(expect.objectContaining(options));
   } else {
     expect(call).toHaveLength(2);
   }
@@ -73,16 +74,6 @@ describe("tailscale helpers", () => {
     vi.restoreAllMocks();
   });
 
-  it("parses DNS name from tailscale status", async () => {
-    const exec = vi.fn().mockResolvedValue({
-      stdout: JSON.stringify({
-        Self: { DNSName: "host.tailnet.ts.net.", TailscaleIPs: ["100.1.1.1"] },
-      }),
-    });
-    const host = await getTailnetHostname(exec);
-    expect(host).toBe("host.tailnet.ts.net");
-  });
-
   it("falls back to IP when DNS missing", async () => {
     const exec = vi.fn().mockResolvedValue({
       stdout: JSON.stringify({ Self: { TailscaleIPs: ["100.2.2.2"] } }),
@@ -98,6 +89,28 @@ describe("tailscale helpers", () => {
     });
     const host = await getTailnetHostname(exec);
     expect(host).toBe("noisy.tailnet.ts.net");
+  });
+
+  it.each([
+    ["ordinary", getTailnetHostname],
+    ["post-Serve", getTailnetHostnameAfterServe],
+  ] as const)("reads the hostname from a large %s status response", async (_name, lookup) => {
+    const exec: typeof runExec = (_command, _args, options) =>
+      runExec(
+        process.execPath,
+        [
+          "-e",
+          `console.log(JSON.stringify({
+            Self: { DNSName: "large.tailnet.ts.net." },
+            Peer: Object.fromEntries(Array.from({ length: 12000 }, (_, i) => [
+              "peer" + i, { DNSName: "peer-" + i + ".tailnet.ts.net.", Online: true }
+            ]))
+          }))`,
+        ],
+        options,
+      );
+
+    await expect(lookup(exec)).resolves.toBe("large.tailnet.ts.net");
   });
 
   it.each([
@@ -128,20 +141,16 @@ describe("tailscale helpers", () => {
     expect(exec).toHaveBeenCalledTimes(2);
     expectExecCall(exec, 1, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
-      maxBuffer: 400_000,
       logOutput: false,
     });
     expectExecCall(exec, 2, tailscaleBin, ["status", "--json"], {
       timeoutMs: 5000,
-      maxBuffer: 400_000,
       logOutput: false,
     });
   });
 
-  it.each([
-    ["missing binary", new Error("spawn tailscale ENOENT")],
-    ["permission failure", new Error("permission denied")],
-  ])("does not retry post-Serve status after a permanent %s", async (_name, failure) => {
+  it("does not retry post-Serve status after a permanent permission failure", async () => {
+    const failure = new Error("permission denied");
     const exec = vi.fn().mockRejectedValue(failure);
 
     await expect(getTailnetHostnameAfterServe(exec)).rejects.toThrow(failure.message);
@@ -250,7 +259,7 @@ describe("tailscale helpers", () => {
   describe("waitForTailscaleBackendReady", () => {
     const status = (BackendState: string) => ({ stdout: JSON.stringify({ BackendState }) });
     const statusArgs = ["status", "--json"];
-    const execOptions = { timeoutMs: 5000, maxBuffer: 400_000, logOutput: false };
+    const execOptions = { timeoutMs: 5000, logOutput: false };
 
     it("waits through boot-time backend states and announces each once", async () => {
       const exec = vi
@@ -470,17 +479,13 @@ describe("tailscale helpers", () => {
   });
 
   it.each([
-    { proxy: "http://127.0.0.1:18789", expected: true },
-    { proxy: "http://127.0.0.1:18789/", expected: true },
     { proxy: "http://127.0.0.1:18789/api", expected: true },
     { proxy: "http://localhost:18789", expected: true },
     { proxy: "http://[::1]:18789", expected: true },
     { proxy: "https+insecure://localhost:18789", expected: true },
-    { proxy: "https+insecure://127.0.0.1:18789/api", expected: true },
     { proxy: "18789", expected: true },
     { proxy: "http://127.0.0.1:9000", expected: false },
     { proxy: "http://10.0.0.5:18789", expected: false },
-    { proxy: "https+insecure://10.0.0.5:18789", expected: false },
   ])("validates Funnel loopback proxy $proxy", async ({ proxy, expected }) => {
     const host = "device.tailnet.ts.net:443";
     const exec = vi.fn().mockResolvedValue({

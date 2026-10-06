@@ -13,7 +13,8 @@ title: "Transcripts CLI"
 
 Inspector and export command for durable meeting transcripts.
 [Google Meet](/plugins/google-meet), [Microsoft Teams](/plugins/teams-meetings),
-and [Zoom](/plugins/zoom-meetings) browser participants capture notes automatically;
+[Slack huddles](/plugins/slack-huddles), and [Zoom](/plugins/zoom-meetings)
+browser participants capture notes automatically;
 the `transcripts` agent tool also supports provider capture and manual import.
 
 Canonical transcript state lives in the shared SQLite database at
@@ -329,6 +330,9 @@ invalid output, OpenClaw saves deterministic heuristic notes instead. Model
 generation enhances the notes; it does not gate saving them. Notes include an
 overview, participants, decisions, action items, risks, and finally the transcript,
 so bounded readers see the notes before long transcripts.
+Gateway shutdown, restart, and capture-disable drainage save final heuristic notes
+without starting new model inference. You can regenerate model notes from the saved
+transcript with the tool's `summarize` action after the Gateway is available again.
 Participants come from speaker labels in first-appearance order, not model guesses.
 Summary JSON records `source` as `model` or `heuristic` and, for model notes, the
 model reference used.
@@ -417,10 +421,10 @@ that draft without sending it to the new connection. Review it and select
 **Save** in the Settings footer. The full transcript schema editor is available
 under **Meeting capture → Advanced settings**.
 
-Changing only auto-start source titles applies to future captures without
-restarting or interrupting current captures. Current and historical notes keep
-their original title, source, agent attribution, and selector. Other source edits
-retain normal Gateway restart behavior.
+Meeting capture settings apply without restarting the Gateway. Removed or changed
+sources drain their received speech and finalize notes before replacement; unchanged
+sources keep recording. Source title edits apply to future captures. Current and
+historical notes keep their original title, source, agent attribution, and selector.
 
 Startup retries preserve the same admitted ID, original title, start time,
 source, and saved notes only while the exact failed provider attempt retains
@@ -501,10 +505,11 @@ even when the channel IDs differ: a Discord bot can occupy only one voice channe
 per guild. Later conflicting entries are skipped with a warning. For the complete
 listen-only setup, see [Discord meeting notes](/channels/discord/voice-transcripts#meeting-notes).
 
-The meeting provider ids are `google-meet`, `teams`, and `zoom`. Their aliases
-are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`, and
-`zoom-meetings`, respectively. Meeting providers attach to an already-active
-meeting bot session; normal meeting joins do not need an `autoStart` entry.
+The meeting provider ids are `google-meet`, `teams`, `slack-huddle`, and `zoom`.
+Their aliases are `googlemeet`/`meet`, `teams-meetings`/`microsoft-teams`/`msteams`,
+`slack-huddles`, and `zoom-meetings`, respectively. Meeting providers attach to an
+already-active meeting bot session; normal meeting joins do not need an
+`autoStart` entry.
 
 ## Related
 

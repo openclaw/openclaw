@@ -2,9 +2,11 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
+import type { NodeWorkerWorkspaceExecInput } from "../worker/node-workspace-protocol.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -13,6 +15,7 @@ import {
 } from "./node-worker-process-identity.js";
 import { createNodeWorkerContainerFixture } from "./node-worker-supervisor.container.test-support.js";
 import {
+  createNodeWorkerSupervisorFixture,
   waitForChildExit,
   waitForChildLine,
   waitForIdentityDeath,
@@ -26,15 +29,88 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 import { inspectOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
+import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useStateDatabaseTempDirs();
 const fileLockModule = createRequire(import.meta.url).resolve("@openclaw/fs-safe/file-lock");
-afterEach(() => closeOpenClawStateDatabaseForTest());
 
 describe("node worker environment stop after failed initialization", () => {
+  it.each([false, true])(
+    "holds workspace admission through supervisor settlement (fails: %s)",
+    async (fails) => {
+      const root = tempDirs.make("node-worker-stop-settlement-");
+      const workspace = new NodeWorkerWorkspaceRuntime({
+        root,
+        env: {
+          PATH: path.dirname(process.execPath),
+          HOME: root,
+          NODE_DISABLE_COMPILE_CACHE: "1",
+        },
+      });
+      const { supervisor } = createNodeWorkerSupervisorFixture(root, { workspace });
+      const entered = createDeferred();
+      const finish = createDeferred();
+      const failure = new Error("worker journal cleanup is uncertain");
+      const initialize = supervisor.initialize.bind(supervisor);
+      vi.spyOn(supervisor, "initialize").mockImplementationOnce(async () => {
+        entered.resolve();
+        await finish.promise;
+        if (fails) {
+          throw failure;
+        }
+        await initialize();
+      });
+      const identity = {
+        gatewayNamespace: "gateway-preview",
+        environmentId: "worker:preview",
+        sessionId: "conversation-preview",
+        generation: 1,
+      };
+      const command: NodeWorkerWorkspaceExecInput = {
+        ...identity,
+        nativeProcessOwner: true,
+        argv: [path.basename(process.execPath), "-e", "process.stdout.write('fresh')"],
+      };
+      const stopping = supervisor.stopEnvironment({ ...identity, ownerEpoch: 1 });
+      void stopping.catch(() => undefined);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          stopping,
+          "supervisor cleanup did not begin",
+        );
+        await expect(workspace.exec(command)).rejects.toThrow("retired");
+        expect(() =>
+          supervisor.observeProcesses({
+            ...identity,
+            ownerEpoch: 1,
+            placementGeneration: 1,
+            expectedBundleHash: "a".repeat(64),
+            operation: { action: "list" },
+          }),
+        ).toThrow("retired");
+        finish.resolve();
+        if (fails) {
+          await expect(stopping).rejects.toBe(failure);
+          await expect(workspace.exec(command)).rejects.toThrow("retired");
+          await supervisor.stopEnvironment({ ...identity, ownerEpoch: 1 });
+        } else {
+          await stopping;
+        }
+        expect((await workspace.exec(command)).stdout).toBe("fresh");
+      } finally {
+        finish.resolve();
+        await stopping.catch(() => undefined);
+        await supervisor.close();
+      }
+    },
+  );
+
   it.runIf(process.platform === "linux" || process.platform === "darwin")(
     "settles native recovery without publishing capacity until the unrelated container recovers",
     async () => {
+      const cleanupMode =
+        process.platform === "linux" && !process.versions.bun ? "linux-subreaper" : "owned-anchor";
       const capacities: Array<{ total: number; available: number }> = [];
       const root = tempDirs.make("node-worker-stop-initialization-");
       const fixture = createNodeWorkerContainerFixture(root, fileLockModule, {
@@ -56,15 +132,15 @@ describe("node worker environment stop after failed initialization", () => {
       let bodyFailure: { error: unknown } | undefined;
       await (async () => {
         const receipt = JSON.parse(await waitForChildLine(owner)) as NodeWorkerLaunchReceipt;
-        expect(receipt.workerCleanupMode).toBe("owned-anchor");
         anchor = receipt.worker!;
+        expect(receipt.workerCleanupMode).toBe(cleanupMode);
         process.kill(anchor.pid, "SIGSTOP");
         owner.kill("SIGKILL");
         await waitForChildExit(owner);
 
-        const store = new NodeWorkerLaunchStore({ env: fixture.env });
+        const store = new NodeWorkerLaunchStore(new NodeWorkerJournalWorker({ env: fixture.env }));
         const live = testWorkerLaunchInput(fixture.workspaceDir, "m-live-pending");
-        store.claim(
+        await store.claim(
           { ...testNodeWorkerLaunchIdentity(live), gatewayNamespace: live.gatewayNamespace },
           requireNodeWorkerProcessIdentity(process.pid),
           3,
@@ -76,8 +152,8 @@ describe("node worker environment stop after failed initialization", () => {
           ...testNodeWorkerLaunchIdentity(blocked),
           gatewayNamespace: blocked.gatewayNamespace,
         };
-        store.claim(claim, staleSupervisor, 3);
-        store.markRunning({
+        await store.claim(claim, staleSupervisor, 3);
+        await store.markRunning({
           ...claim,
           supervisor: staleSupervisor,
           worker: { pid: 2_147_483_646, startTime: 1 },
@@ -88,8 +164,8 @@ describe("node worker environment stop after failed initialization", () => {
             containerId: container.id,
           },
         });
-        const preserved = [store.get(live.launchId), store.get(blocked.launchId)];
-        expect(store.listNonterminal().map((entry) => entry.launchId)).toEqual([
+        const preserved = [await store.get(live.launchId), await store.get(blocked.launchId)];
+        expect((await store.listNonterminal()).map((entry) => entry.launchId)).toEqual([
           native.launchId,
           live.launchId,
           blocked.launchId,
@@ -99,9 +175,10 @@ describe("node worker environment stop after failed initialization", () => {
         const failedInitialization = /injected container removal failure/u;
         await expect(fixture.supervisor.initialize()).rejects.toThrow(failedInitialization);
         expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
-        expect(store.get(native.launchId)).toMatchObject({
+        expect(await store.get(native.launchId)).toMatchObject({
           state: "running",
           workerLineageSettled: false,
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: false } : {}),
         });
         expect(capacities).toEqual([{ total: 3, available: 0 }]);
 
@@ -121,9 +198,15 @@ describe("node worker environment stop after failed initialization", () => {
           message: expect.stringMatching(failedInitialization),
         });
         expect(inspectOwnedNodeWorkerTree(anchor)).toBe("dead");
-        const cancelled = store.get(native.launchId);
-        expect(cancelled).toMatchObject({ state: "cancelled", workerLineageSettled: true });
-        expect([store.get(live.launchId), store.get(blocked.launchId)]).toEqual(preserved);
+        const cancelled = await store.get(native.launchId);
+        expect(cancelled).toMatchObject({
+          state: "cancelled",
+          workerLineageSettled: cleanupMode === "owned-anchor",
+          ...(cleanupMode === "linux-subreaper" ? { workerDescendantsReaped: true } : {}),
+        });
+        expect([await store.get(live.launchId), await store.get(blocked.launchId)]).toEqual(
+          preserved,
+        );
         expect(fixture.exists(container.id)).toBe(true);
         await expect(fixture.supervisor.status(native.launchId)).rejects.toThrow(
           failedInitialization,
@@ -137,16 +220,16 @@ describe("node worker environment stop after failed initialization", () => {
         for (const capacity of capacities) {
           expect(capacity).toEqual({ total: 3, available: 0 });
         }
-        expect(fixture.supervisor.hasActiveWork()).toBe(true);
+        expect(await fixture.supervisor.hasActiveWork()).toBe(true);
 
         fs.unlinkSync(failureMarker);
         await fixture.supervisor.initialize();
         expect(capacities.at(-1)).toEqual({ total: 3, available: 2 });
-        expect(store.get(native.launchId)).toEqual(cancelled);
-        expect(store.get(live.launchId)).toEqual(preserved[0]);
-        expect(store.get(blocked.launchId)?.state).toBe("interrupted");
+        expect(await store.get(native.launchId)).toEqual(cancelled);
+        expect(await store.get(live.launchId)).toEqual(preserved[0]);
+        expect((await store.get(blocked.launchId))?.state).toBe("interrupted");
         expect(fixture.exists(container.id)).toBe(false);
-        expect(store.nonterminalCount()).toBe(1);
+        expect(await store.nonterminalCount()).toBe(1);
         expect(await fixture.supervisor.status(native.launchId)).toMatchObject({
           state: "cancelled",
         });

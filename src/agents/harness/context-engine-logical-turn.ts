@@ -12,7 +12,6 @@ import {
 } from "../../context-engine/registry.js";
 import { disposeContextEngineSources } from "../../context-engine/registry.resources.js";
 import type { ContextEngine, ContextEngineOperation } from "../../context-engine/types.js";
-import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../run-cleanup-timeout.js";
 
 type LogicalTurnSelectionState = "unselected" | "selected" | "started" | "disposed";
@@ -44,29 +43,6 @@ export type ContextEngineLogicalTurnLease = {
   dispose: () => Promise<void>;
 };
 
-export function selectContextEngineForTranscriptHost(params: {
-  lease: ContextEngineLogicalTurnLease;
-  host: ContextEngineHostSupport;
-  operation: ContextEngineOperation;
-  recorder: Pick<UserTurnTranscriptRecorder, "getAdmissionReceipt" | "hasPersisted"> | undefined;
-}): EffectiveContextEngineRef {
-  const admission = params.recorder?.getAdmissionReceipt();
-  // Selection runs during turn preparation, before the user turn is written, so an admitted
-  // receipt does not exist yet on the paths that persist during the run. A receipt is only
-  // owed once the turn has actually been persisted: until then there is no admitted entry for
-  // the fence to anchor to, so there is nothing to degrade over.
-  if (params.recorder && !admission && params.recorder.hasPersisted()) {
-    return params.lease.degradeBeforeStart(
-      "current-turn transcript admission receipt is unavailable",
-    );
-  }
-  return params.lease.selectForHost({
-    host: params.host,
-    operation: params.operation,
-    requiresDurableCommit: params.recorder !== undefined,
-  });
-}
-
 export async function createContextEngineLogicalTurnLease(params: {
   identity: { runId: string; sessionId: string };
   config?: OpenClawConfig;
@@ -75,8 +51,8 @@ export async function createContextEngineLogicalTurnLease(params: {
   warn?: (message: string) => void;
 }): Promise<ContextEngineLogicalTurnLease> {
   const { runId, sessionId } = params.identity;
-  ensureContextEnginesInitialized();
   const resolution = await resolveLogicalTurnContextEngines(params.config, {
+    initialize: ensureContextEnginesInitialized,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
     onCleanupFailure: recordAgentCleanupFailure,

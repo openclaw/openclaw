@@ -1,3 +1,4 @@
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { toErrorObject } from "../../infra/errors.js";
 
 export const TERMINAL_OPEN_DEADLINE_MS = 30_000;
@@ -35,48 +36,27 @@ export async function waitForTerminalOpenDeadline<T>(
   if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
     throw expireTerminalOpenDeadline(deadline);
   }
-  return await new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(expireTerminalOpenDeadline(deadline));
-    };
-    const timer = setTimeout(
-      () => expireTerminalOpenDeadline(deadline),
-      Math.max(0, deadline.expiresAtMs - Date.now()),
-    );
-    deadline.controller.signal.addEventListener("abort", onAbort, { once: true });
-    let promise: Promise<T>;
-    try {
-      promise = run();
-    } catch (error) {
-      if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-        expireTerminalOpenDeadline(deadline);
-        return;
-      }
-      clearTimeout(timer);
-      deadline.controller.signal.removeEventListener("abort", onAbort);
-      reject(toErrorObject(error, "Terminal open failed"));
-      return;
+  const expire = () => {
+    throw expireTerminalOpenDeadline(deadline);
+  };
+  const assertCurrent = () => {
+    if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
+      expire();
     }
-    void promise.then(
-      (value) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-          expireTerminalOpenDeadline(deadline);
-          return;
-        }
-        clearTimeout(timer);
-        deadline.controller.signal.removeEventListener("abort", onAbort);
-        reject(toErrorObject(error, "Terminal open failed"));
-      },
-    );
-  });
+  };
+  return await raceWithTimeout(
+    async () => {
+      try {
+        const result = await run();
+        assertCurrent();
+        return result;
+      } catch (error) {
+        assertCurrent();
+        throw toErrorObject(error, "Terminal open failed");
+      }
+    },
+    Math.max(0, deadline.expiresAtMs - Date.now()),
+    expire,
+    { signal: deadline.controller.signal, onAbort: expire },
+  );
 }

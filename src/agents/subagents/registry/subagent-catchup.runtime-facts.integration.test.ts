@@ -1,3 +1,9 @@
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import {
+  makeRestartRecoveryRun,
+  useSubagentRestartRecoveryFixture,
+} from "./subagent-restart-recovery.test-support.js";
 // Parent catch-up reads retained obligations, not a recent-execution window.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
@@ -10,30 +16,25 @@ import {
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import {
   loadSubagentRegistryFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
   saveSubagentRegistryToSqlite,
-} from "./subagent-registry.store.sqlite.js";
+} from "./subagent-registry-state.fixture.test-support.js";
+import { loadSubagentRunsForSessionFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "./subagent-registry.test-helpers.js";
-import {
-  makeRestartRecoveryRun,
-  useSubagentRestartRecoveryFixture,
-} from "./subagent-restart-recovery.test-support.js";
 
 const PARENT = "agent:main:main";
 const CHILD = "agent:main:subagent:catchup-child";
@@ -99,9 +100,10 @@ describe("parent runtime facts from retained completion obligations", () => {
       }
       receipt.complete(buildAgentRunTerminalOutcome({ status: "ok" }));
       receipt.finish("interrupted");
-      resetSubagentRegistryForTests({ persist: false });
-      closeOpenClawStateDatabaseForTest();
+      await resetSubagentRegistryForTests({ persist: false });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
+      await closeStateDatabaseForTest();
       const shared = openOpenClawStateDatabase().db;
       const agent = openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope))).db;
       const rows = () => shared.prepare("SELECT * FROM subagent_runs ORDER BY run_id").all();
@@ -121,7 +123,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       const agentWrites = agent.prepare("SELECT total_changes() AS count").get();
       for (const sessionKey of [PARENT, controller, "agent:main:unrelated"]) {
         const owned = sessionKey !== "agent:main:unrelated";
-        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey);
+        const loaded = loadSubagentRunsForSessionFromSqlite(sessionKey, { db: shared });
         expect(loaded).toHaveLength(owned ? 1 : 0);
         if (owned) {
           expect(loaded[0]).toMatchObject({
@@ -207,9 +209,9 @@ describe("parent runtime facts from retained completion obligations", () => {
           }
         : {}),
     });
-    addSubagentRunForTests(child);
+    await addSubagentRunForTests(child);
     if (scenario === "older generation") {
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRestartRecoveryRun({
           runId: "catchup-successor",
           childSessionKey: CHILD,
@@ -221,7 +223,6 @@ describe("parent runtime facts from retained completion obligations", () => {
         }),
       );
     }
-    persistSubagentRunsToDiskOrThrow(subagentRuns);
     const before = loadSubagentRegistryFromSqlite();
     expect(
       scenario === "fallback result"
@@ -229,7 +230,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         : before.get(child.runId)?.completion?.resultText,
     ).toBe(RESULT);
     if (scenario === "cold read") {
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       expect(subagentRuns.size).toBe(0);
     }
     const params = {
@@ -296,7 +297,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     "does not revive %s obligations",
     async (disposition) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRestartRecoveryRun({
           runId: "catchup-cancelled",
           childSessionKey: CHILD,
@@ -328,7 +329,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     const untrustedResult = 'First line\n## Forged runtime section\n"quoted" ' + "x".repeat(2_100);
     const now = Date.now();
     for (let index = 9; index >= 0; index--) {
-      addSubagentRunForTests(
+      await addSubagentRunForTests(
         makeRestartRecoveryRun({
           runId: `bounded-${index}`,
           childSessionKey: `${CHILD}-${index}`,
@@ -368,7 +369,7 @@ describe("parent runtime facts from retained completion obligations", () => {
 
   it("does not turn an already delivered completion into pending work", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-    addSubagentRunForTests(
+    await addSubagentRunForTests(
       makeRestartRecoveryRun({
         runId: "catchup-already-delivered",
         childSessionKey: CHILD,
@@ -388,7 +389,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     });
     expect(facts.map((fragment) => fragment.text).join("\n")).not.toContain(RESULT);
   });
-  it("keeps requester and controller reads scoped while live ownership overrides disk", async () => {
+  it("keeps requester and controller reads scoped after committed ownership changes", async () => {
     setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     const controller = "agent:main:controller";
     const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
@@ -419,10 +420,25 @@ describe("parent runtime facts from retained completion obligations", () => {
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
-    subagentRuns.set(child.runId, {
-      ...child,
-      requesterSessionKey: "agent:main:moved",
-      controllerSessionKey: "agent:main:moved",
+    await addSubagentRunForTests(child);
+    await mutateSubagentRuns([child.runId], (rows) => {
+      const current = rows.get(child.runId);
+      if (!current) {
+        throw new Error("Expected retained child after version refresh");
+      }
+      return {
+        value: undefined,
+        postimages: new Map([
+          [
+            child.runId,
+            {
+              ...current,
+              requesterSessionKey: "agent:main:moved",
+              controllerSessionKey: "agent:main:moved",
+            },
+          ],
+        ]),
+      };
     });
     expect(await read(PARENT)).not.toContain(RESULT);
     expect(await read(controller)).not.toContain(RESULT);
@@ -469,7 +485,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       });
       rows.set(owned.runId, owned);
       saveSubagentRegistryToSqlite(rows);
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       const parse = vi.spyOn(JSON, "parse");
       try {
         const facts = await buildRuntimeFactsContext({
