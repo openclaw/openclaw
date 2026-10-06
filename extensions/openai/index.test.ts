@@ -470,7 +470,7 @@ describe("openai plugin", () => {
         interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
-    for (const modelId of ["openai/gpt-5.4-mini", "gpt-6-astra", "openai/gpt-7-x"]) {
+    for (const modelId of ["openai/gpt-5.4-mini", "gpt-6-astra"]) {
       expect(
         openaiProvider.resolveSystemPromptContribution?.({ ...contributionContext, modelId }),
       ).toEqual({
@@ -480,12 +480,11 @@ describe("openai plugin", () => {
         },
       });
     }
-    expect(
-      openaiProvider.resolveSystemPromptContribution?.({
-        ...contributionContext,
-        modelId: "gpt-image-1",
-      }),
-    ).toBeUndefined();
+    for (const modelId of ["gpt-image-1", "openai/gpt-7-x"]) {
+      expect(
+        openaiProvider.resolveSystemPromptContribution?.({ ...contributionContext, modelId }),
+      ).toBeUndefined();
+    }
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
