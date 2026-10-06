@@ -729,11 +729,8 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
 
   private syncRows(nextKeys: readonly string[]): void {
     const virtualizer = this.virtualizerController.getVirtualizer();
-    if (
-      this.offsetState.pendingInteractionAnchor === null &&
-      this.canAutoFollow() &&
-      this.endAnchor.recordViewport(this.scrollElement)
-    ) {
+    const atEnd = this.endAnchor.recordViewport(this.scrollElement);
+    if (this.offsetState.pendingInteractionAnchor === null && this.canAutoFollow() && atEnd) {
       this.endAnchor.scheduleRowModelReconcile(() => {
         if (
           !retargetTranscriptEndAfterRows(
