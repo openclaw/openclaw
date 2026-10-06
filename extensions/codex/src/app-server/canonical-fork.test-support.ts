@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { upsertSessionUpstreamLink } from "openclaw/plugin-sdk/session-catalog";
+import { upsertSessionUpstreamLinkAsync } from "openclaw/plugin-sdk/session-catalog";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createStageTimingTracker } from "openclaw/plugin-sdk/time-runtime";
@@ -391,7 +391,7 @@ export async function createCanonicalForkFixture(params: {
       );
       // Seed the catalog response through the same canonical link store as its Gateway caller.
       if (
-        !upsertSessionUpstreamLink({
+        !(await upsertSessionUpstreamLinkAsync({
           sessionKey: result.sessionKey,
           agentId: "main",
           catalogId: "codex",
@@ -400,7 +400,7 @@ export async function createCanonicalForkFixture(params: {
           upstreamKind: upstream.kind,
           upstreamRef: upstream.ref,
           marker: upstream.marker,
-        })
+        }))
       ) {
         throw new Error("Failed to seed catalog upstream link");
       }

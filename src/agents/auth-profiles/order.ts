@@ -170,18 +170,14 @@ export function resolveAuthProfileEligibility(params: {
     now: params.now,
   });
   if (
-    credentialEligibility.eligible ||
-    (params.includePendingOAuthRefresh === true &&
-      credentialEligibility.reasonCode === "expired" &&
-      cred.type === "oauth" &&
-      isPendingOAuthRefreshFence(cred))
+    params.includePendingOAuthRefresh === true &&
+    credentialEligibility.reasonCode === "expired" &&
+    cred.type === "oauth" &&
+    isPendingOAuthRefreshFence(cred)
   ) {
     return { eligible: true, reasonCode: "ok" };
   }
-  return {
-    eligible: false,
-    reasonCode: credentialEligibility.reasonCode,
-  };
+  return credentialEligibility;
 }
 
 type ResolveAuthProfileOrderParams = {

@@ -282,7 +282,7 @@ export async function deliverOutboundPayloadsCore(
     try {
       throwIfAborted(abortSignal);
 
-      const presentationHandler = await getDeliveryHandler(buildPayloadSummary(payload).mediaUrls);
+      const presentationHandler = await getDeliveryHandler(payloadSummary.mediaUrls);
       const renderedPayload = stripInternalRuntimeScaffoldingFromPayload(
         await renderPresentationForDelivery(presentationHandler, payload),
       );

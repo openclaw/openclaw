@@ -189,6 +189,8 @@ it.each([
   ["async", true],
   ["sync", false],
   ["sync", true],
+  ["publication", false],
+  ["publication", true],
 ] as const)(
   "verifies snapshot bytes despite FUSE timestamp drift (%s, changed bytes=%s)",
   async (mode, changeBytes) => {
@@ -203,6 +205,7 @@ it.each([
     function settleMetadata(value: BigIntStats) {
       // Model delayed metadata publication without changing the file identity.
       value.ctimeNs += BigInt(++observations) * 1_000_000_000n;
+      value.birthtimeNs = value.ctimeNs;
       if (changeBytes && observations === 2) {
         // The first hash has read the original bytes; retain size and inode.
         const writer = fsSync.openSync(targetPath, "r+");
@@ -232,6 +235,34 @@ it.each([
       sourcePath,
       targetPath,
       afterPublish: (guard) => {
+        if (mode === "publication") {
+          const lstat = fsSync.lstatSync;
+          vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+            if (args[1]?.bigint || String(args[0]) !== targetPath) {
+              return lstat(...args);
+            }
+            const stat =
+              args[1]?.throwIfNoEntry === false
+                ? lstat(args[0], { throwIfNoEntry: false })
+                : lstat(args[0]);
+            if (stat) {
+              stat.ctimeMs += ++observations * 1_000;
+              stat.birthtimeMs = stat.ctimeMs;
+            }
+            return stat;
+          });
+          guard.assertTargetUnchanged(() => {
+            if (changeBytes) {
+              const writer = fsSync.openSync(targetPath, "r+");
+              try {
+                fsSync.writeSync(writer, Buffer.from("lost"), 0, 4, 100);
+              } finally {
+                fsSync.closeSync(writer);
+              }
+            }
+          });
+          return;
+        }
         if (mode === "sync") {
           const fstat = fsSync.fstatSync.bind(fsSync);
           vi.spyOn(fsSync, "fstatSync").mockImplementation((...args) =>

@@ -316,6 +316,21 @@ The `memory-session-released-signatures` compatibility record is active. These
 APIs remain supported without warnings or a required migration; changing their
 released contracts requires an explicitly approved Plugin SDK major release.
 
+### Session upstream-link writes
+
+`openclaw/plugin-sdk/session-catalog` retains the synchronous
+`upsertSessionUpstreamLink` and `deleteSessionUpstreamLink` contracts released in
+`v2026.9.8`, including their immediate return values and completion timing. The
+production-private `agent-harness-session-runtime` initializer also retains its
+synchronous `prepare().link(input)` method for released official harnesses.
+
+The `session-upstream-links-sync-persistence` compatibility record deprecates
+those methods without runtime warnings. Core and bundled callers await
+`upsertSessionUpstreamLinkAsync`, `deleteSessionUpstreamLinkAsync`, or the
+initializer's `linkAsync`. The synchronous contracts remain until the next
+Plugin SDK major and explicit breaking-release approval. See
+[await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
+
 ### Native session generation authority
 
 The production-private `agent-harness-session-runtime` subpath retains the

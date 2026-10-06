@@ -313,9 +313,8 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const outboundChannel = channel;
     const resolvedTarget = resolveOutboundTarget({
-      channel: outboundChannel,
+      channel,
       plugin,
       to: params.to,
       cfg,
@@ -345,7 +344,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       const support = await resolveOutboundDurableFinalDeliverySupport({
         cfg,
         agentId: params.agentId,
-        channel: outboundChannel,
+        channel,
         requirements: deriveDurableFinalDeliveryRequirementsForBatch({
           payloads: normalizedPayloads,
           replyToId: reply?.replyToId,
@@ -360,7 +359,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             ? `missing ${support.capability}`
             : support.reason;
         throw new Error(
-          `Required durable message send is unsupported for ${outboundChannel}: ${suffix}. ` +
+          `Required durable message send is unsupported for ${channel}: ${suffix}. ` +
             'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
         );
       }
@@ -368,7 +367,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
     const send = await sendDurableMessageBatchCore(
       {
         cfg,
-        channel: outboundChannel,
+        channel,
         to: resolvedTarget.to,
         session: outboundSession,
         runId: params.runId,

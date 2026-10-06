@@ -91,25 +91,6 @@ function resolveImageLocalPath(image: string): string | undefined {
   return undefined;
 }
 
-async function resolveRemoteUpload(input: DocxUploadInput & { url: string }) {
-  const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
-    url: input.url,
-    maxBytes: input.maxBytes,
-    ...(input.remoteReadTimeoutMs !== undefined
-      ? {
-          responseHeaderTimeoutMs: input.remoteReadTimeoutMs,
-          readIdleTimeoutMs: input.remoteReadTimeoutMs,
-        }
-      : {}),
-  });
-  const urlPath = new URL(input.url).pathname;
-  const urlFileName = urlPath.split("/").pop() || "upload.bin";
-  return {
-    buffer: fetched.buffer,
-    fileName: input.fileName ?? fetched.fileName ?? urlFileName,
-  };
-}
-
 export async function resolveDocxUploadInput(
   input: DocxUploadInput,
 ): Promise<{ buffer: Buffer; fileName: string }> {
@@ -127,7 +108,22 @@ export async function resolveDocxUploadInput(
   }
 
   if (input.url) {
-    return await resolveRemoteUpload({ ...input, url: input.url });
+    const fetched = await getFeishuRuntime().channel.media.readRemoteMediaBuffer({
+      url: input.url,
+      maxBytes: input.maxBytes,
+      ...(input.remoteReadTimeoutMs !== undefined
+        ? {
+            responseHeaderTimeoutMs: input.remoteReadTimeoutMs,
+            readIdleTimeoutMs: input.remoteReadTimeoutMs,
+          }
+        : {}),
+    });
+    const urlPath = new URL(input.url).pathname;
+    const urlFileName = urlPath.split("/").pop() || "upload.bin";
+    return {
+      buffer: fetched.buffer,
+      fileName: input.fileName ?? fetched.fileName ?? urlFileName,
+    };
   }
   if (input.filePath) {
     return await resolveLocalUpload(

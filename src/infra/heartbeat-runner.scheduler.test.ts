@@ -19,6 +19,7 @@ import {
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 type RunnerOptions = Parameters<typeof startHeartbeatRunner>[0];
 type RunOnce = NonNullable<RunnerOptions["runOnce"]>;
@@ -94,6 +95,7 @@ afterEach(async () => {
   await vi.runAllTimersAsync();
   dispose();
   setHeartbeatsEnabled(true);
+  resetSystemEventsForTest();
   resetConfigRuntimeState();
   vi.useRealTimers();
   vi.restoreAllMocks();
@@ -300,6 +302,82 @@ describe("startHeartbeatRunner", () => {
     expect(runSpy).toHaveBeenCalledTimes(3);
   });
 
+  it.each<{
+    owner: string;
+    fromConversationTurn: boolean;
+    commandMs: number;
+    runs: number;
+    beside?: { text: string; contextKey?: string };
+  }>([
+    { owner: "conversation", fromConversationTurn: true, commandMs: 0, runs: 20 },
+    { owner: "conversation", fromConversationTurn: true, commandMs: 40_000, runs: 14 },
+    { owner: "heartbeat", fromConversationTurn: false, commandMs: 40_000, runs: 1 },
+    {
+      owner: "conversation beside a reminder",
+      fromConversationTurn: true,
+      commandMs: 40_000,
+      runs: 1,
+      beside: { text: "Reminder: water the plants" },
+    },
+    {
+      owner: "conversation after a heartbeat delivery",
+      fromConversationTurn: true,
+      commandMs: 40_000,
+      runs: 14,
+      beside: {
+        text: "A heartbeat delivered this message to this channel:\nAll clear",
+        contextKey: "heartbeat-delivery:0:agent:main:main:heartbeat",
+      },
+    },
+  ])(
+    "spaces a $owner command taking $commandMs ms started in every completion turn",
+    async ({ fromConversationTurn, commandMs, runs, beside }) => {
+      if (beside) {
+        enqueueSystemEvent(beside.text, { sessionKey, contextKey: beside.contextKey });
+      }
+      const startCommand = () =>
+        setTimeout(() => {
+          enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+            sessionKey,
+            fromConversationTurn,
+          });
+          requestHeartbeat({ ...execWake, coalesceMs: 0 });
+        }, commandMs);
+      const callTimes: number[] = [];
+      runSpy.mockImplementation(async () => {
+        callTimes.push(Date.now());
+        startCommand();
+        return { status: "ran", durationMs: 0 };
+      });
+      start();
+      startCommand();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      // Event turns keep the 30s spacing; only conversation completions skip the interval wait.
+      expect(callTimes).toHaveLength(runs);
+      for (const [index, time] of callTimes.slice(1).entries()) {
+        expect(time - callTimes[index]!).toBeGreaterThanOrEqual(Math.max(30_000, commandMs));
+      }
+    },
+  );
+
+  it("holds a conversation's completion turn behind the flood guard", async () => {
+    start();
+    for (let i = 0; i < 5; i++) {
+      await wake({ source: "manual", intent: "manual", reason: "manual", sessionKey });
+    }
+    await vi.advanceTimersByTimeAsync(40_000);
+    enqueueSystemEvent("Exec completed (abcd1234, code 0) :: done", {
+      sessionKey,
+      fromConversationTurn: true,
+    });
+    await wake(execWake);
+    await vi.advanceTimersByTimeAsync(19_900);
+    expect(runSpy).toHaveBeenCalledTimes(5);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(runSpy).toHaveBeenCalledTimes(6);
+  });
+
   it("retains an event that collides with a task until the spacing floor", async () => {
     start();
     requestHeartbeat({ ...taskWake, coalesceMs: 0 });
@@ -355,14 +433,14 @@ describe("ambient owner resolution", () => {
 describe("targeted unscheduled wake dispatch", () => {
   it("runs a targeted manual next-heartbeat wake when recurring heartbeats are disabled", async () => {
     start(config("0m", { main: {} }));
-    const enqueueSystemEvent = vi.fn();
+    const enqueueEvent = vi.fn();
     const scheduler = new GatewayScheduler();
     const state = createCronServiceState({
       scheduler,
       storePath: "/unused/cron.json",
       cronEnabled: true,
       log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-      enqueueSystemEvent,
+      enqueueSystemEvent: enqueueEvent,
       requestHeartbeat: (request) => requestHeartbeat({ ...request, coalesceMs: 0 }),
       runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok" }),
     });
@@ -374,7 +452,7 @@ describe("targeted unscheduled wake dispatch", () => {
         sessionKey,
       }),
     ).toEqual({ ok: true });
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Operator requested a session update.", {
+    expect(enqueueEvent).toHaveBeenCalledWith("Operator requested a session update.", {
       agentId: "main",
       sessionKey,
     });

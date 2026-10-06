@@ -2,6 +2,7 @@ import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
   LocalTurnPlacementClaim,
+  PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -90,13 +91,13 @@ type WorkerTurnLauncherOptions = {
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, ActiveWorkerTurn>();
   const provider: SessionPlacementAdmissionProvider & {
-    resolveSandbox(params: {
+    prepareSandbox(params: {
       agentId: string;
       config?: OpenClawConfig;
       sessionId: string;
       sessionKey?: string;
       workspaceDir: string;
-    }): Promise<SandboxContext | null>;
+    }): Promise<PreparedSessionPlacementSandbox>;
   } = {
     resolveRuntimeOverride: (identity) =>
       resolveWorkerPlacementRuntimeOverride(options.placements, identity),
@@ -122,55 +123,57 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
           })
         : undefined;
     },
-    async resolveSandbox(params) {
-      const placement = options.placements.get(params.sessionId);
+    async prepareSandbox(params) {
+      using cleanup = new DisposableStack();
+      const prepared = await options.placements.prepareRuntimeRefresh(params.sessionId);
+      cleanup.defer(prepared.release);
+      const retain = (
+        sandbox: SandboxContext | null,
+        assertCurrent = prepared.assertCurrent,
+      ): PreparedSessionPlacementSandbox => {
+        const lifetime = cleanup.move();
+        return { sandbox, assertCurrent, [Symbol.dispose]: () => lifetime.dispose() };
+      };
+      const placement = prepared.placement;
       if (
         placement?.state !== "active" ||
         placement.executionMode !== "remote-exec" ||
         placement.agentId !== params.agentId ||
         placement.sessionKey !== params.sessionKey
       ) {
-        return null;
+        return retain(null);
       }
-      const assertCurrentPlacement = (phase: "managed workspace" | "sandbox") => {
-        const current = options.placements.get(params.sessionId);
-        if (
-          !matchesWorkerPlacementTarget(current, placement) ||
-          current?.executionMode !== "remote-exec" ||
-          current.agentId !== placement.agentId ||
-          current.sessionKey !== placement.sessionKey
-        ) {
-          throw new Error(`Remote-exec placement changed while preparing its ${phase}`);
-        }
-      };
       const workspace = await options.resolveWorkspace({
         sessionId: placement.sessionId,
         agentId: placement.agentId,
         sessionKey: placement.sessionKey,
       });
-      assertCurrentPlacement("managed workspace");
+      prepared.assertCurrent();
       const { createRemoteExecPlacementSandbox } = await loadPlacementSandbox();
-      assertCurrentPlacement("sandbox");
+      prepared.assertCurrent();
       const sandbox = await createRemoteExecPlacementSandbox({
         config: params.config,
         environments: options.environments,
         workspaceDir: workspace.kind === "local" ? workspace.path : placement.remoteWorkspaceDir,
         placement,
       });
-      assertCurrentPlacement("sandbox");
-      const currentEnvironment = options.environments.get(placement.environmentId);
-      if (
-        currentEnvironment?.state !== "attached" ||
-        currentEnvironment.environmentId !== placement.environmentId ||
-        currentEnvironment.ownerEpoch !== placement.activeOwnerEpoch ||
-        currentEnvironment.attachedSessionIds.length !== 1 ||
-        currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
-        (sandbox.backendId === "node" &&
-          currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
-      ) {
-        throw new Error("Remote-exec environment changed while preparing its sandbox");
-      }
-      return sandbox;
+      const assertCurrent = () => {
+        prepared.assertCurrent();
+        const currentEnvironment = options.environments.get(placement.environmentId);
+        if (
+          currentEnvironment?.state !== "attached" ||
+          currentEnvironment.environmentId !== placement.environmentId ||
+          currentEnvironment.ownerEpoch !== placement.activeOwnerEpoch ||
+          currentEnvironment.attachedSessionIds.length !== 1 ||
+          currentEnvironment.attachedSessionIds[0] !== placement.sessionId ||
+          (sandbox.backendId === "node" &&
+            currentEnvironment.nodeDeviceId !== sandbox.placementNodeId)
+        ) {
+          throw new Error("Remote-exec environment changed while preparing its sandbox");
+        }
+      };
+      assertCurrent();
+      return retain(sandbox, assertCurrent);
     },
     async executeLocalTurn<T>(
       claim: LocalTurnPlacementClaim,

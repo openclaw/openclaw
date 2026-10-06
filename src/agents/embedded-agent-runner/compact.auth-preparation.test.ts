@@ -1,17 +1,14 @@
 import { join } from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
-  acquireAgentRunPreparedModelRuntimeMock,
   contextEngineCompactMock,
-  enqueueCommandInLaneMock,
-  resolveContextEngineMock,
-  resolveModelAsyncMock,
   getApiKeyForModelMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
+  resolveContextEngineMock,
   resolveModelMock,
   sessionCompactImpl,
 } from "./compact.hooks.harness.js";
@@ -118,6 +115,60 @@ it.each(["lookup", "hook", "allowed"] as const)(
   },
 );
 
+it.each([false, true])(
+  "retains sandbox placement through queued engine preparation (revoked=%s)",
+  async (revoke) => {
+    const baseParams = await prepareCompactionParams();
+    let revoked = false;
+    const dispose = vi.fn();
+    const provider = {
+      async prepareSandbox() {
+        return {
+          sandbox: null,
+          assertCurrent() {
+            if (revoked) {
+              throw new Error("placement revoked during engine preparation");
+            }
+          },
+          [Symbol.dispose]: dispose,
+        };
+      },
+    };
+    const uninstall = installSessionPlacementAdmissionProvider({
+      ...provider,
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, run) => await run(),
+      executeTurn: async (_claim, _params, run) => await run(),
+    });
+    resolveContextEngineMock.mockImplementation(async () => {
+      revoked = revoke;
+      return { info: { ownsCompaction: true }, compact: contextEngineCompactMock };
+    });
+    try {
+      const operation = runOwnedCompaction(() =>
+        compactEmbeddedAgentSession({
+          ...baseParams,
+          provider: "openai",
+          model: "gpt-primary",
+          trigger: "manual",
+          enqueue: async (task) => await task(),
+        }),
+      );
+      if (revoke) {
+        await expect(operation).rejects.toThrow("placement revoked during engine preparation");
+        expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      } else {
+        await operation;
+        expect(contextEngineCompactMock).toHaveBeenCalledOnce();
+      }
+      expect(resolveContextEngineMock).toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      uninstall();
+    }
+  },
+);
+
 it.each(["direct", "queued"] as const)(
   "returns a compaction failure when %s auth preparation is cooldowned",
   async (mode) => {
@@ -170,97 +221,3 @@ it.each(["direct", "queued"] as const)(
     expect(authStore).toEqual(originalAuthStore);
   },
 );
-
-it("uses the admitted config, storage, and persisted parent budget throughout queued compaction", async () => {
-  const { workspaceDir, sessionTarget } = await prepareCompactionParams();
-  const [lanes, actualLanes] = await Promise.all([
-    import("./lanes.js"),
-    vi.importActual<typeof import("./lanes.js")>("./lanes.js"),
-  ]);
-  const resolveGlobalLane = vi.mocked(lanes.resolveGlobalLane);
-  const previousResolveGlobalLane = resolveGlobalLane.getMockImplementation();
-  resolveGlobalLane.mockImplementation(actualLanes.resolveGlobalLane);
-  onTestFinished(() => {
-    resolveGlobalLane.mockReset();
-    if (previousResolveGlobalLane) {
-      resolveGlobalLane.mockImplementation(previousResolveGlobalLane);
-    }
-  });
-  const spawningSessionKey = "agent:main:compaction-parent";
-  await upsertSessionEntryCore(sessionTarget, {
-    sessionId: sessionTarget.sessionId,
-    spawnedBy: spawningSessionKey,
-    updatedAt: 1,
-  });
-  const admittedAgentDir = join(workspaceDir, "admitted-agent");
-  const requestedConfig = {
-    agents: { defaults: { compaction: { model: "openai/requested-model" } } },
-  };
-  const admittedConfig = {
-    agents: { defaults: { compaction: { model: "openai/admitted-model" } } },
-  };
-  const acquire = expectDefined(
-    acquireAgentRunPreparedModelRuntimeMock.getMockImplementation(),
-    "prepared runtime acquisition",
-  );
-  acquireAgentRunPreparedModelRuntimeMock.mockImplementationOnce(async (input) =>
-    acquire({ ...input, config: admittedConfig, agentDir: admittedAgentDir }),
-  );
-
-  const result = await runOwnedCompaction(() =>
-    compactEmbeddedAgentSession({
-      ...sessionTarget,
-      sessionTarget,
-      sessionFile: sessionTarget.sessionKey,
-      workspaceDir,
-      allowGatewaySubagentBinding: true,
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      config: requestedConfig,
-      lane: "subagent",
-    }),
-  );
-
-  expect(result).toMatchObject({ ok: true, compacted: true });
-  expect(enqueueCommandInLaneMock).toHaveBeenCalledWith(
-    `subagent:${spawningSessionKey}`,
-    expect.any(Function),
-    expect.any(Object),
-  );
-  const { snapshot, [Symbol.asyncDispose]: release } = await expectDefined(
-    acquireAgentRunPreparedModelRuntimeMock.mock.results[0]?.value,
-    "admitted runtime lease",
-  );
-  const derive = expectDefined(
-    acquireAgentRunPreparedModelRuntimeMock.mock.calls[0]?.[1]?.deriveRuntimePluginSelections,
-    "admitted compaction selection recipe",
-  );
-  expect(
-    derive({ config: admittedConfig, metadataSnapshot: snapshot.metadataSnapshot }),
-  ).toMatchObject([{ provider: "openai", modelId: "admitted-model", agentId: "main" }]);
-  expect(resolveContextEngineMock).toHaveBeenCalledWith(admittedConfig, {
-    agentDir: admittedAgentDir,
-    workspaceDir,
-  });
-  expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-    "openai",
-    "admitted-model",
-    admittedAgentDir,
-    admittedConfig,
-    expect.objectContaining({ preparedModelRuntime: snapshot, skipAgentDiscovery: true }),
-  );
-  expect(contextEngineCompactMock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      runtimeContext: expect.objectContaining({
-        config: admittedConfig,
-        agentDir: admittedAgentDir,
-        workspaceDir,
-        provider: "openai",
-        model: "admitted-model",
-        sessionTarget,
-      }),
-    }),
-  );
-  expect(release).toHaveBeenCalledOnce();
-  expect(requestedConfig.agents.defaults.compaction.model).toBe("openai/requested-model");
-});

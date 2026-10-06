@@ -5,6 +5,7 @@ import {
   ModelsListResultSchema,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { AgentHarnessV2 } from "../../agents/harness/types.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DecisionProviderCapabilities } from "../../plugins/manifest-types.js";
@@ -19,10 +20,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../server-model-catalog-auth.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
-import {
-  createGatewayAgentModelCatalogProjector,
-  prepareModelsListResult,
-} from "./models-list-result.js";
+import { prepareModelsListResult } from "./models-list-result.js";
 import { modelsHandlers } from "./models.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -224,7 +222,7 @@ describe("models.list plugin metadata handoff", () => {
           entries: [catalogEntry("modern"), catalogEntry("another")],
           routeVariants: [],
         };
-        const projector = createGatewayAgentModelCatalogProjector({
+        const projector = createModelCatalogDecisions({
           cfg,
           agentId: "main",
           snapshot,

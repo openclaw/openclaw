@@ -19,8 +19,7 @@ export function parseSlashCommandWithSetUnset<T>(params: {
     return null;
   }
   const error = (message: string): SetUnsetCommand => ({ action: "error", message });
-  const { action } = parsed;
-  const args = parsed.args.trim();
+  const { action, args } = parsed;
   if (action === "unset") {
     return args ? { action: "unset", path: args } : error(`Usage: ${params.slash} unset path`);
   }

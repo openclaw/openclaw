@@ -1,8 +1,5 @@
 /** Handles /bash and ! shell command chat shortcuts. */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { cancelBackgroundExecSession } from "../../agents/bash-process-control.js";
@@ -71,10 +68,9 @@ function formatOutputBlock(text: string) {
   return `\`\`\`txt\n${trimmed}\n\`\`\``;
 }
 
-function parseBashRequest(raw: string): BashRequest | null {
-  const trimmed = raw.trimStart();
+function parseBashRequest(trimmed: string): BashRequest | null {
   let restSource;
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("/bash")) {
+  if (trimmed.toLowerCase().startsWith("/bash")) {
     const match = trimmed.match(/^\/bash(?:\s*:\s*|\s+|$)([\s\S]*)$/i);
     if (!match) {
       return null;
@@ -94,9 +90,8 @@ function parseBashRequest(raw: string): BashRequest | null {
     return { action: "help" };
   }
   const tokenMatch = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  const token = normalizeOptionalString(tokenMatch?.[1]) ?? "";
   const remainder = normalizeOptionalString(tokenMatch?.[2]) ?? "";
-  const lowered = normalizeLowercaseStringOrEmpty(token);
+  const lowered = tokenMatch?.[1]?.toLowerCase() ?? "";
   if (lowered === "poll" || lowered === "stop") {
     return { action: lowered, sessionId: remainder || undefined };
   }
@@ -206,9 +201,7 @@ export async function handleBashChatCommand(params: {
   }
 
   if (request.action === "poll" || request.action === "stop") {
-    const sessionId =
-      normalizeOptionalString(request.sessionId) ||
-      (liveJob?.state === "running" ? liveJob.sessionId : "");
+    const sessionId = request.sessionId || (liveJob?.state === "running" ? liveJob.sessionId : "");
     if (!sessionId) {
       return { text: "⚙️ No active bash job." };
     }
@@ -275,10 +268,7 @@ export async function handleBashChatCommand(params: {
     };
   }
 
-  const commandText = request.command.trim();
-  if (!commandText) {
-    return buildUsageReply();
-  }
+  const commandText = request.command;
 
   activeJob = {
     state: "starting",

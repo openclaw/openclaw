@@ -494,11 +494,10 @@ async function runCliAgentWithLifecycleInternal(
       ? (normalizeOptionalString(result.meta.finalAssistantVisibleText) ??
         normalizeOptionalString(result.payloads[0]?.text))
       : undefined;
-    const durableReasoningText = normalizeOptionalString(finalReasoningText);
-    const resultWithReasoning = durableReasoningText
+    const resultWithReasoning = finalReasoningText
       ? {
           ...result,
-          payloads: [{ text: durableReasoningText, isReasoning: true }, ...(result.payloads ?? [])],
+          payloads: [{ text: finalReasoningText, isReasoning: true }, ...(result.payloads ?? [])],
         }
       : result;
     if (cliText) {
