@@ -21,7 +21,7 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 export async function readPendingInputSource(
   scope: PendingInputScope,
   idempotencyKey: string,
-  pendingOnly: boolean,
+  { pendingOnly, commitEvidence = false }: { pendingOnly: boolean; commitEvidence?: boolean },
 ) {
   const captured = {
     ...scope,
@@ -35,6 +35,7 @@ export async function readPendingInputSource(
     sessionId: captured.sessionId,
     idempotencyKey,
     pendingOnly,
+    ...(commitEvidence ? { commitEvidence: true as const } : {}),
   };
   if (captured.incognito) {
     const { actor, authority } = captured.incognito;

@@ -327,6 +327,8 @@ export function hasRegisteredSessionPendingInputOwner(
     SessionPendingInputRow,
     "input_id" | "session_key" | "session_id" | "lifecycle_generation"
   >,
+  /** `settling` matches only an owner still persisting its terminal disposition. */
+  options?: { settling?: boolean },
 ): boolean {
   const owner = owners.live.get(row.input_id);
   return (
@@ -334,7 +336,8 @@ export function hasRegisteredSessionPendingInputOwner(
     owner.sessionId === row.session_id &&
     owner.sessionKey === row.session_key &&
     owner.lifecycleGeneration === row.lifecycle_generation &&
-    (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration))
+    (owner.settling ||
+      (!options?.settling && isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration)))
   );
 }
 

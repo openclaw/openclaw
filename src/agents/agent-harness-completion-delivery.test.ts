@@ -21,6 +21,7 @@ import {
   readActiveTranscriptEntryAnchor,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as pendingInputSource from "../config/sessions/session-pending-input-source.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { registerChatAbortController } from "../gateway/chat-abort.js";
@@ -796,6 +797,198 @@ describe("review3 Gateway admission custody", () => {
       } finally {
         registration.cleanup();
       }
+    });
+  });
+});
+
+// Regression: a parent yields, a native child completes, and the first admission
+// accepts the hidden completion input but then fails with
+// SESSION_WORK_START_CHANGED before any claim or transcript commit. The input is
+// left `interrupted`; reconcile used to call that "blocked" and the native
+// monitor dropped the completion forever.
+const readmissionChildRunId = "codex-thread:child-1";
+const readmissionAnnounceKey = "announce:codex-native:parent:child-1:succeeded";
+const readmissionSuccessorKey = `${readmissionAnnounceKey}:readmit:1`;
+const readmissionProvenance = {
+  kind: "inter_session" as const,
+  sourceTool: "agent_harness_completion",
+  sourceChannel: "internal",
+  sourceSessionKey: readmissionChildRunId,
+};
+
+async function interruptAdmission(receipt: sessionAccessor.SessionPendingInputReceipt) {
+  receipt.finish("interrupted");
+  await receipt.settled?.();
+}
+
+async function setupInterruptedAdmission(
+  state: OpenClawTestState,
+  patch: Partial<SessionEntry> = {},
+) {
+  const entry: SessionEntry = {
+    sessionId: "physical-1",
+    lifecycleRevision: "revision-1",
+    updatedAt: Date.now(),
+    status: "running",
+    ...patch,
+  };
+  const target = {
+    agentId: "main",
+    sessionKey,
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+  };
+  await replaceSessionEntry(target, entry);
+  const scope = { ...target, sessionId: entry.sessionId };
+  const message = {
+    role: "user" as const,
+    content: "completed child",
+    timestamp: 100,
+    idempotencyKey: `${readmissionAnnounceKey}:user`,
+    provenance: readmissionProvenance,
+  };
+  const receipt = await sessionAccessor.stageSessionPendingInput(scope, {
+    runId: readmissionAnnounceKey,
+    message,
+    assertCurrent: () => {},
+  });
+  if (!receipt) {
+    throw new Error("completion input was not accepted");
+  }
+  return {
+    target,
+    scope,
+    message,
+    receipt,
+    request: (sourceRunId = readmissionAnnounceKey) => ({
+      ...target,
+      sourceRunId,
+      taskRunId: readmissionChildRunId,
+    }),
+  };
+}
+
+describe("harness completion readmission after interrupted admission", () => {
+  it("proves an interrupted, uncommitted, unowned input spent and admits a successor", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { scope, message, receipt, request } = await setupInterruptedAdmission(state);
+      // While the admitting run still owns the input, nothing may re-admit it.
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("blocked");
+
+      // Admission throws SESSION_WORK_START_CHANGED; the run releases the input.
+      await interruptAdmission(receipt);
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("orphaned");
+
+      // The same identity can never be re-staged (the reason a successor is needed).
+      await expect(
+        sessionAccessor.stageSessionPendingInput(scope, {
+          runId: readmissionAnnounceKey,
+          message,
+          assertCurrent: () => {},
+        }),
+      ).rejects.toThrow("Pending input ownership ended");
+      expect(await reconcileHarnessCompletionDelivery(request(readmissionSuccessorKey))).toBe(
+        "unowned",
+      );
+    });
+  });
+
+  it("keeps unavailable interruption evidence retryable, then proves the identity spent", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { receipt, request } = await setupInterruptedAdmission(state);
+      await interruptAdmission(receipt);
+      const read = vi
+        .spyOn(sessionAccessor, "readSessionPendingInputInterruption")
+        .mockResolvedValueOnce("unavailable"); // stale projection or failed evidence read
+      try {
+        expect(await reconcileHarnessCompletionDelivery(request())).toBe("unavailable");
+      } finally {
+        read.mockRestore();
+      }
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("orphaned");
+    });
+  });
+
+  it("keeps custody when the admission owner settles during the evidence read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { receipt, request } = await setupInterruptedAdmission(state);
+      const read = pendingInputSource.readPendingInputSource;
+      const spy = vi
+        .spyOn(pendingInputSource, "readPendingInputSource")
+        .mockImplementation(async (...args) => {
+          const source = await read(...args);
+          if (args[2].commitEvidence && source?.snapshot.pending?.state === "queued") {
+            // The worker captured queued evidence; the owner now commits
+            // `interrupted` and unregisters before the read is released.
+            await interruptAdmission(receipt);
+          }
+          return source;
+        });
+      try {
+        const delivery = await deliverAgentHarnessCompletion({
+          scope: createAgentHarnessCompletionScope({ requesterSessionKey: sessionKey }),
+          isSourceSessionAdmissionAllowed: () => true,
+          childSessionKey: readmissionChildRunId,
+          childSessionId: "child-1",
+          announceId: readmissionAnnounceKey.slice("announce:".length),
+          status: "succeeded",
+          result: "result",
+        });
+        expect(delivery).toEqual({
+          delivered: false,
+          path: "none",
+          recoveryUnavailable: true,
+          error: "completion custody evidence is temporarily unavailable",
+        });
+      } finally {
+        spy.mockRestore();
+      }
+      // The retry proves the base spent and selects exactly one fresh successor.
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("orphaned");
+      expect(await reconcileHarnessCompletionDelivery(request(readmissionSuccessorKey))).toBe(
+        "unowned",
+      );
+    });
+  });
+
+  it("keeps blocking when the input was consumed into the transcript", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { scope, receipt, request } = await setupInterruptedAdmission(state);
+      await receipt.run(() => appendTranscriptMessage(scope, { message: receipt.message }));
+      await interruptAdmission(receipt);
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("blocked");
+    });
+  });
+
+  it("keeps blocking when requester recovery owns the source run", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { receipt, request } = await setupInterruptedAdmission(state, {
+        restartRecoveryDeliverySourceRunId: readmissionAnnounceKey,
+      });
+      await interruptAdmission(receipt);
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("blocked");
+    });
+  });
+
+  it("keeps blocking a cancelled input", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { receipt, request } = await setupInterruptedAdmission(state);
+      receipt.finish("cancelled");
+      await receipt.settled?.();
+      expect(await reconcileHarnessCompletionDelivery(request())).toBe("blocked");
+    });
+  });
+
+  it("keeps blocking when the requester session was replaced", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { target, receipt, request } = await setupInterruptedAdmission(state);
+      await interruptAdmission(receipt);
+      await replaceSessionEntry(target, {
+        sessionId: "physical-2",
+        lifecycleRevision: "revision-2",
+        updatedAt: Date.now(),
+        status: "running",
+      });
+      expect(await reconcileHarnessCompletionDelivery(request())).not.toBe("orphaned");
     });
   });
 });

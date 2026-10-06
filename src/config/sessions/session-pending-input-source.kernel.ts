@@ -57,6 +57,27 @@ export function readPendingInputSourceInDatabase(
         throw new Error("Submitted input exceeds the Gateway payload limit");
       }
       snapshot.pending = executeSqliteQueryTakeFirstSync(database.db, pendingQuery.selectAll());
+      if (input.commitEvidence) {
+        // Evidence only: a stale projection is reported, never read through or repaired.
+        const transcriptIndexCurrent = !sessionTranscriptIndexNeedsReconcile(
+          database.db,
+          input.sessionId,
+        );
+        snapshot.pendingCommit = {
+          transcriptIndexCurrent,
+          committed:
+            transcriptIndexCurrent &&
+            executeSqliteQueryTakeFirstSync(
+              database.db,
+              db
+                .selectFrom("transcript_event_identities")
+                .select("seq")
+                .where("session_id", "=", input.sessionId)
+                .where("message_idempotency_key", "=", input.idempotencyKey)
+                .limit(1),
+            ) !== undefined,
+        };
+      }
     } else if (!input.pendingOnly) {
       if (sessionTranscriptIndexNeedsReconcile(database.db, input.sessionId)) {
         throw new SessionTranscriptProjectionUnavailableError(input.sessionId);

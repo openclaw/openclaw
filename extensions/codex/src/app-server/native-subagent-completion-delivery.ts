@@ -109,7 +109,20 @@ export class CodexNativeSubagentCompletionDelivery {
         this.prepareDelivery(state, childState);
         return;
       }
-      if (!this.claim(state, childState) || delivery.recoveryBlocked) {
+      if (!this.claim(state, childState)) {
+        this.dependencies.unregisterChild(childState);
+        return;
+      }
+      if (delivery.recoveryUnavailable) {
+        // Custody evidence was unreadable: keep the child and its custody, and
+        // retry on the bounded ladder instead of treating the completion as owned.
+        this.scheduleRetry(
+          childState,
+          delivery.error ?? "completion custody evidence is temporarily unavailable",
+        );
+        return;
+      }
+      if (delivery.recoveryBlocked) {
         this.dependencies.unregisterChild(childState);
         return;
       }
