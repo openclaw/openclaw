@@ -64,12 +64,8 @@ import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
-import { runAgentFallbackCandidates } from "./agent-runner-fallback-candidate.js";
-import type {
-  AgentFallbackCycleParams,
-  AgentFallbackCycleState,
-} from "./agent-runner-fallback-cycle.types.js";
-import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js";
+import { executeAgentFallbackCycle } from "./agent-runner-fallback-cycle.js";
+import type { AgentFallbackCycleState } from "./agent-runner-fallback-cycle.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import {
   createAgentTurnTimingTracker,
@@ -393,7 +389,7 @@ async function executeAgentTurnInternalLoop(
         directBlockDeliveries,
         heartbeatState,
       });
-      const cycleParams: AgentFallbackCycleParams = {
+      const cycle = await executeAgentFallbackCycle({
         preparedRunAdmission,
         turn: params,
         effectiveRun,
@@ -412,15 +408,7 @@ async function executeAgentTurnInternalLoop(
         shouldSurfaceToControlUi,
         commitTerminalOutcome,
         clearRecoveredAutoFallbackPrimaryProbe,
-      };
-      const fallbackResult = await runAgentFallbackCandidates(cycleParams);
-      agentTurnTiming.logIfSlow({
-        runId,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        outcome: "completed",
       });
-      const cycle = await settleAgentFallbackCycle({ cycle: cycleParams, fallbackResult });
       if (cycle.kind === "aborted") {
         return cycle;
       }
