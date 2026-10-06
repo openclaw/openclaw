@@ -59,6 +59,7 @@ import {
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 import { isErrno } from "./errors.js";
+import { beginSqliteHeaderProbeRetention, endSqliteHeaderProbeRetention } from "./sqlite-files.js";
 import {
   createLegacyAuditBackupCapture,
   legacyAuditBackupCapturesMatch,
@@ -467,6 +468,11 @@ export async function createBackupArchive(
   }
   const tempArchivePath = publication.tempArchivePath;
   let snapshotFacts: readonly BackupSqliteSnapshotFact[] = [];
+  // Discovery and the archive-walk filter below classify the same non-`.sqlite`
+  // candidates. Retaining batched header-probe results for the whole capture
+  // keeps large state trees on a single probe child process even after the
+  // cross-backup cache would evict them.
+  beginSqliteHeaderProbeRetention();
   try {
     const configRemaps = await stageBackupConfigCapture(plan.configCapture, tempDir);
     const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
@@ -720,6 +726,7 @@ export async function createBackupArchive(
       throw formatBackupOutputFailure(error, outputPath, "publication");
     }
   } finally {
+    endSqliteHeaderProbeRetention();
     try {
       await cleanupBackupArchivePublication(publication, opts.log);
     } finally {
