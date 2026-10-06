@@ -85,10 +85,6 @@ enum QuickChatFocusedTextCollector {
                 ownTexts.append(candidate)
                 let piece = rendered.isEmpty ? candidate : "\n\(candidate)"
                 let remaining = maximumCharacters + 1 - rendered.count
-                guard remaining > 0 else {
-                    wasTextTruncated = true
-                    break traversal
-                }
                 rendered.append(contentsOf: piece.prefix(remaining))
                 textEntryCount += 1
                 if piece.count >= remaining {
@@ -311,7 +307,6 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
             kAXRowsAttribute,
             kAXContentsAttribute,
         ]
-        let resolvedLimit = max(1, limit)
         var nodes: [any QuickChatTextTreeNode] = []
         var seen = Set<UInt64>()
         var wasTruncated = false
@@ -324,7 +319,7 @@ private struct QuickChatAXTextTreeNode: QuickChatTextTreeNode, Sendable {
                 &count) == .success,
                 count > 0
             else { continue }
-            let remaining = resolvedLimit - nodes.count
+            let remaining = limit - nodes.count
             guard remaining > 0 else {
                 wasTruncated = true
                 break

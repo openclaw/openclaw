@@ -95,7 +95,9 @@ describe("node worker inference config projection", () => {
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
     expect(() =>
       projectNodeWorkerNativeInference(snapshot, descriptor(workspace, "missing")),
-    ).toThrow("not configured for worker inference");
+    ).toThrow(
+      "Configure it under models.providers with a usable credential in the node openclaw.json",
+    );
   });
 
   it("captures credentials and header bytes for child diagnostics", () => {

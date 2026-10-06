@@ -140,7 +140,6 @@ private fun isMdnsLocalHostname(host: String): Boolean {
   if (host.length > 253) return false
   if (!host.endsWith(".local")) return false
   val labels = host.split('.')
-  if (labels.size < 2 || labels.last() != "local") return false
   return labels.dropLast(1).all(::isDnsHostnameLabel)
 }
 

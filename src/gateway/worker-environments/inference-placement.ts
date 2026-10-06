@@ -22,7 +22,7 @@ export function workerInferencePlacement(
   }
   if (placement !== "worker") {
     throw new WorkerProviderError(
-      "Worker inference requires an explicitly configured paired-device worker profile; use gateway or worker",
+      'Invalid device worker profile: cloudWorkers.profiles.<id>.settings.inference must be "gateway" or "worker".',
     );
   }
   return "worker";

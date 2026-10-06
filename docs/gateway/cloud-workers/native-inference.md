@@ -242,6 +242,29 @@ configuration, unavailable models, incompatible workers, and provider errors fai
 closed. The worker and Gateway both reject proxy fallback for local turns.
 Omitting `settings.inference`, or setting it to `gateway`, preserves the default.
 
+## Troubleshooting
+
+Worker-local inference is deliberately fail-closed. A failed turn never falls
+back to Gateway inference, because that would silently change credential custody
+and placement. Use the first matching diagnostic below, fix its owner, then retry
+or restart the failed worker placement.
+
+| Diagnostic                                         | What to fix                                                                                                                                                                            |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `settings.inference must be "gateway" or "worker"` | Set the selected device profile's `settings.inference` to one of those exact values. Omit it to keep Gateway inference.                                                                |
+| `requires a paired device profile`                 | Set `cloudWorkers.profiles.<id>.settings.device` to the connected node ID and dispatch through that profile, not the ordinary device target.                                           |
+| `cannot use ... for agent ...`                     | Allow the model in that agent's model policy, or choose an allowed configured default.                                                                                                 |
+| `missing from the Gateway model catalog`           | Add non-secret metadata for the same model reference under the Gateway's `models.providers`. Keep `baseUrl`, credentials, and secret headers on the node.                              |
+| `unavailable on paired device ...`                 | Update and restart the node host. Use Linux or macOS, set `nodeHost.workerRuns.isolation` to `"none"`, and ensure the node has at least one compatible model with a usable credential. |
+| `not configured on this node`                      | Add a compatible model and usable credential under the node's `models.providers`, then restart the node host so it snapshots the new configuration.                                    |
+| `model ... is unavailable on this node`            | Configure that exact provider/model reference and credential in the node's `openclaw.json`, then restart the node host.                                                                |
+| `startup data exceeds 2 MiB`                       | Reduce the number or size of configured node models and headers, then restart the node host.                                                                                           |
+
+If the Control UI reports **Runner failed**, open the placement details for the
+diagnostic. Restarting without changing the named configuration will repeat the
+same failure. Gateway logs do not contain node credentials or the node-local
+model catalog in full.
+
 ## Upgrade and downgrade
 
 The canonical profile values are `gateway` and `worker`; omission means `gateway`.

@@ -179,8 +179,10 @@ export function registerWorkerTurnInferenceTests(): void {
         ),
       ).rejects.toThrow(
         rejection === "model-policy"
-          ? "Model is not approved for this worker agent"
-          : "Worker inference requires a matching capable paired-node worker build",
+          ? "Allow that model in the agent model policy"
+          : rejection === "missing-node"
+            ? "settings.device to a connected node"
+            : "Update and restart its OpenClaw node host",
       );
       expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
       expect(environments.startTunnel).not.toHaveBeenCalled();

@@ -130,19 +130,19 @@ impl QuickChatState {
                 return Ok(current.clone());
             }
         }
-        let idempotency_key = Uuid::new_v4().to_string();
-        *retry = Some(QuickChatRetryIdentity {
+        let identity = QuickChatRetryIdentity {
             message: message.to_string(),
             agent_id: agent_id.to_string(),
             scope: scope.to_string(),
             main_key: main_key.to_string(),
-            idempotency_key: idempotency_key.clone(),
+            idempotency_key: Uuid::new_v4().to_string(),
             gateway_generation,
             attempt: Uuid::new_v4(),
             terminal: None,
             session_id: None,
-        });
-        Ok(retry.as_ref().expect("retry initialized").clone())
+        };
+        *retry = Some(identity.clone());
+        Ok(identity)
     }
 
     fn clear_send_retry(&self, identity: &QuickChatRetryIdentity) {

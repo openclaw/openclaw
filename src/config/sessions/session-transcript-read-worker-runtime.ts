@@ -3,14 +3,12 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { SensitiveTextRedactionSnapshot } from "../../logging/redact.js";
-import type { SessionBranchSummaryReadRequest } from "./session-accessor.sqlite-branches.js";
 import type { readSessionTranscriptModelContext } from "./session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
 import type { SessionContextMessagesWorkerInput } from "./session-history-read.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import type {
-  SessionBranchSummaryWorkerInput,
   SessionEntryWorkerInput,
   SessionResetRecallWorkerInput,
   SessionModelContextWorkerInput,
@@ -48,9 +46,6 @@ const modelContextReads = createTranscriptReadPool<
 const sessionEntries = createTranscriptReadPool<
   SessionEntryWorkerInput | SessionResetRecallWorkerInput
 >(true);
-
-// Branch scans share background compute admission without delaying foreground history or context.
-const branchSummaries = createTranscriptReadPool<SessionBranchSummaryWorkerInput>(true);
 
 export async function readSessionTranscriptModelContextInWorker(
   target: SessionTranscriptRuntimeTarget,
@@ -160,27 +155,4 @@ export async function readSessionResetRecallCutoffInWorker(
     throw new Error("Session transcript worker returned an export instead of reset metadata");
   }
   return result.cutoff;
-}
-
-export async function runSessionBranchSummaryWorkerRequest(
-  request: SessionBranchSummaryReadRequest,
-  signal: AbortSignal,
-) {
-  return unwrapSessionTranscriptWorkerReply<"branch-summaries">(
-    await branchSummaries.run(
-      { kind: "branch-summaries", request },
-      {
-        inputBytes:
-          2 *
-          (request.database.agentId.length +
-            request.database.path.length +
-            request.databaseIdentity.length +
-            request.sessionKey.length +
-            request.sessionId.length +
-            (request.lifecycleRevision?.length ?? 0)),
-        timeoutMs: 60_000,
-        signal,
-      },
-    ),
-  );
 }

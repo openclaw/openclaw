@@ -4,6 +4,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import {
   openFixtureReceiptChannel,
@@ -84,6 +85,10 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
           },
           async () => {
             const server = createServer((socket) => socket.end("serving"));
+            const closeServer = () =>
+              new Promise<void>((resolve) => {
+                server.close(() => resolve());
+              });
             server.listen(0, "127.0.0.1");
             await once(server, "listening");
             const address = server.address();
@@ -113,9 +118,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               await fixtures.withIsolatedSignals(async ({ captureSignal }) => {
                 const close = vi.fn(async () => {
                   if (server.listening) {
-                    await new Promise<void>((resolve) => {
-                      server.close(() => resolve());
-                    });
+                    await closeServer();
                   }
                   if (closeFailure) {
                     throw new Error("fixture Gateway close failed");
@@ -400,9 +403,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                         persistedReads + 1,
                       "persisted SIGTERM restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     const localReads = fixtures.consumeGatewayRestartIntent.mock.calls.length;
@@ -416,9 +417,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                         fixtures.consumeGatewayRestartIntent.mock.calls.length === localReads + 1,
                       "same-owner SIGUSR2 restart was not consumed",
                     );
-                    await new Promise<void>((resolve) => {
-                      setImmediate(resolve);
-                    });
+                    await setImmediate();
                     expect(close).not.toHaveBeenCalled();
                     expect(runtime.exit).not.toHaveBeenCalled();
                     expect(server.listening).toBe(true);
@@ -578,9 +577,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                   });
                   await settle(async () => {
                     if (server.listening) {
-                      await new Promise<void>((resolve) => {
-                        server.close(() => resolve());
-                      });
+                      await closeServer();
                     }
                   });
                   await settle(() => gatewayLock.current?.release());
@@ -618,9 +615,7 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
               });
             } finally {
               if (server.listening) {
-                await new Promise<void>((resolve) => {
-                  server.close(() => resolve());
-                });
+                await closeServer();
               }
               await gatewayLock.current?.release();
             }

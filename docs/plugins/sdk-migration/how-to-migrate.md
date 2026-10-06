@@ -139,14 +139,27 @@ await before consumption. An optional per-item
 otherwise the entire admission fails. A late compatibility refusal rejects the
 entire undispatched batch, without repeating native checks or settlement callbacks.
 
-Pending-question claims and cancellation retain their synchronous contracts.
-If queueing may answer or cancel a pending question, pass `compatAssertCurrent`
-to that path so its final check still reads current policy. Queue-only target
-eligibility stays with ordinary enqueue admission; it does not add database
+Pending-question sinks can implement `claimPendingUserInputAnswerAsync` and
+`cancelPendingUserInputAsync`, taking the same preparation object as the queue
+companion. Pass it as `authority.toolAuthorityPreparation` to the shared question
+functions, alongside your current backend assertion. The question owner composes
+fresh policy reads with its final resolve or cancel boundary. Legacy sinks retain
+their full synchronous `compatAssertCurrent` assertion; an earlier snapshot never
+substitutes for current policy.
+
+Custom question dispatchers retain `version: 2`. When source-bound authority
+provides `assertCurrentAsync`, await it after transport preparation, then invoke
+`assertCurrent` immediately before I/O. Older implementations that only invoke
+`assertCurrent` retain the released fresh native check. A failed awaited check
+must not trigger a synchronous fallback or replay a possibly accepted input.
+Run-owned legacy callbacks keep a fresh native policy assertion immediately before
+dispatch because their unscoped contract exposes no awaited effect boundary.
+
+Queue-only target eligibility stays with ordinary enqueue admission; it does not add database
 reads to question callbacks. Built-in ordinary steering installs input inside
 its final admission and notifies subscribers after releasing that admission.
 
-The synchronous fingerprint, projection, binding, and queue methods are deprecated under
+The synchronous fingerprint, projection, binding, and injection methods are deprecated under
 `reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
@@ -177,6 +190,26 @@ the next Plugin SDK major and explicit breaking-release approval. Their
 deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
+
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
 
 ## Await session transcript persistence
 

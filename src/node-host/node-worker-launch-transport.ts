@@ -39,6 +39,7 @@ import type {
   NodeWorkerLaunchStore,
 } from "./node-worker-launch-store.js";
 import {
+  NODE_WORKER_INFERENCE_SETUP_ERROR,
   projectNodeWorkerNativeInference,
   type NodeWorkerNativeInferenceSnapshot,
 } from "./node-worker-native-inference.js";
@@ -89,11 +90,12 @@ export async function prepareNodeWorkerLaunchTransport(
   if (options.descriptor.assignment.inference === "runtime-local") {
     if (options.containerEngine) {
       throw new Error(
-        "Node worker native inference requires isolation none, not a nested container",
+        'Worker-local inference requires nodeHost.workerRuns.isolation to be "none"; ' +
+          "nested-container worker isolation is unsupported.",
       );
     }
     if (!options.nativeInferenceSnapshot) {
-      throw new Error("Node worker native inference requires node-local startup configuration");
+      throw new Error(NODE_WORKER_INFERENCE_SETUP_ERROR);
     }
     const startup = projectNodeWorkerNativeInference(
       options.nativeInferenceSnapshot,
@@ -101,7 +103,10 @@ export async function prepareNodeWorkerLaunchTransport(
     );
     const encoded = JSON.stringify(startup);
     if (Buffer.byteLength(encoded) > WORKER_NATIVE_INFERENCE_STARTUP_MAX_BYTES) {
-      throw new Error("Node worker native inference startup configuration exceeds the size limit");
+      throw new Error(
+        "Worker-local inference startup data exceeds 2 MiB. Reduce the configured node models " +
+          "or headers, then restart the node host.",
+      );
     }
     secretInput = {
       fd: WORKER_NATIVE_INFERENCE_STARTUP_FD,

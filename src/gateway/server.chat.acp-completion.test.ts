@@ -449,11 +449,26 @@ describe("Gateway ACP completion ownership", () => {
         );
         expect
           .soft(lifecycle.map((frame) => frame.payload?.data?.phase))
-          .toEqual(
-            scenario.rpcAbort
-              ? ["start", "end", scenario.persistFail ? "error" : "end"]
-              : ["start", expectedState === "error" ? "error" : "end"],
-          );
+          .toEqual(["start", expectedState === "error" ? "error" : "end"]);
+        if (scenario.rpcAbort) {
+          expect.soft(lifecycle.at(-1)?.payload?.data).toMatchObject({
+            phase: "end",
+            status: "cancelled",
+            aborted: true,
+            stopReason: "rpc",
+          });
+          // This terminal-only reply was never shown; there is no visible partial to save.
+          expect
+            .soft(
+              frames.filter(
+                (frame) =>
+                  frame.payload?.runId === runId &&
+                  (frame.payload.stream === "assistant" || frame.payload.state === "delta"),
+              ),
+            )
+            .toEqual([]);
+          expect.soft(finals[0]?.payload?.message).toBeUndefined();
+        }
         expect
           .soft(
             frames.filter(

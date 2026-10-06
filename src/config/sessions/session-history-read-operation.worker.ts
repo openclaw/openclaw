@@ -33,6 +33,7 @@ export type SessionHistoryReadOperationRequest =
   | Exclude<DurableHistoryReadOperationRequest, BranchReadRequest>
   | {
       kind: "branch-summaries";
+      database: BranchReadRequest["database"];
       request: Omit<BranchReadRequest["request"], "databaseIdentity"> & {
         databaseIdentity?: string;
       };
@@ -221,18 +222,28 @@ async function prepareHistoryRead(
       const { readSessionBranchSnapshot, readSessionBranchSummariesInWorker } =
         await import("./session-accessor.sqlite-branches.js");
       if (retainedDatabase) {
-        return () =>
-          readSessionBranchSnapshot(retainedDatabase, {
+        return () => ({
+          kind: request.kind,
+          result: readSessionBranchSnapshot(retainedDatabase, {
             sessionKey: request.request.sessionKey,
             sessionId: request.request.sessionId,
             lifecycleRevision: request.request.lifecycleRevision,
-          });
+            previous: request.request.previous,
+          }),
+        });
       }
       const databaseIdentity = request.request.databaseIdentity;
       if (databaseIdentity === undefined) {
         throw new Error("Durable branch reads require their captured database identity");
       }
-      return () => readSessionBranchSummariesInWorker({ ...request.request, databaseIdentity });
+      return () => ({
+        kind: request.kind,
+        result: readSessionBranchSummariesInWorker({
+          ...request.request,
+          database: request.database,
+          databaseIdentity,
+        }),
+      });
     }
     case "session-title-fields": {
       const { readSessionTitleFieldsFromTranscript } =

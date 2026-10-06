@@ -399,19 +399,32 @@ function bindEmbeddedMessageInjection(
           legacy?.assertQueueCurrent();
           return guarded.queueMessage(text, injectionOptions, assertFinalCurrent, authorityKind);
         },
-        claimPendingUserInputAnswer: guarded.claimPendingUserInputAnswer
-          ? (text, injectionOptions) =>
-              guarded.claimPendingUserInputAnswer!(
-                text,
-                injectionOptions,
-                assertCurrent,
-                authorityKind,
-              )
-          : undefined,
-        cancelPendingUserInput: guarded.cancelPendingUserInput
-          ? (resolvedBy) =>
-              guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
-          : undefined,
+        claimPendingUserInputAnswer:
+          prepared && guarded.claimPendingUserInputAnswerAsync
+            ? (text, injectionOptions) =>
+                guarded.claimPendingUserInputAnswerAsync!(
+                  text,
+                  injectionOptions,
+                  prepared,
+                  authorityKind,
+                )
+            : guarded.claimPendingUserInputAnswer
+              ? (text, injectionOptions) =>
+                  guarded.claimPendingUserInputAnswer!(
+                    text,
+                    injectionOptions,
+                    assertCurrent,
+                    authorityKind,
+                  )
+              : undefined,
+        cancelPendingUserInput:
+          prepared && guarded.cancelPendingUserInputAsync
+            ? (resolvedBy) =>
+                guarded.cancelPendingUserInputAsync!(resolvedBy, prepared, authorityKind)
+            : guarded.cancelPendingUserInput
+              ? (resolvedBy) =>
+                  guarded.cancelPendingUserInput!(resolvedBy, assertCurrent, authorityKind)
+              : undefined,
       }
     : undefined;
 }

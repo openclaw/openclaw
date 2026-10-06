@@ -1,4 +1,3 @@
-/** Extracts and trust-filters media from embedded-agent tool results. */
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import {
   asNonNegativeFiniteNumber,
@@ -21,7 +20,6 @@ function pushUniqueMessagingMediaUrl(urls: Set<string>, value: unknown): void {
   }
 }
 
-/** Collects messaging attachment references from tool-call arguments or result records. */
 export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
   const urls = new Set<string>();
   mapAgentHarnessMessagingMediaValues(
@@ -35,7 +33,6 @@ export function collectMessagingMediaUrlsFromRecord(record: Record<string, unkno
   return [...urls];
 }
 
-/** Collects messaging attachment references from a completed tool result. */
 export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
   const records = [result, asOptionalObjectRecord(result)?.details];
   const outputText = extractToolResultText(result);

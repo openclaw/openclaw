@@ -24,11 +24,7 @@ type ChannelMissingDefaultAccountContext = {
 };
 
 function normalizeBindingChannelKey(raw?: string | null): string {
-  const normalized = normalizeChatChannelId(raw);
-  if (normalized) {
-    return normalized;
-  }
-  return normalizeLowercaseStringOrEmpty(raw);
+  return normalizeChatChannelId(raw) || normalizeLowercaseStringOrEmpty(raw);
 }
 
 function collectChannelsMissingDefaultAccount(
@@ -51,11 +47,7 @@ function collectChannelsMissingDefaultAccount(
     }
 
     const normalizedAccountIds = Array.from(
-      new Set(
-        Object.keys(accounts)
-          .map((accountId) => normalizeAccountId(accountId))
-          .filter(Boolean),
-      ),
+      new Set(Object.keys(accounts).map(normalizeAccountId)),
     ).toSorted((a, b) => a.localeCompare(b));
     if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
       continue;
@@ -65,7 +57,6 @@ function collectChannelsMissingDefaultAccount(
   return contexts;
 }
 
-/** Warn when account-scoped route bindings do not cover channels without accounts.default. */
 export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
   const bindings = listRouteBindings(cfg);
   const warnings: string[] = [];
@@ -131,7 +122,6 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
   return warnings;
 }
 
-/** Warn when multi-account channels omit or misconfigure an explicit default account. */
 export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
   for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(

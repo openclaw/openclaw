@@ -48,7 +48,7 @@ const retainedWatermarkQuery = createSqliteQueryCache((database) => {
   });
 });
 
-/** Read hot generation and retained cold position on the caller's admitted snapshot. */
+/** Read hot generation and retained cold position together on the admitted snapshot. */
 export function readSessionTranscriptWatermarkInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   sessionId: string,

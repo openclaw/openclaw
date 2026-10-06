@@ -14,7 +14,6 @@ export interface ExecOptions {
   signal?: AbortSignal;
   /** Timeout in milliseconds */
   timeout?: number;
-  /** Working directory */
   cwd?: string;
   /** Optional maximum retained stdout/stderr characters per stream. */
   maxOutputChars?: number;
@@ -70,10 +69,6 @@ function appendCapturedOutput(
   };
 }
 
-/**
- * Execute a shell command and return stdout/stderr/code.
- * Supports timeout and abort signal.
- */
 export async function execCommand(
   command: string,
   args: string[],

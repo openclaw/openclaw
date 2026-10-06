@@ -467,6 +467,12 @@ describe("models.list configured runtime choices", () => {
           } else {
             expect(revokedChoice?.unavailableReason).toBe("unsupported-runtime");
           }
+          readiness = "ready";
+          const recoveredChoice = prepared.read().models[0]?.runtimeChoices?.[0];
+          expect(recoveredChoice?.available).toBe(selectable);
+          if (selectable) {
+            expect(recoveredChoice).toMatchObject({ contextWindow: 128_000, reasoning: true });
+          }
           expect(loadModelCatalog).not.toHaveBeenCalled();
           expect(loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
           expect(cfg.agents?.defaults?.models?.[`${provider}/${model}`]?.agentRuntime?.id).toBe(

@@ -9,7 +9,7 @@ import { MissingAgentHarnessError } from "./errors.js";
 import type { AgentHarnessPolicy } from "./policy.js";
 import { listRegisteredAgentHarnesses, resolveAgentHarnessOwnerPluginId } from "./registry.js";
 import { buildAgentHarnessSupportContext, resolveAutoAgentHarnessSelection } from "./support.js";
-import type { AgentHarness, AgentHarnessSupport, AgentHarnessSupportContext } from "./types.js";
+import type { AgentHarness, AgentHarnessSupportContext } from "./types.js";
 
 const log = createSubsystemLogger("agents/harness");
 
@@ -56,9 +56,7 @@ export type AgentHarnessSelectionDecision = {
     | "plugin_declared_fallback_openclaw"
     // Provider-owned CLI runtime aliases have no agent harness plugin counterpart.
     | "cli_runtime_passthrough_openclaw"
-    // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
-    // Auto mode found no supporting plugin harness, so OpenClaw handled the run.
     | "auto_openclaw";
   candidates: AgentHarnessSelectionCandidate[];
 } & (
@@ -135,8 +133,11 @@ export function resolveAgentHarnessSelectionDecision(
           candidates: listHarnessCandidates(pluginHarnesses),
         });
       }
+      const providerModel = params.modelId
+        ? `${params.provider}/${params.modelId}`
+        : params.provider;
       throw new Error(
-        `Requested agent harness "${runtime}" does not support ${formatProviderModel(params)}${
+        `Requested agent harness "${runtime}" does not support ${providerModel}${
           support.reason ? ` (${support.reason})` : ""
         }.`,
       );
@@ -177,7 +178,14 @@ export function resolveAgentHarnessSelectionDecision(
     harness: selected,
     policy,
     selectedReason: selected ? "auto_plugin" : "auto_openclaw",
-    candidates: candidates.map(toSelectionCandidate),
+    candidates: candidates.map(({ harness, support }) => ({
+      id: harness.id,
+      label: harness.label,
+      pluginId: harness.pluginId,
+      supported: support.supported,
+      priority: support.supported ? support.priority : undefined,
+      reason: support.reason,
+    })),
   });
 }
 
@@ -187,20 +195,6 @@ function listHarnessCandidates(harnesses: AgentHarness[]): AgentHarnessSelection
     label: harness.label,
     pluginId: harness.pluginId,
   }));
-}
-
-function toSelectionCandidate(entry: {
-  harness: AgentHarness;
-  support: AgentHarnessSupport;
-}): AgentHarnessSelectionCandidate {
-  return {
-    id: entry.harness.id,
-    label: entry.harness.label,
-    pluginId: entry.harness.pluginId,
-    supported: entry.support.supported,
-    priority: entry.support.supported ? entry.support.priority : undefined,
-    reason: entry.support.reason,
-  };
 }
 
 export function buildAgentHarnessSelectionDecision(params: {
@@ -223,8 +217,4 @@ export function buildAgentHarnessSelectionDecision(params: {
         ownerPluginId: resolveAgentHarnessOwnerPluginId(params.harness),
       }
     : { ...common, builtIn: true };
-}
-
-function formatProviderModel(params: { provider: string; modelId?: string }): string {
-  return params.modelId ? `${params.provider}/${params.modelId}` : params.provider;
 }

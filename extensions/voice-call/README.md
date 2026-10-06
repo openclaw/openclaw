@@ -108,6 +108,7 @@ Notes:
 - `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh. Use `main` to share the configured agent's main session (`agent:<agentId>:main`, or `global` when core `session.scope` is `"global"`). Custom core `session.mainKey` values are ignored.
 - `realtime.consultThinkingLevel` is optional. When set, it overrides the thinking level used by the model behind realtime `openclaw_agent_consult` calls.
 - `realtime.consultFastMode` is optional. When set, it toggles fast mode for realtime `openclaw_agent_consult` calls.
+- `realtime.idleHangupMs` is optional. When set to a positive integer, an active realtime call ends after neither side has spoken for that many milliseconds; in-flight agent consults pause the timer. Unset keeps the current no-speech-idle-limit behavior.
 
 ## Stale call reaper
 

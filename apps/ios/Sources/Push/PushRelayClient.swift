@@ -239,7 +239,7 @@ final class PushRelayClient: @unchecked Sendable {
         guard service.isSupported else { throw PushRelayError.unsupportedAppAttest }
 
         let keyID: String
-        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(scope: scope), !existing.isEmpty {
+        if let existing = PushRelayRegistrationStore.loadAppAttestKeyID(scope: scope) {
             keyID = existing
         } else {
             keyID = try await service.generateKey()
