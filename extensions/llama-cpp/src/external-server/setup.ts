@@ -245,7 +245,6 @@ async function discoverForSetup(
       apiKey,
       headers,
       signal: ctx.signal,
-      cacheTtlMs: 0,
     });
     return discovery.kind === "success" ? discovery : null;
   } catch {
@@ -376,7 +375,6 @@ export async function runLlamaServerSetup(ctx: ProviderAuthContext): Promise<Pro
     apiKey,
     headers,
     signal: ctx.signal,
-    cacheTtlMs: 0,
   });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
@@ -449,7 +447,7 @@ async function validateNonInteractiveDiscovery(
   } else {
     persistence = { kind: "remove" };
   }
-  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers, cacheTtlMs: 0 });
+  const discovery = await discoverLlamaServer({ baseUrl, apiKey, headers });
   if (discovery.kind !== "success") {
     throw new Error(describeDiscoveryFailure(discovery));
   }

@@ -1,11 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import { sessionSharingTestContext } from "../../../gateway/server-methods/sessions-sharing.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
-import { executeExistingOpenClawStateRead } from "../../../state/openclaw-state-db-readonly.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import {
@@ -14,12 +14,17 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+} from "./subagent-registry-persistence.js";
 import { createSubagentRegistryRestorer } from "./subagent-registry-restore.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
 import type { SubagentManagerOptions } from "./subagent-registry-run-wait.js";
+import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const fixture = vi.hoisted(() => ({
@@ -89,14 +94,7 @@ afterEach(async () => {
 });
 
 async function readStored() {
-  const reply = await executeExistingOpenClawStateRead(
-    { env: state.env },
-    { type: "subagents.runs", scope: { kind: "all" } },
-  );
-  if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection) {
-    throw new Error("Queued recovery fixture could not read its durable registry");
-  }
-  return reply.runs;
+  return readAllSubagentRunsInWorker(captureOpenClawStateWorkerContext({ env: state.env }));
 }
 
 function createRegistrationFixture() {
@@ -175,6 +173,7 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
       getGatewayContextResolver: () => resolveGatewayContext,
       bindGatewayOwners: () => true,
       settleRequesterTurn: async () => false,
+      retireSupersededRun: async () => {},
       ensureListener: () => {},
       startSweeper: () => {},
       scheduleSweep: () => {},
@@ -413,6 +412,7 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
       getGatewayContextResolver: () => resolver,
       bindGatewayOwners: () => true,
       settleRequesterTurn,
+      retireSupersededRun: async () => {},
       ensureListener,
       startSweeper,
       scheduleSweep: () => {},
@@ -470,3 +470,131 @@ it.each(["current", "during hydration", "reset", "replaced Gateway"] as const)(
     }
   },
 );
+
+it("retries retirement when registration supersedes another restored child during a held write", async () => {
+  vi.useFakeTimers();
+  const { manager } = createRegistrationFixture();
+  const settleOwnedWork = observeRootWork();
+  const held = createDeferred();
+  const release = createDeferred();
+  const retiredLater = createDeferred();
+  const context = sessionSharingTestContext(vi.fn());
+  const resolver = () => context;
+  context.resolveGatewayContext = resolver;
+  const register = (runId: string, child: string, expectsCompletionMessage = false) =>
+    manager.registerSubagentRun({
+      runId,
+      childSessionKey: `agent:main:subagent:${child}`,
+      requesterSessionKey: "agent:main:retirement-requester",
+      requesterAgentId: "main",
+      requesterTurnRunId: expectsCompletionMessage ? "retirement-turn" : undefined,
+      requesterDisplayKey: "main",
+      task: "Exercise cancellation supersession during restore",
+      cleanup: "keep",
+      expectsCompletionMessage,
+    });
+  const restorer = createSubagentRegistryRestorer({
+    runs: subagentRuns,
+    getGatewayContextResolver: () => resolver,
+    bindGatewayOwners: () => true,
+    settleRequesterTurn: async () => {
+      throw new Error("Superseded children must retire before requester handoff");
+    },
+    retireSupersededRun: async (runId, entry, assertCurrent) => {
+      await retireSupersededSubagentRun({
+        runId,
+        entry,
+        runs: subagentRuns,
+        clearPendingLifecycleError: () => {},
+        assertCurrent,
+      });
+      if (runId === "later-child") {
+        retiredLater.resolve();
+      }
+    },
+    ensureListener: () => {},
+    startSweeper: () => {},
+    scheduleSweep: () => {},
+    resumeRun: () => {},
+    listSwarmRunsForGroup: () => [],
+    startQueuedSubagentRun: async () => true,
+    terminateAcceptedRestoredCollectorRun: async () => {},
+    cleanupCollectorLaunchResources: async () => true,
+    settleFailedQueuedSubagentLaunch: async () => true,
+    completeCollectorLaunchCleanup: async () => {},
+    warn: () => {},
+  });
+  let activation: Promise<unknown> | undefined;
+  try {
+    for (const runId of ["first-child", "later-child"]) {
+      await register(runId, runId, true);
+      expect(await manager.markSubagentRunTerminated({ runId })).toBe(1);
+    }
+    await register("first-successor", "first-child");
+    subagentRuns.clear();
+    await restorer.restoreOnce();
+    expect(subagentRuns.get("first-child")?.killReconciliation?.supersededAt).toBeTypeOf("number");
+    expect(subagentRuns.get("later-child")?.killReconciliation?.supersededAt).toBeUndefined();
+
+    const execute = expectDefined(
+      vi.mocked(stateWorker.runOpenClawStateWorkerOperation).getMockImplementation(),
+      "registration fixture worker transport",
+    );
+    vi.mocked(stateWorker.runOpenClawStateWorkerOperation).mockImplementation(
+      (owner, run, options) =>
+        execute(
+          owner,
+          (scope) =>
+            run({
+              execute: async (command, executeOptions) => {
+                if (
+                  isSubagentRegistryWriteCommand(command) &&
+                  command.input.deleteRunIds.includes("first-child")
+                ) {
+                  held.resolve();
+                  await release.promise;
+                }
+                return scope.execute(command, executeOptions);
+              },
+            }),
+          options,
+        ),
+    );
+    activation = restorer.activate().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await awaitGateBeforeSettlement(
+      held.promise,
+      activation,
+      "Restored retirement did not reach its native deletion",
+    );
+    await register("later-successor", "later-child");
+    expect((await readStored()).get("later-child")?.killReconciliation?.supersededAt).toBeTypeOf(
+      "number",
+    );
+    release.resolve();
+    expect(await activation).toBeInstanceOf(SubagentRegistryMutationRejectedError);
+    expect((await readStored()).has("first-child")).toBe(false);
+    expect((await readStored()).get("later-child")?.requesterTurnRunId).toBe("retirement-turn");
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await retiredLater.promise;
+    await vi.advanceTimersByTimeAsync(0);
+    const saved = await readStored();
+    expect(saved.has("later-child")).toBe(false);
+    for (const runId of ["first-successor", "later-successor"]) {
+      expect(saved.get(runId)).toMatchObject({
+        runId,
+        expectsCompletionMessage: false,
+        execution: { status: "running" },
+      });
+    }
+  } finally {
+    release.resolve();
+    await activation;
+    restorer.reset();
+    await settleOwnedWork();
+    vi.useRealTimers();
+  }
+});

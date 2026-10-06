@@ -189,8 +189,7 @@ function startProviderOperation(
       current &&
       !current.signal.aborted &&
       current.operations.providers.get(current.key)?.result === result &&
-      !catalog.error &&
-      catalog.hosts.every((host) => !host.error && !host.pending)
+      !catalog.error
     ) {
       const pages = current.operations.pages;
       pages.delete(current.key);
@@ -243,7 +242,7 @@ export async function listSessionCatalogWithinBudget(
   }
   const result = await raceWithTimeout(active.result, 1_000, () => undefined, { ref: false });
   const catalog = result?.catalogs[0];
-  const error = catalog?.error ?? catalog?.hosts.find((host) => host.error)?.error;
+  const error = catalog?.error;
   if (result && !error) {
     return result;
   }
@@ -254,14 +253,16 @@ export async function listSessionCatalogWithinBudget(
   if (result && !cached) {
     return result;
   }
-  const previous = cached?.catalogs[0] ?? empty;
+  const previous = (cached && resolvePublishedSessionCatalogs(cached)[0]) ?? empty;
   return {
     catalogs: [
       {
         ...previous,
         hosts: result
           ? previous.hosts
-          : previous.hosts.map((host) => Object.assign({}, host, { pending: true })),
+          : previous.hosts.map((host) =>
+              host.error ? host : Object.assign({}, host, { pending: true }),
+            ),
         error: {
           code: result ? "catalog_stale" : "catalog_pending",
           message: `${cached ? "Showing stale results. " : ""}${error ? `Refresh failed: [${error.code}] ${error.message}` : "Catalog refresh is still pending; retry shortly."}`,

@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
-import type { ApplicationContext, ApplicationNavigationPreferences } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -158,13 +158,4 @@ export async function saveIdentityDraft(params: {
       host.identitySaving = false;
     }
   }
-}
-
-/** Quick-switcher pin toggle; pins persist as browser-profile preferences. */
-export function togglePinnedAgent(navigation: ApplicationNavigationPreferences, agentId: string) {
-  const pinned = navigation.snapshot.pinnedAgentIds;
-  const next = pinned.includes(agentId)
-    ? pinned.filter((id) => id !== agentId)
-    : [...pinned, agentId];
-  navigation.update({ pinnedAgentIds: next });
 }

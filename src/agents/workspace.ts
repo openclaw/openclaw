@@ -342,18 +342,12 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
   state: WorkspaceSetupState;
-  bootstrapExists?: boolean;
+  bootstrapExists: boolean;
   guard?: WorkspaceStateGuard;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const assertEvidence = captureWorkspaceStateFilesystemGuard(params.dir);
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
-  const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
-  if (
-    typeof params.state.setupCompletedAt === "string" &&
-    params.state.setupCompletedAt.trim().length > 0
-  ) {
-    return { repaired: false, bootstrapExists, state: params.state };
-  }
+  const { bootstrapExists } = params;
 
   if (
     bootstrapExists

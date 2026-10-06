@@ -153,6 +153,24 @@ describe("legacy state migration caller execution", () => {
       const sidecarBytes = "retired encrypted bytes\n";
       fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
       fs.writeFileSync(sidecarPath, sidecarBytes);
+      const authStorePath = path.join(fixture.stateDir, "agents/main/agent/auth-profiles.json");
+      fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
+      fs.writeFileSync(
+        authStorePath,
+        JSON.stringify({
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              oauthRef: {
+                source: "openclaw-credentials",
+                provider: "openai-codex",
+                id: "b".repeat(32),
+              },
+            },
+          },
+        }),
+      );
       const stateDatabasePath = resolveOpenClawStateSqlitePath(fixture.env);
       writeLegacyStateSchemaV1(stateDatabasePath);
       const before = snapshotSqliteArtifacts(stateDatabasePath);

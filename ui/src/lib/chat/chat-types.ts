@@ -229,7 +229,8 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
-      sessionsYield?: "waiting" | "resumed";
+      /** Structural only: separates a handed-off run from its resumption. Never rendered. */
+      handoffBoundary?: true;
     }
   | {
       kind: "divider";
@@ -256,7 +257,15 @@ export type ChatItem =
   | {
       kind: "reading-indicator";
       key: string;
+      /** When this status began on the browser clock; no later than `request.askedAt`. */
       startedAt: number;
+      /** The run handed off and is idle; its subagents are what is still working. */
+      waitingOn?: "subagents";
+      /**
+       * Set for a run that resumed a handoff: when its request was asked, on the
+       * transcript's clock, and the earlier runs of the same answer, oldest first.
+       */
+      request?: { askedAt: number; runIds: readonly string[] };
       runId?: string;
       boundaryId?: string;
     }

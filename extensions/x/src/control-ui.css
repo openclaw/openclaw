@@ -64,6 +64,46 @@
   color: var(--danger);
 }
 
+.x-replies__spend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin: var(--space-4) 0;
+}
+
+.x-replies__spend > div {
+  flex: 1 1 220px;
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+}
+
+.x-replies__spend dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.x-replies__spend dd {
+  margin: var(--space-2) 0 0;
+}
+
+.x-replies__spend strong {
+  color: var(--text-strong);
+  font-size: 22px;
+}
+
+.x-replies__spend dd span {
+  color: var(--muted);
+}
+
+.x-replies__budget {
+  padding: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  overflow-wrap: anywhere;
+}
+
 .x-replies__list {
   position: relative;
   overflow-x: auto;

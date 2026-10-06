@@ -412,9 +412,9 @@ The bundled Anthropic plugin registers for `claude-cli`:
 | `systemPromptMode`    | `append`                                                                                                                                                                                                      |
 
 On Claude Code 2.1.98 or newer, the bundled backend adds
-`--exclude-dynamic-system-prompt-sections` after a bounded version probe on the
-first CLI execution. Concurrent executions share the probe. API catalog discovery
-does not start it. Older, unknown, or failed probes keep the established argv.
+`--exclude-dynamic-system-prompt-sections` after a bounded version check on the
+first CLI execution. Concurrent executions share the check. API catalog discovery
+does not start it. Older, unknown, or failed checks keep the established argv.
 
 The bundled Google plugin registers for `google-gemini-cli`:
 
@@ -504,6 +504,7 @@ stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 overall agent turn timeout still apply.
 
+The shared listener remains available after the turn that first started it completes.
 After plugin replacement, new CLI turns resolve bridge tools against the current
 plugin generation without restarting the listener. Retired plugin instances remain
 unavailable, and each turn still needs its own active context grant.
@@ -563,7 +564,7 @@ Backends without an exact translation still fail closed.
 
 If no MCP servers are enabled, OpenClaw still injects a strict config when a backend opts into bundle MCP, so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth probes, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
+Session-scoped bundled MCP runtimes are cached for reuse within a session, then reaped after 10 minutes of idle time. One-shot embedded runs such as auth checks, slug generation, and active-memory recall request cleanup at run end. Stdio children and Streamable HTTP or SSE streams therefore do not outlive the run.
 
 A fresh CLI session must wait for its predecessor's cleanup. If cleanup fails or
 exceeds its deadline, OpenClaw refuses replacement, including from a later run.
@@ -601,6 +602,10 @@ Oversized incomplete lines are omitted so truncation cannot expose credential
 fragments. Native stdout and MCP input are not included in these diagnostics.
 Stderr is supplemental display text only. It does not change the native error's
 retry, authentication, timeout, or fallback classification.
+
+On macOS and Linux, a broken input pipe preserves the process's exit error when
+the child exits during graceful shutdown. If OpenClaw must terminate the child,
+the original pipe error remains the failure; cancellation retains its own reason.
 
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |

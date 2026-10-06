@@ -160,7 +160,7 @@ actor GatewayEndpointStore {
         }
         if let override {
             // Password overrides always warn; token overrides warn only when different.
-            if let configured, !configured.isEmpty, kind == .password || configured != override {
+            if let configured, kind == .password || configured != override {
                 self.warnEnvOverrideOnce(
                     kind: kind,
                     envVar: envVar,
@@ -168,7 +168,7 @@ actor GatewayEndpointStore {
             }
             return override
         }
-        if let configured, !configured.isEmpty {
+        if let configured {
             return configured
         }
         guard !isRemote else { return nil }
@@ -185,14 +185,8 @@ actor GatewayEndpointStore {
         guard let envName = envSecretRefName(trimmed) else {
             return trimmed
         }
-        // Finder-launched apps cannot see gateway-service-only env values. Resolve
-        // local refs from app env first, then the gateway LaunchAgent snapshot.
-        for source in [env, serviceEnv] {
-            if let value = source[envName]?.nonEmpty {
-                return value
-            }
-        }
-        return nil
+        // Finder-launched apps cannot see gateway-service-only env values.
+        return env[envName]?.nonEmpty ?? serviceEnv[envName]?.nonEmpty
     }
 
     private static func envSecretRefName(_ value: String) -> String? {

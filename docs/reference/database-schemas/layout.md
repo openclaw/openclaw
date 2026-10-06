@@ -33,6 +33,35 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
+### Linux database page cache
+
+After readiness, the Gateway samples Linux file-cache residency and checks it again
+every 15 minutes. The sample observes up to 256 file pages without reading their
+contents; it estimates whole-file residency, not the residency of every hot query.
+Other platforms do not run this maintenance.
+
+A cold sample (below 80%) or a slow bounded session-projection read starts background
+warming through an independent read-only SQLite worker. Shared state is read
+sequentially. Agent warming reads at most 4,096 session projections updated within
+seven days and bounded ranges of their history metadata indexes. Projection values
+larger than 256 KiB are skipped. After metadata, it warms the newest 32 active messages
+per session for sessions updated within 48 hours, newest sessions first. Payload
+reads use batches of eight and skip stored JSON or compressed values above 64 KiB;
+compressed messages are not decoded. Cold snapshot values and older transcript
+payloads are not scanned.
+Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
+Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+or three minutes per database. A final chunk can exceed the byte budget slightly.
+Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
+
+The journal records `database page-cache residency`. Startup diagnostics include
+sample scope, progress, logical read bytes, disk bytes, warmed payload bytes and
+message counts, and bounded projection-query
+timings before and after warming. These timings do not measure the full
+`chat.history` request. Older history, oversized messages, and cold snapshots can
+still require disk reads.
+No schema, stored data, configuration, or update behavior changes.
+
 ### Session reactions
 
 The per-agent `session_reactions` table stores reaction rows as side data for
@@ -363,7 +392,7 @@ latest interrupted verification or correct its `abandoned` result to `succeeded`
 only after all recorded drivers are positively dead and fresh installed-build,
 serving-build, readiness, and generation checks agree. Recovery descriptors and
 recorded repair, failure, or rollback evidence prevent that correction. The transaction
-rechecks the complete row and latest-run identity after probing, then records the
+rechecks the complete row and latest-run identity after checking, then records the
 verification, outcome, and an explanatory warning together. Older rows without
 the target identity remain unchanged, and Doctor explains the missing evidence.
 This uses existing step and verification fields; schemas and rollback readers

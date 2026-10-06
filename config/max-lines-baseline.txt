@@ -137,10 +137,8 @@ extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
-extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
-extensions/qa-lab/src/gateway-process-boundary.ts
 extensions/qa-lab/src/lab-server.test.ts
 extensions/qa-lab/src/lab-server.ts
 extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts
@@ -250,8 +248,6 @@ src/agents/embedded-agent-runner.e2e.test.ts
 src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts
 src/agents/embedded-agent-runner/compact.hooks.harness.ts
 src/agents/embedded-agent-runner/compact.hooks.test.ts
-src/agents/embedded-agent-runner/context-engine-maintenance.test.ts
-src/agents/embedded-agent-runner/extra-params.ts
 src/agents/embedded-agent-runner/model.provider-runtime.test-support.ts
 src/agents/embedded-agent-runner/model.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
@@ -303,7 +299,6 @@ src/agents/tools/web-fetch.ts
 src/agents/transcript-redact.test.ts
 src/agents/workspace.ts
 src/agents/worktrees/service.ts
-src/auto-reply/reply/abort.test.ts
 src/auto-reply/reply/agent-runner-memory.test.ts
 src/auto-reply/reply/agent-runner-memory.ts
 src/auto-reply/reply/agent-runner-payloads.test.ts
@@ -368,7 +363,6 @@ src/commands/configure.wizard.ts
 src/commands/daemon-install-helpers.test.ts
 src/commands/doctor-auth-flat-profiles.test.ts
 src/commands/doctor-auth-flat-profiles.ts
-src/commands/doctor-gateway-services.test.ts
 src/commands/doctor-legacy-config.migrations.test.ts
 src/commands/doctor-memory-search.test.ts
 src/commands/doctor-session-sqlite.ts
@@ -536,7 +530,6 @@ src/plugins/contracts/host-hooks.contract.test.ts
 src/plugins/contracts/plugin-sdk-subpaths.test.ts
 src/plugins/contracts/scheduled-turns.contract.test.ts
 src/plugins/contracts/tts-contract-suites.ts
-src/plugins/conversation-binding.test.ts
 src/plugins/discovery.test.ts
 src/plugins/discovery.ts
 src/plugins/hook-types.ts
@@ -544,7 +537,6 @@ src/plugins/hooks.ts
 src/plugins/install-security-scan.runtime.ts
 src/plugins/install.npm-spec.test.ts
 src/plugins/install.test.ts
-src/plugins/installed-plugin-index.test.ts
 src/plugins/loader.activation.test-utils.ts
 src/plugins/loader.base.test-utils.ts
 src/plugins/loader.discovery-and-security.test-utils.ts

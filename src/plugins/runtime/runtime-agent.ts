@@ -283,6 +283,7 @@ async function createSessionEntry(
             }
           },
           { config: params.cfg, agentId: captured.agentId, entry: expected },
+          creationOwner,
         );
         initialization.handle.assertCurrent();
         if (!afterCreate) {

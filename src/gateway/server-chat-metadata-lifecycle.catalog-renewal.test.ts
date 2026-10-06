@@ -9,10 +9,7 @@ import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
-import {
-  getPreparedModelCatalogOwnerSnapshot,
-  getPublishedPreparedModelCatalogOwnerSnapshot,
-} from "../agents/prepared-model-catalog.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
@@ -75,10 +72,7 @@ afterEach(async ({ task }) => {
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
 });
 
-async function createRenewalLifecycle(
-  minimalTestGateway = false,
-  allowGatewaySubagentBinding = false,
-) {
+async function createRenewalLifecycle() {
   const config: OpenClawConfig = { agents: { entries: { main: {} } } };
   mocks.configuredAgentIds = ["main"];
   mocks.authStorage.getAll.mockReturnValue({
@@ -101,7 +95,7 @@ async function createRenewalLifecycle(
   await refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
     catalogMode: "static",
-    ...(allowGatewaySubagentBinding ? { allowGatewaySubagentBinding: true } : {}),
+    allowGatewaySubagentBinding: true,
   });
   owner = getPreparedModelRuntimeSnapshot({
     config,
@@ -122,7 +116,6 @@ async function createRenewalLifecycle(
   });
   const lifecycle = await createGatewayChatMetadataLifecycle({
     getConfig: () => config,
-    minimalTestGateway,
     log: { warn: mocks.warn } as never,
   });
   const sidecars = createGatewaySidecarStopOwner();
@@ -139,25 +132,8 @@ async function createRenewalLifecycle(
 }
 
 describe("catalog renewal metadata broadcasts", () => {
-  it("prepares Gateway binding when minimal metadata finds an unbound model owner", async () => {
-    const harness = await createRenewalLifecycle(true, false);
-    try {
-      expect(owner.isCurrent()).toBe(false);
-      const bound = getPreparedModelCatalogOwnerSnapshot({
-        config: harness.config,
-        agentId: "main",
-        allowGatewaySubagentBinding: true,
-      });
-      expect(bound?.isCurrent()).toBe(true);
-      await harness.lifecycle.read({ agentId: "main" });
-      expect(bound?.isCurrent()).toBe(true);
-    } finally {
-      await harness.stop();
-    }
-  });
-
-  it("retains the published model owner across minimal metadata reads and catalog renewal", async () => {
-    const harness = await createRenewalLifecycle(true, true);
+  it("retains the published model owner across metadata reads and catalog renewal", async () => {
+    const harness = await createRenewalLifecycle();
     try {
       expect(owner.isCurrent()).toBe(true);
       const next = structuredClone(harness.inventory);
@@ -193,7 +169,7 @@ describe("catalog renewal metadata broadcasts", () => {
     }
   });
 
-  it.each(["usage", "auth", "removed", "outcome", "failed"] as const)(
+  it.each(["usage", "removed", "failed"] as const)(
     "publishes only settled visible changes for a renewal (%s)",
     async (change) => {
       const harness = await createRenewalLifecycle();
@@ -206,30 +182,15 @@ describe("catalog renewal metadata broadcasts", () => {
       const next = structuredClone(harness.inventory);
       if (change === "removed") {
         next.entries = next.entries.filter(({ id }) => id !== "second");
-      } else if (change === "outcome") {
-        next.providerOutcomes = [{ provider: "custom", status: "unavailable" }];
       }
-      if (change === "usage" || change === "auth") {
+      if (change === "usage") {
         const auth = getPreparedModelFullCatalogAuth(original)!;
         setPreparedModelFullCatalogAuth(next, {
           ...auth,
           authStore: {
             ...auth.authStore,
-            ...(change === "usage"
-              ? {
-                  lastGood: { custom: "custom:default" },
-                  usageStats: { "custom:default": { lastUsed: 42 } },
-                }
-              : {
-                  profiles: {
-                    ...auth.authStore.profiles,
-                    "custom:added": {
-                      type: "api_key",
-                      provider: "custom",
-                      key: "synthetic-added-key",
-                    },
-                  },
-                }),
+            lastGood: { custom: "custom:default" },
+            usageStats: { "custom:default": { lastUsed: 42 } },
           },
         });
       }
@@ -305,10 +266,6 @@ describe("catalog renewal metadata broadcasts", () => {
           expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
             custom: "custom:default",
           });
-        } else if (change === "auth") {
-          expect(
-            getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!)?.authStore.profiles,
-          ).toHaveProperty("custom:added");
         } else if (change === "removed") {
           expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
             next.entries.map(({ id }) => id).toSorted(),

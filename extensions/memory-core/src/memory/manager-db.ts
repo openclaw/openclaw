@@ -5,7 +5,6 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
-  ensureMemoryIndexSchema,
   loadSqliteVecExtension,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
@@ -151,10 +150,8 @@ export async function removeMemoryDatabaseFiles(dbPath: string): Promise<void> {
 }
 
 /** Remove crash-left shadows while the caller owns the reindex lease. */
-export async function cleanupAgedMemoryReindexTempFiles(
-  dbPath: string,
-  nowMs = Date.now(),
-): Promise<void> {
+export async function cleanupAgedMemoryReindexTempFiles(dbPath: string): Promise<void> {
+  const nowMs = Date.now();
   if (!(await isRegularFile(dbPath))) {
     return;
   }
@@ -233,9 +230,8 @@ export function openMemoryDatabaseAtPath(
 function openUninitializedMemoryDatabase(allowExtension: boolean) {
   const database = openNodeSqliteDatabase(":memory:", { allowExtension });
   try {
-    ensureMemoryIndexSchema({ cacheEnabled: true, db: database, ftsEnabled: true });
     database.exec("PRAGMA query_only = ON");
-    return { db: database, release: () => database.close() };
+    return { db: database, release: () => database.close(), hasIndex: false };
   } catch (error) {
     database.close();
     throw error;
@@ -260,7 +256,7 @@ export function openMemoryDatabaseReadOnlyAtPath(
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  return { db: database.db, release: database.close };
+  return { db: database.db, release: database.close, hasIndex: true };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

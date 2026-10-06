@@ -2,6 +2,7 @@ import type { Transferable, WorkerOptions } from "node:worker_threads";
 import type { RetainedOperation, RetainedOutcome } from "./retained-operation.js";
 import type { RetainedNativeWorker, WorkerLifecycle } from "./worker-lifecycle.js";
 import type { WorkerComputePermit } from "./worker-task-capacity.js";
+import type { WorkerTaskObservation } from "./worker-task-host.js";
 import type { WorkerNativeSectionState } from "./worker-task-native-sections.js";
 
 export type WorkerTaskPoolOptions<Output> = {
@@ -70,8 +71,10 @@ export type WorkerTaskOptions<Input> = {
 };
 
 /** Internal codecs may answer a worker while their caller cannot run Promise reactions. */
-export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> &
-  (
+export type OwnedWorkerTaskOptions<Input> = Omit<WorkerTaskOptions<Input>, "onRequest"> & {
+  /** Host diagnostics classify this operation before publishing bounded labels. */
+  diagnosticOperation?: string;
+} & (
     | { onRequest?: WorkerTaskOptions<Input>["onRequest"]; onRequestSync?: never }
     | {
         onRequest?: never;
@@ -129,6 +132,7 @@ export type Task<Input, Output> = Omit<PromiseWithResolvers<Output>, "resolve"> 
   inputBytes: number;
   computePermit?: WorkerComputePermit;
   enqueuedAt: number;
+  observation?: WorkerTaskObservation;
   startedAt?: number;
   preparedAt?: number;
   transferMs: number;

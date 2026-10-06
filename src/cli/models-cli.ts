@@ -1,7 +1,6 @@
 // Commander registration for model catalog, status, auth, alias, and fallback commands.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
+import { formatDocsHelp } from "./help-format.js";
 import { registerModelsAccountsCli } from "./models-accounts-cli.js";
 import type { GlobalOnlyModelCommandName } from "./models-cli.runtime.js";
 import { isModelsStatusJsonOutput } from "./models-output-mode.js";
@@ -43,11 +42,7 @@ export function registerModelsCli(program: Command) {
     .option("--status-json", "Output JSON (alias for `models status --json`)", false)
     .option("--status-plain", "Plain output (alias for `models status --plain`)", false)
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/models", "docs.openclaw.ai/cli/models")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/models"));
   const hasJsonOutput = (opts?: { json?: boolean }): boolean =>
     Boolean(opts?.json || models.opts<{ json?: boolean }>().json);
   setCommandJsonMode(models, "output", ({ argv, command }) =>
@@ -89,20 +84,20 @@ export function registerModelsCli(program: Command) {
       "Check auth/runtime readiness (1=missing/expired/unavailable/incompatible/indeterminate, 2=expiring)",
       false,
     )
-    .option("--probe", "Probe configured provider auth (live)", false)
-    .option("--probe-provider <name>", "Only probe a single provider")
+    .option("--probe", "Check configured provider auth (live)", false)
+    .option("--probe-provider <name>", "Only check a single provider")
     .option(
       "--probe-profile <id>",
-      "Only probe specific auth profile ids (repeat or comma-separated)",
+      "Only check specific auth profile ids (repeat or comma-separated)",
       (value, previous) => {
         const next = Array.isArray(previous) ? previous : previous ? [previous] : [];
         next.push(value);
         return next;
       },
     )
-    .option("--probe-timeout <ms>", "Per-probe timeout in ms")
-    .option("--probe-concurrency <n>", "Concurrent probes")
-    .option("--probe-max-tokens <n>", "Probe max tokens (best-effort)")
+    .option("--probe-timeout <ms>", "Timeout per check in ms")
+    .option("--probe-concurrency <n>", "Concurrent checks")
+    .option("--probe-max-tokens <n>", "Maximum tokens per check (best-effort)")
     .option("--agent <id>", "Agent id to inspect (overrides OPENCLAW_AGENT_DIR)")
     .action(async (opts: ModelsStatusOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
@@ -272,9 +267,9 @@ export function registerModelsCli(program: Command) {
     .option("--max-age-days <days>", "Skip models older than N days")
     .option("--provider <name>", "Filter by provider prefix")
     .option("--max-candidates <n>", "Max fallback candidates", "6")
-    .option("--timeout <ms>", "Per-probe timeout in ms")
-    .option("--concurrency <n>", "Probe concurrency")
-    .option("--no-probe", "Skip live probes; list free candidates only")
+    .option("--timeout <ms>", "Timeout per check in ms")
+    .option("--concurrency <n>", "Check concurrency")
+    .option("--no-probe", "Skip live checks; list free candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
     .option("--set-default", "Set agents.defaults.model to the first selection", false)

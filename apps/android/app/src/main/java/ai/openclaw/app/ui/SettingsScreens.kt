@@ -2117,19 +2117,18 @@ private fun AppearanceSettingsScreen(
         color = ClawTheme.colors.text,
         modifier = Modifier.padding(top = ClawTheme.spacing.xxs),
       )
-      (listOf<Long?>(null) + appearanceAccentPalette).chunked(5).forEach { accentRow ->
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
-        ) {
-          accentRow.forEach { candidate ->
-            AppearanceAccentSwatch(
-              argb = candidate,
-              previewArgb = candidate ?: themeFamily.previewAccentArgb,
-              selected = candidate == accentArgb,
-              onClick = { viewModel.setAppearanceAccentArgb(candidate) },
-            )
-          }
+      FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+        verticalArrangement = Arrangement.spacedBy(ClawTheme.spacing.xxs),
+      ) {
+        (listOf<Long?>(null) + appearanceAccentPalette).forEach { candidate ->
+          AppearanceAccentSwatch(
+            argb = candidate,
+            previewArgb = candidate ?: themeFamily.previewAccentArgb,
+            selected = candidate == accentArgb,
+            onClick = { viewModel.setAppearanceAccentArgb(candidate) },
+          )
         }
       }
     }

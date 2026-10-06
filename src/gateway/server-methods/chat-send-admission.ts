@@ -558,12 +558,8 @@ export async function admitChatSend(
       releaseChatSendCallerAuthority({ operator: capturedOperator, request, session });
     // Authority stays fresh per segment; effects check cancellation themselves.
     // A cancelled admission callback must still reach the handler's abort settlement.
-    const consumeCurrent = async <T>(consume: () => T): Promise<T | undefined> => {
-      if (!params.withCurrent && params.assertCurrentAsync) {
-        await params.assertCurrentAsync();
-      }
-      const consumeAuthorized = () => {
-        params.assertCurrent?.();
+    const consumeCurrent = <T>(consume: () => T): Promise<T | undefined> =>
+      consumeChatSendCurrent(params, () => {
         capturedOperator.authority?.assertCurrent();
         if (
           !assertChatSendSessionTargetOrRespond({
@@ -575,9 +571,7 @@ export async function admitChatSend(
           return undefined;
         }
         return consume();
-      };
-      return params.withCurrent ? params.withCurrent(consumeAuthorized) : consumeAuthorized();
-    };
+      });
     if (runInterruptTarget || p.queueMode === "interrupt") {
       const pending = await consumeCurrent(() => ({
         interruption: startOwnedWork(
@@ -662,11 +656,10 @@ export async function admitChatSend(
   // the armed discard here is the single custody owner for that window. The
   // handler disarms it once the media becomes referenced (durable admission
   // or ACK handing ownership to dispatch, which persists on all paths).
-  const admittedCleanup = createAdmittedChatSendCleanup({
+  const { cleanup: cleanupAdmittedRun, setDiscardPreparedMedia } = createAdmittedChatSendCleanup({
     cleanupAbort: activeRunAbort.cleanup,
     releaseRetainedWork: retainedWork.release,
   });
-  const cleanupAdmittedRun = admittedCleanup.cleanup;
   const rejectSessionRoutingChanged = () => {
     cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);
@@ -734,7 +727,7 @@ export async function admitChatSend(
         }
       },
       restartSafeAdmission,
-      setDiscardAbandonedPreparedMedia: admittedCleanup.setDiscardPreparedMedia,
+      setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };
 }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "./openclaw-agent-db-registry-listing.js";
@@ -30,6 +31,42 @@ function createRegistry(malformed: boolean) {
   closeOpenClawStateDatabaseForTest();
   return options;
 }
+
+it("reuses migration admission across registry writes and refuses a changed legacy schema", () => {
+  const options = createRegistry(false);
+  const { db } = openOpenClawStateDatabase(options);
+  const read = (artifactPreserving = false) =>
+    readRegisteredAgentDatabaseRows(db, options.path, artifactPreserving);
+  const probes = trackSqliteStatementExecutions(db, ["legacyWatches"], (sql) =>
+    sql.includes('from "session_watch_cursors"') ? "legacyWatches" : null,
+  );
+  try {
+    expect(read()).toEqual([]);
+    expect(probes.counts.legacyWatches).toBe(1);
+    db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
+      VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
+    expect(read()).toEqual([
+      {
+        agentId: "worker",
+        path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/openclaw-agent.sqlite"),
+        schemaVersion: 1,
+        lastSeenAt: 10,
+        sizeBytes: null,
+      },
+    ]);
+    expect(probes.counts.legacyWatches).toBe(1);
+
+    db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
+    expect(() => read()).toThrow("legacy agent database registry schema");
+    expect(read(true)).toHaveLength(1);
+    db.exec(`DROP TABLE agent_databases;
+      CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
+        last_seen_at INTEGER, size_bytes INTEGER)`);
+    expect(() => read(true)).toThrow("unsupported agent database registry schema");
+  } finally {
+    probes.restore();
+  }
+});
 
 it("returns registry unavailability only after the fixed native read and worker settle", async () => {
   const options = createRegistry(true);

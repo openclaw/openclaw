@@ -516,10 +516,6 @@ export function scheduleProcessExitAfterTuiReturn(
   return timer;
 }
 
-export function cancelProcessExitAfterTuiReturn(timer: ReturnType<typeof setTimeout>): void {
-  clearTimeout(timer);
-}
-
 type CtrlCAction = "clear" | "warn" | "exit";
 type TuiCtrlCAction = CtrlCAction | "force-exit";
 
@@ -559,10 +555,7 @@ export function resolveTuiCtrlCAction(params: {
   if (params.exitRequested === true) {
     return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
-  if (params.hasInput) {
-    return resolveCtrlCAction(params);
-  }
-  if (params.wasDisconnected === true) {
+  if (!params.hasInput && params.wasDisconnected === true) {
     return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
   return resolveCtrlCAction(params);
@@ -1108,9 +1101,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const setConnectionStatus = (text: string, ttlMs?: number) => {
     state.connectionStatus = sanitizeRenderableLine(text);
     renderStatus();
-    if (state.statusTimeout) {
-      stopStatusTimeout();
-    }
+    stopStatusTimeout();
     if (ttlMs && ttlMs > 0) {
       state.statusTimeout = setTimeout(() => {
         state.connectionStatus = state.isConnected
@@ -1242,13 +1233,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     chatLog.addSystem("question refresh failed; reconnect or use /question to retry");
     tui.requestRender();
   };
-  const refreshQuestions = async () => {
-    try {
-      await questions.refresh();
-    } catch {
-      reportQuestionRefreshError();
-    }
-  };
+  const refreshQuestions = () => questions.refresh().catch(reportQuestionRefreshError);
   const pluginApprovals = createTuiPluginApprovalController({
     client,
     chatLog,
@@ -1560,9 +1545,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   editor.onCtrlC = handleCtrlC;
-  editor.onCtrlD = () => {
-    requestExit();
-  };
+  editor.onCtrlD = requestExit;
   editor.onCtrlO = () => {
     state.toolsExpanded = !state.toolsExpanded;
     chatLog.setToolsExpanded(state.toolsExpanded);
@@ -1576,9 +1559,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     );
     tui.requestRender();
   };
-  editor.onCtrlL = () => {
-    openModelSelector();
-  };
+  editor.onCtrlL = openModelSelector;
   editor.onCtrlG = () => {
     void openAgentSelector();
   };

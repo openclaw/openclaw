@@ -7,12 +7,12 @@ import {
   registerAgentSessionLoopTestLifecycle,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
 import {
   clearEmbeddedSessionPromptStates,
   createToolResultPromptProjectionState,
   getEmbeddedSessionPromptState,
   persistToolResultProjections,
-  serializeCacheTtlToolResultProjections,
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
@@ -22,7 +22,7 @@ const sessionId = "projection-dispatch";
 afterEach(() => clearEmbeddedSessionPromptStates([sessionId]));
 
 describe("tool-result projection persistence at dispatch", () => {
-  it("restores only the latest active marker and retries changed snapshots after a failed write", async () => {
+  it("restores only the active branch and retries changed projections after a failed write", async () => {
     const { sessionManager: manager } = await createTestSession();
     const snapshot = (key: string) => ({
       prunedToolResults: [],
@@ -58,8 +58,11 @@ describe("tool-result projection persistence at dispatch", () => {
     await persistToolResultProjections(restored, appendEntry);
     await persistToolResultProjections(restored, appendEntry);
     expect(markers()).toHaveLength(4);
-    expect(manager.getBranch().at(-1)).toMatchObject({
-      data: { frozenToolResults: [{ key: "active", sourceHash: "source", texts: ["changed"] }] },
+    const reopened = createToolResultPromptProjectionState();
+    restoreCacheTtlToolResultProjections(reopened, manager.getBranch());
+    expect(serializeCacheTtlToolResultProjections(reopened)).toEqual({
+      ...snapshot("active"),
+      frozenToolResults: [{ key: "active", sourceHash: "source", texts: ["changed"] }],
     });
   });
 
@@ -69,15 +72,17 @@ describe("tool-result projection persistence at dispatch", () => {
     const projectionState = sessionPromptState.toolResults;
     const requests: Context["messages"][] = [];
     activeSession.agent.streamFn = (model, context) => {
-      const marker = manager.getEntries().at(-1);
-      expect(marker).toMatchObject({
-        type: "custom",
-        customType: "openclaw.cache-ttl",
-        data: { frozenToolResults: expect.any(Array) },
-      });
-      expect(marker?.type === "custom" && marker.data).toEqual(
+      const persisted = createToolResultPromptProjectionState();
+      restoreCacheTtlToolResultProjections(persisted, manager.getBranch());
+      expect(serializeCacheTtlToolResultProjections(persisted)).toEqual(
         serializeCacheTtlToolResultProjections(projectionState),
       );
+      for (const message of context.messages) {
+        if (message.role === "toolResult") {
+          const key = `tool:${message.toolCallId}:${message.timestamp}`;
+          expect(persisted.replacements.get(key)?.content).toEqual(message.content);
+        }
+      }
       requests.push(structuredClone(context.messages));
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }]));
     };

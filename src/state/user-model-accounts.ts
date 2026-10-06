@@ -221,37 +221,6 @@ function credentialOwner(db: DatabaseSync, authProfileId: string): string | unde
   return locator ? resolveOwner(db, locator.ownerProfileId) : undefined;
 }
 
-/** A locator identifies a record; only its current identity owner can newly select it. */
-export function isUserModelAuthProfileOwner(
-  params: { profileId: string; authProfileId: string },
-  options: OpenClawStateDatabaseOptions = {},
-): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const owner = resolveOwner(db, params.profileId);
-      if (
-        !owner ||
-        credentialOwner(db, params.authProfileId) !== owner ||
-        !tableExists(db, "secret_store_entries")
-      ) {
-        return false;
-      }
-      return Boolean(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "secret_store_entries">>(db)
-            .selectFrom("secret_store_entries")
-            .select("name")
-            .where("scope_kind", "=", "identity")
-            .where("scope_id", "=", owner)
-            .where("name", "=", `model-account:${params.authProfileId}`)
-            .where("deleted_at_ms", "is", null),
-        ),
-      );
-    }, options) ?? false
-  );
-}
-
 function accountSummary(
   authProfileId: string,
   value: string,
@@ -334,10 +303,18 @@ export function readUserModelAuthProfile(
   authProfileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAuthProfile | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = credentialOwner(db, authProfileId);
-    return owner ? readProfile(db, owner, authProfileId) : undefined;
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAuthProfileInDatabase(db, authProfileId),
+    options,
+  );
+}
+
+export function readUserModelAuthProfileInDatabase(
+  db: DatabaseSync,
+  authProfileId: string,
+): UserModelAuthProfile | undefined {
+  const owner = credentialOwner(db, authProfileId);
+  return owner ? readProfile(db, owner, authProfileId) : undefined;
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */

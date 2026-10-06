@@ -3,7 +3,6 @@
  * This module turns channel targets, thread ids, aliases, and plugin hooks into stable binding ids.
  */
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -73,13 +72,7 @@ type ResolveInboundConversationResolutionInput = {
 const CANONICAL_TARGET_PREFIXES = ["user:", "spaces/"] as const;
 
 function resolveChannelId(raw?: string | null): string | null {
-  const normalizedRaw = normalizeOptionalString(raw);
-  if (!normalizedRaw) {
-    return null;
-  }
-  return (
-    normalizeAnyChannelId(normalizedRaw) ?? normalizeOptionalLowercaseString(normalizedRaw) ?? null
-  );
+  return normalizeAnyChannelId(raw) ?? normalizeOptionalLowercaseString(raw) ?? null;
 }
 
 function normalizeResolutionTarget(
@@ -130,26 +123,18 @@ function resolveFallbackConversationTargetId(params: {
   allowNumericTopicShorthand?: boolean;
   preserveExplicitTopicSuffix?: boolean;
 }): string | undefined {
-  const { allowNumericTopicShorthand = false } = params;
-  const target = normalizeOptionalString(params.rawTarget);
-  if (!target) {
-    return undefined;
-  }
+  const target = params.rawTarget;
   const withoutKind = stripOutboundTargetKindPrefix(target);
   const withoutTopic =
     params.preserveExplicitTopicSuffix && /:topic:/iu.test(withoutKind)
       ? withoutKind
       : stripTargetTopicSuffix(withoutKind, {
-          allowNumericShorthand: allowNumericTopicShorthand,
+          allowNumericShorthand: params.allowNumericTopicShorthand ?? false,
         });
   return (
     resolveConversationIdFromTargets({
       targets: [withoutTopic],
-    }) ??
-    (withoutTopic !== target ? withoutTopic : undefined) ??
-    resolveConversationIdFromTargets({
-      targets: [target],
-    })
+    }) ?? (withoutTopic !== target ? withoutTopic : undefined)
   );
 }
 
@@ -165,7 +150,7 @@ function resolveChannelTargetId(params: {
   }
   const messaging = params.plugin?.messaging;
 
-  const lower = normalizeLowercaseStringOrEmpty(target);
+  const lower = target.toLowerCase();
   const channelPrefix = `${params.channel}:`;
   if (lower.startsWith(channelPrefix)) {
     return resolveChannelTargetId({

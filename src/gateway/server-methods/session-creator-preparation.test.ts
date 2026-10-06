@@ -10,11 +10,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  disposeOpenClawAgentDatabaseByPath,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
@@ -459,11 +459,11 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           });
         },
       });
-      await cleanupSessionStateForTest({ stateDir });
-      // This fixture moves/recreates the file, so release path validation as well as the handle.
-      disposeOpenClawAgentDatabaseByPath(
+      // Disposal writes the shared registry; drain it before moving/recreating the root.
+      await disposeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
+      await cleanupSessionStateForTest({ stateDir });
       expect(closing).toEqual([
         { agentOpen: true, stateOpen: true, rootExists: true, selector: undefined },
       ]);

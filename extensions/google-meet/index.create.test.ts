@@ -1,5 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { Command } from "commander";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import { createRequireRecord, useMeetingTestState } from "openclaw/plugin-sdk/test-fixtures";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,7 +12,6 @@ import {
   invokeGoogleMeetGatewayMethodForTest,
   setupGoogleMeetPlugin,
 } from "./src/test-support/plugin-harness.js";
-import { testing as googleMeetPluginTesting } from "./test-api.js";
 
 let meetingTestState: ReturnType<typeof useMeetingTestState>;
 
@@ -66,14 +66,13 @@ function setup(
     },
     options,
   );
-  googleMeetPluginTesting.setCallGatewayFromCliForTests(
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
     async (method, _opts, params) =>
       (await invokeGoogleMeetGatewayMethodForTest(harness.methods, method, params)) as Record<
         string,
         unknown
       >,
   );
-  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -234,8 +233,7 @@ describe("google-meet create flow", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    googleMeetPluginTesting.setCallGatewayFromCliForTests();
-    googleMeetPluginTesting.setPlatformForTests();
+    vi.restoreAllMocks();
   });
 
   afterAll(() => {

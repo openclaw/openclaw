@@ -118,10 +118,7 @@ type StatusProviderUseRef = {
   routeScope: "text" | "image";
 };
 
-type StatusProviderUse = {
-  provider: string;
-  model: string;
-  allowCodexRuntimeFallback: boolean;
+type StatusProviderUse = Omit<StatusProviderUseRef, "routeScope"> & {
   evaluation: ModelAuthAvailabilityEvaluation;
   usesCodexRuntimeAuth: boolean;
   runtimeAvailability?: AgentHarnessRuntimeAvailability;
@@ -155,28 +152,24 @@ type StatusRuntimeAuthRoute =
       runtimePluginIds: string[];
     });
 
-type StatusModelRouteIssue =
+type StatusModelRouteIssue = {
+  provider: string;
+  model: string;
+  message: string;
+} & (
   | {
       kind: "incompatible";
-      provider: string;
-      model: string;
       code: string;
-      message: string;
     }
   | {
       kind: "indeterminate";
-      provider: string;
-      model: string;
       evidence?: ModelAuthAvailabilityEvaluation["evidence"];
-      message: string;
     }
   | {
       kind: "missing-auth";
-      provider: string;
-      model: string;
       authRequirement: ProviderModelRouteCandidate["authRequirement"];
-      message: string;
-    };
+    }
+);
 
 function parseOptionalPositiveFiniteOption(raw: unknown, label: string, fallback: number): number {
   if (raw === undefined || raw === null) {
@@ -232,13 +225,9 @@ function finishModelsStatusOutput(
   check: boolean | undefined,
   checkStatus: number,
 ): void {
-  if (check) {
-    if (!requestExitAfterOneShotOutput(runtime, checkStatus)) {
-      runtime.exit(checkStatus);
-    }
-    return;
+  if (!requestExitAfterOneShotOutput(runtime, check ? checkStatus : undefined) && check) {
+    runtime.exit(checkStatus);
   }
-  requestExitAfterOneShotOutput(runtime);
 }
 
 export async function modelsStatusCommand(
@@ -427,6 +416,7 @@ export async function modelsStatusCommand(
           .filter(Boolean),
       );
       const providersFromModels = new Set<string>();
+      const modelCandidates: string[] = [];
       const providerUseRefs: StatusProviderUseRef[] = [];
       const addProviderUse = (
         raw: string | undefined,
@@ -449,10 +439,14 @@ export async function modelsStatusCommand(
         ...fallbacks,
         imageModel,
         ...imageFallbacks,
+        // Probe the configured utility route itself, not another model from its provider.
         utilityModelRef ?? "",
         ...configuredAllowRefs,
       ]) {
         const ref = resolveStatusModelRef(raw);
+        if (ref) {
+          modelCandidates.push(`${ref.provider}/${ref.model}`);
+        }
         if (ref?.provider) {
           providersFromModels.add(normalizeProviderId(ref.provider));
         }
@@ -1023,16 +1017,11 @@ export async function modelsStatusCommand(
         )
         .toSorted((a, b) => a.localeCompare(b));
 
-      const probeProfileIds = (() => {
-        if (!opts.probeProfile) {
-          return [];
-        }
-        const raw = Array.isArray(opts.probeProfile) ? opts.probeProfile : [opts.probeProfile];
-        return raw
-          .flatMap((value) => (value ?? "").split(","))
-          .map((value) => value.trim())
-          .filter(Boolean);
-      })();
+      const probeProfileIds = [opts.probeProfile ?? []]
+        .flat()
+        .flatMap((value) => (value ?? "").split(","))
+        .map((value) => value.trim())
+        .filter(Boolean);
       const probeTimeoutMs = parseOptionalPositiveFiniteOption(
         opts.probeTimeout,
         "--probe-timeout",
@@ -1049,21 +1038,6 @@ export async function modelsStatusCommand(
         8,
       );
 
-      const rawCandidates = [
-        rawModel || resolvedLabel,
-        ...fallbacks,
-        imageModel,
-        ...imageFallbacks,
-        // Probe the configured utility model itself; an arbitrary catalog model
-        // from the same provider can sit on a different auth route.
-        utilityModelRef ?? "",
-        ...configuredAllowRefs,
-      ].filter(Boolean);
-      const resolvedCandidates = rawCandidates
-        .map(resolveStatusModelRef)
-        .filter((ref): ref is { provider: string; model: string } => Boolean(ref));
-      const modelCandidates = resolvedCandidates.map((ref) => `${ref.provider}/${ref.model}`);
-
       let probeSummary: AuthProbeSummary | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
@@ -1071,7 +1045,7 @@ export async function modelsStatusCommand(
           listProbeRuntimeLoader.load(),
         ]);
         probeSummary = await withProgressTotals(
-          { label: "Probing auth profiles…", total: 1 },
+          { label: "Checking auth profiles…", total: 1 },
           async (update) => {
             return await runAuthProbes({
               cfg,
@@ -1566,7 +1540,7 @@ export async function modelsStatusCommand(
             listProbeRuntimeLoader.load(),
           ]);
         runtime.log("");
-        runtime.log(colorize(rich, theme.heading, "Auth probes"));
+        runtime.log(colorize(rich, theme.heading, "Auth checks"));
         if (probeSummary.results.length === 0) {
           runtime.log(colorize(rich, theme.muted, "- none"));
         } else {

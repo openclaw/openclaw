@@ -74,13 +74,19 @@ export async function prepareCurrentGitHubPublicationIdentity(
   });
 }
 
-export async function prepareCurrentGitHubPublicationOptionsIdentity(agentId: string) {
+export async function prepareCurrentGitHubPublicationOptionsIdentity(
+  agentId: string,
+  assertCurrent?: () => void,
+) {
+  assertCurrent?.();
   await requestCurrentGitHubOAuthRefresh(agentId);
+  assertCurrent?.();
   const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationOptionsIdentity({
     config: snapshot.config,
     sourceConfig: snapshot.sourceConfig,
     agentId,
+    assertCurrent,
   });
 }
 

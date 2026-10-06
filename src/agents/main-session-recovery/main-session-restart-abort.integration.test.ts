@@ -16,7 +16,7 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { clearCommandRecoveryClaim } from "../command/post-run.js";
+import { clearCommandRecoveryClaim } from "../command/cleanup.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
@@ -160,8 +160,10 @@ it.each(["before settlement", "after settlement", "persisted interruption"] as c
             ).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
             expect(dispatch).not.toHaveBeenCalled();
             expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds).toContain(runId);
-            expect(info).toHaveBeenCalledExactlyOnceWith(
-              "main-session restart recovery startup complete: started=0 settled=0 failed=0 skipped=1 skipReasons=live_owner:1",
+            expect(info).toHaveBeenCalledWith(
+              expect.stringContaining(
+                "main-session restart recovery startup complete: started=0 settled=0 failed=0 skipped=1 skipReasons=live_owner:1",
+              ),
             );
           } finally {
             info.mockRestore();

@@ -88,12 +88,15 @@ describe("doctor session snapshot stale runtime metadata", () => {
     note.mockClear();
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-session-snapshots-"));
     bundledSkillsDir = path.join(root, "current", "skills");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", bundledSkillsDir);
     await fs.mkdir(path.join(bundledSkillsDir, "doctor"), { recursive: true });
     await fs.writeFile(path.join(bundledSkillsDir, "doctor", "SKILL.md"), "# Doctor\n");
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     clearSessionStoreCacheForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -106,16 +109,18 @@ describe("doctor session snapshot stale runtime metadata", () => {
   }) {
     const storePath = path.join(root, "snapshot-scan.json");
     await writeSessionStore(storePath, params.store);
+    vi.stubEnv("OPENCLAW_BUNDLED_SKILLS_DIR", params.bundledSkillsDir);
     const pathExists = params.pathExists;
     const exists = pathExists
       ? vi
           .spyOn(fsSync, "existsSync")
-          .mockImplementation((filePath) => pathExists(String(filePath)))
+          .mockImplementation(
+            (filePath) => String(filePath) === storePath || pathExists(String(filePath)),
+          )
       : undefined;
     try {
       const findings = await detectSessionSnapshotHealthIssues({
-        storePaths: [storePath],
-        bundledSkillsDir: params.bundledSkillsDir,
+        cfg: { session: { store: storePath } },
         env: params.env,
       });
       return findings.map(({ storePath: _storePath, ...finding }) => finding);
@@ -198,8 +203,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
 
     const [issue] = await detectSessionSnapshotHealthIssues({
-      storePaths: [storePath],
-      bundledSkillsDir,
+      cfg: { session: { store: storePath } },
     });
 
     if (!issue) {
@@ -344,7 +348,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
     expect(
       await detectSessionSnapshotHealthIssues({
-        storePaths: [storePath],
+        cfg: { session: { store: storePath } },
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
     ).toEqual([expect.objectContaining({ expectedPath })]);
@@ -448,7 +452,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
       }),
     });
 
-    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+    await noteSessionSnapshotHealth({ cfg: { session: { store: storePath } } });
 
     expect(note).toHaveBeenCalledTimes(1);
     const [message, title] = note.mock.calls[0] as [string, string];
@@ -488,7 +492,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
         }),
       });
 
-      await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+      await noteSessionSnapshotHealth({ cfg: { session: { store: storePath } } });
 
       expect(note).toHaveBeenCalledTimes(1);
       const [message] = note.mock.calls[0] as [string, string];
@@ -522,7 +526,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     expect(raw).not.toContain(stalePath);
     expect(raw).toContain("promptRef");
 
-    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+    await noteSessionSnapshotHealth({ cfg: { session: { store: storePath } } });
 
     expect(note).toHaveBeenCalledTimes(1);
     const [message] = note.mock.calls[0] as [string, string];
@@ -556,7 +560,6 @@ describe("doctor session snapshot stale runtime metadata", () => {
 
     await noteSessionSnapshotHealth({
       cfg: { session: { store: configuredStorePath } } as OpenClawConfig,
-      bundledSkillsDir,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
 
@@ -593,7 +596,6 @@ describe("doctor session snapshot stale runtime metadata", () => {
         session: { store: templatedStore },
         agents: { entries: { main: {}, ops: {} } },
       } as OpenClawConfig,
-      bundledSkillsDir,
       env: { OPENCLAW_STATE_DIR: path.join(root, "state") },
     });
 
@@ -617,7 +619,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
     });
     const original = await fs.readFile(storePath);
 
-    await noteSessionSnapshotHealth({ storePaths: [storePath], bundledSkillsDir });
+    await noteSessionSnapshotHealth({ cfg: { session: { store: storePath } } });
 
     expect(note).not.toHaveBeenCalled();
     expect(await fs.readFile(storePath)).toEqual(original);

@@ -919,23 +919,30 @@ it("orders native reads with writers and ignores unrelated metadata notification
       runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, () =>
         withSessionEntriesFromStoresInWorker([input], () => {}, { ordered: true }),
       ),
-    ).rejects.toThrow("cannot reenter an active SQLite writer admission");
+    ).resolves.toBeUndefined();
   });
 });
 
-it.each(["entry", "store", "topology"] as const)(
+it.each(["entry", "store", "topology", "native"] as const)(
   "revokes an ordered reader after authoritative %s changes",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       const sessionKey = "agent:main:changed-consumer";
       writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-      await withSessionEntriesFromStoresInWorker(
+      let consumed = 0;
+      const reading = withSessionEntriesFromStoresInWorker(
         [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
         ([read]) => {
+          consumed += 1;
           read!.assertCurrent();
           if (change === "entry") {
             writeSessionEntry(database, sessionKey, { sessionId: "successor", updatedAt: 2 });
+          } else if (change === "native") {
+            database.db
+              .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+              .run(sessionKey);
+            read!.assertCurrent();
           } else if (change === "store") {
             sessionChanges.emit({
               all: true,
@@ -949,6 +956,38 @@ it.each(["entry", "store", "topology"] as const)(
         },
         { ordered: true },
       );
+      if (change === "native") {
+        await expect(reading).rejects.toThrow("Session entry changed during read");
+      } else {
+        await reading;
+      }
+      expect(consumed).toBe(1);
     });
   },
 );
+
+it("refuses an ordered result when its database closes during reader cleanup", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:closing-consumer";
+    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+    let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
+    const reading = withSessionEntriesFromStoresInWorker(
+      [{ agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env }],
+      ([read]) => {
+        read!.assertCurrent();
+        queueMicrotask(() => {
+          closing = closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+        });
+        return read!.result.entries[0]?.entry;
+      },
+      { ordered: true },
+    );
+    try {
+      await expect(reading).rejects.toThrow("revoked");
+      expect(closing).toBeDefined();
+    } finally {
+      await closing;
+    }
+  });
+});

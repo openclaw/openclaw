@@ -356,11 +356,6 @@ export function resolveInFlightRunSnapshot(params: {
       normalizeOptionalLowercaseString(params.defaultAgentId);
     return runAgentId === requestedAgentId;
   };
-  // Some callers/tests run without populated run state; guard like
-  // collectTrackedActiveSessionRuns so a missing map is a no-op, not a throw.
-  if (!(params.chatAbortControllers instanceof Map)) {
-    return undefined;
-  }
   // Timestamp wins over insertion order; runId breaks ties deterministically.
   let best: { runId: string; startedAtMs: number } | undefined;
   for (const [runId, entry] of params.chatAbortControllers) {

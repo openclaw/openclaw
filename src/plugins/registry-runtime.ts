@@ -369,6 +369,15 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 assertRuntimeCurrent();
                 return result;
               }),
+            withSessionFacts: (select, run) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.withSessionFacts(select, (snapshot) => {
+                  assertRuntimeCurrent();
+                  return run(snapshot);
+                });
+                assertRuntimeCurrent();
+                return result;
+              }),
             subscribeSessionChanges: (listener) =>
               runWithPluginScope(() =>
                 gateway.subscribeSessionChanges((event) =>

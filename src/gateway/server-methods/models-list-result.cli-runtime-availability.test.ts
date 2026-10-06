@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   clearUserProfileAuthLink,
@@ -8,10 +9,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "./models-list-result.js";
+import { buildModelsListResult } from "./models-list-result.js";
 import {
   createModelsListTestContext,
   listModels,
@@ -176,7 +174,7 @@ describe("models.list CLI runtime availability", () => {
             params: { view: "configured", preparedOnly: true },
             preloadedCatalog: { agentId: "main", config: cfg, snapshot },
             preloadedOnly: true,
-            catalogProjector: createGatewayAgentModelCatalogProjector({
+            catalogProjector: createModelCatalogDecisions({
               cfg,
               agentId: "main",
               agentDir: state.agentDir(),
@@ -284,7 +282,7 @@ describe("models.list CLI runtime availability", () => {
           params: { view: "all", preparedOnly: true },
           preloadedCatalog: { agentId: "main", config: cfg, snapshot },
           preloadedOnly: true,
-          catalogProjector: createGatewayAgentModelCatalogProjector({
+          catalogProjector: createModelCatalogDecisions({
             cfg,
             agentId: "main",
             agentDir: state.agentDir(),

@@ -65,7 +65,7 @@ function createCurrentEntryRead(
               projection: "list",
             })?.entry
           : lookup === "logical"
-            ? readSessionEntryRow(database, sessionKey, "full")?.entry
+            ? readSessionEntryRow(database, sessionKey, "list")?.entry
             : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
       if (options.projection === "capability") {
         entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;

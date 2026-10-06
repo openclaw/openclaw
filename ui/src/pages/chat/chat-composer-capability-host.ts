@@ -34,7 +34,7 @@ import { renderLibraryPinRead } from "../skills/library-detail.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { CapabilityMenuProps } from "./components/chat-composer-types.ts";
+import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.ts";
 import {
   ComposerSkillCatalog,
   composerWebSearchBaseEnabled,
@@ -465,7 +465,7 @@ export class ChatComposerCapabilityHost {
     agentId: string,
     toolAccessOpen = false,
     skillsOpen = false,
-  ): CapabilityMenuProps {
+  ): ChatComposerCapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
       this.connectionEpoch = state.connectionEpoch;

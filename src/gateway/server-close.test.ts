@@ -7,6 +7,7 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { registerDispatcher } from "../auto-reply/reply/dispatcher-registry.js";
 import {
   createReplyOperation,
   type ReplyOperation,
@@ -153,7 +154,7 @@ const createGatewayCloseHandler = createGatewayCloseTestHandlerFactory(
   await import("./server-close.js"),
 );
 const { createChatRunState, isChatAbortMarkerCurrent } = await import("./server-chat-state.js");
-const { finishGatewayRestartTrace, recordGatewayRestartTraceSpan, startGatewayRestartTrace } =
+const { finishGatewayRestartTrace, formatGatewayPendingCloseSteps, startGatewayRestartTrace } =
   await import("./restart-trace.js");
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 type MarkMainSessionsAbortedForRestart = NonNullable<
@@ -1249,39 +1250,6 @@ describe("createGatewayCloseHandler", () => {
     ).toBe(true);
   });
 
-  it("emits restart ready child spans without shortening the parent ready span", async () => {
-    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
-
-    startGatewayRestartTrace("restart.signal.received", [["reason", "test restart"]]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    recordGatewayRestartTraceSpan("restart.ready.runtime.post-attach", 12, 40, [
-      ["eventLoopMax", "1.0ms"],
-    ]);
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    finishGatewayRestartTrace("restart.ready");
-
-    const messages = mocks.logInfo.mock.calls.map(([message]) => String(message));
-    expect(messages).toEqual(
-      expect.arrayContaining([
-        expect.stringMatching(
-          /^restart trace: restart\.ready\.runtime\.post-attach 12\.0ms total=40\.0ms eventLoopMax=1\.0ms$/u,
-        ),
-      ]),
-    );
-    const parentReadyLine = messages.find((message) =>
-      /^restart trace: restart\.ready [0-9.]+ms total=[0-9.]+ms$/u.test(message),
-    );
-    expect(parentReadyLine).toBeDefined();
-    const parentDuration = Number(
-      /^restart trace: restart\.ready ([0-9.]+)ms/u.exec(parentReadyLine ?? "")?.[1],
-    );
-    expect(parentDuration).toBeGreaterThan(30);
-  });
-
   it.each([
     { action: "shutdown", timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS },
     { action: "pre-restart", timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS },
@@ -1304,11 +1272,14 @@ describe("createGatewayCloseHandler", () => {
       expect(stopPeriodicTasks).toHaveBeenCalledOnce();
       expect(mocks.stopGmailWatcher).toHaveBeenCalledOnce();
       expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+      expect(formatGatewayPendingCloseSteps()).toContain(`restart.close.gateway-${action}-hook=`);
+      expect(formatGatewayPendingCloseSteps()).not.toContain(`gateway-${action}-hook-grace=`);
     } finally {
       cleanup.resolve();
       await closing;
     }
     expect((await closing).warnings).toContain(`gateway:${action}`);
+    expect(formatGatewayPendingCloseSteps()).toBe("none");
     expect(stopPeriodicTasks).toHaveBeenCalledOnce();
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(action === "pre-restart" ? 2 : 1);
     expect(
@@ -1527,36 +1498,33 @@ describe("createGatewayCloseHandler", () => {
     expect(order).toStrictEqual(["reply-drain", "session-end"]);
   });
 
-  it("waits for pending replies to settle before restart shutdown", async () => {
+  it("drains each Gateway's replies independently of another Gateway's pending work", async () => {
     vi.useFakeTimers();
-    let pendingReplies = 1;
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        getPendingReplyCount: () => pendingReplies,
-      }),
-    );
-
-    const closePromise = close({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-      drainTimeoutMs: 200,
-    });
-    await vi.advanceTimersByTimeAsync(100);
-    pendingReplies = 0;
-    await vi.advanceTimersByTimeAsync(100);
-    const result = await closePromise;
-
-    expect(result.warnings).not.toContain("restart-reply-drain");
-    expect(
-      mocks.logInfo.mock.calls.some(([message]) =>
-        String(message).includes("waiting for 1 pending reply(ies) before restart shutdown"),
-      ),
-    ).toBe(true);
-    expect(
-      mocks.logInfo.mock.calls.some(([message]) =>
-        String(message).includes("restart reply drain completed after"),
-      ),
-    ).toBe(true);
+    let firstPending = 1;
+    let secondPending = 1;
+    const unregister = registerDispatcher(() => secondPending);
+    const firstDeps = createGatewayCloseTestDeps({ getPendingReplyCount: () => firstPending });
+    const secondDeps = createGatewayCloseTestDeps({ getPendingReplyCount: () => secondPending });
+    const options = { restartExpectedMs: 123, drainTimeoutMs: 500 };
+    const firstClose = createGatewayCloseHandler(firstDeps)(options);
+    const secondClose = createGatewayCloseHandler(secondDeps)(options);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstDeps.chatRunState.clear).not.toHaveBeenCalled();
+      firstPending = 0;
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await firstClose).warnings).not.toContain("restart-reply-drain");
+      expect(secondDeps.chatRunState.clear).not.toHaveBeenCalled();
+      secondPending = 0;
+      await vi.advanceTimersByTimeAsync(100);
+      expect((await secondClose).warnings).not.toContain("restart-reply-drain");
+    } finally {
+      firstPending = 0;
+      secondPending = 0;
+      unregister();
+      await vi.runAllTimersAsync();
+      await Promise.allSettled([firstClose, secondClose]);
+    }
   });
 
   it("marks pending reply work after its chat run registration is gone", async () => {
@@ -1745,7 +1713,7 @@ describe("createGatewayCloseHandler", () => {
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
         String(message).includes(
-          "restart reply drain timed out after 100ms with 2 active run(s) still active",
+          "restart reply drain timed out after 100ms with chatRuns=2 still active",
         ),
       ),
     ).toBe(true);

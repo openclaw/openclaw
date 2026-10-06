@@ -52,12 +52,12 @@ import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recovery.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   readSubagentSessionStore,
   removeSubagentSessionEntry,
   writeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -416,7 +416,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
         await activateGatewayRuntime();
         await testing.sweepOnceForTests();
         expect(dispatchAgent).not.toHaveBeenCalled();
-        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
           runId,
           execution: { status: "terminal", outcome: { status: "error" } },
         });
@@ -584,7 +584,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             before,
           );
           expect(
-            getSubagentRunByChildSessionKey(childSessionKey)?.execution.interruptionReason,
+            (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.interruptionReason,
           ).toBeUndefined();
           return;
         }
@@ -609,7 +609,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
             status: "interrupted",
           });
           expect(
-            getSubagentRunByChildSessionKey(childSessionKey)?.execution.interruptionReason,
+            (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.interruptionReason,
           ).toBe("gateway-restart");
         }
       } finally {
@@ -642,7 +642,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
 
     await testing.sweepOnceForTests();
 
-    const after = getSubagentRunByChildSessionKey(childSessionKey);
+    const after = await getSubagentRunByChildSessionKey(childSessionKey);
     expect(dispatchAgent).not.toHaveBeenCalled();
     expect(after?.execution.endedAt).toBeTypeOf("number");
     expect(after?.execution.outcome?.status).toBe("error");
@@ -692,7 +692,7 @@ describe("subagent orphan recovery — faithful restart path", () => {
       await testing.sweepOnceForTests();
 
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
         runId,
         execution: { status: "terminal", outcome: { status: "error" } },
       });

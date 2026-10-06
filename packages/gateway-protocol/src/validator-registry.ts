@@ -595,3 +595,6 @@ export const validateTranscriptsSummarizeParams = compile(S.TranscriptsSummarize
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
+
+export const validateCatalogBrowseParams = compile(S.CatalogBrowseParamsSchema);
+export const validateCatalogSearchKeywordsParams = compile(S.CatalogSearchKeywordsParamsSchema);

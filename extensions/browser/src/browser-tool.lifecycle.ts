@@ -1,4 +1,6 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
 import { resolveBrowserBaseUrl } from "./browser-tool.routing.js";
 import {
@@ -9,9 +11,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
-  jsonResult,
-  normalizeOptionalString,
-} from "./browser-tool.runtime.js";
+} from "./browser/client.js";
 import { parseSystemProfileDomains } from "./browser/system-profile-domains.js";
 
 const unavailableSystemProfiles = (unavailableReason: string) => ({

@@ -161,22 +161,6 @@ function resolveMessageId(result: Record<string, unknown> | null | undefined): s
   return raw ? raw.trim() : null;
 }
 
-// Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
-function resolveOutboundMessageGuid(
-  result: Record<string, unknown> | null | undefined,
-): string | null {
-  if (!result) {
-    return null;
-  }
-  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
-    const guid = normalizeResolvedMessageGuid(result[key]);
-    if (guid) {
-      return guid;
-    }
-  }
-  return null;
-}
-
 function isNumericMessageRowId(value: string | null | undefined): value is string {
   return typeof value === "string" && /^\d+$/.test(value.trim());
 }
@@ -188,22 +172,6 @@ function normalizeResolvedMessageGuid(value: unknown): string | null {
   const trimmed = value.trim();
   // Status placeholders and numeric ROWIDs cannot match inbound tapback GUIDs.
   return normalizeIMessageMessageId(trimmed) && !isNumericMessageRowId(trimmed) ? trimmed : null;
-}
-
-async function resolveMessageGuidFromChatDb(params: {
-  dbPath?: string;
-  messageId: string;
-}): Promise<string | null> {
-  const dbPath = params.dbPath?.trim();
-  const messageId = params.messageId.trim();
-  if (!dbPath || !isNumericMessageRowId(messageId)) {
-    return null;
-  }
-  return normalizeResolvedMessageGuid(
-    await withIMessageReceiptGuidReader(dbPath, (read) =>
-      read({ type: "messageGuid", input: { messageId } }),
-    ),
-  );
 }
 
 function canResolveLatestSentMessageGuidFromChatDb(dbPath?: string): boolean {
@@ -225,21 +193,30 @@ async function resolveApprovalBindingMessageGuid(params: {
   result: Record<string, unknown> | null | undefined;
   resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
 }): Promise<string | null> {
-  const immediateGuid = resolveOutboundMessageGuid(params.result);
-  if (immediateGuid) {
-    return immediateGuid;
+  // Tapbacks identify their target by GUID, never the numeric ROWID some sends return.
+  for (const key of ["messageGuid", "guid", "messageId", "message_id", "id"]) {
+    const guid = normalizeResolvedMessageGuid(params.result?.[key]);
+    if (guid) {
+      return guid;
+    }
   }
   const messageId = params.messageId?.trim();
   if (!messageId || !isNumericMessageRowId(messageId)) {
     return null;
   }
-  const resolver = params.resolveMessageGuidImpl ?? resolveMessageGuidFromChatDb;
-  return normalizeResolvedMessageGuid(
-    await resolver({
-      dbPath: params.dbPath,
-      messageId,
-    }),
-  );
+  if (params.resolveMessageGuidImpl) {
+    return normalizeResolvedMessageGuid(
+      await params.resolveMessageGuidImpl({ dbPath: params.dbPath, messageId }),
+    );
+  }
+  const dbPath = params.dbPath?.trim();
+  return dbPath
+    ? normalizeResolvedMessageGuid(
+        await withIMessageReceiptGuidReader(dbPath, (read) =>
+          read({ type: "messageGuid", input: { messageId } }),
+        ),
+      )
+    : null;
 }
 
 async function resolveFallbackSentMessageGuid(params: {

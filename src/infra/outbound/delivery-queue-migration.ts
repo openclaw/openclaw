@@ -155,27 +155,24 @@ async function prepareLegacyEntryCheckpoint(params: {
   if (prepareForReplay) {
     let modifiersStarted = false;
     let leaseLost = false;
-    const renewLease = (): void => {
-      if (leaseLost) {
-        return;
-      }
-      const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
-      if (
-        !replacePendingDeliveryQueueEntry({
-          queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
-          expectedEntry: sourceEntry,
-          replacementEntry: renewed,
-          stateDir: params.stateDir,
-        })
-      ) {
-        leaseLost = true;
-        return;
-      }
-      sourceEntry = renewed;
-    };
     const renewLeaseSafely = (): void => {
       try {
-        renewLease();
+        if (leaseLost) {
+          return;
+        }
+        const renewed = withLegacyPreparationLease(sourceEntry, params.ownerId);
+        if (
+          !replacePendingDeliveryQueueEntry({
+            queueName: OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
+            expectedEntry: sourceEntry,
+            replacementEntry: renewed,
+            stateDir: params.stateDir,
+          })
+        ) {
+          leaseLost = true;
+          return;
+        }
+        sourceEntry = renewed;
       } catch (error) {
         leaseLost = true;
         params.log.warn(

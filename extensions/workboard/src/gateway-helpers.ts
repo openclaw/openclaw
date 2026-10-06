@@ -90,7 +90,7 @@ export function assertNoCursorAdvance(params: Record<string, unknown>) {
   }
 }
 
-export function resolveGatewayWorkboardWorkspaceAccess(params: {
+function resolveGatewayWorkboardWorkspaceAccess(params: {
   context: GatewayMethodContext["context"];
   client: GatewayMethodContext["client"];
 }): WorkboardWorkspaceAccess {

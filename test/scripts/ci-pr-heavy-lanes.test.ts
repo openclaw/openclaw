@@ -12,6 +12,42 @@ import {
   type WorkflowStep,
 } from "./ci-workflow.test-support.js";
 
+it.each(["openclaw/openclaw", "contributor/openclaw"])(
+  "keeps TypeScript cycle and Kysely checks in the existing PR guard for %s",
+  (headRepository) => {
+    for (const [changedPath, cycles, kysely] of [
+      ["src/skills/runtime/refresh.ts", true, true],
+      ["extensions/telegram/src/runtime.ts", true, true],
+      ["packages/media-core/src/runtime.mts", true, true],
+      ["ui/src/runtime.tsx", true, false],
+      ["src/shared/runtime.js", false, false],
+    ] as const) {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        checkFamilyScope: true,
+        eventName: "pull_request",
+        runnerProfile: "hybrid",
+        changedPaths: [changedPath],
+        scopeEnv: { OPENCLAW_CI_HEAD_REPOSITORY: headRepository },
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_pr_madge_import_cycles).toBe(String(cycles));
+      expect(result.outputs.run_pr_kysely_guardrails).toBe(String(kysely));
+      const rows = ["check_matrix", "check_additional_matrix"].flatMap(
+        (key) =>
+          JSON.parse(expectDefined(result.outputs[key], key)).include as Array<{
+            check_name: string;
+            task?: string;
+            group?: string;
+          }>,
+      );
+      expect(rows.filter((row) => (row.task ?? row.group) === "guards")).toHaveLength(1);
+      expect(rows.some((row) => row.group === "runtime-topology-architecture")).toBe(false);
+      expect(rows.some((row) => /import-cycle|kysely/u.test(row.check_name))).toBe(false);
+    }
+  },
+);
+
 it("does not budget a disabled PR screenshot request", () => {
   const results = ["false", "true"].map((hint) => {
     const result = runCiManifestFixture({
@@ -66,6 +102,8 @@ it.each([
     },
   });
   expect(result.status, result.output).toBe(0);
+  expect(result.outputs.run_pr_madge_import_cycles).toBe(String(deferred));
+  expect(result.outputs.run_pr_kysely_guardrails).toBe(String(deferred));
   for (const flag of [
     "run_ui_real_gateway",
     "run_checks_windows",

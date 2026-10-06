@@ -411,23 +411,18 @@ final class QuickChatWindowPicker {
         }
         self.captureTask = Task { [weak self] in
             guard let self else { return }
+            defer { self.clearCaptureTask(for: operationID) }
             do {
                 try await Task.sleep(for: .milliseconds(80))
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 let data = try await capture()
                 guard self.operationID == operationID,
                       self.model.activePresentationID == presentationID,
                       !Task.isCancelled
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 if mode == .area {
                     self.finishInteraction(invalidateOperation: false)
                 }
@@ -439,10 +434,7 @@ final class QuickChatWindowPicker {
                 guard accepted,
                       self.operationID == operationID,
                       self.model.activePresentationID == presentationID
-                else {
-                    self.clearCaptureTask(for: operationID)
-                    return
-                }
+                else { return }
                 try? await Task.sleep(for: .seconds(0.45))
                 let stillCurrent = self.operationID == operationID &&
                     self.model.activePresentationID == presentationID &&
@@ -452,7 +444,7 @@ final class QuickChatWindowPicker {
                     self.onSendAccepted()
                 }
             } catch is CancellationError {
-                self.clearCaptureTask(for: operationID)
+                return
             } catch {
                 // A stale operation cannot fail or restore a newer capture's presentation.
                 self.model.failCapturePipeline(pipelineID)

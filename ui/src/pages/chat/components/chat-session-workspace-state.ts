@@ -43,11 +43,6 @@ export function trackSessionCheckoutSidebar(content: SidebarSelection) {
   checkoutSidebarContents.add(content);
 }
 
-export function openSessionCheckoutSidebar(state: SessionWorkspaceHost, content: SidebarSelection) {
-  trackSessionCheckoutSidebar(content);
-  state.handleOpenSidebar(content);
-}
-
 function clearSessionCheckoutSidebar(state: SessionWorkspaceHost) {
   if (state.sidebarContent && checkoutSidebarContents.has(state.sidebarContent)) {
     state.sidebarContent = null;

@@ -10,12 +10,7 @@ import { CONFIG_DIR_NAME } from "../package-metadata.js";
 import { canonicalizePath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { createEventBus, type EventBus } from "./event-bus.js";
-import {
-  clearExtensionCache,
-  createExtensionRuntime,
-  loadExtensionFromFactory,
-  loadExtensionsCached,
-} from "./extensions/loader.js";
+import { createExtensionRuntime, loadExtensionFromFactory } from "./extensions/loader.js";
 import type { Extension, ExtensionFactory, LoadExtensionsResult } from "./extensions/types.js";
 import type { PromptTemplate } from "./prompt-templates.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
@@ -61,7 +56,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   private extensionThemeSourceInfos = new Map<string, SourceInfo>();
   private lastPromptPaths: string[] = [];
   private lastThemePaths: string[] = [];
-  private loaded = false;
 
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
@@ -119,14 +113,15 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   async reload(): Promise<void> {
-    if (this.loaded) {
-      clearExtensionCache();
-    }
     this.extensionSkillSourceInfos = new Map();
     this.extensionPromptSourceInfos = new Map();
     this.extensionThemeSourceInfos = new Map();
 
-    const extensionsResult = await loadExtensionsCached([], this.cwd, this.eventBus);
+    const extensionsResult: LoadExtensionsResult = {
+      extensions: [],
+      errors: [],
+      runtime: createExtensionRuntime(),
+    };
     for (const [index, factory] of this.extensionFactories.entries()) {
       const extensionPath = `<inline:${index + 1}>`;
       try {
@@ -158,7 +153,6 @@ export class DefaultResourceLoader implements ResourceLoader {
     this.updateSkillsFromPaths([]);
     this.updatePromptsFromPaths([]);
     this.updateThemesFromPaths([]);
-    this.loaded = true;
   }
 
   private registerExtensionPaths(
@@ -238,24 +232,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 
   private resolveSourceInfoForPath(
     resourcePath: string,
-    extraSourceInfos?: Map<string, SourceInfo>,
+    extraSourceInfos: Map<string, SourceInfo>,
     existing?: SourceInfo,
   ): SourceInfo {
-    if (!resourcePath) {
-      return existing ?? this.getDefaultSourceInfoForPath(resourcePath);
-    }
-
-    if (resourcePath.startsWith("<")) {
-      return this.getDefaultSourceInfoForPath(resourcePath);
-    }
-
     const normalizedResourcePath = resolve(resourcePath);
-    if (extraSourceInfos) {
-      for (const [sourcePath, sourceInfo] of extraSourceInfos.entries()) {
-        const normalizedSourcePath = resolve(sourcePath);
-        if (isPathInside(normalizedSourcePath, normalizedResourcePath)) {
-          return { ...sourceInfo, path: resourcePath };
-        }
+    for (const [sourcePath, sourceInfo] of extraSourceInfos) {
+      if (isPathInside(sourcePath, normalizedResourcePath)) {
+        return { ...sourceInfo, path: resourcePath };
       }
     }
 
@@ -263,15 +246,6 @@ export class DefaultResourceLoader implements ResourceLoader {
   }
 
   private getDefaultSourceInfoForPath(filePath: string): SourceInfo {
-    if (filePath.startsWith("<") && filePath.endsWith(">")) {
-      return {
-        path: filePath,
-        source: filePath.slice(1, -1).split(":")[0] || "temporary",
-        scope: "temporary",
-        origin: "top-level",
-      };
-    }
-
     const normalizedPath = resolve(filePath);
     for (const [baseDir, scope] of [
       [this.agentDir, "user"],

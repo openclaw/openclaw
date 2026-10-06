@@ -865,7 +865,7 @@ test("projects.remove refuses to delete a cloned checkout referenced by a live w
       name: "Managed",
       originUrl,
     });
-    insertRegistryWorktree(
+    await insertRegistryWorktree(
       process.env,
       {
         id: "live-worktree",

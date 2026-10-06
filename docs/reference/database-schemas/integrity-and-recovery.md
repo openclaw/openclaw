@@ -14,13 +14,14 @@ remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
-starts as soon as the listener binds, with at most two databases opening
-concurrently. Agent-local session preparation waits for restored recovery owners,
-then runs with up to four agents concurrently. Only credential/model publication
+starts after Gateway sidecars are ready, with at most two databases opening
+concurrently. Slow opens and index repairs therefore cannot occupy shared SQLite
+workers ahead of plugin-service startup. Agent-local session preparation then
+runs with up to four agents concurrently. Only credential/model publication
 and final admission are serialized, in the order agents finish session preparation;
 a slow open or migration does not hold that publication turn. Readiness reports
 pending required stores in
-`agentDatabases` without failing the Gateway probe; confirmed database failures
+`agentDatabases` without failing the Gateway check; confirmed database failures
 still fail readiness. The validation deadlines, dirty-close checks, and
 clean-close receipt requirements are unchanged; a deferred store is never
 admitted for writes merely because the foreground wait expired.
@@ -28,6 +29,17 @@ Chat metadata and model listings refresh when an agent finishes admission, so
 they include newly recovered stores.
 Update canaries retain foreground inspection and strict database readiness because
 they do not activate background agent preparation.
+
+Missing or changed canonical index definitions also defer an agent to that same
+startup owner, even with a reusable clean-close receipt. Foreground inspection
+compares schema metadata without rebuilding indexes. After sidecars are ready,
+the SQLite worker repairs the indexes atomically before admitting the agent.
+That agent's session reads and writes remain unavailable; health, Control UI,
+and admitted agents can proceed. The repair log names the rebuilt indexes and
+elapsed time. Deferred preparation timing includes the repair; foreground
+`sessions.admission` does not. Matching definitions are not rebuilt. A crash
+before the repair commits rolls back its DDL, and the next startup detects the
+remaining drift again. Physical corruption still requires explicit Doctor repair.
 
 For current-schema stores without a reusable clean-close receipt, ordinary
 Gateway inspection checks compatibility, ownership, and schema shape, then
@@ -190,6 +202,11 @@ reclamation connections close immediately. Active executions close when their
 final borrower releases them; active reclamation requests settle before closing.
 External cleanup can still be pending. Cancellation alone never certifies a
 receipt: the last lease must still complete its checkpoint and native close.
+Restart recovery markers and reply cancellation precede background-service
+joins, including scheduled continuation delivery. An interrupted external restart
+can exit after accepted terminal writes, memory preparation, and database close
+settle, without waiting for unrelated service teardown. Scheduled deliveries retain
+their Gateway owner so restart cancellation reaches their reply admissions.
 Database retirement completes independently for each path. A database whose
 resources have settled can publish its clean-close receipt while another database
 still owns pending work. Each path still joins its accepted writers, pending opens,
@@ -644,12 +661,14 @@ so running it while the lock is held can fail with the same contention.
 `Cannot determine whether database paths alias` means OpenClaw could not safely
 compare paths that do not yet exist. Check permission to create and remove entries
 under the nearest existing parent directory, then retry. Comparisons use bounded
-filesystem probes: each missing suffix permits up to 8,192 UTF-16 code units, with
+filesystem checks: each missing suffix permits up to 8,192 UTF-16 code units, with
 at most 32,768 forward filesystem observations. Simplify unusually long paths if
-those limits are exceeded. Incomplete probe cleanup never becomes a cached
+those limits are exceeded. Incomplete check cleanup never becomes a cached
 path-identity result.
 
-### A mount probe times out while opening a local database
+<a id="a-mount-probe-times-out-while-opening-a-local-database" />
+
+### A mount check times out while opening a local database
 
 On macOS, native filesystem inspection can confirm APFS after mount enumeration
 times out. For a canonical database directory, OpenClaw then keeps WAL enabled

@@ -1,6 +1,6 @@
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import { projectPublicSessionEntry } from "../../config/sessions/session-entry-projection.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
@@ -9,6 +9,7 @@ import {
   withPluginRuntimeGenerationScope,
 } from "../../plugins/runtime/generation-scope.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
@@ -216,6 +217,7 @@ export async function compactEmbeddedAgentSessionDirect(
   paramsInput: CompactEmbeddedAgentSessionRuntimeParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
+  const parentSignal = getAsyncWorkSignal();
   const memoryTranscript = readCompactionAccountingRecorder(
     paramsBase.contextEngineRuntimeContext,
   )?.memoryTranscript;
@@ -226,7 +228,16 @@ export async function compactEmbeddedAgentSessionDirect(
       ...paramsBase,
       missingSessionKey: "resolve-existing",
     }));
-  const entry = loadSessionEntryReadOnly({ ...runSessionTarget, readConsistency: "latest" });
+  const assertReadCurrent = () => {
+    parentSignal?.throwIfAborted();
+    paramsBase.abortSignal?.throwIfAborted();
+    memoryTranscript?.assertActive();
+  };
+  const entry = await readSessionEntryReadOnlyInWorker(
+    { ...runSessionTarget, readConsistency: "latest" },
+    assertReadCurrent,
+  );
+  assertReadCurrent();
   const lockedHarnessRuntime = resolveSessionPinnedHarnessId(entry);
   const transcriptBytePreflightClaim = consumeTranscriptBytePreflightClaim(
     paramsBase,

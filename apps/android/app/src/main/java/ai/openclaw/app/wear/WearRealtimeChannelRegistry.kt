@@ -241,13 +241,13 @@ internal class WearRealtimeChannelRegistry(
       System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(connectionReadyTimeoutMillis)
     while (true) {
       currentCoroutineContext().ensureActive()
-      when (val selection = reserveClaim(nodeId, attemptId, expectedPath, key, sequence)) {
+      when (val selection = reserveClaim(key, attemptId, sequence)) {
         is ChannelClaimSelection.Claimed -> {
           return selection.claim
         }
 
         is ChannelClaimSelection.Promote -> {
-          return completePromotion(nodeId, attemptId, key, selection)
+          return completePromotion(key, attemptId, selection)
         }
 
         ChannelClaimSelection.Superseded -> {
@@ -268,20 +268,18 @@ internal class WearRealtimeChannelRegistry(
   }
 
   private suspend fun reserveClaim(
-    nodeId: String,
-    attemptId: String,
-    expectedPath: String,
     key: ChannelKey,
+    attemptId: String,
     sequence: Long,
   ): ChannelClaimSelection =
     lifecycleMutex.withLock {
-      if (latestClaimSequences[nodeId] != sequence) return@withLock ChannelClaimSelection.Superseded
-      if (promotingConnections.keys.any { promotingKey -> promotingKey.nodeId == nodeId }) {
+      if (latestClaimSequences[key.nodeId] != sequence) return@withLock ChannelClaimSelection.Superseded
+      if (promotingConnections.keys.any { promotingKey -> promotingKey.nodeId == key.nodeId }) {
         return@withLock ChannelClaimSelection.Wait
       }
       val connection = pendingConnections.remove(key)
       if (connection != null) {
-        val displaced = connections[nodeId]
+        val displaced = connections[key.nodeId]
         // Reservation is the ordering boundary. Later claims wait for this bounded handoff, then may replace it.
         connection.ready = false
         displaced?.ready = false
@@ -292,10 +290,10 @@ internal class WearRealtimeChannelRegistry(
           claimSequence = sequence,
         )
       }
-      connections[nodeId]?.let { active ->
+      connections[key.nodeId]?.let { active ->
         if (active.claimSequence > sequence) return@withLock ChannelClaimSelection.Superseded
         val current = active.owner
-        if (active.ready && active.channel.path == expectedPath) {
+        if (active.ready && active.channel.path == key.path) {
           if (current?.attemptId == attemptId) {
             active.claimSequence = sequence
             return@withLock ChannelClaimSelection.Claimed(
@@ -303,7 +301,7 @@ internal class WearRealtimeChannelRegistry(
             )
           }
           if (current == null) {
-            val owner = WearRealtimeAttemptOwner(nodeId, attemptId, active.generation)
+            val owner = WearRealtimeAttemptOwner(key.nodeId, attemptId, active.generation)
             active.owner = owner
             active.claimSequence = sequence
             return@withLock ChannelClaimSelection.Claimed(
@@ -344,9 +342,8 @@ internal class WearRealtimeChannelRegistry(
   }
 
   private suspend fun completePromotion(
-    nodeId: String,
-    attemptId: String,
     key: ChannelKey,
+    attemptId: String,
     promotion: ChannelClaimSelection.Promote,
   ): WearRealtimeChannelClaim? {
     var connection = promotion.connection
@@ -375,11 +372,11 @@ internal class WearRealtimeChannelRegistry(
               connection = replacement
             } else {
               promotingConnections.remove(key, connection)
-              owner = WearRealtimeAttemptOwner(nodeId, attemptId, connection.generation)
+              owner = WearRealtimeAttemptOwner(key.nodeId, attemptId, connection.generation)
               connection.owner = owner
               connection.claimSequence = promotion.claimSequence
               connection.ready = true
-              connections[nodeId] = connection
+              connections[key.nodeId] = connection
               promoted = true
             }
             true

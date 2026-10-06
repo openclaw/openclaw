@@ -221,7 +221,7 @@ export function projectGoogleMessages(params: {
 
       const modelSupportsMultimodalFunctionResponse = supportsMultimodalFunctionResponse(model.id);
 
-      const responseValue = hasText ? sanitizeText(textResult) : (mediaPlaceholder ?? "");
+      const responseValue = hasText ? textResult : (mediaPlaceholder ?? "");
 
       const imageParts: GoogleContentPart[] = imageContent.map((imageBlock) => ({
         inlineData: {

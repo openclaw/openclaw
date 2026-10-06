@@ -121,7 +121,20 @@ it.each(["other-owner", "pending-authority"])(
       expect(snapshot.degradedOwners).toEqual([]);
     };
     if (scope === "pending-authority") {
+      const loadAuthStore = vi.fn();
+      const pending = await prepareSecretsRuntimeSnapshot({
+        config: {},
+        env,
+        agentDirs: [agentDir],
+        includeConfigRefs: false,
+        loadAuthStore,
+      });
+      expect(pending.authStores).toEqual([]);
+      expect(pending.degradedOwners).toEqual([]);
+      expect(loadAuthStore).not.toHaveBeenCalled();
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBe(refusal);
       await preparePendingAgentDatabase(refusal, { env, assertCurrent: () => {} }, prepare);
+      expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toBeUndefined();
     } else {
       await prepare();
     }

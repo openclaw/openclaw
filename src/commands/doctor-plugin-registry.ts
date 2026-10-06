@@ -72,11 +72,6 @@ type StaleManagedNpmBundledPlugin = {
   version?: string;
 };
 
-type StaleManagedNpmBundledPluginRepairResult = {
-  installRecords: Record<string, PluginInstallRecord>;
-  removedPluginIds: string[];
-};
-
 type PluginRegistryHealthIssue =
   | {
       kind: "registry-missing-or-stale";
@@ -281,7 +276,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams & {
     installRecords?: Record<string, PluginInstallRecord>;
   },
-): StaleManagedNpmBundledPluginRepairResult | null {
+) {
   const stale = listStaleManagedNpmBundledPlugins(params);
   if (stale.length === 0) {
     return null;
@@ -468,10 +463,9 @@ export function pluginRegistryIssueToHealthFinding(
         issue.packageDir,
         "Restore access to the package files, then run `openclaw doctor` again.",
       );
-    case "stale-managed-npm-install-generation":
+    default:
       return staleManagedNpmInstallGenerationToHealthFinding(issue);
   }
-  return assertNeverPluginRegistryIssue(issue);
 }
 
 export function pluginRegistryIssueToRepairEffect(
@@ -505,16 +499,9 @@ export function pluginRegistryIssueToRepairEffect(
         "requires-registered-npm-package-readability-repair",
         issue.packageDir,
       );
-    case "stale-managed-npm-install-generation":
+    default:
       return staleManagedNpmInstallGenerationToRepairEffect(issue);
   }
-  return assertNeverPluginRegistryIssue(issue);
-}
-
-function assertNeverPluginRegistryIssue(issue: never): never {
-  throw new Error(
-    `Unhandled plugin registry issue kind: ${String((issue as { kind?: unknown }).kind)}`,
-  );
 }
 
 /**

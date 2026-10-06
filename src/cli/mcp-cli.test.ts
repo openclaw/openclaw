@@ -333,7 +333,7 @@ describe("mcp cli", () => {
       expect(output).toContain("No enabled MCP servers in");
       expect(output).toContain("openclaw mcp add <name> --command <command>");
       expect(output).toContain("openclaw mcp configure <name> --enable");
-      expect(output).not.toMatch(/^MCP probe \(.*\):$/m);
+      expect(output).not.toMatch(/^MCP check \(.*\):$/m);
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "probe", "--json"]);
@@ -711,7 +711,7 @@ describe("mcp cli", () => {
 
       await expect(runMcpCommand(["mcp", "probe", "docs"])).rejects.toThrow("__exit__:1");
       expect(lastErrorLine()).toBe(
-        `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before probing it.`,
+        `MCP server "docs" is disabled in ${configPath}. Run openclaw mcp configure docs --enable before checking it.`,
       );
     });
   });
@@ -752,7 +752,7 @@ describe("mcp cli", () => {
       });
 
       expect(JSON.parse(lastLogLine())).toMatchObject({ servers: {}, diagnostics: [] });
-      expect(lastErrorLine()).toBe(`MCP probe did not connect to "incomplete" in ${configPath}.`);
+      expect(lastErrorLine()).toBe(`MCP check did not connect to "incomplete" in ${configPath}.`);
 
       await writeMcpServers(home, {
         healthy: { command: "node" },

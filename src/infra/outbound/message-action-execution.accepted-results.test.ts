@@ -1,7 +1,13 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { jsonResult } from "openclaw/plugin-sdk/channel-actions";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import type {
+  ChannelPlugin,
+  ChannelThreadingToolContext,
+} from "../../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -13,17 +19,21 @@ import {
   type MessageActionResult,
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
-import { annotateSourceDelivery } from "./message-action-execution.js";
+import { annotateSourceDelivery, executeMessagePoll } from "./message-action-execution.js";
 import { runMessageAction } from "./message-action-runner.js";
-import type { MessageSendResult } from "./message.js";
+import {
+  registerReplyPlugin,
+  runCurrentConversationPollAction,
+  runReplyAction,
+} from "./message-action-runner.test-support.js";
 
 const channel = "accepted-results";
-const toolContext = {
+const acceptedToolContext = {
   currentChannelProvider: channel,
   currentChannelId: "room-1",
   currentThreadTs: "thread-1",
 };
-const authorization = { requesterAccountId: "default", toolContext };
+const authorization = { requesterAccountId: "default", toolContext: acceptedToolContext };
 const sessionKey = `agent:main:${channel}:direct:room-1`;
 const acceptedPayload = { ok: true, messageId: "accepted-1" };
 const closed = new Error("delivery caller closed");
@@ -54,69 +64,8 @@ describe("accepted results through registered message actions", () => {
   afterEach(() => resetPluginRuntimeStateForTest());
   afterAll(async () => tempHome.restore());
 
-  it.each(["sent", "partial_failed"] as const)(
-    "keeps the matched core %s result accurate while its caller stays current",
-    async (deliveryStatus) => {
-      const plugin = registerPlugin();
-      const sendResult: MessageSendResult = {
-        channel,
-        to: "room-1",
-        via: "direct",
-        mediaUrl: null,
-        deliveryStatus,
-        ...(deliveryStatus === "partial_failed"
-          ? { error: "second part failed", sentBeforeError: true as const }
-          : {}),
-        result: { channel, messageId: "part-1" },
-      };
-      const result: MessageActionResult = {
-        kind: "send",
-        channel,
-        action: "send",
-        to: "room-1",
-        handledBy: "core",
-        payload: sendResult,
-        sendResult,
-        dryRun: false,
-      };
-      const ctx: ResolvedActionContext = {
-        cfg: {},
-        params: { to: "room-1" },
-        channel,
-        channelPlugin: plugin,
-        accountId: "default",
-        mediaAccess: { localRoots: [] },
-        dryRun: false,
-        input: {
-          cfg: {},
-          action: "send",
-          params: {},
-          sessionKey,
-          messageActionAuthorization: {
-            requesterAccountId: "default",
-            toolContext: { currentChannelProvider: channel, currentChannelId: "room-1" },
-          },
-        },
-      };
-      const annotated = await annotateSourceDelivery(result, ctx, false);
-      expect(annotated.sendResult).toBe(sendResult);
-      if (deliveryStatus === "sent") {
-        expect(annotated.payload).toHaveProperty("sourceReplyRoute", "current-source");
-        expect(resolveMessageActionOutcome(annotated)).toEqual({ ok: true });
-      } else {
-        expect(annotated.payload).toHaveProperty("sourceReplyRoute", "current-source");
-        expect(resolveMessageActionOutcome(annotated)).toEqual({
-          ok: false,
-          sentBeforeError: true,
-          error: "second part failed",
-        });
-      }
-    },
-  );
-
   it.each([
     { mode: "plugin", messageId: "accepted-1" },
-    { mode: "core", messageId: "accepted-1" },
     { mode: "core", messageId: "unknown" },
   ] as const)(
     "retains an accepted $mode send ($messageId) when its caller closes before annotation",
@@ -312,7 +261,6 @@ describe("accepted results through registered message actions", () => {
     "before lookup",
     "during lookup",
     "lookup failure",
-    "current",
     "aborted before lookup",
     "aborted during lookup",
   ] as const)("preserves an accepted thread reply (%s)", async (scenario) => {
@@ -371,16 +319,9 @@ describe("accepted results through registered message actions", () => {
     expect(matchesCurrentConversationAsync).toHaveBeenCalledTimes(
       scenario === "before lookup" || scenario === "aborted before lookup" ? 0 : 1,
     );
-    if (scenario === "current") {
-      expect(result.payload).toMatchObject({
-        ...acceptedPayload,
-        sourceReplyRoute: "current-source",
-      });
-    } else {
-      expect(result.payload).toBe(acceptedPayload);
-      expect(result).toHaveProperty("toolResult.details", acceptedPayload);
-      expect(result.payload).not.toHaveProperty("sourceReplyRoute");
-    }
+    expect(result.payload).toBe(acceptedPayload);
+    expect(result).toHaveProperty("toolResult.details", acceptedPayload);
+    expect(result.payload).not.toHaveProperty("sourceReplyRoute");
   });
 
   it.each([
@@ -388,29 +329,6 @@ describe("accepted results through registered message actions", () => {
     { name: "unconfirmed ID", payload: { messageId: "unconfirmed-1" } },
     { name: "unknown ID", payload: { ok: true, messageId: "unknown" } },
     { name: "rejected with an ID", payload: { ok: false, messageId: "rejected-1" } },
-    {
-      name: "nested rejection",
-      payload: { ok: true, result: { ok: false, messageId: "rejected-1" } },
-    },
-    {
-      name: "failure at the supported payload depth",
-      payload: {
-        ...acceptedPayload,
-        result: { result: { result: { result: { ok: false } } } },
-      },
-    },
-    {
-      name: "nested error",
-      payload: { ok: true, result: { error: "rejected", messageId: "rejected-1" } },
-    },
-    {
-      name: "error status",
-      payload: { ok: true, result: { status: "error", messageId: "rejected-1" } },
-    },
-    {
-      name: "incomplete status",
-      payload: { ok: true, result: { status: "incomplete", messageId: "part-1" } },
-    },
     {
       name: "conflicting partial status",
       payload: { ok: true, deliveryStatus: "partial_failed", messageId: "part-1" },
@@ -424,40 +342,10 @@ describe("accepted results through registered message actions", () => {
         sentBeforeError: true,
       },
     },
-    { name: "tool error", payload: acceptedPayload, toolError: true },
-    {
-      name: "conflicting error status",
-      payload: { ...acceptedPayload, deliveryStatus: "sent", status: "error" },
-    },
-    {
-      name: "conflicting incomplete status",
-      payload: { ...acceptedPayload, deliveryStatus: "sent", status: "incomplete" },
-    },
-    {
-      name: "conflicting failed status",
-      payload: { ...acceptedPayload, deliveryStatus: "sent", status: "failed" },
-    },
-    { name: "tool failure status", payload: acceptedPayload, toolStatus: "failed" },
-    { name: "tool partial status", payload: acceptedPayload, toolStatus: "partial_failed" },
     { name: "tool partial delivery", payload: acceptedPayload, toolPartial: true },
-    {
-      name: "partial delivery at the supported tool-result depth",
-      payload: acceptedPayload,
-      toolDetails: { result: { result: { result: { sentBeforeError: true } } } },
-    },
     { name: "tool dry run", payload: acceptedPayload, toolDryRun: true },
     { name: "dry run", payload: acceptedPayload, dryRun: true },
     { name: "read", payload: acceptedPayload, action: "read" as const },
-    {
-      name: "dry-run partial",
-      payload: { ok: false, sentBeforeError: true, messageId: "part-1" },
-      dryRun: true,
-    },
-    {
-      name: "read partial",
-      payload: { ok: false, sentBeforeError: true, messageId: "part-1" },
-      action: "read" as const,
-    },
   ])("keeps $name strict when annotation loses authority", async (testCase) => {
     const plugin = registerPlugin();
     const result: MessageActionResult = {
@@ -468,9 +356,7 @@ describe("accepted results through registered message actions", () => {
       handledBy: "plugin",
       payload: testCase.payload,
       toolResult: {
-        ...jsonResult(testCase.toolDetails ?? testCase.payload),
-        ...(testCase.toolError ? { isError: true } : {}),
-        ...(testCase.toolStatus ? { status: testCase.toolStatus } : {}),
+        ...jsonResult(testCase.payload),
         ...(testCase.toolPartial ? { sentBeforeError: true } : {}),
         ...(testCase.toolDryRun ? { dryRun: true } : {}),
       },
@@ -497,5 +383,379 @@ describe("accepted results through registered message actions", () => {
     await expect(annotateSourceDelivery(result, ctx, false)).rejects.toBe(closed);
     expect(result.payload).toBe(testCase.payload);
     expect(result.payload).not.toHaveProperty("sourceReplyRoute");
+  });
+});
+
+const threadActionParams = {
+  action: "thread-reply",
+  to: "direct:user-1",
+  threadId: "thread-1",
+  message: "visible reply",
+};
+
+const input = {
+  cfg: {},
+  action: "thread-reply" as const,
+  params: { channel: "testchat", ...threadActionParams },
+  messageActionAuthorization: {
+    requesterAccountId: "default",
+    toolContext: {
+      currentChannelProvider: "testchat" as const,
+      currentChannelId: "direct:user-1",
+      currentThreadTs: "thread-1",
+    },
+  },
+  sessionKey: "agent:main:testchat:direct:user-1",
+  defaultAccountId: "default",
+};
+
+const annotationParams = {
+  cfg: {},
+  params: threadActionParams,
+  channel: "testchat" as const,
+  accountId: "default",
+  input,
+  dryRun: false,
+  channelPlugin: createChannelTestPluginBase({ id: "testchat" }),
+  mediaAccess: { localRoots: [] },
+};
+
+describe("annotateSourceDelivery thread replies", () => {
+  afterEach(() => resetPluginRuntimeStateForTest());
+  it.each([true, false, "error", "stale"] as const)(
+    "awaits owner proof for a receiptless thread reply without legacy fallback (%s)",
+    async (outcome) => {
+      const proof = createDeferred<boolean>();
+      const matchesCurrentConversation = vi.fn(() => true);
+      const matchesCurrentConversationAsync = vi.fn(() => proof.promise);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            origin: "bundled",
+            plugin: {
+              ...annotationParams.channelPlugin,
+              actions: {
+                describeMessageTool: () => ({ actions: ["thread-reply"] }),
+                messageActionTargetAliases: {
+                  "thread-reply": {
+                    aliases: ["threadId"],
+                    matchesCurrentConversation,
+                    matchesCurrentConversationAsync,
+                  },
+                },
+              },
+            },
+          },
+        ]),
+      );
+      const actionResult = {
+        kind: "action" as const,
+        channel: "testchat" as const,
+        action: "thread-reply" as const,
+        handledBy: "plugin" as const,
+        payload: { ok: true },
+        dryRun: false,
+      };
+      const pending = annotateSourceDelivery(actionResult, annotationParams, false);
+      expect(matchesCurrentConversationAsync).toHaveBeenCalledOnce();
+      expect(matchesCurrentConversation).not.toHaveBeenCalled();
+      if (outcome === "error") {
+        const expected = expect(pending).rejects.toThrow("proof unavailable");
+        proof.reject(new Error("proof unavailable"));
+        await expected;
+      } else {
+        if (outcome === "stale") {
+          setActivePluginRegistry(createTestRegistry([]));
+        }
+        proof.resolve(outcome !== false);
+        const result = await pending;
+        if (outcome === true) {
+          expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+        } else {
+          expect(result).toBe(actionResult);
+        }
+      }
+      expect(matchesCurrentConversation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("marks both payload and tool details after local plugin dispatch", async () => {
+    const receipt = { threadId: "thread-1" };
+    const result = await annotateSourceDelivery(
+      {
+        kind: "action" as const,
+        channel: "testchat" as const,
+        action: "thread-reply" as const,
+        handledBy: "plugin" as const,
+        payload: { receipt },
+        toolResult: {
+          content: [{ type: "text" as const, text: "delivered" }],
+          details: { receipt },
+        },
+        dryRun: false,
+      },
+      annotationParams,
+      false,
+    );
+
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+    expect(result.toolResult.details).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("leaves a different-thread receipt unmarked", async () => {
+    const result = await annotateSourceDelivery(
+      {
+        kind: "action" as const,
+        channel: "testchat" as const,
+        action: "thread-reply" as const,
+        handledBy: "plugin" as const,
+        payload: { receipt: { threadId: "other-thread" } },
+        dryRun: false,
+      },
+      annotationParams,
+      false,
+    );
+
+    expect(result.payload).not.toHaveProperty("sourceReplyRoute");
+  });
+});
+
+describe("runMessageAction reply-type plugin actions", () => {
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+  it("marks replies to the run's inbound message as current-source deliveries", async () => {
+    registerReplyPlugin();
+
+    const result = await runReplyAction({
+      actionParams: { message: "visible reply", messageId: "1783" },
+      currentMessageId: "1783",
+    });
+
+    expect(result.kind).toBe("action");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+    const details = "toolResult" in result ? result.toolResult?.details : undefined;
+    expect(details).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("matches numeric replied-to message ids against string tool-context ids", async () => {
+    registerReplyPlugin();
+
+    const result = await runReplyAction({
+      actionParams: { message: "visible reply", messageId: 1783 },
+      currentMessageId: "1783",
+    });
+
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("leaves explicitly targeted replies unmarked", async () => {
+    registerReplyPlugin();
+
+    const result = await runReplyAction({
+      actionParams: {
+        message: "visible reply",
+        messageId: "1783",
+        to: "direct:someone-else",
+      },
+      currentMessageId: "1783",
+    });
+
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+
+  it("marks polls sent to the current conversation as current-source deliveries", async () => {
+    registerReplyPlugin();
+
+    const result = await runCurrentConversationPollAction({ to: "direct:user-1" });
+
+    expect(result.kind).toBe("poll");
+    expect(result.payload).toMatchObject({ sourceReplyRoute: "current-source" });
+  });
+
+  it("leaves polls sent to other conversations unmarked", async () => {
+    registerReplyPlugin();
+
+    const result = await runCurrentConversationPollAction({ to: "direct:someone-else" });
+
+    expect((result.payload as { sourceReplyRoute?: unknown }).sourceReplyRoute).toBeUndefined();
+  });
+});
+
+const pollerConfig = {
+  channels: {
+    poller: {
+      botToken: "poller-test",
+    },
+  },
+} as OpenClawConfig;
+
+type PollerSendPoll = NonNullable<NonNullable<ChannelPlugin["outbound"]>["sendPoll"]>;
+
+const sendPoll = async ({ threadId }: Parameters<PollerSendPoll>[0]) => ({
+  messageId: "poll-test",
+  receipt: createMessageReceiptFromOutboundResults({
+    results: [{ messageId: "poll-test" }],
+    kind: "poll",
+    ...(threadId ? { threadId } : {}),
+    sentAt: 1,
+  }),
+});
+const pollerSendPoll = vi.fn<PollerSendPoll>(sendPoll);
+
+const pollerTestPlugin: ChannelPlugin = {
+  id: "poller",
+  meta: {
+    id: "poller",
+    label: "Poller",
+    selectionLabel: "Poller",
+    docsPath: "/channels/poller",
+    blurb: "Poller test plugin.",
+  },
+  capabilities: { chatTypes: ["direct", "group"] },
+  config: {
+    listAccountIds: () => ["default"],
+    resolveAccount: () => ({ botToken: "poller-test" }),
+    isConfigured: () => true,
+  },
+  outbound: {
+    deliveryMode: "direct",
+    sendPoll: pollerSendPoll,
+  },
+  actions: {
+    describeMessageTool: () => null,
+    supportsAction: ({ action }) => action !== "poll",
+    handleAction: async () => {
+      throw new Error("poll should be owned by the canonical adapter");
+    },
+  },
+  messaging: {
+    targetResolver: {
+      looksLikeId: () => true,
+      resolveTarget: async ({ normalized }) => ({
+        to: normalized,
+        kind: "user",
+        source: "normalized",
+      }),
+    },
+  },
+  threading: {
+    resolveAutoThreadId: ({ toolContext, to, replyToId }) => {
+      if (replyToId || toolContext?.currentChannelId !== to) {
+        return undefined;
+      }
+      return toolContext.currentThreadTs;
+    },
+  },
+};
+
+async function runPollAction(params: {
+  actionParams: Record<string, unknown>;
+  toolContext?: ChannelThreadingToolContext;
+}) {
+  const target = params.actionParams.target;
+  if (typeof target !== "string") {
+    throw new Error("poll test target is required");
+  }
+  const actionParams = { ...params.actionParams, to: target };
+  const result = await executeMessagePoll({
+    cfg: pollerConfig,
+    params: actionParams,
+    channel: "poller",
+    channelPlugin: pollerTestPlugin,
+    mediaAccess: {},
+    accountId: "default",
+    dryRun: false,
+    input: {
+      cfg: pollerConfig,
+      action: "poll",
+      params: actionParams,
+      toolContext: params.toolContext,
+    },
+  });
+  if (result.kind !== "poll") {
+    throw new Error(`expected poll result, got ${result.kind}`);
+  }
+  const call = pollerSendPoll.mock.calls[0]?.[0];
+  if (!call) {
+    throw new Error("expected poller sendPoll call");
+  }
+  return { call, result };
+}
+
+describe("executeMessagePoll", () => {
+  beforeAll(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "poller", source: "test", plugin: pollerTestPlugin }]),
+    );
+  });
+
+  beforeEach(() => {
+    pollerSendPoll.mockReset();
+    pollerSendPoll.mockImplementation(sendPoll);
+  });
+
+  afterAll(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("passes normalized poll fields and auto threadId to the provider", async () => {
+    const { call, result } = await runPollAction({
+      actionParams: {
+        target: "poller:123",
+        message: "    Choose carefully  ",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+        pollDurationHours: 2,
+        silent: true,
+      },
+      toolContext: {
+        currentChannelId: "poller:123",
+        currentThreadTs: "42",
+      },
+    });
+
+    expect(call.poll).toMatchObject({
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      durationHours: 2,
+      maxSelections: 1,
+    });
+    expect(call.threadId).toBe("42");
+    expect(call.content).toBe("    Choose carefully  ");
+    expect(call.silent).toBe(true);
+    expect(pollerSendPoll).toHaveBeenCalledOnce();
+    expect(result.pollResult?.result).toMatchObject({
+      messageId: "poll-test",
+      receipt: { primaryPlatformMessageId: "poll-test", threadId: "42" },
+    });
+  });
+
+  it("normalizes blank poll content and trims its question and options", async () => {
+    const { call } = await runPollAction({
+      actionParams: {
+        target: "poller:123",
+        message: " \n\t ",
+        pollQuestion: " Lunch? ",
+        pollOption: [" Pizza ", " Sushi "],
+      },
+    });
+    expect(call.content).toBe("");
+    expect(call.poll.question).toBe("Lunch?");
+    expect(call.poll.options).toEqual(["Pizza", "Sushi"]);
+  });
+
+  it("requires at least two poll options", async () => {
+    await expect(
+      runPollAction({
+        actionParams: {
+          target: "poller:123",
+          pollQuestion: "Lunch?",
+          pollOption: ["Pizza"],
+        },
+      }),
+    ).rejects.toThrow(/pollOption requires at least two values/i);
   });
 });

@@ -86,6 +86,7 @@ export type SessionListOptions = {
   excludeSubagents?: boolean;
   excludeCron?: boolean;
   excludeSystem?: boolean;
+  excludeDock?: boolean;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   includeOwnerSessionCounts?: boolean;

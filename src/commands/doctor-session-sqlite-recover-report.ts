@@ -42,7 +42,6 @@ import type { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import {
   createDoctorSessionSqliteTargetReport,
-  type DoctorSessionSqliteOptions,
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
@@ -58,7 +57,6 @@ const CANONICAL_AGENT_INDEX_NAMES = getCanonicalSqliteNamedIndexContracts(
 /** Restores the latest failed migration run and validates only selected manifest targets. */
 export async function recoverDoctorSessionSqliteTargets(params: {
   env: NodeJS.ProcessEnv;
-  options: DoctorSessionSqliteOptions;
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;

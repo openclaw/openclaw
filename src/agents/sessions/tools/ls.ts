@@ -68,7 +68,7 @@ function formatLsContinuation(after: string): string {
   return `\n\n[More entries. Continue with the same path and after=${JSON.stringify(after)}.]`;
 }
 
-export function createLsToolDefinition(
+function createLsToolDefinition(
   cwd: string,
   options?: LsToolOptions,
 ): ToolDefinition<typeof lsSchema, LsToolDetails> {

@@ -37,10 +37,7 @@ const MIGRATION_KIND = WORKSPACE_LEGACY_STATE_MIGRATION_KIND;
 
 type WorkspaceMigrationDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  | "workspace_setup_state"
-  | "workspace_path_aliases"
-  | "workspace_generated_bootstrap_hashes"
-  | "migration_sources"
+  "workspace_setup_state" | "workspace_generated_bootstrap_hashes" | "migration_sources"
 >;
 
 type ParsedSetup = {
@@ -393,7 +390,7 @@ export function importAndRecordReceipt(params: {
           verified && verified.workspace_path != null
             ? createWorkspaceSetupFingerprint(verified)
             : null;
-        if (!verified || actualFingerprint !== verifiedFingerprint) {
+        if (actualFingerprint !== verifiedFingerprint) {
           throw new Error("SQLite verification failed for workspace setup state");
         }
       } else {

@@ -75,7 +75,7 @@ export function registerProxyCli(program: Command) {
     )
     .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
     .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
-    .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
+    .option("--apns-authority <url>", "APNs authority to check with --apns-reachable")
     .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", (value) =>
       parsePositiveIntegerOption(value, "--timeout-ms"),
     )

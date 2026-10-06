@@ -244,7 +244,6 @@ export {
 export {
   filterLiveShortTermRecallEntries,
   readShortTermRecallEntries,
-  recordGroundedShortTermCandidates,
   recordShortTermRecalls,
 } from "./short-term-promotion-record.js";
 export { applyShortTermPromotions } from "./short-term-promotion-apply.js";

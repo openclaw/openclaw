@@ -4,6 +4,7 @@ import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { createContext, Script } from "node:vm";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as gatewayRuntime from "openclaw/plugin-sdk/gateway-runtime";
 import {
   convertMeetingTtsAudioForBridge,
   createLocalMeetingRealtimeAudioTransport,
@@ -43,6 +44,7 @@ import {
   invokeGoogleMeetGatewayMethodForTest,
   noopLogger,
   setupGoogleMeetPlugin,
+  withPlatform,
 } from "./src/test-support/plugin-harness.js";
 import * as chromeTransport from "./src/transports/chrome.js";
 import { GOOGLE_MEET_PLATFORM_ADAPTER } from "./src/transports/google-meet-platform-adapter.js";
@@ -51,8 +53,8 @@ import {
   normalizeDialInNumber,
   prefixDtmfWait,
 } from "./src/transports/twilio.js";
-import type { GoogleMeetJoinResult, GoogleMeetSession } from "./src/transports/types.js";
-import { testing as googleMeetPluginTesting } from "./test-api.js";
+
+type GoogleMeetJoinResult = Awaited<ReturnType<ReturnType<typeof meetRuntime>["join"]>>;
 
 let meetingTestState: ReturnType<typeof useMeetingTestState>;
 
@@ -279,10 +281,9 @@ function setup(
         }
       : {}),
   });
-  googleMeetPluginTesting.setCallGatewayFromCliForTests(
+  vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
     createGoogleMeetToolGatewayForTest(harness.methods),
   );
-  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -456,25 +457,6 @@ function requireSetupCheck(checks: unknown[] | undefined, id: string): Record<st
     throw new Error(`Expected setup check ${id}`);
   }
   return check;
-}
-
-function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T>;
-function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T;
-function withPlatform<T>(platform: NodeJS.Platform, fn: () => T | Promise<T>): T | Promise<T> {
-  const originalPlatform = process.platform;
-  const restore = () => Object.defineProperty(process, "platform", { value: originalPlatform });
-  Object.defineProperty(process, "platform", { value: platform });
-  try {
-    const result = fn();
-    if (result instanceof Promise) {
-      return result.finally(restore);
-    }
-    restore();
-    return result;
-  } catch (error) {
-    restore();
-    throw error;
-  }
 }
 
 type TwilioSetupCredentials = {
@@ -795,8 +777,7 @@ describe("google-meet plugin", () => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     localBrowserGatewayRequestHandler = undefined;
-    googleMeetPluginTesting.setCallGatewayFromCliForTests();
-    googleMeetPluginTesting.setPlatformForTests();
+    vi.restoreAllMocks();
     for (const dir of testTempDirs) {
       rmSync(dir, { force: true, recursive: true });
     }
@@ -948,13 +929,15 @@ describe("google-meet plugin", () => {
     const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
     const tool = getMeetTool({ tools });
     const callGatewayFromCli = vi.fn(async () => ({ ok: true }));
-    googleMeetPluginTesting.setCallGatewayFromCliForTests(callGatewayFromCli);
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(callGatewayFromCli);
 
     expect(tools).toHaveLength(1);
     expect(cliRegistrations).toHaveLength(1);
     expect(methods.has("googlemeet.setup")).toBe(true);
 
-    const joined = await tool.execute("linux-agent", { action: "join" });
+    const joined = await withPlatform("linux", () =>
+      tool.execute("linux-agent", { action: "join" }),
+    );
     expect(joined.details).toEqual({ ok: true });
     expect(callGatewayFromCli).toHaveBeenCalledOnce();
     expect(callGatewayFromCli).toHaveBeenNthCalledWith(
@@ -979,15 +962,15 @@ describe("google-meet plugin", () => {
       { progress: false, scopes: ["operator.admin"] },
     );
 
-    googleMeetPluginTesting.setPlatformForTests(() => "win32");
-    const blocked = await tool.execute("windows-agent", { action: "join" });
+    const blocked = await withPlatform("win32", () =>
+      tool.execute("windows-agent", { action: "join" }),
+    );
     expect(blocked.details).toEqual({
       error:
         "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
     });
     expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
 
-    googleMeetPluginTesting.setPlatformForTests(() => "linux");
     const remote = await tool.execute("linux-chrome-node", {
       action: "join",
       transport: "chrome-node",
@@ -1146,10 +1129,12 @@ describe("google-meet plugin", () => {
       { toolContext: { sessionKey: "agent:main:discord:channel:general" } },
     );
     const gatewayParams: unknown[] = [];
-    googleMeetPluginTesting.setCallGatewayFromCliForTests(async (_method, _opts, params) => {
-      gatewayParams.push(params);
-      return { ok: true };
-    });
+    vi.spyOn(gatewayRuntime, "callGatewayFromCli").mockImplementation(
+      async (_method, _opts, params) => {
+        gatewayParams.push(params);
+        return { ok: true };
+      },
+    );
     const tool = getMeetTool({ tools });
 
     await tool.execute("id", {
@@ -3134,7 +3119,7 @@ describe("google-meet plugin", () => {
     })) as {
       found: boolean;
       spoken: boolean;
-      session?: GoogleMeetSession;
+      session?: GoogleMeetJoinResult["session"];
     };
 
     expect(retry.found).toBe(true);

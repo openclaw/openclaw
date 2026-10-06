@@ -3,7 +3,7 @@ summary: "The live ACP conversation-bind smoke and the plugin-owned Codex app-se
 title: "ACP bind and Codex app-server lanes"
 read_when:
   - You are debugging `/acp spawn ... --bind here` against a real ACP agent
-  - You are running the Codex app-server harness, its stress probes, or its Docker recipe
+  - You are running the Codex app-server harness, its stress checks, or its Docker recipe
 ---
 
 ## Live: ACP bind smoke (`/acp spawn ... --bind here`)
@@ -32,13 +32,13 @@ read_when:
   - `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND='npx -y @agentclientprotocol/claude-agent-acp@<version>'`
   - `OPENCLAW_LIVE_ACP_BIND_CODEX_MODEL=gpt-5.6-luna`
   - `OPENCLAW_LIVE_ACP_BIND_OPENCODE_MODEL=opencode/kimi-k2.6`
-  - `OPENCLAW_LIVE_ACP_BIND_IMAGE_PROBE=1` (or `on`/`true`/`yes`) to force the image probe on; any other value forces it off. Runs by default for every agent except `opencode`.
+  - `OPENCLAW_LIVE_ACP_BIND_IMAGE_PROBE=1` (or `on`/`true`/`yes`) to force the image check on; any other value forces it off. Runs by default for every agent except `opencode`.
   - `OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON=1`
   - `OPENCLAW_LIVE_ACP_BIND_PARENT_MODEL=openai/gpt-5.6-luna`
 - Notes:
   - This lane uses the gateway `chat.send` surface with admin-only synthetic originating-route fields so tests can attach message-channel context without pretending to deliver externally.
   - When `OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND` is unset, the test uses the embedded `acpx` plugin's built-in agent registry for the selected ACP harness agent.
-  - Bound-session cron MCP creation is best-effort by default because external ACP harnesses can cancel MCP calls after the bind/image proof has passed; set `OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON=1` to make that post-bind cron probe strict.
+  - Bound-session cron MCP creation is best-effort by default because external ACP harnesses can cancel MCP calls after the bind/image proof has passed; set `OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON=1` to make that post-bind cron check strict.
 
 Example:
 
@@ -85,7 +85,7 @@ Docker notes:
     thread can resume
   - run `/codex status` and `/codex models` through the same gateway command
     path
-  - optionally run two Guardian-reviewed escalated shell probes: one benign
+  - optionally run two Guardian-reviewed escalated shell checks: one benign
     command that should be approved and one fake-secret upload that should be
     denied so the agent asks back
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
@@ -100,9 +100,9 @@ Docker notes:
 - Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
 - Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
   copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
-- Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
-- Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
-- Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
+- Optional image check: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
+- Optional MCP/tool check: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
+- Optional Guardian check: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
 - Optional resume stress: `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1` adds
   four history turns, then closes and restarts the Gateway and Codex app-server
   three times while requiring the same native thread id and conversation
@@ -132,7 +132,7 @@ Docker notes:
   does not clamp the override back to its normal catalog window. The ordinary
   reduced-threshold stress above keeps the stricter automatic-compaction and
   hidden-marker retention assertions.
-- Optional loop-relay opt-out probe:
+- Optional loop-relay opt-out check:
   `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
 - The requested thinking preference may map to the nearest effort advertised
   by Codex for that model. For example, Luna maps `minimal` to `low`.
@@ -171,9 +171,9 @@ the container exits. It preserves Docker's other restrictions and does not
 change the default profile or kernel settings. Loading requires an available
 `apparmor_parser` and noninteractive permission to load profiles.
 
-The subagent probe also enables Codex's V2 native children by default. Explicit
+The subagent check also enables Codex's V2 native children by default. Explicit
 `OPENCLAW_CODEX_APP_SERVER_ARGS` overrides are forwarded unchanged; disabling the
-subagent probe leaves the native argument defaults unchanged. Manual compaction
+subagent check leaves the native argument defaults unchanged. Manual compaction
 configurations supply explicit native arguments that take precedence over this
 environment default.
 

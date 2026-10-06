@@ -5,6 +5,11 @@ import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-co
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  settleCurrentReadPreparations,
+  withCurrentReadAuthority,
+  type CurrentReadAuthority,
+} from "../shared/current-read-authority.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
@@ -28,7 +33,11 @@ import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityEvaluation,
 } from "./model-auth-availability.js";
-import { prepareModelCatalogView } from "./model-catalog-view.js";
+import {
+  createModelCatalogView,
+  prepareModelCatalogView,
+  selectModelCatalogRuntimeEntry,
+} from "./model-catalog-view.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { dedupeModelCatalogEntries } from "./model-selection-shared.js";
@@ -40,7 +49,6 @@ import {
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export type ModelCatalogDecisionParams = {
   cfg: OpenClawConfig;
@@ -70,10 +78,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
   // The Gateway owns one process-lifecycle plugin metadata snapshot. Carry it
   // through the whole projection so per-model normalization cannot rediscover it.
   const metadataSnapshot = params.metadataSnapshot;
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.cfg, params.agentId) ??
-    resolveDefaultAgentWorkspaceDir();
+  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, params.agentId);
   let authStore = params.preparedAuthStore;
   const preferredProfilesByProvider = new Map<string, string>();
   const personalProviders = new Set<string>();
@@ -245,6 +250,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     entry: Pick<ModelCatalogEntry, "provider" | "id" | "api" | "baseUrl">,
     routeVariants?: readonly ModelCatalogEntry[],
     runtimeId?: string,
+    authority?: CurrentReadAuthority,
   ): Promise<ModelAuthAvailabilityEvaluation> => {
     const identity = openAIModelCatalogRoutePolicy.resolveIdentity(entry);
     const observedRoutes = (routeVariants ?? [entry]).map(({ api, baseUrl }) => ({ api, baseUrl }));
@@ -255,8 +261,8 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       entry.baseUrl,
       observedRoutes,
     ]);
-    return getOrCreatePromise(pending, cacheKey, () =>
-      Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
+    return withCurrentReadAuthority(authority, () =>
+      getOrCreatePromise(pending, cacheKey, async (): Promise<ModelAuthAvailabilityEvaluation> => {
         const defaultProfileId = preferredProfilesByProvider.get(
           normalizeProviderId(entry.provider),
         );
@@ -309,10 +315,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     !authStore.profiles[params.preferredProfileId],
   );
   const evaluateEntry: typeof evaluateStoredEntry = missingPersonalPin
-    ? async (entry, variants, runtimeId) =>
+    ? async (entry, variants, runtimeId, authority) =>
         profileProvider &&
         normalizeProviderId(profileProvider) !== normalizeProviderId(entry.provider)
-          ? evaluateStoredEntry(entry, variants, runtimeId)
+          ? evaluateStoredEntry(entry, variants, runtimeId, authority)
           : {
               availability: false,
               unavailableReason: "missing-auth",
@@ -327,22 +333,31 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     accountObservations.every((current) => current());
   const prepareSelectedAccountCatalog = async (
     assertCurrent: () => void,
-    options: { allowDiscovery: boolean; refresh?: boolean },
+    options: {
+      allowDiscovery: boolean;
+      refresh?: boolean;
+      withCurrent?: CurrentReadAuthority["withCurrent"];
+      beforeRequest?: () => void;
+    },
   ): Promise<void> => {
-    if (!params.accountCatalog) {
+    const accountCatalog = params.accountCatalog;
+    if (!accountCatalog) {
       return;
     }
+    const authority = { assertCurrent, withCurrent: options.withCurrent };
     const selections = new Map(preferredProfilesByProvider);
     if (selectedProfileId && profileProvider) {
       selections.set(normalizeProviderId(profileProvider), selectedProfileId);
     }
     for (const [providerId, profileId] of selections) {
-      assertCurrent();
-      const credential = authStore.profiles[profileId];
+      const credential = await withCurrentReadAuthority(
+        authority,
+        () => authStore.profiles[profileId],
+      );
       if (!credential) {
         continue;
       }
-      const acquired = await params.accountCatalog.acquire({
+      const request: Parameters<typeof accountCatalog.acquire>[0] = {
         profileId,
         credential,
         ...options,
@@ -357,7 +372,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           const { loadSelectedProviderAccountCatalog } =
             await import("./models-config.providers.catalog-context.js");
           assertCurrent();
-          return loadSelectedProviderAccountCatalog({
+          const selectedRequest: Parameters<typeof loadSelectedProviderAccountCatalog>[0] = {
             provider,
             providerId,
             profileId,
@@ -367,23 +382,69 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
             workspaceDir,
             isCurrent,
             assertCurrent,
-          });
+            withCurrent: options.withCurrent,
+            beforeRequest: options.beforeRequest,
+          };
+          return withCurrentReadAuthority(authority, () =>
+            loadSelectedProviderAccountCatalog(selectedRequest),
+          );
         },
-      });
-      assertCurrent();
-      accountObservations.push(acquired.isCurrent);
-      providerOutcomes.splice(
-        0,
-        providerOutcomes.length,
-        ...providerOutcomes.filter(
-          (outcome) =>
-            normalizeProviderId(outcome.provider) !== providerId || outcome.profileId !== profileId,
-        ),
-        ...acquired.outcomes,
+      };
+      const acquired = await withCurrentReadAuthority(authority, () =>
+        accountCatalog.acquire(request),
       );
+      await withCurrentReadAuthority(authority, () => {
+        accountObservations.push(acquired.isCurrent);
+        providerOutcomes.splice(
+          0,
+          providerOutcomes.length,
+          ...providerOutcomes.filter(
+            (outcome) =>
+              normalizeProviderId(outcome.provider) !== providerId ||
+              outcome.profileId !== profileId,
+          ),
+          ...acquired.outcomes,
+        );
+      });
     }
   };
+  let projectedCatalog: Promise<ModelCatalogEntry[]> | undefined;
   return {
+    projectCatalog: (authority?: CurrentReadAuthority) => {
+      if (projectedCatalog) {
+        const cached = projectedCatalog;
+        return authority ? withCurrentReadAuthority(authority, () => cached) : cached;
+      }
+      const view = createModelCatalogView({
+        cfg: params.cfg,
+        catalog: snapshot.entries,
+        routeVariants:
+          snapshot.routeVariants.length > 0 ? snapshot.routeVariants : snapshot.entries,
+      });
+      const work = view.logicalEntries.map(async (entry) => {
+        const routeVariants = view.variantsOf(entry) ?? [entry];
+        const host = await evaluateEntry(entry, routeVariants, undefined, authority);
+        return withCurrentReadAuthority(authority, () => {
+          const evaluation = evaluateNative(entry, host);
+          const runtimeId =
+            resolveCatalogDecisionRuntime({
+              cfg: params.cfg,
+              agentId: params.agentId,
+              entry,
+              evaluation,
+              pluginRegistry: params.pluginRegistry,
+            })?.id ?? "openclaw";
+          const selected = selectModelCatalogRuntimeEntry({ entry, routeVariants, runtimeId });
+          return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
+        });
+      });
+      const projection = settleCurrentReadPreparations(work);
+      // Request authority belongs to this preparation, never the shared projector cache.
+      if (!authority) {
+        projectedCatalog = projection;
+      }
+      return projection;
+    },
     accountCatalog: params.accountCatalog,
     prepareSelectedAccountCatalog,
     evaluateEntry,
@@ -395,15 +456,18 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     async runtimeChoices(
       entry: ModelCatalogEntry,
       variants: readonly ModelCatalogEntry[] = [entry],
+      authority?: CurrentReadAuthority,
     ): Promise<string[] | undefined> {
-      const initial = await evaluateEntry(entry, variants);
-      const selected = resolveCatalogDecisionRuntime({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        entry,
-        evaluation: initial,
-        pluginRegistry: params.pluginRegistry,
-      });
+      const initial = await evaluateEntry(entry, variants, undefined, authority);
+      const selected = await withCurrentReadAuthority(authority, () =>
+        resolveCatalogDecisionRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          entry,
+          evaluation: initial,
+          pluginRegistry: params.pluginRegistry,
+        }),
+      );
       const candidates = new Set([
         selected?.id ?? "openclaw",
         "openclaw",
@@ -423,8 +487,10 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       const choices: string[] = [];
       let unknown = false;
       for (const runtimeId of candidates) {
-        const host = await evaluateEntry(entry, variants, runtimeId);
-        const evaluation = evaluateNative(entry, host, runtimeId);
+        const host = await evaluateEntry(entry, variants, runtimeId, authority);
+        const evaluation = await withCurrentReadAuthority(authority, () =>
+          evaluateNative(entry, host, runtimeId),
+        );
         if (evaluation.availability === undefined) {
           unknown = true;
         }

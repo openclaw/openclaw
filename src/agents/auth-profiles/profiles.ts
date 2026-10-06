@@ -4,6 +4,7 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { removePersistedPluginModelCatalogCredentials } from "../plugin-model-catalog-credentials.js";
@@ -20,11 +21,12 @@ import {
   type OAuthRefreshGenerationPeer,
 } from "./oauth-refresh-peers.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import { removeRuntimeExternalProfileReferences } from "./runtime-external-profile-references.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { resolveAuthProfileDatabasePath } from "./sqlite.js";
+import { resolveAuthProfileDatabasePath, runAuthProfileWriteTransaction } from "./sqlite.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
   loadAuthProfileStoreWithoutExternalProfiles,
@@ -38,6 +40,8 @@ import {
   resolvePersistedAuthProfileOwnerAgentDir,
   resolveRuntimeAuthProfileAgentDir,
   restoreAuthProfileStorePersistenceSnapshot,
+  applyScopedAuthReadThrough,
+  getScopedAuthProfileEnv,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
@@ -444,16 +448,23 @@ async function removeAuthProfileTargetsWithLocks(
       for (const target of targets) {
         let stale = false;
         let publishRemoval: (() => boolean) | undefined;
-        const updated = await updateAuthProfileStoreWithLock({
-          agentDir: target.agentDir,
-          updater: (store) => {
+        // The compensation owner captures and saves exact rows in its own transaction.
+        const updated = runAuthProfileWriteTransaction(
+          target.agentDir,
+          (database) => {
+            const store = applyScopedAuthReadThrough(
+              loadPersistedAuthProfileStore(target.agentDir, { database }) ?? {
+                version: 1,
+                profiles: {},
+              },
+            );
             if (!authProfileRemovalTargetMatches(target, store)) {
               stale = true;
-              return false;
+              return store;
             }
             const before = captureAuthProfileStorePersistenceSnapshot(target.agentDir);
             if (!removeProfileReferences(store, target.profileIds, target.provider)) {
-              return false;
+              return store;
             }
             const saved = saveAuthProfileStoreIfPersistenceSnapshotMatches({
               store,
@@ -464,14 +475,10 @@ async function removeAuthProfileTargetsWithLocks(
               restoreAuthProfileStorePersistenceSnapshot(before, saved.owned, target.agentDir),
             );
             publishRemoval = saved.publishRuntimeSnapshots;
-            // The guarded save supplies the exact compensation receipt.
-            return false;
+            return store;
           },
-        });
-        if (updated === null) {
-          result = { kind: "contention" };
-          break;
-        }
+          { env: getScopedAuthProfileEnv() },
+        );
         if (stale) {
           result = { kind: "retry" };
           break;
@@ -480,7 +487,11 @@ async function removeAuthProfileTargetsWithLocks(
         stores.push(updated);
       }
     } catch (error) {
-      removalFailure = { error };
+      if (isSqliteLockError(error)) {
+        result = { kind: "contention" };
+      } else {
+        removalFailure = { error };
+      }
     }
     try {
       // Publication rechecks captured auth, so one scrub after deletion also

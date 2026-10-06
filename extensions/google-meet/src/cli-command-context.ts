@@ -1,5 +1,4 @@
 import type { Command } from "commander";
-import type { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   callGoogleMeetGateway,
   parseOptionalNumber,
@@ -42,7 +41,6 @@ export type GoogleMeetCliCommandContext = {
   root: Command;
   config: GoogleMeetConfig;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
-  callGateway: typeof callGatewayFromCli;
   operationTimeoutMs: number;
 };
 
@@ -69,7 +67,6 @@ export async function callGoogleMeetRuntime<Result>(
   timeoutMs?: number,
 ): Promise<Result> {
   const delegated = await callGoogleMeetGateway({
-    callGateway: context.callGateway,
     method,
     payload,
     timeoutMs,

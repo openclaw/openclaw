@@ -893,7 +893,7 @@ jobs:
         approve_plugins_clawhub_release,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_publish_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@7e2aa3cec5d35c91bb6163aa6676541d795876c5 # reviewed parent receipt contract; CLI honors Retry-After
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@ef56b2cb287f0db5462b92dea8e4b63325d0341c # reviewed sealed receipt and final-effect proof contract
     permissions:
       actions: read
       contents: read
@@ -910,7 +910,7 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
       site: https://clawhub.ai
-      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      family: ${{ matrix.plugin.family }}
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
@@ -919,6 +919,55 @@ jobs:
       source_path: ${{ matrix.plugin.packageDir }}
       inspector_artifact_name: ${{ matrix.plugin.artifactName }}-inspector
       publish_json_artifact_name: ${{ matrix.plugin.artifactName }}-publish-json
+
+  seal_clawhub_recovery_manifest:
+    name: Seal exact ClawHub recovery manifest
+    needs: [seal_clawhub_transactions, publish_plugins_clawhub]
+    if: ${{ always() && inputs.dry_run != true && needs.seal_clawhub_transactions.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout trusted recovery tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          sparse-checkout: scripts
+          persist-credentials: false
+
+      - name: Download exact transaction roster
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-clawhub-transactions-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery/transactions
+
+      - name: Download package publication receipts
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: "*-publish-json"
+          path: ${{ runner.temp }}/clawhub-recovery/publications
+
+      - name: Seal complete attempt roster
+        run: |
+          set -euo pipefail
+          publications=()
+          while IFS= read -r -d '' path; do
+            publications+=("$path")
+          done < <(find "$RUNNER_TEMP/clawhub-recovery/publications" -type f -name package-publish.json -print0)
+          node scripts/plugin-clawhub-recovery.mjs create \
+            --transactions "$RUNNER_TEMP/clawhub-recovery/transactions/transactions.json" \
+            --output "$RUNNER_TEMP/clawhub-recovery/manifest/recovery-manifest.json" \
+            "${publications[@]}"
+
+      - name: Upload sealed recovery manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-clawhub-recovery-manifest-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/clawhub-recovery/manifest/recovery-manifest.json
+          if-no-files-found: error
+          retention-days: 30
 
   # Exact public artifact verification runs in plugin-clawhub-postpublish.yml
   # after the authorizing parent succeeds. Waiting here would deadlock staging.

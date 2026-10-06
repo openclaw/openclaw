@@ -8,7 +8,7 @@ import {
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
-import type { WorkerTaskInput, WorkerTaskOptions } from "../infra/worker-task-pool.types.js";
+import type { OwnedWorkerTaskOptions, WorkerTaskInput } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   OpenClawStateReadReply,
@@ -20,7 +20,7 @@ type ReadTask = RetainedOperation<OpenClawStateReadReply> & {
 };
 type RunTask = (
   input: WorkerTaskInput<OpenClawStateReadRequest>,
-  options: WorkerTaskOptions<OpenClawStateReadRequest>,
+  options: OwnedWorkerTaskOptions<OpenClawStateReadRequest>,
 ) => ReadTask;
 const mock = vi.hoisted(() => ({
   create: vi.fn(),
@@ -99,7 +99,7 @@ export function queueTask(dispatchReady: Promise<void> = Promise.resolve()) {
     resolve: completion.resolve,
     reject: completion.reject,
   };
-  const submitted = createDeferredCore<WorkerTaskOptions<OpenClawStateReadRequest>>();
+  const submitted = createDeferredCore<OwnedWorkerTaskOptions<OpenClawStateReadRequest>>();
   const captured = createDeferredCore<OpenClawStateReadRequest>();
   const close = vi.fn<OwnedWorkerTask<OpenClawStateReadReply>["close"]>().mockResolvedValue();
   const handle: ReadTask = {

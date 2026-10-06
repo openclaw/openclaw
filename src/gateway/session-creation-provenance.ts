@@ -8,6 +8,7 @@ import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-sp
 export type TrustedSessionCreation = Partial<AgentRuntimeSessionSpawnContext> & {
   skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   via: SessionCreatedVia;
+  surface?: "plugin-dock";
   actor?: SessionCreatedActor;
   /** Creator-owned isolation requirement resolved only by the trusted Gateway boundary. */
   sandbox?: "required";

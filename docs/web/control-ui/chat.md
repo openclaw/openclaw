@@ -26,13 +26,59 @@ A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
-When the parent turn has ended but subagents are still active, the chat shows
-**Waiting on subagents**. A single active child already loaded in the pane can
-be opened from its name beside the indicator. Elapsed time appears when the
-loaded history records a yield after the parent's last run began.
-Successful `sessions_yield` calls leave a quiet **Handed off and waiting** marker
-with a timestamp; it changes to **Resumed** when the conversation continues.
-Private continuation context stays hidden.
+While a turn is still working and has subagents running, its working indicator
+ends with their count, such as **3 subagents running**, and counts down as they
+finish. Child sessions that are not subagents are not part of that count.
+
+When a turn hands off with `sessions_yield` and its subagents are still active,
+the working indicator stays under that reply and reads **Waiting on 3
+subagents**, counting down as they finish. When one is left it shows that
+subagent's name, which opens its session. Elapsed time counts from the handoff.
+If the turn ended without a handoff while subagents are still active, the same
+line follows the finished reply without elapsed time. Child sessions that are
+not subagents are counted without names once no subagent is left, as **Waiting
+on 2 sessions**. Once everything it waited on has finished, the line goes away
+until the agent resumes. Tool rows you opened stay open through the handoff. A
+successful `sessions_yield` leaves no marker in the transcript, and its private
+continuation context stays hidden.
+
+When the last subagent finishes, the wait line ends and the block stays as it
+is, without a working indicator, until the turn resumes. Its answer then
+continues in that same block, with one footer at the end. Tool activity that
+resumes with nothing written in between joins the activity row from before the
+handoff. In dashboard sessions, tool activity recorded after the resumed
+answer, such as the step that sent it, joins the activity before that answer,
+so the answer stays last; a step that failed there stays where it happened. The
+working indicator
+and the closing **Done in…** line then
+describe the whole request: time since you asked, including the wait, and
+output tokens from the runs in that block. The token count is left out when the
+pane did not see all of those runs, for example after a reload during the wait.
+When the loaded transcript does not show your request leading straight into that
+block, for example when the request is older than the loaded history, both
+lines describe the resumed run alone. A message you send after the handoff
+starts a block of its own, with that run's own clock and closing line.
+
+In the tool activity, a subagent's launch row shows the label its launch gave
+it, when it gave one, rather than its instructions, followed by **running**
+while it works and by its duration once it has finished. A subagent that failed
+or timed out reads **failed** instead, and one that was stopped reads
+**stopped**. Selecting the name opens that subagent's session; the rest of the
+row still expands the launch's details. Collapsed activity counts subagents on
+their own, such as **1 other operation · 3 subagents**. A launch that was
+refused started no subagent and is counted with the other operations. While the
+step in progress has no title of its own, the collapsed row keeps showing that
+count. A launch that opens a
+child session in its own right, such as one asked for with `visible`, is not a
+subagent: its row and its place in that count stay those of an ordinary
+operation.
+
+The running count, the wait's count and name, and a launch row's state and link
+come from the session's subagent list. Until the pane has loaded it, the working
+indicator shows no count and a wait reads **Waiting on subagents**; a launch
+row whose subagent is not in the list shows its name alone. The pane does not
+load that list when
+[Swarm is turned off](/tools/swarm) with `tools.swarm: false`.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
@@ -318,11 +364,12 @@ gets three seconds to read before a newer title replaces it; rapid calls keep on
 pending update. The last purpose stays visible between tools, without a running
 ellipsis after that operation ends. The row stays expandable throughout. Failed
 or blocked operations and the end of the run bypass the hold, and settled activity
-returns to counts. A new disclosure after inline narration starts with its own
+returns to counts, or to a lone workflow's own row as described below. A new
+disclosure after inline narration starts with its own
 current purpose rather than moving an older operation across the narration.
 Reduced motion disables the title transition.
 
-Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
+Tool activity summaries count the operations inside a workflow rather than counting its wrapper again. A workflow whose recorded calls are all routine, such as plan or progress updates, is counted itself instead. Once it is no longer the live activity, activity that consists of one such successfully completed workflow shows that workflow's own titled row rather than a count; expand it for the routine calls and **Tool input**. A workflow that failed, was blocked, has no recorded outcome, or went through an approval review keeps the counted row with its status. Execution calls show the agent-provided purpose when available; titles describe intended work, while results determine success or failure. Recorded child calls appear under their operation instead of as separate peer rows. Expand the operation to inspect its children, then expand a child for its command, full output, and reported exit status. **Tool input** retains the wrapper's source and output. Collapsed operations include failures from their children, even when the wrapper or later calls succeed. Error messages and diagnostic paths stay inside the expandable tool details. Nested relationships use recorded call metadata from the same run and survive reloading; calls without an available, unambiguous parent stay separate. Untitled command previews flatten line breaks and truncate long commands; expanded details retain the original source.
 
 Native Codex Code Mode calls show **run JavaScript** when no purpose is available. Expand **Tool input** to read the source. Captured text-block responses display their text directly, and completed command envelopes show readable output with nonzero exit codes kept visible. JSON output is indented without changing number or string values. **Raw details** retains the original response, including execution metadata. For long results, choose **Show full output** to inspect the complete response; copy and download preserve those captured bytes.
 
@@ -414,7 +461,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Click **Stop**. Runs with an exact local run ID call `chat.abort`; when selected-session state reports active work but the Control UI has no local run ID, it calls `sessions.abort` instead. For non-global sessions, that selected-session path also discards queued follow-ups so they cannot restart work after the stop.
     - Exact-run Stop cancels that parent's associated sub-agents and Swarm collectors, including their descendants. Successful cancellation prevents selected queued children from starting while running siblings stop; it leaves unrelated parent turns and session-wide queues alone.
     - If Stop reports incomplete descendant cancellation, inspect the remaining native subagent runs with `/subagents list` and ask the agent to retry their cancellation with `subagents`. Do not treat the parent's stopped state as confirmation that every child stopped or that runtime cleanup was instantaneous. See [Sub-agent stopping](/tools/subagents#stopping) for scope details.
-    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. Text already streamed in an open chat stays before the steering message across history refreshes and reconnects; subsequent updates show only the continuation below it.
+    - While a run is active, normal follow-ups use the Gateway's effective `messages.queue` mode. `steer` injects into the running turn; other modes keep the browser's durable queued delivery. If the Gateway queues an input instead of steering it, the message appears above the composer until consumed or canceled. Reconnecting also recovers queued inputs from older history pages without changing the page you are viewing. Once the Gateway accepts input for an existing session, its database owns the approved input until it reaches the transcript. Collected messages are retired together with their combined transcript entry. Unconsumed input survives a Gateway restart as interrupted input requiring an explicit resend. Click **Steer** on a browser-owned queued message to inject it manually; removing a server-owned queued message requests its cancellation. A message you steer moves once from the queue to the bottom of the transcript when delivery starts. It stays there while acknowledgment and history catch up, until its saved copy replaces it. Already-visible text and tool activity stay before the steer; new output appears below it. This order survives history refreshes, reconnects, and reloading a finished run, including when a streamed answer spans the steer.
     - With **Settings → Appearance → Send shortcut** set to **Enter**, **Cmd/Ctrl+Enter** submits the opposite follow-up action while connected to an active run: queue when Enter steers, or steer when Enter queues (including inherited `collect` and `followup` modes). The send button tooltip shows both actions for the current follow-up setting. This affects only that message, not your saved preference. With the **Cmd/Ctrl+Enter** send shortcut selected, modified Enter remains the normal send action and plain Enter inserts a newline. Interrupt mode keeps its normal behavior.
     - Reorder the queue from the handle on the left of a queued message: drag it, or focus it and press the up and down arrow keys. The position is stored with the message, so it survives a reload and decides delivery order, not just what the list looks like. Rows already handed to a run — sending, steering, running a command, awaiting settings, or waiting on an uncertain delivery — hold their place and split the queue: a message moves only among the rows between two of them, so it can never reach the Gateway ahead of work already handed over.
     - Edit a queued message with the pencil on its row, or by double-clicking the row. The row becomes its own textarea and stays in place while the main composer remains independent, including any separate draft and attachments. Submit replaces the row in the same slot and preserves its attachments and delivery choice, even when the composer currently defaults to Steer or Interrupt; Cancel or Escape discards the row-local draft and restores the queued message. A normal composer send remains a separate queued item even while a row edit is open. The queue behind an edited row waits rather than delivering a message you are still rewriting, so that row splits the queue for reordering the same way an in-flight row does. Queued slash commands keep the discard-and-retype flow.
@@ -767,7 +814,9 @@ visible results, so a page opened after an inline widget appears after that widg
 Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
-stay expanded. User messages,
+stay expanded. So does a turn that handed off with `sessions_yield`, whether it
+is waiting, has resumed, or never did: its activity stays in place, and once it
+resumes the closing line reports the request. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing

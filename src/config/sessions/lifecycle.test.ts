@@ -7,7 +7,6 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
-  hasTerminalMainSessionTranscriptNewerThanRegistry,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
 } from "./lifecycle.js";
@@ -106,14 +105,6 @@ describe("terminal main session transcript freshness", () => {
     } finally {
       reads.restore();
     }
-    await expect(
-      hasTerminalMainSessionTranscriptNewerThanRegistry({
-        agentId: "main",
-        entry,
-        sessionKey,
-        storePath,
-      }),
-    ).resolves.toBe(true);
   });
 
   it.each(["done", "failed"] as const)("keeps %s terminal sessions reusable", async (status) => {

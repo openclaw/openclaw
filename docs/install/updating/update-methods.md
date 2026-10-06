@@ -176,8 +176,8 @@ also needs fresh declarations for plugin development.
 
 This reference script requires **Corepack** and creates temporary shims without
 global activation before fetching. After fetching, it freezes the target commit
-and checks that its exact pnpm pin can run through those shims in a private probe
-workspace. The probe contains only package-manager metadata, not the target's
+and checks that its exact pnpm pin can run through those shims in a private check
+workspace. The check contains only package-manager metadata, not the target's
 dependencies, hooks, or configuration. Missing or invalid metadata, provisioning
 failure, or a version mismatch stops before checkout update or restart; repair
 the target pin or install a compatible Corepack, then retry.
@@ -390,7 +390,7 @@ lifecycle work is recorded in `.openclaw-lifecycle-pending` at the package root,
 outside the `dist` inventory. `postinstall` removes that marker after completion.
 If package scripts were skipped, the CLI completes the pending lifecycle before
 running any command, including `--version`; failure stops the command with
-reinstall guidance. The updater probes the owning npm before mutation. On npm
+reinstall guidance. The updater checks the owning npm before mutation. On npm
 11.15 and earlier it omits the unsupported lifecycle-policy flag. On npm 12 and
 npm 11.16+, it approves only the candidate OpenClaw lifecycle; transitive
 dependency scripts remain unapproved.
@@ -445,7 +445,7 @@ bun add -g --trust openclaw@latest
 
 `--trust` allows OpenClaw's lifecycle scripts. The canonical `openclaw update`
 path applies the same OpenClaw-only Bun trust when it owns the install.
-For Bun-owned updates, package-manager probes and installs use the verified
+For Bun-owned updates, package-manager checks and installs use the verified
 service Bun when updating a managed service root. Otherwise they use
 `process.execPath` when the updater runs under Bun, with bare `bun` from PATH
 only as the final fallback. A missing or different PATH Bun does not replace

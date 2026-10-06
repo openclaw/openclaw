@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -268,24 +269,18 @@ export async function startGatewaySidecars(params: {
         if (deadlineAtMs === undefined) {
           return stopPromise;
         }
-        return new Promise<Awaited<ReturnType<PluginServicesHandle["stop"]>>>((resolve, reject) => {
-          const timer = setTimeout(
-            () => {
-              reject(
-                new AggregateError(
-                  [new Error("Gateway plugin service startup did not settle before replacement")],
-                  "Gateway plugin service replacement cleanup failed",
-                ),
-              );
-            },
-            Math.max(0, deadlineAtMs - Date.now()),
-          );
-          void stopPromise
-            .finally(() => clearTimeout(timer))
-            .then(resolve, (error: unknown) => {
-              reject(error instanceof Error ? error : new Error(String(error)));
-            });
-        });
+        return raceWithTimeout(
+          stopPromise.catch((error: unknown) => {
+            throw error instanceof Error ? error : new Error(String(error));
+          }),
+          Math.max(0, deadlineAtMs - Date.now()),
+          () => {
+            throw new AggregateError(
+              [new Error("Gateway plugin service startup did not settle before replacement")],
+              "Gateway plugin service replacement cleanup failed",
+            );
+          },
+        );
       },
     };
     // Startup may outlive a replacement deadline. Final shutdown retains this

@@ -126,11 +126,9 @@ export function applyChatAgentOwnerTransition(
   host.assistantAgentId = selectedAgentId;
   host.assistantName = "";
   host.assistantAvatar = null;
-  host.assistantAvatarSource = null;
   host.assistantAvatarStatus = null;
   host.assistantAvatarReason = null;
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
   host.modelAuthStatusResult = null;

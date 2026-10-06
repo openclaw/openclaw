@@ -11,9 +11,10 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
+import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
@@ -25,6 +26,7 @@ import {
 import {
   buildChildCompletionFindings,
   readSubagentRunAnnounceResultUsing,
+  SubagentAnnouncePreparationConflictError,
   type ChildCompletionRow,
   type PreparedAnnounceResult,
 } from "./subagent-announce-result.js";
@@ -240,14 +242,18 @@ export async function readChildCompletionFindings(
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
       if (!child || !prepared.isCurrent()) {
-        throw new Error("A child result changed while preparing the completion batch.");
+        throw new SubagentAnnouncePreparationConflictError(
+          "A child result changed while preparing the completion batch.",
+        );
       }
       return { child, ...prepared };
     }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {
-    throw new Error("A child result changed while preparing the completion batch.");
+    throw new SubagentAnnouncePreparationConflictError(
+      "A child result changed while preparing the completion batch.",
+    );
   }
   return {
     text: buildChildCompletionFindings(
@@ -289,7 +295,10 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
+    getLatestSubagentRunByChildSessionKey: (
+      childSessionKey: string,
+      childAgentId?: string,
+    ) => SubagentRunReadRecord | null;
   },
 ): T[] {
   return children.filter((child) => {
@@ -336,9 +345,7 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestRuntimeEnv()) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 150);
-      });
+      await sleep(150);
     }
     entry = readSubagentSessionEntry(storePath, params.sessionKey);
   }

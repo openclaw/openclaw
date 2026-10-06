@@ -188,9 +188,19 @@ it.each([false, true])(
     if (abandoned) {
       reconcileUpdateRunsInNativeKernelForTest();
     }
-    const broadcast = vi.fn();
+    const published = createDeferredCore();
+    const broadcast = vi.fn((event, payload) => {
+      if (
+        event === "update.run.changed" &&
+        payload.runId === runId &&
+        payload.status === "succeeded"
+      ) {
+        published.resolve();
+      }
+    });
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await vi.waitFor(() => expect(getUpdateRun(runId)?.status).toBe("succeeded"));
+    await published.promise;
+    expect(getUpdateRun(runId)?.status).toBe("succeeded");
     expect(getUpdateRun(runId)).toMatchObject({
       reason: null,
       after: { version: "2026.9.4", buildId: "candidate-build" },
@@ -203,8 +213,8 @@ it.each([false, true])(
     expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain(
       "Updater exited before recording completion",
     );
-    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle probe: settled");
-    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle probe: settled"));
+    expect(renderUpdateRunReport(getUpdateRun(runId)!).markdown).toContain("settle check: settled");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("settle check: settled"));
   },
 );
 
@@ -393,10 +403,10 @@ it.each(["unverified", "timed-out"])(
     const diagnostic = pending.steps.find((step) => step.step === "reconcile:settle");
     expect(diagnostic).toMatchObject({
       status: "completed",
-      detail: expect.stringContaining(`settle probe: ${outcome}`),
+      detail: expect.stringContaining(`settle check: ${outcome}`),
     });
     expect(pending.status).toBe("running");
-    expect(renderUpdateRunReport(pending).markdown).toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(pending).markdown).toContain(`settle check: ${outcome}`);
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining(diagnostic!.detail!));
     if (outcome === "timed-out") {
       expect(diagnostic?.detail).toContain(
@@ -408,9 +418,9 @@ it.each(["unverified", "timed-out"])(
     const recovered = getUpdateRun(runId)!;
     expect(recovered).toMatchObject({ status: "succeeded", verification: { versionMatch: true } });
     expect(recovered.steps.filter((step) => step.step === "reconcile:settle")).toEqual([
-      expect.objectContaining({ detail: expect.stringContaining("settle probe: settled") }),
+      expect.objectContaining({ detail: expect.stringContaining("settle check: settled") }),
     ]);
-    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle probe: ${outcome}`);
+    expect(renderUpdateRunReport(recovered).markdown).not.toContain(`settle check: ${outcome}`);
   },
 );
 

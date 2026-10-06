@@ -1,8 +1,9 @@
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { isIncognitoSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { prepareUserProfileRoleAuthority } from "../state/user-channel-identity-operations.js";
 import type { UserProfileIdentity } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
@@ -14,9 +15,12 @@ import {
   resolveOperatorRolePolicyForAssignment,
 } from "./operator-role-policy.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayClient, SessionMutationAuthorization } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
-import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
+import {
+  SessionMutationAuthorizationChangedError,
+  SessionSharingProfileFactsChangedError,
+} from "./session-mutation-authorization-error.js";
 import {
   authorizeSessionSharingTarget,
   canManageSessionSharing,
@@ -27,6 +31,7 @@ import {
   sharingIdentity,
   type SessionSharingRoleParams,
   type SessionSharingTarget,
+  type withSessionSharingTarget,
 } from "./session-sharing-policy.js";
 import {
   loadCachedSessionSharingSnapshot,
@@ -192,6 +197,8 @@ export type PreparedSessionSharingProfiles = {
 /** Worker authorization also serves callers without a connection-owned profile projection. */
 export async function prepareSessionSharingProfiles(
   client: GatewayClient | null,
+  mode: "selection" | "custody" = "selection",
+  options: OpenClawStateDatabaseOptions = {},
 ): Promise<PreparedSessionSharingProfiles> {
   const actor = resolveGatewayOperatorRoleActor(client);
   const actorKind = actor?.kind;
@@ -210,17 +217,24 @@ export async function prepareSessionSharingProfiles(
       const canonicalProfileId = retained.profileId;
       return () => {
         const current = client?.preparedSessionProfile;
-        if (current?.profileId !== canonicalProfileId || !current.aliases.has(profileId)) {
+        if (
+          !current?.aliases.has(profileId) ||
+          (mode === "selection" && current.profileId !== canonicalProfileId)
+        ) {
           return unavailable();
         }
         return current;
       };
     }
-    const prepared = await prepareUserProfileRoleAuthority(profileId);
+    const prepared = await prepareUserProfileRoleAuthority(profileId, options);
     const profile = prepared && { ...prepared, aliases: new Set(prepared.aliases) };
     return () => {
       if (prepared && !prepared.isCurrent()) {
-        return unavailable();
+        prepared.readSource();
+        throw new SessionSharingProfileFactsChangedError(
+          authenticatedProfileUnavailableError(),
+          prepared.readSource,
+        );
       }
       return profile;
     };
@@ -245,6 +259,68 @@ export async function prepareSessionSharingProfiles(
   };
   readCurrent();
   return { readCurrent };
+}
+
+/** Refresh changed profile facts only before the synchronous consumer has begun effects. */
+async function withCurrentSessionSharingProfiles<T>(
+  client: GatewayClient | null,
+  read: (profiles: PreparedSessionSharingProfiles, beginConsume: () => void) => Promise<T>,
+): Promise<T> {
+  let consumed = false;
+  let readSource: () => OpenClawStateDatabaseOptions = () => ({});
+  for (let attempt = 0; ; attempt += 1) {
+    const source = readSource();
+    try {
+      const profiles = await prepareSessionSharingProfiles(client, "custody", source);
+      readSource();
+      return await read(profiles, () => {
+        consumed = true;
+      });
+    } catch (error) {
+      if (consumed || attempt >= 1 || !(error instanceof SessionSharingProfileFactsChangedError)) {
+        throw error;
+      }
+      readSource = error.readSource;
+    }
+  }
+}
+
+export function createSessionSharingInputAuthority(
+  ownedParams: { client: GatewayClient | null; preparedProfiles?: PreparedSessionSharingProfiles },
+  authorization: SessionMutationAuthorization,
+  readSharing: () => Parameters<Parameters<typeof withSessionSharingTarget>[1]>[0],
+): SessionMutationAuthorization["admittedInputAuthority"] {
+  const { withCurrent, withPreparedCurrent } = authorization;
+  if (!withCurrent || !withPreparedCurrent) {
+    return undefined;
+  }
+  return {
+    // Transport/source custody owns lifetime; profile selection ends at input acceptance.
+    assertLifetimeCurrent: () => {},
+    withCurrent: (consume) =>
+      withCurrentSessionSharingProfiles(ownedParams.client, (profiles, beginConsume) => {
+        ownedParams.preparedProfiles = profiles;
+        return withCurrent(() => {
+          beginConsume();
+          const read = readSharing();
+          return consume(
+            {
+              agentId: read.storageTarget.agentId,
+              storePath: read.storageTarget.storePath,
+              sessionKey: toAgentStoreSessionKey({
+                agentId: read.storageTarget.agentId,
+                requestKey: read.target?.storeKey ?? read.storageTarget.canonicalKey,
+              }),
+              entry: read.target?.entry,
+              readSource: read.target?.readSource,
+              members: read.members,
+            },
+            read.assertCurrent,
+          );
+        });
+      }),
+    withPreparedCurrent,
+  };
 }
 
 export function prepareProjectedSessionSharing(params: {
@@ -276,6 +352,7 @@ export function prepareProjectedSessionSharing(params: {
             cfg,
             roleProfile?.githubLogin ?? null,
           );
+  let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
       aliases: profile?.aliases ?? new Set(),
@@ -283,6 +360,20 @@ export function prepareProjectedSessionSharing(params: {
       isMember,
     }),
     policy,
+    get cacheKey() {
+      return (cacheKey ??= JSON.stringify([
+        actor,
+        identity?.id,
+        client?.authenticatedUserProfile?.profileId,
+        client?.authenticatedUserId,
+        Boolean(client?.authenticatedGitHubIdentitySync),
+        client?.connect.scopes?.toSorted(),
+        profile?.profileId,
+        profile && [...profile.aliases].toSorted(),
+        policy,
+        Boolean(cfg.gateway?.roles),
+      ]));
+    },
   };
 }
 

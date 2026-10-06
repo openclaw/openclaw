@@ -31,7 +31,7 @@ restoration failure; slow startup does not undo a completed repair.
 
     Windows extra-service hints use read-only `schtasks /Query` inspection. Node hosts remain visible in diagnostics; discovery alone does not make a service a removal target. Unreadable unrelated Scheduled Tasks do not block discovery or test runtime preparation, regardless of whether they are running. Selected tasks, recognized OpenClaw launchers, and custom aliases with OpenClaw launcher content still report incomplete inspection when their command cannot be verified.
 
-    Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status probe does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
+    Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status check does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
     On Linux, if the user-level gateway service is missing but a system-level OpenClaw gateway service exists, doctor does not install a second user-level service automatically. Inspect with `openclaw gateway status --deep` or `openclaw doctor --deep`, then remove the duplicate or set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when a system supervisor owns the gateway lifecycle.
 
@@ -82,7 +82,7 @@ restoration failure; slow startup does not undo a completed repair.
     - **Plugins**: reports only errored plugin IDs; use `openclaw plugins list` for loaded, imported, disabled, and bundle-plugin inventory.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
-    - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy probe details are omitted.
+    - **Claude CLI**: reports only binary, authentication, profile, workspace, or project-directory problems; healthy check details are omitted.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
@@ -208,7 +208,7 @@ restoration failure; slow startup does not undo a completed repair.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
     - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.
 
-    When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
+    When a cached gateway check result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 
     Use `openclaw memory status --deep` to verify embedding readiness at runtime.
 
@@ -216,7 +216,7 @@ restoration failure; slow startup does not undo a completed repair.
 
   </Accordion>
   <Accordion title="14. Channel status warnings">
-    If the gateway is healthy, doctor runs a channel status probe and reports warnings with suggested fixes.
+    If the gateway is healthy, doctor runs a channel status check and reports warnings with suggested fixes.
   </Accordion>
   <Accordion title="15. Supervisor config audit + repair">
     Plain Doctor inspection checks the installed supervisor config (launchd/systemd/schtasks) for missing or outdated defaults (for example systemd network-online dependencies and restart delay) and can offer an interactive repair. Explicit repair maintenance skips this separate service-rewrite phase, but reconciles [eligible installation drift in a previously running service](/cli/doctor/recovery#gateway-service-recovery) through the native installer. Stopped services keep their launcher and stop state. Run `openclaw gateway install --force` from the intended installation to replace the launcher and managed environment.
@@ -235,7 +235,7 @@ restoration failure; slow startup does not undo a completed repair.
     - An updater's explicit Gateway activation policy leaves stop/restart ownership with the updater. Doctor still requires native proof that the service is offline; a live `update --no-restart` repair fails without stopping or restarting it. Stop the service through its owner before retrying the update. Older update parents without that policy retain ordinary Doctor maintenance.
     - `openclaw doctor --fix --force` uses the same policy-refresh and installation-drift rules. Use `openclaw gateway install --force` to request a rewrite; operator-owned systemd drop-ins remain unchanged.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. Have the deployment owner stop the Gateway, run Doctor as the state-owning account, then restart through that owner. The policy skips native maintenance inspection and service mutations, including install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup. It keeps Gateway/state coordinators and agent-database lease checks, reports service health, and runs non-service repairs. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).
-    - Doctor and `gateway status --deep` name unavailable launchd domains, missing systemd user-session buses, and native probe access denial separately. Linux guidance covers `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `dbus-user-session`; externally supervised deployments receive the existing policy above. See [Gateway and service recovery](/cli/doctor/recovery).
+    - Doctor and `gateway status --deep` name unavailable launchd domains, missing systemd user-session buses, and native check access denial separately. Linux guidance covers `XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`, and `dbus-user-session`; externally supervised deployments receive the existing policy above. See [Gateway and service recovery](/cli/doctor/recovery).
     - Within a live Linux service inspection, OpenClaw can retain the authenticated user manager's private connection if its session bus stops. Typed command and runtime reads continue only for that original manager and unit. A missing initial manager identity or a replaced manager remains unavailable; OpenClaw does not start the bus or select another manager. This read-only recovery does not change service start/stop authority.
 
     - On macOS, a same-label system LaunchDaemon blocks user LaunchAgent install, start, restart, and bootstrap repair. Doctor reports the system owner and stops service recovery; `--force` does not bypass this ownership boundary. See [Existing system LaunchDaemons](/gateway#existing-system-launchdaemons).

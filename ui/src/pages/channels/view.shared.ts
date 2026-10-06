@@ -5,18 +5,10 @@ import type { ChannelAccountSnapshot, ChannelStatus } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { channelSnapshotEntryIsActive, resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { ChannelKey, ChannelsProps } from "./view.types.ts";
-
-type ChannelDisplayState = {
-  configured: boolean | null;
-  running: boolean | null;
-  connected: boolean | null;
-  defaultAccount: ChannelAccountSnapshot | null;
-  status: Record<string, unknown> | undefined;
-};
 
 type ChannelStatusKind = "ok" | "warn" | "danger" | "accent" | "muted";
 
@@ -54,10 +46,7 @@ function resolveDefaultChannelAccount(
   );
 }
 
-export function resolveChannelDisplayState(
-  key: ChannelKey,
-  props: ChannelsProps,
-): ChannelDisplayState {
+export function resolveChannelDisplayState(key: ChannelKey, props: ChannelsProps) {
   const status = resolveChannelStatus(key, props);
   const defaultAccount = resolveDefaultChannelAccount(key, props);
   const configured =
@@ -76,14 +65,6 @@ export function resolveChannelDisplayState(
     defaultAccount,
     status,
   };
-}
-
-export function channelEnabled(key: ChannelKey, props: ChannelsProps) {
-  return channelSnapshotEntryIsActive(props.channels.channelsSnapshot, key);
-}
-
-export function resolveChannelConfigured(key: ChannelKey, props: ChannelsProps): boolean | null {
-  return resolveChannelDisplayState(key, props).configured;
 }
 
 export function formatNullableBoolean(value: boolean | null): string {

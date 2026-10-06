@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { ADMIN_SCOPE } from "../../../gateway/method-scopes.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
@@ -22,6 +23,7 @@ import { bindSwarmRunReservation, enqueueSwarmRun } from "../swarm/swarm-schedul
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import { callSubagentRegistryGateway } from "./subagent-registry-deps.js";
 import { updateSubagentArchiveAtMs } from "./subagent-registry-helpers.js";
+import type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-context.js";
 import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import {
   getCurrentSubagentRunOwner,
@@ -33,6 +35,7 @@ import {
   restoreSubagentRunsFromDisk,
 } from "./subagent-registry-persistence.js";
 import { getLatestSubagentRunForChild } from "./subagent-registry-queries.js";
+import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import { settleRestoredRequesterTurns } from "./subagent-registry-restore-requester.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -59,6 +62,7 @@ export function createSubagentRegistryRestorer(config: {
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   bindGatewayOwners: () => boolean | Promise<boolean>;
   settleRequesterTurn: SubagentLifecycleController["settleRequesterTurnAfterSessionSpawns"];
+  retireSupersededRun: SubagentLifecycleOptions["retireSupersededRun"];
   ensureListener: () => void;
   startSweeper: () => void;
   scheduleSweep: () => void;
@@ -67,7 +71,7 @@ export function createSubagentRegistryRestorer(config: {
     groupId: string,
     requesterSessionKey?: string,
     requesterAgentId?: string,
-  ) => SubagentRunRecord[];
+  ) => SubagentRunReadRecord[];
   startQueuedSubagentRun: (
     runId: string,
     gatewayRunId?: string,
@@ -207,11 +211,12 @@ export function createSubagentRegistryRestorer(config: {
       stateContext,
       assertCurrent,
       settleRequesterTurn,
-      warn,
+      retireSupersededRun: config.retireSupersededRun,
     });
     assertCurrent();
     if (!runsResumed) {
-      resumeRestoredRuns(cfg);
+      await resumeRestoredRuns(cfg, assertCurrent);
+      assertCurrent();
       runsResumed = true;
     }
     if (transferFailures.length > 0) {
@@ -235,14 +240,28 @@ export function createSubagentRegistryRestorer(config: {
     activated = true;
   }
 
-  function resumeRestoredRuns(cfg: ReturnType<typeof getRuntimeConfig>) {
+  async function resumeRestoredRuns(
+    cfg: ReturnType<typeof getRuntimeConfig>,
+    assertCurrent: () => void,
+  ) {
     if (runs.size === 0) {
       return;
     }
     ensureListener();
     // Session-mode runs have no archive deadline but still need TTL cleanup.
     startSweeper();
-    for (const [runId, entry] of runs) {
+    // Resume only this captured owner set; registration may change the live map while we yield.
+    const capturedRuns = [...runs];
+    let visited = 0;
+    for (const [runId, snapshot] of capturedRuns) {
+      if (++visited % 128 === 0) {
+        await yieldToEventLoop();
+        assertCurrent();
+      }
+      const entry = getCurrentSubagentRunOwner(runs, snapshot);
+      if (!entry) {
+        continue;
+      }
       // Restart recovery exclusively owns receipt-bearing source rows until it
       // remaps or terminalizes them. Generic resume would wait on an obsolete run.
       if (entry.execution.restartRecovery || entry.killIntent || entry.killReconciliation) {
@@ -450,7 +469,7 @@ export function createSubagentRegistryRestorer(config: {
           (rows) => {
             const postimages = new Map<string, SubagentRunRecord>();
             for (const [runId, entry] of rows) {
-              const draft = structuredClone(entry);
+              const draft = { ...entry };
               const requesterAgentId = resolveSubagentRequesterAgentId(cfg, draft);
               const ownerChanged = !draft.requesterAgentId && requesterAgentId !== undefined;
               if (ownerChanged) {

@@ -1291,6 +1291,10 @@ if (sharedSdkDeclarations) {
     1,
   );
 }
+const runPrMadgeImportCycles =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true);
+const runPrKyselyGuardrails =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true);
 const checkTasks = [
   ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
     check_name: `check-${task}`,
@@ -1317,6 +1321,17 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
+// Keep the selected source scans independent of the other PR guards.
+const guardRow = checkTasks.find(({ task }) => task === "guards");
+const splitPrGuards = guardRow !== undefined && (runPrMadgeImportCycles || runPrKyselyGuardrails);
+if (splitPrGuards) {
+  checkTasks.push({
+    check_name: "check-guards-architecture",
+    task: "guards-architecture",
+    runner: guardRow.runner,
+  });
+}
+
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1332,7 +1347,7 @@ if (
 
 // These rows need no compiler plan; retain their existing full-check placement.
 if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  for (const task of ["guards", "dependencies"]) {
+  for (const task of ["guards", "guards-architecture", "dependencies"]) {
     const index = checkTasks.findIndex((row) => row.task === task);
     if (index >= 0) {
       const { task: group, ...row } = checkTasks.splice(index, 1)[0];
@@ -1395,6 +1410,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
+  // Older scope owners retain these guards rather than silently dropping coverage.
+  run_pr_madge_import_cycles: runPrMadgeImportCycles,
+  run_pr_kysely_guardrails: runPrKyselyGuardrails,
+  split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan

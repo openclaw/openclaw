@@ -354,10 +354,7 @@ function formatReason(hit: ChannelPluginBlockerHit): string {
   if (hit.reason === "not enabled and not in allowlist") {
     return `plugin "${sanitizeForLog(hit.pluginId)}" is not enabled and is omitted from plugins.allow. Add plugins.entries.${sanitizeForLog(hit.pluginId)}.enabled=true and include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
   }
-  if (hit.reason === "not in allowlist") {
-    return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
-  }
-  return `plugin "${sanitizeForLog(hit.pluginId)}" is not loadable (${sanitizeForLog(hit.reason)}).`;
+  return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
 }
 
 function formatChannelPluginBlocker(hit: ChannelPluginBlockerHit): string {

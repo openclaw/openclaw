@@ -291,7 +291,6 @@ export function renderChatPaneComposerControls(params: {
           modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
           modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-          modelsLoading: state.chatModelsLoading,
           modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
           effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
           contextWindowMutationDisabledReason: contextWindowAccess.allowed

@@ -17,7 +17,6 @@ import {
 import { MAX_TIMER_TIMEOUT_MS, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
-import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import {
   withMemoryWorkspaceLock,
   withMemoryWorkspacePreparation,
@@ -586,8 +585,16 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     embeddings: number[][],
     vectorReady: boolean,
   ): Promise<void> {
+    const database = this.database;
+    const sourceDatabase = generation?.database ?? this.publishedDatabase;
+    const session =
+      source === "sessions"
+        ? {
+            agentId: this.agentId,
+            sessionId: expectDefined(entry.sessionId, "memory index session identity"),
+          }
+        : undefined;
     await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-      const database = this.database;
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -595,15 +602,30 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           database.closed ||
           !database.db.isOpen ||
           this.database !== database ||
-          (generation &&
-            (generation.database !== this.publishedDatabase ||
-              generation.database.closed ||
-              !generation.database.db.isOpen ||
-              this.syncProviderGeneration !== generation))
+          sourceDatabase !== this.publishedDatabase ||
+          sourceDatabase.closed ||
+          !sourceDatabase.db.isOpen ||
+          (generation && this.syncProviderGeneration !== generation)
         ) {
           throw new Error("Memory source owner changed before replacement");
         }
       };
+      if (session) {
+        // Forget shares this cross-process lock. The prepared predicate remains
+        // current through native commit only while this lock and original owner
+        // stay retained; a shadow's empty tombstone table cannot authorize it.
+        const predicate = await sourceDatabase.read(
+          { type: "session.current", input: session },
+          assertCurrent,
+        );
+        assertCurrent();
+        if (predicate === "forgotten") {
+          this.markFailedFullReindexRetry({ memory: false, sessions: true });
+          throw new Error(
+            "A session was forgotten while memory indexing was running; retry the memory index.",
+          );
+        }
+      }
       const createReplacement = (): MemorySourceIndexReplacement => ({
         entry: { path: entry.path, hash: entry.hash, mtimeMs: entry.mtimeMs, size: entry.size },
         chunks,
@@ -611,13 +633,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         model: generation?.provider?.model ?? "fts-only",
         now: Date.now(),
         vectorReady,
-        ...(source === "sessions"
-          ? {
-              source,
-              agentId: this.agentId,
-              sessionId: expectDefined(entry.sessionId, "memory index session identity"),
-            }
-          : { source }),
+        ...(session ? { source: "sessions", ...session } : { source: "memory" }),
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
@@ -635,21 +651,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
           }
         }
         assertCurrent();
-        // Read before BEGIN: Worker admission may hold an EXCLUSIVE rollback-journal lock.
-        // The workspace lock excludes Forget until the Worker reply.
-        if (
-          source === "sessions" &&
-          hasMemorySessionTombstone(
-            (generation?.database ?? database).db,
-            this.agentId,
-            expectDefined(entry.sessionId, "memory index session identity"),
-          )
-        ) {
-          this.markFailedFullReindexRetry({ memory: false, sessions: true });
-          throw new Error(
-            "A session was forgotten while memory indexing was running; retry the memory index.",
-          );
-        }
         return true;
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
@@ -677,12 +678,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   private async prepareIndexEntry(
     entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
+    source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
   ): Promise<PreparedMemoryIndexEntry | null> {
-    const source = options.source;
     const kind = entry.kind;
-    const suppliedContent = options.content ?? entry.content;
+    const suppliedContent = entry.content;
     const prepare = async (): Promise<PreparedMemoryIndexEntry | null> => {
       if (kind === "multimodal") {
         const multimodalChunk: Awaited<
@@ -789,7 +789,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       await runWithConcurrency(
         items.map(
           (item) => async () =>
-            await this.indexFileWithGeneration(item.entry, { source: item.source }, generation),
+            await this.indexFileWithGeneration(item.entry, item.source, generation),
         ),
         this.getIndexConcurrency(),
       );
@@ -873,14 +873,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
     for (const item of items) {
       if (item.entry.kind === "multimodal") {
-        await this.indexFileWithGeneration(item.entry, { source: item.source }, generation);
+        await this.indexFileWithGeneration(item.entry, item.source, generation);
         continue;
       }
-      const preparedEntry = await this.prepareIndexEntry(
-        item.entry,
-        { source: item.source },
-        generation,
-      );
+      const preparedEntry = await this.prepareIndexEntry(item.entry, item.source, generation);
       if (!preparedEntry) {
         continue;
       }
@@ -904,13 +900,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     await flushPrepared("end");
   }
 
-  protected async indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void> {
+  protected async indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void> {
     this.beginSyncProviderGeneration();
     try {
-      await this.indexFileWithGeneration(entry, options, this.syncProviderGeneration);
+      await this.indexFileWithGeneration(entry, source, this.syncProviderGeneration);
     } finally {
       this.endSyncProviderGeneration();
     }
@@ -918,14 +911,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
 
   private async indexFileWithGeneration(
     entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
+    source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
   ): Promise<void> {
     // Multimodal files require an embedding provider; skip in FTS-only mode.
     if (generation?.kind !== "semantic" && entry.kind === "multimodal") {
       return;
     }
-    const prepared = await this.prepareIndexEntry(entry, options, generation);
+    const prepared = await this.prepareIndexEntry(entry, source, generation);
     if (!prepared) {
       return;
     }
@@ -942,7 +935,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         source: prepared.source,
       }));
       embeddings = this.batch.enabled
-        ? await this.embedChunksWithBatch(candidates, options.source, generation)
+        ? await this.embedChunksWithBatch(candidates, source, generation)
         : await this.embedChunksInBatches(candidates, generation, EMBEDDING_BATCH_MAX_TOKENS);
     } catch (err) {
       const message = formatErrorMessage(err);

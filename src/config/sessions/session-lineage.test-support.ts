@@ -63,3 +63,25 @@ export const SESSION_ROLLOVER_LINEAGE_CASES = [
     preservesSpawnLineage: true,
   },
 ];
+
+export function createSessionRolloverSpawnLineage(
+  testCase: (typeof SESSION_ROLLOVER_LINEAGE_CASES)[number],
+) {
+  return {
+    spawnedBy: testCase.spawnedBy,
+    spawnedBySenderIsOwner: true,
+    spawnedBySessionId: "parent-session",
+    spawnedWorkspaceDir: "/tmp/child-workspace",
+    spawnedCwd: "/tmp/task-repo",
+    spawnDepth: 1,
+    inheritedToolPolicyVersion: 1 as const,
+    inheritedToolPolicySource: "sender" as const,
+    inheritedToolAllow: ["read", "sessions_spawn"],
+    inheritedToolDeny: ["exec"],
+    sessionRoot: "/tmp/child-workspace/scoped",
+    ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
+    ...(testCase.subagentControlScope
+      ? { subagentControlScope: testCase.subagentControlScope }
+      : {}),
+  };
+}

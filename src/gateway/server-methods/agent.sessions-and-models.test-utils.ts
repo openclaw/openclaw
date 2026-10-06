@@ -7,7 +7,8 @@ import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-to
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -276,14 +277,12 @@ describe("gateway agent handler", () => {
 
       await fixture.cleanupCompleted;
 
-      expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
-        cleanupCompletedAt: expect.any(Number),
-      });
       const run = requireValue(
-        getSubagentRunByChildSessionKey(childSessionKey),
+        await getSubagentRunByChildSessionKey(childSessionKey),
         "expected subagent registry run",
       );
       expectRecordFields(run, {
+        cleanupCompletedAt: expect.any(Number),
         runId,
         childSessionKey,
         controllerSessionKey: "agent:work:main",
@@ -313,9 +312,9 @@ describe("gateway agent handler", () => {
         ),
       );
 
-      await fixture.work.runWhenIdle(() => {
+      await fixture.work.runWhenIdle(async () => {
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-        expect(getSubagentRunByChildSessionKey(childSessionKey)?.createdAt).toBe(createdAt);
+        expect((await getSubagentRunByChildSessionKey(childSessionKey))?.createdAt).toBe(createdAt);
       });
     });
   });
@@ -349,7 +348,7 @@ describe("gateway agent handler", () => {
       });
 
       const run = requireValue(
-        getSubagentRunByChildSessionKey(childSessionKey),
+        await getSubagentRunByChildSessionKey(childSessionKey),
         "expected requester-bound plugin subagent run",
       );
       expectRecordFields(run, {
@@ -449,7 +448,7 @@ describe("gateway agent handler", () => {
           );
           expect(mocks.agentCommand).not.toHaveBeenCalled();
           expect(context.chatAbortControllers.has(runId)).toBe(false);
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId: previousRunId,
             pauseReason: "sessions_yield",
           });
@@ -558,7 +557,7 @@ describe("gateway agent handler", () => {
           cleanupCompletedAt: undefined,
         });
         const run = requireValue(
-          getSubagentRunByChildSessionKey(childSessionKey),
+          await getSubagentRunByChildSessionKey(childSessionKey),
           "expected separately registered plugin subagent run",
         );
         expectRecordFields(run.delivery, { status: "delivered" });
@@ -2410,7 +2409,7 @@ describe("gateway agent handler", () => {
         await waitForAgentCommandCall();
 
         await waitForAssertion(() => {
-          expectRecordFields(getSubagentRunByChildSessionKey(childSessionKey), {
+          expectRecordFields(subagentRuns.get(runId), {
             runId,
             childSessionKey,
             label: "plugin:memory-core",

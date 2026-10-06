@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok } from "@openclaw/normalization-core/result";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
@@ -35,15 +37,47 @@ function assertResultKind<K extends Extract<SessionHistoryWorkerValue, { kind: s
 export function createSessionHistoryWorkerReaders(
   runRequest: SessionHistoryWorkerRequestRunner,
 ): Omit<SessionHistoryWorkerDatabase, "generation" | "assertCurrent"> {
-  function reader<K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"], Input, T>(
+  function reader<
+    K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"] &
+      SessionHistoryWorkerPreparedInput["kind"],
+    T,
+  >(
     kind: K,
     expected: string,
-    prepare: (input: Input) => SessionHistoryWorkerPreparedInput,
     project: (value: Extract<SessionHistoryWorkerValue, { kind: K }>) => T,
+  ): (
+    input: Omit<Extract<SessionHistoryWorkerPreparedInput, { kind: K }>, "kind">,
+    signal?: AbortSignal,
+  ) => Promise<T>;
+  function reader<
+    K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"],
+    Input extends object,
+    T,
+  >(
+    kind: K,
+    expected: string,
+    project: (value: Extract<SessionHistoryWorkerValue, { kind: K }>) => T,
+    prepare: (input: Input) => SessionHistoryWorkerPreparedInput,
+  ): (input: Input, signal?: AbortSignal) => Promise<T>;
+  function reader<
+    K extends Extract<SessionHistoryWorkerValue, { kind: string }>["kind"],
+    Input extends object,
+    T,
+  >(
+    kind: K,
+    expected: string,
+    project: (value: Extract<SessionHistoryWorkerValue, { kind: K }>) => T,
+    prepare?: (input: Input) => SessionHistoryWorkerPreparedInput,
   ): (input: Input, signal?: AbortSignal) => Promise<T> {
     return async (input, signal) =>
       runRequest(
-        () => prepare(input),
+        () => {
+          if (prepare) {
+            return prepare(input);
+          }
+          // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
+          return { kind, ...input } as SessionHistoryWorkerPreparedInput;
+        },
         JSON.stringify(input).length * 2,
         (value) => {
           assertResultKind(value, kind, expected);
@@ -56,48 +90,30 @@ export function createSessionHistoryWorkerReaders(
     readMessagePresence: reader(
       "transcript-message-presence",
       "message presence",
-      (input) => ({ kind: "transcript-message-presence", ...input }),
       (value) => value.present,
     ),
-    readAnchors: reader(
-      "transcript-anchors",
-      "transcript anchors",
-      (input) => ({ kind: "transcript-anchors", ...input }),
-      (value) => value.facts,
-    ),
+    readAnchors: reader("transcript-anchors", "transcript anchors", (value) => value.facts),
     readRuntimeTarget: reader(
       "session-runtime-target",
       "runtime transcript target",
-      (input) => ({ kind: "session-runtime-target", ...input }),
       (value) => value.target,
     ),
-    readConversations: reader(
-      "conversation-rows",
-      "conversations",
-      (input) => ({ kind: "conversation-rows", ...input }),
-      (value) => value.rows,
-    ),
-    prewarm: reader(
-      "prewarm",
-      "prewarm acknowledgement",
-      (input) => ({ kind: "prewarm", ...input }),
-      () => undefined,
-    ),
+    readConversations: reader("conversation-rows", "conversations", (value) => value.rows),
+    prewarm: reader("prewarm", "prewarm acknowledgement", () => undefined),
     readPendingArchives: reader(
       "session-pending-archives",
       "pending archives",
-      (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
     ),
     readLifecycleArtifactPlan: reader(
       "lifecycle-artifact-plan",
       "lifecycle artifact plan",
-      (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
       (value) => value,
     ),
     readMemorySessionTargets: reader(
       "memory-session-targets",
       "memory session targets",
+      (value) => value.targets,
       (input) => ({
         kind: "memory-session-targets",
         ...input,
@@ -106,44 +122,41 @@ export function createSessionHistoryWorkerReaders(
           env: captureSessionTranscriptStorageEnvironment(input.params.env),
         },
       }),
-      (value) => value.targets,
     ),
     readArchiveInventory: reader(
       "session-archive-inventory",
       "archive inventory",
+      (value) => value.archives,
       (input) => ({
         kind: "session-archive-inventory",
         ...input,
         env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
       }),
-      (value) => value.archives,
     ),
     readCorpusInventory: reader(
       "session-corpus-inventory",
       "corpus inventory",
+      (value) => value.entries,
       (input) => ({
         kind: "session-corpus-inventory",
         ...input,
         scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
       }),
-      (value) => value.entries,
     ),
     readArchivePresence: reader(
       "session-archive-presence",
       "archive presence",
-      (input) => ({ kind: "session-archive-presence", ...input }),
       (value) => value.registered,
     ),
     findTranscriptEvent: reader(
       "transcript-match",
       "a transcript match",
-      (request) => ({ kind: "transcript-match", request }),
       (value) => value.result,
+      (request) => ({ kind: "transcript-match", request }),
     ),
     readHistoricalEvictionCandidates: reader(
       "historical-eviction-candidates",
       "eviction candidates",
-      (input) => ({ kind: "historical-eviction-candidates", ...input }),
       (value) => {
         if (!("sessionIds" in value)) {
           throw new Error(
@@ -152,11 +165,11 @@ export function createSessionHistoryWorkerReaders(
         }
         return value.sessionIds;
       },
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
     ),
     readArchivedEvictionCandidates: reader(
       "historical-eviction-candidates",
       "archived eviction candidates",
-      (input) => ({ kind: "historical-eviction-candidates", ...input }),
       (value) => {
         if (!("batch" in value)) {
           throw new Error(
@@ -165,60 +178,47 @@ export function createSessionHistoryWorkerReaders(
         }
         return value.batch;
       },
+      (input) => ({ kind: "historical-eviction-candidates", ...input }),
     ),
     readArchivePruning: reader(
       "session-archive-pruning",
       "archive pruning",
-      (input) => ({ kind: "session-archive-pruning", ...input }),
       (value) => value.result,
     ),
-    readColdMetadata: reader(
-      "cold-metadata",
-      "cold metadata",
-      (input) => ({ kind: "cold-metadata", ...input }),
-      (value) => value,
-    ),
+    readColdMetadata: reader("cold-metadata", "cold metadata", (value) => value),
     readColdStorageInventory: reader(
       "cold-storage-inventory",
       "cold storage inventory",
-      (input) => ({ kind: "cold-storage-inventory", ...input }),
       (value) => value,
     ),
     searchTranscripts: reader(
       "transcript-search",
       "search",
-      (params) => ({ kind: "transcript-search", params }),
       (value) => value.result,
+      (params) => ({ kind: "transcript-search", params }),
     ),
-    readPreview: reader(
-      "session-preview",
-      "a preview",
-      (input) => ({ kind: "session-preview", ...input }),
-      (value) => value.items,
+    isTranscriptSearchCurrent: reader(
+      "transcript-search-current",
+      "search snapshot currency",
+      (value) => value.current,
     ),
-    readTitleFields: reader(
-      "session-title-fields",
-      "title fields",
-      (input) => ({ kind: "session-title-fields", ...input }),
-      (value) => value.fields,
-    ),
+    readPreview: reader("session-preview", "a preview", (value) => value.items),
+    readTitleFields: reader("session-title-fields", "title fields", (value) => value.fields),
     readWatermark: reader(
       "transcript-watermark",
       "a transcript watermark",
-      (input) => ({ kind: "transcript-watermark", ...input }),
       (value) => value.watermark,
     ),
     readActivitySummarySource: reader(
       "session-activity-summary-source",
       "an Activity recap source",
-      (input) => ({ kind: "session-activity-summary-source", ...input }),
       (value) => value.source,
     ),
     readRowBackfill: reader(
       "session-row-backfill",
       "transcript fields",
-      (params) => ({ kind: "session-row-backfill", params }),
       (value) => value.fields,
+      (params) => ({ kind: "session-row-backfill", params }),
     ),
     run: async (prepare, inputBytes) =>
       await runRequest(prepare, inputBytes, (value) => {
@@ -252,6 +252,7 @@ export function createSessionHistoryWorkerReaders(
       }),
     readTranscript: async (input, signal) => {
       const events: TranscriptEvent[] = [];
+      const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
       let parts: string[] = [];
       let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
@@ -281,7 +282,9 @@ export function createSessionHistoryWorkerReaders(
           }
           parts.push(text.decoder.decode(frame.data, { stream: !frame.endOfEvent }));
           if (frame.endOfEvent) {
-            events.push(JSON.parse(parts.join("")));
+            const json = parts.join("");
+            events.push(JSON.parse(json));
+            eventJson?.push(json);
             parts = [];
           }
         }
@@ -305,7 +308,10 @@ export function createSessionHistoryWorkerReaders(
           if (parts.length !== 0 || events.length !== value.eventCount) {
             throw new Error("Session history worker returned an incomplete transcript");
           }
-          return { kind: "full", snapshot: { events, version: value.version } };
+          return {
+            kind: "full",
+            snapshot: { events, version: value.version, ...(eventJson ? { eventJson } : {}) },
+          };
         },
         signal,
         input.limits ? undefined : receiveChunk,
@@ -314,39 +320,27 @@ export function createSessionHistoryWorkerReaders(
     readMaintenance: reader(
       "transcript-maintenance",
       "transcript maintenance facts",
-      (input) => ({ kind: "transcript-maintenance", ...input }),
       (value) => value,
     ),
-    readCurrentTurnEntry: reader(
-      "current-turn-entry",
-      "a current-turn entry",
-      (input) => ({ kind: "current-turn-entry", ...input }),
-      (value) => value,
-    ),
+    readCurrentTurnEntry: reader("current-turn-entry", "a current-turn entry", (value) => value),
     readRecentActiveEvents: reader(
       "recent-active-events",
       "recent active events",
-      (input) => ({ kind: "recent-active-events", ...input }),
       (value) => value.events,
     ),
     readLatestActiveMessage: reader(
       "latest-active-message",
       "the latest active message",
-      (input) => ({ kind: "latest-active-message", ...input }),
       (value) => value.message,
     ),
+    readVoiceSessions: reader("voice-sessions", "voice sessions", (value) => value),
     readUsageCache: reader(
       "usage-refresh-lock",
       "usage cache",
+      (value) => value,
       (input) => ({ kind: "usage-cache", ...input }),
-      (value) => value,
     ),
-    readMembershipFacts: reader(
-      "session-membership-facts",
-      "membership facts",
-      (input) => ({ kind: "session-membership-facts", ...input }),
-      (value) => value,
-    ),
+    readMembershipFacts: reader("session-membership-facts", "membership facts", (value) => value),
     readMembers: async (input) =>
       await runRequest(
         () => ({ kind: "session-members", ...input }),
@@ -358,12 +352,7 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
-    readSuggestions: reader(
-      "session-suggestions",
-      "suggestions",
-      (input) => ({ kind: "session-suggestions", ...input }),
-      (value) => value.suggestions,
-    ),
+    readSuggestions: reader("session-suggestions", "suggestions", (value) => value.suggestions),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(
@@ -394,94 +383,81 @@ export function createSessionHistoryWorkerReaders(
         },
       );
     },
-    readProgressCard: reader(
-      "session-progress-card",
-      "a progress card",
-      (input) => ({ kind: "session-progress-card", ...input }),
-      (value) => value.card,
-    ),
+    readProgressCard: reader("session-progress-card", "a progress card", (value) => value.card),
     readPendingInputHistory: reader(
       "session-pending-input-history",
       "pending input history",
-      (input) => ({ kind: "session-pending-input-history", ...input }),
       (value) => value.snapshot,
     ),
     readPendingInputReceipts: reader(
       "session-pending-input-receipts",
       "pending input receipts",
-      (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
     ),
     readHarnessCompletionSource: reader(
       "session-harness-completion-source",
       "a harness completion source",
-      (input) => ({ kind: "session-harness-completion-source", ...input }),
       (value) => value.snapshot,
     ),
     readPendingInputSource: reader(
       "session-pending-input-source",
       "a submitted input source",
-      (input) => ({ kind: "session-pending-input-source", ...input }),
       (value) => value.snapshot,
     ),
     readConversationDelivery: reader(
       "conversation-delivery",
       "a conversation delivery receipt",
-      (input) => ({ kind: "conversation-delivery", ...input }),
       (value) => value.record,
     ),
     readGoalOperationReceipt: reader(
       "goal-operation-receipt",
       "a Goal operation receipt",
-      (input) => ({ kind: "goal-operation-receipt", ...input }),
       (value) => value.result,
     ),
-    readEntryResult: reader(
-      "session-entry-read",
-      "an entry",
-      (input) => ({ kind: "session-entry-read", ...input }),
-      (value) =>
-        value.readError
-          ? err(decodeSessionTranscriptWorkerReadError(value.readError))
-          : ok(value.entry),
+    readEntryResult: reader("session-entry-read", "an entry", (value) =>
+      value.readError
+        ? err(decodeSessionTranscriptWorkerReadError(value.readError))
+        : ok(value.entry),
     ),
     readEntryCurrent: reader(
       "session-entry-current",
       "entry currency facts",
-      (input) => ({ kind: "session-entry-current", ...input }),
       (value) => value.entry,
     ),
-    readDiagnosticText: reader(
-      "session-diagnostic-text",
-      "diagnostic text",
-      (input) => ({ kind: "session-diagnostic-text", ...input }),
-      (value) => value.text,
-    ),
-    readEntries: async (scope, continuation) =>
-      runRequest(
-        () => ({ kind: "session-entry-list", scope, continuation }),
-        JSON.stringify({ scope, continuation }).length * 2,
+    readDiagnosticText: reader("session-diagnostic-text", "diagnostic text", (value) => value.text),
+    readEntries: async (scope, continuation, expectedIdentity) => {
+      const captured = expectedIdentity && { ...expectedIdentity };
+      const assertIdentity = () => {
+        if (
+          captured &&
+          !isDeepStrictEqual(readDatabasePathIdentitySync(captured.canonicalPath), captured)
+        ) {
+          throw new Error("Session listing changed its captured physical owner");
+        }
+      };
+      assertIdentity();
+      return runRequest(
+        () => {
+          assertIdentity();
+          return { kind: "session-entry-list", scope, continuation, expectedIdentity: captured };
+        },
+        JSON.stringify({ scope, continuation, expectedIdentity: captured }).length * 2,
         (value) => {
           assertResultKind(value, "session-entry-list", "entries");
+          assertIdentity();
           return value.entries;
         },
-      ),
+      );
+    },
     readStoreProjection: reader(
       "session-store-projection",
       "store projection admission",
-      (input) => ({ kind: "session-store-projection", ...input }),
       (value) => value,
     ),
-    readStoreSummary: reader(
-      "session-store-summary",
-      "a store summary",
-      (input) => ({ kind: "session-store-summary", ...input }),
-      (value) => value.summary,
-    ),
+    readStoreSummary: reader("session-store-summary", "a store summary", (value) => value.summary),
     readIdentityEvidence: reader(
       "session-identity-evidence",
       "identity evidence",
-      (input) => ({ kind: "session-identity-evidence", ...input }),
       (value) => value.evidence,
     ),
     readProjectionStatus: async (input, signal) =>

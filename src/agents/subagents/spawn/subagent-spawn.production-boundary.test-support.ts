@@ -328,7 +328,7 @@ export function registerYieldedRequesterBatchCase(options: {
     async (actor, { signal }) => {
       const registry = await import("../registry/subagent-registry.js");
       const { loadSubagentRegistryFromSqlite } =
-        await import("../registry/subagent-registry.store.sqlite.js");
+        await import("../registry/subagent-registry-state.fixture.test-support.js");
       const { settleSubagentRegistryPersistenceWork } =
         await import("../registry/subagent-registry.persistence.test-support.js");
       const announce = await import("../announce/subagent-announce.js");

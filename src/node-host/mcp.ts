@@ -73,13 +73,10 @@ type NodeHostMcpClient = {
   close(): Promise<void>;
 };
 
-type NodeHostMcpTransport = {
-  transport: Transport;
-  transportType: "stdio" | "sse" | "streamable-http";
-  connectionTimeoutMs: number;
-  requestTimeoutMs: number;
-  detachStderr?: () => void;
-};
+type NodeHostMcpTransport = Pick<
+  NonNullable<ReturnType<typeof resolveMcpTransport>>,
+  "transport" | "transportType" | "connectionTimeoutMs" | "requestTimeoutMs" | "detachStderr"
+>;
 
 type NodeHostMcpSession = NodeHostMcpTransport & {
   client: NodeHostMcpClient;
@@ -117,17 +114,7 @@ export class NodeHostMcpError extends Error {
   }
 }
 
-export type NodeHostMcpManager = {
-  descriptors: NodePluginToolDescriptor[];
-  callMcpTool(params: {
-    server: string;
-    tool: string;
-    arguments?: Record<string, unknown>;
-    timeoutMs?: number;
-    signal?: AbortSignal;
-  }): Promise<CallToolResult>;
-  close(): Promise<void>;
-};
+export type NodeHostMcpManager = Awaited<ReturnType<typeof startNodeHostMcpManager>>;
 
 type NodeHostMcpManagerDeps = {
   createClient?: (serverName: string, options: { onToolsChanged: () => void }) => NodeHostMcpClient;
@@ -136,10 +123,6 @@ type NodeHostMcpManagerDeps = {
   warn?: (message: string) => void;
   signal?: AbortSignal;
 };
-
-function defaultWarn(message: string): void {
-  console.warn(message);
-}
 
 function formatMcpError(error: unknown): string {
   return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
@@ -266,8 +249,8 @@ async function disposeNodeHostMcpSession(session: NodeHostMcpSession): Promise<v
 export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
-): Promise<NodeHostMcpManager> {
-  const warn = deps.warn ?? defaultWarn;
+) {
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
   const createClient =
     deps.createClient ??
     ((_serverName, options) =>
@@ -553,7 +536,13 @@ export async function startNodeHostMcpManager(
 
   return {
     descriptors,
-    async callMcpTool(params) {
+    async callMcpTool(params: {
+      server: string;
+      tool: string;
+      arguments?: Record<string, unknown>;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    }) {
       const state = states.get(params.server);
       const session = state?.current;
       if (!state || !session?.connected) {

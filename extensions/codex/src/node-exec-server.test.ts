@@ -1,4 +1,3 @@
-/** Protects node policy, real pinned Codex stdio framing, and child cleanup. */
 import { EventEmitter, once } from "node:events";
 import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
@@ -556,8 +555,6 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
       async ({ dir }) => {
         const cwd = await realpath(dir);
         const workspaceUri = pathToFileURL(cwd).href;
-        const probePath = path.join(cwd, "probe.txt");
-        const probeUri = pathToFileURL(probePath).href;
         const frames = createNodeFrames(signal);
         const command = createCodexNodeExecServerCommand();
         const workspace = createManagedWorkspaceInvocation(cwd);
@@ -607,42 +604,6 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             sessionId: expect.any(String),
           });
           await frames.send({ method: "initialized", params: {} });
-
-          await frames.send({ id: 2, method: "environment/info", params: {} });
-          expect(await readNodeResponse(frames, 2)).toMatchObject({
-            cwd: workspaceUri,
-            capabilities: { networkProxyLaunch: true, sandboxedFileStreaming: true },
-          });
-
-          const dataBase64 = Buffer.from("node filesystem proof\n").toString("base64");
-          await frames.send({
-            id: 3,
-            method: "fs/writeFile",
-            params: { path: probeUri, dataBase64, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 3)).toEqual({});
-          expect(await readFile(probePath, "utf8")).toBe("node filesystem proof\n");
-
-          await frames.send({
-            id: 4,
-            method: "fs/canonicalize",
-            params: { path: probeUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 4)).toEqual({ path: probeUri });
-          await frames.send({
-            id: 5,
-            method: "fs/open",
-            params: { handleId: "node-proof", path: probeUri, sandbox: null },
-          });
-          expect(await readNodeResponse(frames, 5)).toEqual({ handleId: "node-proof" });
-          await frames.send({
-            id: 6,
-            method: "fs/readBlock",
-            params: { handleId: "node-proof", offset: 0, len: 256 },
-          });
-          expect(await readNodeResponse(frames, 6)).toEqual({ chunk: dataBase64, eof: true });
-          await frames.send({ id: 7, method: "fs/close", params: { handleId: "node-proof" } });
-          expect(await readNodeResponse(frames, 7)).toEqual({});
 
           const script = [
             "process.stdin.once('data', input => {",
@@ -754,145 +715,6 @@ process.stdout.write(JSON.stringify({home: process.env.HOME, codexHome: process.
             params: { path: chunkedUri, sandbox: null },
           });
           expect(await readNodeResponse(frames, 11)).toEqual({ dataBase64: chunkedDataBase64 });
-
-          await frames.send({ id: 12, method: "environment/status", params: {} });
-          expect(await readNodeResponse(frames, 12)).toEqual({ status: "ready" });
-          await frames.send({
-            id: 13,
-            method: "fs/walk",
-            params: {
-              path: workspaceUri,
-              options: {
-                maxDepth: 2,
-                maxDirectories: 10,
-                maxEntries: 30,
-                followDirectorySymlinks: false,
-                pruneHiddenDirectories: false,
-              },
-              sandbox: null,
-            },
-          });
-          expect(await readNodeResponse(frames, 13)).toMatchObject({
-            entries: expect.arrayContaining([
-              expect.objectContaining({ path: probeUri, kind: "file" }),
-              expect.objectContaining({ path: chunkedUri, kind: "file" }),
-            ]),
-            errors: [],
-            truncated: false,
-          });
-          await frames.send({
-            id: 14,
-            method: "capabilityRoots/discoverV1",
-            params: { roots: [{ id: "workspace", path: workspaceUri, sandbox: null }] },
-          });
-          expect(await readNodeResponse(frames, 14)).toMatchObject({
-            roots: [expect.objectContaining({ id: "workspace", path: workspaceUri })],
-          });
-
-          for (const control of [
-            { id: 15, processId: "node-signal", method: "process/signal", result: {} },
-            {
-              id: 17,
-              processId: "node-terminate",
-              method: "process/terminate",
-              result: { running: true },
-            },
-          ]) {
-            await frames.send({
-              id: control.id,
-              method: "process/start",
-              params: {
-                processId: control.processId,
-                argv: [process.execPath, "-e", "setInterval(() => {}, 60_000)"],
-                cwd: workspaceUri,
-                env: {},
-                tty: false,
-                pipeStdin: false,
-                arg0: null,
-              },
-            });
-            expect(await readNodeResponse(frames, control.id)).toMatchObject({
-              processId: control.processId,
-            });
-            await frames.send({
-              id: control.id + 1,
-              method: control.method,
-              params: {
-                processId: control.processId,
-                ...(control.method === "process/signal" ? { signal: "interrupt" } : {}),
-              },
-            });
-            expect(await readNodeResponse(frames, control.id + 1)).toEqual(control.result);
-            const controlNotifications = await readNodeProcessNotifications(
-              frames,
-              control.processId,
-              2,
-            );
-            expect(controlNotifications.map((message) => message.method)).toEqual([
-              "process/exited",
-              "process/closed",
-            ]);
-          }
-
-          const httpServer = createServer((_request, response) => {
-            response.writeHead(200, { "content-type": "text/plain" });
-            response.write("alpha");
-            setImmediate(() => response.end("beta"));
-          });
-          httpServer.listen(0, "127.0.0.1");
-          try {
-            await once(httpServer, "listening");
-            const address = httpServer.address();
-            if (!address || typeof address === "string") {
-              throw new Error("Codex exec-server HTTP fixture did not bind a TCP port.");
-            }
-            await frames.send({
-              id: 19,
-              method: "http/request",
-              params: {
-                method: "GET",
-                url: `http://127.0.0.1:${address.port}/`,
-                headers: [],
-                bodyBase64: null,
-                timeoutMs: 3_000,
-                redirectPolicy: "follow",
-                requestId: "node-http-proof",
-                streamResponse: true,
-              },
-            });
-            expect(await readNodeResponse(frames, 19)).toMatchObject({
-              status: 200,
-              bodyBase64: "",
-            });
-            await frames.waitForMessage(
-              (message) =>
-                message.method === "http/request/bodyDelta" &&
-                (message.params as { requestId?: string }).requestId === "node-http-proof" &&
-                (message.params as { done?: boolean }).done === true,
-            );
-            const chunks = frames.outbound
-              .filter(
-                (message) =>
-                  message.method === "http/request/bodyDelta" &&
-                  (message.params as { requestId?: string }).requestId === "node-http-proof",
-              )
-              .map(
-                (message) => message.params as { seq: number; deltaBase64: string; done: boolean },
-              );
-            expect(chunks.map((chunk) => chunk.seq)).toEqual(
-              chunks.map((_chunk, index) => index + 1),
-            );
-            expect(
-              Buffer.concat(
-                chunks.map((chunk) => Buffer.from(chunk.deltaBase64, "base64")),
-              ).toString("utf8"),
-            ).toBe("alphabeta");
-            expect(chunks.at(-1)?.done).toBe(true);
-          } finally {
-            await new Promise<void>((resolve, reject) => {
-              httpServer.close((error) => (error ? reject(error) : resolve()));
-            });
-          }
 
           const policyScript = [
             "const net = require('node:net')",

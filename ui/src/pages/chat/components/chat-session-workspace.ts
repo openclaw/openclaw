@@ -25,7 +25,6 @@ import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
   loadSessionWorkspace,
-  openSessionCheckoutSidebar,
   refreshSessionWorkspaceState,
   trackSessionCheckoutSidebar,
 } from "./chat-session-workspace-state.ts";
@@ -498,7 +497,6 @@ export function createSessionWorkspaceProps(
       workspace.filter = filter;
       state.requestUpdate?.();
     },
-    onRefresh: () => loadSessionWorkspace(state, workspace, true),
     onBrowsePath: (path) => {
       clearWorkspaceTimer(workspace);
       workspace.browserPath = path;
@@ -524,7 +522,7 @@ export function createSessionWorkspaceProps(
       }, 160);
     },
     onOpenArtifact: (artifactId) => openArtifact(state, workspace, artifactId),
-    onOpenDiff: diffContent ? () => openSessionCheckoutSidebar(state, diffContent) : undefined,
+    onOpenDiff: diffContent ? () => state.handleOpenSidebar(diffContent) : undefined,
   };
 }
 

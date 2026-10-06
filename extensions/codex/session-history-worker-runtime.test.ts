@@ -5,6 +5,7 @@ import {
   type CodexSessionContextReader,
   type CodexSessionContextSnapshot,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import * as transcriptRuntime from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import * as sessionStore from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectCodexSettledHistoryInWorker } from "./session-history-worker-runtime.js";
@@ -58,10 +59,11 @@ function actorHistoryFixture() {
 }
 
 describe("Codex actor history adapter", () => {
-  it("projects full-fidelity settled evidence into ordered native history", async () => {
+  it("captures its actor reader and projects full-fidelity evidence into native history", async () => {
     const { target, reader, upstreamPrompt } = actorHistoryFixture();
+    vi.spyOn(transcriptRuntime, "captureCodexSessionContextReader").mockReturnValue(reader);
 
-    await expect(projectCodexSettledHistoryInWorker(target, undefined, reader)).resolves.toEqual({
+    await expect(projectCodexSettledHistoryInWorker(target)).resolves.toEqual({
       status: "ok",
       value: [
         {

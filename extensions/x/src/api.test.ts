@@ -1,6 +1,7 @@
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXApiClient, type XFetch } from "./api.js";
+import { createXTestSpend } from "./test-support/spend.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -12,6 +13,7 @@ describe("X API authentication", () => {
     const requests: string[] = [];
     let subscribed = false;
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",
@@ -86,6 +88,7 @@ describe("X API authentication", () => {
       return Response.json({ data: [] });
     });
     const options = {
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "initial",
@@ -125,6 +128,7 @@ describe("X API authentication", () => {
   ])("retains safe Activity diagnostics for $label", async ({ body, detail }) => {
     vi.useFakeTimers();
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "test-secret",
       refreshToken: "test-seed",
@@ -154,6 +158,7 @@ describe("X API authentication", () => {
       throw new Error("unexpected post");
     });
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",
@@ -177,6 +182,7 @@ describe("X API authentication", () => {
   it("keeps provider and persistence errors out of token status and diagnostics", async () => {
     const states: string[] = [];
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "refresh",
@@ -204,6 +210,7 @@ describe("X API authentication", () => {
     let posts = 0;
     let refreshes = 0;
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "seed",
@@ -233,6 +240,8 @@ describe("X API authentication", () => {
     const error: unknown = await api
       .reply({ text: "Reply", inReplyToId: "20" })
       .catch((cause: unknown) => cause);
+    const uncertain = ["post-network", "post-json", "post-503"].includes(failure);
+    expect(await api.spend.status()).toMatchObject({ dayUsd: uncertain ? 0.02 : 0 });
     if (failure === "refresh" || failure === "refresh-after-401") {
       expect(posts).toBe(failure === "refresh" ? 0 : 1);
       expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
@@ -259,6 +268,7 @@ describe("X API authentication", () => {
       retryable: false,
     });
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "seed",
@@ -288,6 +298,7 @@ describe("X API authentication", () => {
       ),
     );
     const api = createXApiClient({
+      spend: createXTestSpend(),
       clientId: "client",
       clientSecret: "secret",
       refreshToken: "seed",

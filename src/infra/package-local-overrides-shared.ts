@@ -7,7 +7,6 @@ import type { PackageDistContentInventoryEntry } from "./package-dist-inventory.
 
 export type LocalOverridePackageRoot = Awaited<ReturnType<typeof openFsRoot>>;
 
-type LocalPackageOverrideKind = "added" | "modified" | "deleted";
 export type LocalPackageOverrideConflictReason =
   | "target-changed"
   | "target-exists"
@@ -18,14 +17,19 @@ export type LocalPackageOverrideConflictReason =
   | "rollback-failed";
 
 export type LocalPackageOverrideChange = {
-  kind: LocalPackageOverrideKind;
   path: string;
-  baseline?: PackageDistContentInventoryEntry;
   dependencies?: string[];
   reapply?: boolean;
-  savedPath?: string;
-  mode?: number;
-};
+} & (
+  | { kind: "deleted"; baseline: PackageDistContentInventoryEntry }
+  | { kind: "added"; savedPath: string; mode: number }
+  | {
+      kind: "modified";
+      baseline: PackageDistContentInventoryEntry;
+      savedPath: string;
+      mode: number;
+    }
+);
 
 export type LocalPackageOverridesResult = {
   status: "none" | "preserved" | "applied" | "conflict" | "error";

@@ -6,7 +6,7 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { sleepWithAbort } from "@openclaw/retry";
+import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -142,7 +142,11 @@ async function acquireProviderLocalService(
   }
   throwIfAborted(signal);
 
-  validateLocalServiceConfig(service, target.providerId);
+  if (!path.isAbsolute(service.command)) {
+    throw new Error(
+      `models.providers.${target.providerId}.localService.command must be an absolute path`,
+    );
+  }
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
   const healthHeaders = buildHealthProbeHeaders(target.headers);
   const key = localServiceKey(target.providerId, service, healthUrl);
@@ -269,12 +273,6 @@ export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalService
   );
 }
 
-function validateLocalServiceConfig(service: ModelProviderLocalServiceConfig, provider: string) {
-  if (!path.isAbsolute(service.command)) {
-    throw new Error(`models.providers.${provider}.localService.command must be an absolute path`);
-  }
-}
-
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {
   return service.healthUrl?.trim() || `${baseUrl.replace(/\/+$/, "")}/models`;
 }
@@ -325,7 +323,7 @@ async function probeHealth(
   // Only the actual health request may materialize retained sentinel headers.
   const egressHeaders = unwrapHeadersInitSentinelsForProviderEgress(
     headers,
-    "to probe local model provider health",
+    "to check local model provider health",
   );
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), DEFAULT_PROBE_TIMEOUT_MS);
@@ -630,23 +628,8 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
+    throw toErrorObject(error, "Non-Error rejection");
   });
 }
 

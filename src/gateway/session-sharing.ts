@@ -6,6 +6,7 @@ import {
   errorShape,
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
+import type { SessionPendingInputAuthorityFacts } from "../config/sessions/session-pending-input-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { resolveSessionMethodScope } from "../shared/session-method-scopes-base.js";
@@ -58,6 +59,7 @@ import { captureSessionMutationRouting } from "./session-sharing-preparation.js"
 import {
   createSessionListEntryFilter,
   prepareProjectedSessionSharing,
+  createSessionSharingInputAuthority,
 } from "./session-sharing-read.js";
 import {
   captureSessionSharingTalkAuthority,
@@ -114,7 +116,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
   authorization?: SessionMutationAuthorization;
   error: ErrorShape | null;
 } {
-  let params = request;
+  let params = { ...request };
   params.preparedProfiles?.readCurrent();
   if (params.method === "chat.send") {
     const normalized = resolveChatSendAuthorizationParams(
@@ -412,8 +414,6 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         const previous = consumingSharing;
         consumingSharing = prepared;
         try {
-          // Worker consumption uses pinned profile facts; accepted input custody
-          // rechecks live target policy without retaining that preparation snapshot.
           params.preparedProfiles?.readCurrent();
           prepared.assertCurrent();
           const result = consume();
@@ -562,7 +562,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         }
       };
       let createdSessionRecorded = false;
-      return {
+      const authorization: SessionMutationAuthorization = {
         ...(params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
           ? {
               withCurrent: async <T>(consume: () => T): Promise<T> => {
@@ -590,14 +590,7 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
                 );
               },
               withPreparedCurrent: <T>(
-                facts: {
-                  agentId: string;
-                  storePath: string;
-                  sessionKey: string;
-                  entry: import("../config/sessions/types.js").SessionEntry | undefined;
-                  readSource?: import("../config/sessions/session-entry-read-source.types.js").CapturedSessionEntryReadSource;
-                  members: readonly import("../config/sessions/session-sharing-store.kernel.js").SessionMember[];
-                },
+                facts: SessionPendingInputAuthorityFacts,
                 consume: () => T,
                 assertSourceCurrent: () => void,
               ): T => {
@@ -718,6 +711,15 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
           );
         },
       };
+      // Native Incognito custody retains its process-local identity and live permission guard.
+      if (!authorizedTargets.some((target) => isIncognitoSessionKey(target.sessionKey))) {
+        authorization.admittedInputAuthority = createSessionSharingInputAuthority(
+          params,
+          authorization,
+          () => consumingSharing!,
+        );
+      }
+      return authorization;
     })(),
   };
 }

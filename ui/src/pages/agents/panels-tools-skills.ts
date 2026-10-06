@@ -543,7 +543,7 @@ export function renderAgentTools(
                     }
                   </span>
                 </summary>
-                <div class="agent-tools-list agent-tools-list--stacked">
+                <div class="agent-tools-list">
                   ${sortedTools.map((tool) => {
                     const anchorId = toToolAnchorId(tool.id);
                     const resolved = resolveAllowed(tool.id);

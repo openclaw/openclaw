@@ -40,7 +40,7 @@ it("captures queued read routing and schema facts without reading unrelated envi
     executeExistingOpenClawStateRead({ path: pathname, env }, { type: "fleet.list" }),
   );
   try {
-    await task.submitted;
+    expect((await task.submitted).diagnosticOperation).toBe("fleet.list");
     env.OPENCLAW_STATE_DIR = path.join(root, "changed-after-capture");
     env.OPENCLAW_SUPERVISOR_MODE = "internal";
     dispatch.resolve();

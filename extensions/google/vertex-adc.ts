@@ -51,9 +51,9 @@ let cachedGoogleAuthClient:
   | Promise<{ getAccessToken: () => Promise<string | null | undefined> }>
   | undefined;
 
-function isGoogleVertexTokenFresh(expiresAtMsRaw: number, nowRaw = Date.now()): boolean {
+function isGoogleVertexTokenFresh(expiresAtMsRaw: number): boolean {
   const expiresAtMs = asDateTimestampMs(expiresAtMsRaw);
-  const nowMs = asDateTimestampMs(nowRaw);
+  const nowMs = asDateTimestampMs(Date.now());
   if (expiresAtMs === undefined || nowMs === undefined) {
     return false;
   }

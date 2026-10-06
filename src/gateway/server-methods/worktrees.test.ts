@@ -28,6 +28,7 @@ import {
   createTestGatewayScheduler,
 } from "../../test-utils/gateway-scheduler-clock.js";
 import { startWorktreeMaintenance } from "../worktree-maintenance.js";
+import * as localStateOwner from "./local-state-owner.js";
 import { createWorktreesHandlers } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
@@ -80,7 +81,11 @@ const emptyConfigContext = { getRuntimeConfig: () => ({}) };
 
 describe("worktrees gateway methods", () => {
   it("routes checkout operations through the managed worktree service", async () => {
-    const deferred = { ...record, gcProtection: "branch-moved" };
+    const deferred: ManagedWorktreeRecord = {
+      ...record,
+      gcProtection: "branch-moved",
+      gcRetry: { stage: "snapshot", elapsedMs: 120_000, attempts: 1, retryAt: 7_200_000 },
+    };
     const service = {
       list: vi.fn(async () => [deferred]),
       create: vi.fn(async () => deferred),
@@ -114,7 +119,34 @@ describe("worktrees gateway methods", () => {
     );
     expect(expectDefined(restoreResult[0], "worktree restore success flag")).toBe(true);
     expect(Value.Check(WorktreeRecordSchema, restoreResult[1])).toBe(true);
+    expect(restoreResult[1]).toEqual({ ...record, snapshotRef: "refs/snapshot" });
     expect(Value.Check(WorktreesListResultSchema, listed?.[1])).toBe(true);
+    // mock-isolation: Response projection consumes an already accepted local owner.
+    const ownerGuard = vi
+      .spyOn(localStateOwner, "captureLocalStateMutationGuard")
+      .mockReturnValue(() => {});
+    try {
+      for (const [method, params] of [
+        ["worktrees.create", { repoRoot: "/repo" }],
+        ["worktrees.restore", { id: record.id }],
+      ] as const) {
+        const qualified = expectDefined(
+          await call(
+            handlers,
+            method,
+            { ...params, expectedOwnerId: "gateway-owner" },
+            { client: adminClient, context: emptyConfigContext },
+          ),
+          "qualified worktree response",
+        );
+        expect(qualified[0]).toBe(true);
+        expect(Value.Check(WorktreeRecordSchema, qualified[1])).toBe(true);
+        expect(qualified[1]).toMatchObject({ gcProtection: "branch-moved" });
+        expect(qualified[1]).not.toHaveProperty("gcRetry");
+      }
+    } finally {
+      ownerGuard.mockRestore();
+    }
     expect(service.create).toHaveBeenCalledWith({
       repoRoot: "/repo",
       name: "task-one",

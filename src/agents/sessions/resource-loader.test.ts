@@ -178,7 +178,7 @@ describe("DefaultResourceLoader", () => {
         parameters: Type.Object({}),
         execute: async () => ({ content: [], details: undefined }),
       });
-      api.registerFlag("shared", { type: "boolean" });
+      api.registerFlag("shared", { type: "boolean", default: false });
       api.registerCommand("shared", { handler: async () => {} });
     };
     const loader = createLoader(root, {
@@ -195,8 +195,10 @@ describe("DefaultResourceLoader", () => {
     ]);
     expect(loader.getExtensions().extensions).toHaveLength(3);
 
+    loader.getExtensions().runtime.flagValues.set("shared", true);
     description = "Reloaded registration";
     await loader.reload();
+    expect(loader.getExtensions().runtime.flagValues.get("shared")).toBe(false);
     expect(loader.getExtensions().extensions).toHaveLength(3);
     for (const [index, extension] of loader.getExtensions().extensions.entries()) {
       const sourceInfo = {

@@ -252,7 +252,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   if (!input.isRawModelRun) {
     restoreCacheTtlToolResultProjections(
       toolResultPromptProjectionState,
-      sessionManager.getBranch(),
+      sessionManager.getToolResultProjectionEntries(),
     );
   }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);

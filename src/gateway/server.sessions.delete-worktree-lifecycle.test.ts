@@ -9,10 +9,7 @@ import {
   getRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "../agents/worktrees/registry.js";
-import {
-  acquireWorktreeRunLease,
-  resolveWorktreeIdForPath,
-} from "../agents/worktrees/run-lease.js";
+import { acquireWorktreeRunLease, resolveWorktreeForPath } from "../agents/worktrees/run-lease.js";
 import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
@@ -368,12 +365,12 @@ test("sessions.delete snapshots dirty work before admitting same-key successor w
         actorId: creatorProfileId,
       }),
     ]);
-    const admittedWorktreeId = await resolveWorktreeIdForPath({
+    const selected = await resolveWorktreeForPath({
       sessionEntry: persisted,
       candidatePaths: [persisted?.spawnedCwd],
     });
-    expect(admittedWorktreeId).toBe(successorWorktree.id);
-    const runLease = await acquireWorktreeRunLease(admittedWorktreeId!);
+    expect(selected?.record.id).toBe(successorWorktree.id);
+    const runLease = await acquireWorktreeRunLease(selected!.record.id, { source: selected });
     await runLease.release();
   } finally {
     releaseRemoval();

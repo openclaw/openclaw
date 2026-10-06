@@ -39,14 +39,6 @@ type ChatModelSelectOption = {
   unavailableReason?: ModelCatalogEntry["unavailableReason"];
 };
 
-type ChatModelSelectState = {
-  currentOverride: string;
-  defaultModel: string;
-  defaultLabel: string;
-  modelOverrideSource: GatewaySessionRow["modelOverrideSource"];
-  options: ChatModelSelectOption[];
-};
-
 export type ChatFastModeSelectValue = "" | "on" | "off" | "auto" | "ultrafast";
 
 export type ChatFastModeSelectState = {
@@ -252,9 +244,7 @@ export function chatModelUnavailableMessage(
     : undefined;
 }
 
-export function resolveChatModelSelectState(
-  state: ChatModelSelectStateInput,
-): ChatModelSelectState {
+export function resolveChatModelSelectState(state: ChatModelSelectStateInput) {
   const catalog = state.chatModelCatalog ?? [];
   const availableKeys = new Set(
     catalog.filter((entry) => entry.available !== false).map(catalogModelAvailabilityKey),

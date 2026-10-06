@@ -42,7 +42,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
+import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
   hasSessionActiveAutoModelFallback,
   hasSessionAutoModelFallbackProvenance,
@@ -107,6 +107,7 @@ type StatusArgs = {
   parentSessionKey?: string;
   sessionScope?: SessionScope;
   sessionStorePath?: string;
+  sessionStartedAt?: number;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedFast?: FastMode;
@@ -550,9 +551,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     const fallbackMatchesRuntimeModel =
       initialFallbackState.active &&
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
-        normalizeLowercaseStringOrEmpty(
-          normalizeOptionalString(entry?.fallbackNotice?.activeModel ?? "") ?? "",
-        );
+        normalizeLowercaseStringOrEmpty(entry?.fallbackNotice?.activeModel);
     const runtimeMatchesSelectedModel =
       normalizeLowercaseStringOrEmpty(runtimeModelRaw) ===
       normalizeLowercaseStringOrEmpty(modelRefs.selected.label || "unknown");
@@ -753,12 +752,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
   });
 
   const updatedAt = entry?.updatedAt;
-  const sessionStartedAt = resolveSessionLifecycleTimestamps({
-    entry,
-    agentId: args.agentId,
-    sessionKey: args.sessionKey,
-    storePath: args.sessionStorePath,
-  }).sessionStartedAt;
+  const sessionStartedAt = resolveTimestamp(args.sessionStartedAt ?? entry?.sessionStartedAt);
   const sessionDuration =
     typeof sessionStartedAt === "number"
       ? formatDurationCompact(now - sessionStartedAt, { spaced: true })

@@ -58,22 +58,11 @@ const SANDBOX_BLOCKED_RE =
 const OAUTH_REFRESH_TIMEOUT_RE = /\boauth refresh call\b.*\bexceeded hard timeout\b/i;
 const OAUTH_CALLBACK_TIMEOUT_RE = /\bcallback_timeout\b/i;
 const OAUTH_CALLBACK_VALIDATION_RE = /\bcallback_validation_failed\b/i;
-function stripErrorPrefix(raw: string): string {
-  return raw.replace(/^error:\s*/i, "").trim();
-}
 function isHtmlErrorResponse(raw: string, status?: number): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  if (status === undefined || status < 400) {
     return false;
   }
-  const candidate = extractLeadingHttpStatus(trimmed) ? trimmed : stripErrorPrefix(trimmed);
-  const inferred =
-    typeof status === "number" && Number.isFinite(status)
-      ? status
-      : extractLeadingHttpStatus(candidate)?.code;
-  if (typeof inferred !== "number" || inferred < 400) {
-    return false;
-  }
+  const candidate = extractLeadingHttpStatus(raw) ? raw : raw.replace(/^error:\s*/i, "").trim();
   const rest = extractHttpResponseBody(extractLeadingHttpStatus(candidate))?.body ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
 }
@@ -86,37 +75,15 @@ function isOpenAICodexScopeContext(raw: string, provider?: string): boolean {
   );
 }
 function isAuthScopeErrorMessage(raw: string, status?: number, provider?: string): boolean {
-  if (!raw) {
-    return false;
-  }
   if (!isOpenAICodexScopeContext(raw, provider)) {
     return false;
   }
-  const inferred =
-    typeof status === "number" && Number.isFinite(status)
-      ? status
-      : extractLeadingHttpStatus(raw.trim())?.code;
   const hasScopeHint = AUTH_SCOPE_HINT_RE.test(raw);
   const hasKnownScopeName = AUTH_SCOPE_NAME_RE.test(raw);
   if (!hasScopeHint && !hasKnownScopeName) {
     return false;
   }
-  if (typeof inferred !== "number") {
-    return hasScopeHint;
-  }
-  if (inferred !== 401 && inferred !== 403) {
-    return false;
-  }
-  return true;
-}
-function isProxyErrorMessage(raw: string, status?: number): boolean {
-  if (!raw) {
-    return false;
-  }
-  if (status === 407) {
-    return true;
-  }
-  return PROXY_ERROR_RE.test(raw);
+  return status === undefined ? hasScopeHint : status === 401 || status === 403;
 }
 function isSandboxBlockedErrorMessage(raw: string): boolean {
   return Boolean(formatExecDeniedUserMessage(raw)) || SANDBOX_BLOCKED_RE.test(raw);
@@ -125,22 +92,18 @@ function isSchemaErrorMessage(
   raw: string,
   opts?: { provider?: string; providerPlugin?: PreparedProviderFailoverOwner | null },
 ): boolean {
-  if (!raw || isReplayInvalidErrorMessage(raw) || isContextOverflowErrorFromTables(raw)) {
+  if (isReplayInvalidErrorMessage(raw) || isContextOverflowErrorFromTables(raw)) {
     return false;
   }
   // Schema copy requires message evidence, not a generic HTTP 400 classification.
   return classifyFailoverReason(raw, opts) === "format" || matchesFormatErrorPattern(raw);
 }
 function isTimeoutTransportErrorMessage(raw: string, status?: number): boolean {
-  if (!raw) {
-    return false;
-  }
-  if (isTimeoutErrorMessage(raw) || INTERRUPTED_NETWORK_ERROR_RE.test(raw)) {
-    return true;
-  }
   return (
-    typeof status === "number" &&
-    [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status)
+    isTimeoutErrorMessage(raw) ||
+    INTERRUPTED_NETWORK_ERROR_RE.test(raw) ||
+    (status !== undefined &&
+      [408, 499, 500, 502, 503, 504, 521, 522, 523, 524, 529].includes(status))
   );
 }
 function isOAuthRefreshContentionMessage(raw: string): boolean {
@@ -185,7 +148,7 @@ export function classifyProviderRuntimeFailureKind(
   if (message && isAuthScopeErrorMessage(message, status, normalizedSignal.provider)) {
     return "auth_scope";
   }
-  if (message && isProxyErrorMessage(message, status)) {
+  if (message && (status === 407 || PROXY_ERROR_RE.test(message))) {
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {

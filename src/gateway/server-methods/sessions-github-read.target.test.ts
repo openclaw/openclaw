@@ -64,7 +64,7 @@ async function registerWorktree(origin?: string) {
     createdAt: 1,
     lastActiveAt: 1,
   };
-  insertRegistryWorktree(process.env, worktree);
+  await insertRegistryWorktree(process.env, worktree);
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey },
     {
@@ -122,7 +122,7 @@ describe("registered guest publication target discovery", () => {
           ).toHaveBeenCalledWith(true, receipt);
         } else {
           const identity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
-          updateRegistryWorktree(process.env, worktree.id, {
+          await updateRegistryWorktree(process.env, worktree.id, {
             repositoryIdentity: {
               repoRoot: identity.repoRoot,
               repoFingerprint: identity.fingerprint,
@@ -165,7 +165,7 @@ describe("registered guest publication target discovery", () => {
           if (change === "connection") {
             fixture.disconnect();
           } else {
-            updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+            await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
           }
           pending.resolve(identity);
           await request;

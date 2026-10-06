@@ -169,6 +169,14 @@ owning its prepared environment. Direct providers use
 requested proof requires another environment; capacity or hydration failure
 does not make a different provider equivalent.
 
+When provider readiness fails, the wrapper reports the failed or missing doctor
+check names with bounded, sanitized messages and classification hints. Successful
+checks and other provider details are omitted; a count identifies additional
+failures beyond the summary limit. Errors retain the doctor exit status and
+recovery instructions, including login guidance for broker authentication failures.
+Use `crabbox doctor --provider <provider> --json` to inspect the full report locally
+before sharing it.
+
 The direct `.github/workflows/windows-blacksmith-testbox.yml` workflow runs
 native Windows. The wrapper's Blacksmith adapter supports Linux only; explicit
 `--provider blacksmith-testbox` prevents automatic Azure routing but does not
@@ -189,7 +197,7 @@ candidate. A dirty or occupied sibling is not a reason to stop and ask.
 
 Mantis uses the same plugin-owned discovery and managed installation. Relative
 executable overrides and `PATH` entries resolve from its requested `--repo-root`,
-and version probes run there with the same environment as lease commands. Its workflows
+and version checks run there with the same environment as lease commands. Its workflows
 prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
 the selected binary and verified version as JSON and, in GitHub Actions, adds its
 directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.
