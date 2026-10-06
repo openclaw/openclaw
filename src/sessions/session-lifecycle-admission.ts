@@ -651,7 +651,7 @@ export async function beginSessionWorkAdmission(params: {
             const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
             await lease.run(async () => await revalidate());
           },
-          { reentrant: true, identities: params.storeWriterIdentities },
+          { reentrant: true, identities: params.storeWriterIdentities, signal },
         );
         return lease;
       },
