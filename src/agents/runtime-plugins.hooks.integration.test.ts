@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -17,6 +18,7 @@ import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
   loadAgentRuntimePluginRegistryHandle,
   withAgentPluginRegistry,
@@ -134,4 +136,38 @@ it.each([
   } else {
     await withAgentPluginRegistry({ config, workspaceDir, run });
   }
+});
+
+it("blocks a tool call through the run's before_tool_call hook when no process registry was activated", async () => {
+  // A headless `agent exec` run: nothing activated a root registry, so the global
+  // runner did not exist and tool policy let every call through (#158824).
+  useNoBundledPlugins();
+  resetGlobalHookRunner();
+  const pluginId = "headless-tool-guard";
+  const plugin = writePlugin({
+    id: pluginId,
+    body: `module.exports = {
+  id: ${JSON.stringify(pluginId)},
+  register(api) {
+    api.on("before_tool_call", async (event) => ({ block: true, blockReason: "guarded " + event.toolName }));
+  },
+};\n`,
+  });
+  const config = {
+    plugins: {
+      allow: [pluginId],
+      load: { paths: [plugin.file] },
+      entries: { [pluginId]: { enabled: true } },
+      slots: { memory: "none" },
+    },
+  } satisfies OpenClawConfig;
+  const workspaceDir = makePluginLoaderTempDir();
+  expect(getGlobalHookRunner()).toBeNull();
+  const outcome = await withAgentPluginRegistry({
+    config,
+    workspaceDir,
+    run: async () => runBeforeToolCallHook({ toolName: "exec", params: { command: "ls -a" } }),
+  });
+  expect(outcome.blocked).toBe(true);
+  expect(outcome.blocked && outcome.reason).toContain("guarded exec");
 });
