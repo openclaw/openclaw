@@ -143,7 +143,7 @@ export async function closeAcpRuntimeForSession(params: {
         latestMeta.identity.state !== "resolved" ||
         (!latestMeta.identity.acpxSessionId && !latestMeta.identity.agentSessionId)
       ) {
-        return;
+        return undefined;
       }
 
       // Ownership repair failures must reach the caller before metadata is cleared.

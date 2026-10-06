@@ -260,7 +260,7 @@ export function* filterSessionEntries(
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
   const label = normalizeOptionalString(opts.label) ?? "";
   const boardFace = opts.boardFace;
-  const agentId = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
+  const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
   const matchesSearch = search
@@ -406,9 +406,9 @@ export function* filterSessionEntries(
     ) {
       continue;
     }
-    if (agentId && storeKey !== "global") {
+    if (agentFilter && storeKey !== "global") {
       const ownerAgentId = target.storeKey ? normalizeAgentId(target.agentId) : selection.agentId;
-      if (ownerAgentId !== agentId) {
+      if (ownerAgentId !== agentFilter) {
         continue;
       }
     }
