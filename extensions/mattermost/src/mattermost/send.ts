@@ -212,18 +212,7 @@ async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Pro
   return channel.id;
 }
 
-type MattermostSendContext = {
-  cfg: OpenClawConfig;
-  accountId: string;
-  client: MattermostClient;
-  channelId: string;
-  mediaMaxBytes?: number;
-};
-
-async function resolveMattermostSendContext(
-  to: string,
-  opts: MattermostSendOpts,
-): Promise<MattermostSendContext> {
+async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts) {
   const core = getMattermostRuntime();
   const logger = core.logging.getChildLogger({ module: "mattermost" });
   if (!opts?.cfg) {

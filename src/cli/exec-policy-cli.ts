@@ -84,23 +84,7 @@ type ExecPolicyShowPayload = {
   };
 };
 
-type ExecPolicyShowScope = Omit<
-  ExecPolicyScopeSnapshot,
-  "security" | "ask" | "askFallback" | "allowedDecisions"
-> & {
-  runtimeApprovalsSource: "local-file" | "node-runtime";
-  security: Omit<ExecPolicyScopeSnapshot["security"], "host" | "effective"> & {
-    host: ExecSecurity | "unknown";
-    effective: ExecSecurity | "unknown";
-  };
-  ask: Omit<ExecPolicyScopeSnapshot["ask"], "host" | "effective"> & {
-    host: ExecAsk | "unknown";
-    effective: ExecAsk | "unknown";
-  };
-  askFallback: Omit<ExecPolicyScopeSnapshot["askFallback"], "effective"> & {
-    effective: ExecSecurity | "unknown";
-  };
-};
+type ExecPolicyShowScope = ReturnType<typeof buildExecPolicyShowScope>;
 
 function formatExecPolicyError(err: unknown): string {
   return sanitizeExecPolicyMessage(err instanceof Error ? err.message : String(err));
@@ -287,35 +271,35 @@ async function buildLocalExecPolicyShowPayload(
   return payload;
 }
 
-function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicyShowScope {
+function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot) {
   const { allowedDecisions: _allowedDecisions, ...baseScope } = snapshot;
   if (snapshot.host.requested !== "node") {
     return {
       ...baseScope,
-      runtimeApprovalsSource: "local-file",
+      runtimeApprovalsSource: "local-file" as const,
     };
   }
   return {
     ...baseScope,
-    runtimeApprovalsSource: "node-runtime",
+    runtimeApprovalsSource: "node-runtime" as const,
     security: {
       requested: snapshot.security.requested,
       requestedSource: snapshot.security.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     ask: {
       requested: snapshot.ask.requested,
       requestedSource: snapshot.ask.requestedSource,
-      host: "unknown",
+      host: "unknown" as const,
       hostSource: "node runtime approvals",
-      effective: "unknown",
+      effective: "unknown" as const,
       note: "runtime policy resolved by node approvals",
     },
     askFallback: {
-      effective: "unknown",
+      effective: "unknown" as const,
       source: "node runtime approvals",
     },
   };

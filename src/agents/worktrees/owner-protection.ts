@@ -25,7 +25,8 @@ export function createManagedWorktreeOwnerPolicy(
   const cleanupOwner = new AsyncLocalStorage<{
     ownerId: string;
     scope: string;
-    entry?: SessionEntry;
+    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision" | "archivedAt" | "worktree">;
+    lifecycleHeld?: boolean;
   }>();
   const state = (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => {
     if (ownerKind !== "session") {
@@ -37,9 +38,9 @@ export function createManagedWorktreeOwnerPolicy(
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
       const identities = [target.canonicalKey, ownerId, entry?.sessionId];
       const cleanup = cleanupOwner.getStore();
-      const ownsLifecycle = cleanup?.ownerId === ownerId;
+      const ownsCleanup = cleanup?.ownerId === ownerId;
       if (
-        ownsLifecycle &&
+        ownsCleanup &&
         (cleanup.scope !== scope ||
           cleanup.entry?.sessionId !== entry?.sessionId ||
           cleanup.entry?.lifecycleRevision !== entry?.lifecycleRevision ||
@@ -50,7 +51,8 @@ export function createManagedWorktreeOwnerPolicy(
       }
       if (
         isSessionWorkAdmissionActive(scope, identities) ||
-        (!ownsLifecycle && isSessionLifecycleMutationActive(scope, identities))
+        (!(ownsCleanup && cleanup.lifecycleHeld) &&
+          isSessionLifecycleMutationActive(scope, identities))
       ) {
         return "active";
       }
@@ -102,19 +104,35 @@ export function createManagedWorktreeOwnerPolicy(
     shouldRemoveOwner: (kind, id) => state(kind, id) === "retired",
     withOwnerCleanup: async (record, run, signal) => {
       if (record.ownerKind !== "session" || !record.ownerId) {
-        return await run();
+        return await run((mutation) => mutation());
       }
       const ownerId = record.ownerId;
       const target = resolveSessionEntryAccessTarget({ cfg, sessionKey: ownerId });
       const scope = resolveSessionStorePathCore(cfg.session?.store, { agentId: target.agentId });
-      // Unarchive must observe either the retained checkout or its finalized snapshot.
-      // This fences only its session; no session-store writer remains held during Git work.
-      return await runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+      const entry = target.entry;
+      const owner = {
+        ownerId,
         scope,
-        identities: [target.canonicalKey, ownerId, target.entry?.sessionId],
-        signal,
-        run: () => cleanupOwner.run({ ownerId, scope, entry: target.entry }, run),
-      });
+        entry: entry && {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          archivedAt: entry.archivedAt,
+          worktree: entry.worktree && { ...entry.worktree },
+        },
+      };
+      const identities = [target.canonicalKey, ownerId, owner.entry?.sessionId];
+      // The registry removal claim fences checkout consumers during Git work.
+      // Session admission is held only while claiming and publishing that lifecycle.
+      return await cleanupOwner.run(owner, () =>
+        run((mutation, options) =>
+          runExclusiveSessionLifecycleMutation("worktree-cleanup", {
+            scope,
+            identities,
+            signal: options?.settle ? undefined : signal,
+            run: () => cleanupOwner.run({ ...owner, lifecycleHeld: true }, mutation),
+          }),
+        ),
+      );
     },
   };
 }

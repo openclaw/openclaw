@@ -2,6 +2,7 @@ import type { SessionEntryReadScope } from "../../../config/sessions/session-acc
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { resolveSessionStoreIdentity } from "../../../gateway/session-store-key.js";
 import type { resolveGatewaySessionStoreTargetInWorker } from "../../../gateway/session-utils-store-worker.js";
+import type { SessionBindingRecord } from "../../../infra/outbound/session-binding-service.js";
 
 type StoreScope = { agentId?: string; env?: NodeJS.ProcessEnv; storePath?: string };
 type EntryScope = StoreScope & { sessionKey: string };
@@ -61,5 +62,28 @@ export function createAcpSpawnStoreMocks(mocks: {
         return result;
       },
     },
+  };
+}
+
+export function createAcpSpawnSessionBinding(
+  overrides?: Partial<SessionBindingRecord>,
+): SessionBindingRecord {
+  return {
+    bindingId: "default:child-thread",
+    targetSessionKey: "agent:codex:acp:s1",
+    targetKind: "session",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "child-thread",
+      parentConversationId: "parent-channel",
+    },
+    status: "active",
+    boundAt: Date.now(),
+    metadata: {
+      agentId: "codex",
+      boundBy: "system",
+    },
+    ...overrides,
   };
 }

@@ -14,7 +14,6 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import type { RequesterInitialTransfer } from "./subagent-registry-requester-yield.js";
-import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   captureRequesterSettleRunIdentity,
@@ -598,14 +597,8 @@ export function commitRequesterWake(
         if (acknowledgedReceipt !== pending.committedWake) {
           acknowledgedReceipt = pending.committedWake;
           acknowledgedProgress.clear();
-          for (const { row } of acknowledgedReceipt.result.records) {
-            const intended = rowToSubagentRunRecord(row);
-            if (intended) {
-              acknowledgedProgress.set(
-                intended.runId,
-                captureRequesterSettleWakeProgress(intended),
-              );
-            }
+          for (const { subagent } of acknowledgedReceipt.result.records) {
+            acknowledgedProgress.set(subagent.runId, captureRequesterSettleWakeProgress(subagent));
           }
         }
         if (

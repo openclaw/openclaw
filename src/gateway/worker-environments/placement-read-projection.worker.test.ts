@@ -473,10 +473,19 @@ describe("worker placement read projection", () => {
         nodeDeviceId: null,
         attachedSessionIds: ["pending"],
       });
+      expect(await store.readEnvironmentOwner(placement.environmentId)).toMatchObject({
+        sessionId: "pending",
+        state: "draining",
+        generation: draining.generation,
+      });
+      expect(await store.readEnvironmentOwner("missing-environment")).toBeUndefined();
       expect((await other.readProjection(["pending"])).placements.get("pending")?.state).toBe(
         "requested",
       );
       await closeOpenClawStateDatabaseAsync();
+      expect(await store.readEnvironmentOwner(moving.placement.environmentId)).toEqual(
+        move.placement,
+      );
       expect((await store.readProjection(["pending"])).placements.get("pending")?.generation).toBe(
         draining.generation,
       );

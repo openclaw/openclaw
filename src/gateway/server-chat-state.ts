@@ -12,7 +12,6 @@ import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.j
 import {
   createToolEventRecipientRegistry,
   type ChatRunToolRecipientState,
-  type ToolEventRecipientRegistry,
 } from "./server-chat-tool-recipients.js";
 
 export type ChatRunTiming = {
@@ -121,13 +120,9 @@ type ChatRunRecord = {
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
-type ChatRunRecordStore = {
-  runs: Map<string, ChatRunRecord>;
-  getOrCreate: (runId: string) => ChatRunRecord;
-  releaseIfEmpty: (runId: string) => void;
-};
+type ChatRunRecordStore = ReturnType<typeof createChatRunRecordStore>;
 
-function createChatRunRecordStore(): ChatRunRecordStore {
+function createChatRunRecordStore() {
   const runs = new Map<string, ChatRunRecord>();
   const getOrCreate = (runId: string) => {
     const existing = runs.get(runId);
@@ -203,31 +198,10 @@ function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegist
   return { add, peek, shift: (sessionId) => takeRegistration(sessionId), remove: takeRegistration };
 }
 
-export type ChatRunState = {
-  runs: Map<string, ChatRunRecord>;
-  registry: ChatRunRegistry;
-  toolEventRecipients: ToolEventRecipientRegistry;
-  /** Acquire mutable state and record activity; readers use runs.get. */
-  getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (
-    runId: string,
-    options?: { final?: boolean },
-  ) => { text: string; suppress: boolean };
-  updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
-  takeBufferDelta: (
-    runId: string,
-    text: string,
-  ) => { deltaText: string; replace?: true } | undefined;
-  flushPendingText: (runId: string) => void;
-  hasAbortMarker: (runId: string) => boolean;
-  deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
-  clearRun: (runId: string) => void;
-  clear: () => void;
-};
+export type ChatRunState = ReturnType<typeof createChatRunState>;
 
 /** Create the single record map used by Gateway chat-run runtime state. */
-export function createChatRunState(isConnectionActive?: (connId: string) => boolean): ChatRunState {
+export function createChatRunState(isConnectionActive?: (connId: string) => boolean) {
   const store = createChatRunRecordStore();
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistry(store, isConnectionActive);
@@ -393,11 +367,12 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     runs: store.runs,
     registry,
     toolEventRecipients,
+    /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
     updateBuffer,
     takeBufferDelta,
-    flushPendingText: (runId) => {
+    flushPendingText: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -408,8 +383,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         flush.flush();
       }
     },
-    hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
-    deleteAbortMarker: (runId) => {
+    hasAbortMarker: (runId: string) => store.runs.get(runId)?.abortMarker !== undefined,
+    deleteAbortMarker: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;

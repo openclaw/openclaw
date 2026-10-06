@@ -131,7 +131,7 @@ export async function isUpdatedInstallGatewayExecutorSupported(params: {
 // Candidate version/preservation guards reject older targets before repair, without retry.
 export async function runUpdatedInstallGatewayCommand(
   params: {
-    result: { root?: string; mode?: UpdateRunResult["mode"] };
+    result: Partial<Pick<UpdateRunResult, "root" | "mode">>;
     opts: Pick<UpdateCommandOptions, "run">;
     invocationEnv: NodeJS.ProcessEnv;
     serviceEnv?: NodeJS.ProcessEnv;

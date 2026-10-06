@@ -58,67 +58,29 @@ function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   return tailscaleMode === "serve" || tailscaleMode === "funnel";
 }
 
-function formatGatewayAuthDisplayLabel(label: GatewayAuthSharedSecretLabel): string {
-  if (label === "gateway auth password") {
-    return "Gateway password";
-  }
-  return "Gateway token";
-}
-
-function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSecretLabel): string {
-  if (reusedGatewayAuthLabel === "gateway auth password") {
-    return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
-  }
-  return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
-}
-
-function findGatewayAuthLabelMatchingHooksToken(params: {
-  hooksToken: string;
-  auth: ResolvedGatewayAuth;
-}): GatewayAuthSharedSecretLabel | undefined {
-  const { auth, hooksToken } = params;
-  if (auth.mode === "token" && normalizeOptionalString(auth.token) === hooksToken) {
-    return "gateway auth token";
-  }
-  if (
-    (auth.mode === "password" || auth.mode === "trusted-proxy") &&
-    normalizeOptionalString(auth.password) === hooksToken
-  ) {
-    return "gateway auth password";
-  }
-  return undefined;
-}
-
 function findHooksTokenGatewayAuthReuse(params: {
   hooksToken: string;
   configGatewayAuth: ResolvedGatewayAuth;
   overrideGatewayAuth?: ResolvedGatewayAuth;
 }): GatewayAuthSharedSecretReuse | undefined {
-  const configReuseLabel = findGatewayAuthLabelMatchingHooksToken({
-    hooksToken: params.hooksToken,
-    auth: params.configGatewayAuth,
-  });
-  if (configReuseLabel) {
-    return { label: configReuseLabel, source: "config" };
+  for (const [source, auth] of [
+    ["config", params.configGatewayAuth],
+    ["override", params.overrideGatewayAuth],
+  ] as const) {
+    if (!auth) {
+      continue;
+    }
+    if (auth.mode === "token" && normalizeOptionalString(auth.token) === params.hooksToken) {
+      return { label: "gateway auth token", source };
+    }
+    if (
+      (auth.mode === "password" || auth.mode === "trusted-proxy") &&
+      normalizeOptionalString(auth.password) === params.hooksToken
+    ) {
+      return { label: "gateway auth password", source };
+    }
   }
-
-  const overrideReuseLabel = params.overrideGatewayAuth
-    ? findGatewayAuthLabelMatchingHooksToken({
-        hooksToken: params.hooksToken,
-        auth: params.overrideGatewayAuth,
-      })
-    : undefined;
-  if (!overrideReuseLabel) {
-    return undefined;
-  }
-  return { label: overrideReuseLabel, source: "override" };
-}
-
-function formatHooksTokenReuseRemediation(reuse: GatewayAuthSharedSecretReuse): string {
-  if (reuse.source === "override") {
-    return "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env.";
-  }
-  return `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`;
+  return undefined;
 }
 
 function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
@@ -514,12 +476,18 @@ export function collectHooksHardeningFindings(
     overrideGatewayAuth,
   });
   if (reusedGatewayAuth) {
+    const password = reusedGatewayAuth.label === "gateway auth password";
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuth.label)}`,
-      detail: formatHooksTokenReuseDetail(reusedGatewayAuth.label),
-      remediation: formatHooksTokenReuseRemediation(reusedGatewayAuth),
+      title: `Hooks token reuses the Gateway ${password ? "password" : "token"}`,
+      detail: password
+        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth."
+        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+      remediation:
+        reusedGatewayAuth.source === "override"
+          ? "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env."
+          : `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`,
     });
   }
 

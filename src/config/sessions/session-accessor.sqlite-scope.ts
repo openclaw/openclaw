@@ -163,7 +163,7 @@ export async function runExclusiveSqliteSessionWrite<T>(
   fn: () => Promise<T>,
   operation: SqliteSessionWriteOperation,
   diagnostics?: SqliteSessionWriteDiagnostics,
-  writer: "foreground" | "worker" = "foreground",
+  writer: "foreground" | "foreground-reentrant" | "worker" = "foreground",
   signal?: AbortSignal,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
@@ -210,7 +210,13 @@ export async function runExclusiveSqliteSessionWrite<T>(
       () =>
         writer === "worker"
           ? runOpenClawAgentWorkerWrite(databaseOptions, fn, timing, signal)
-          : runOpenClawAgentWriteAdmission(databaseOptions, fn, false, timing, signal),
+          : runOpenClawAgentWriteAdmission(
+              databaseOptions,
+              fn,
+              writer === "foreground-reentrant",
+              timing,
+              signal,
+            ),
     );
   try {
     const result = await owned();

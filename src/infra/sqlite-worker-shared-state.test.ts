@@ -15,9 +15,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { NativeHookRelayBridgeRecord } from "../agents/harness/native-hook-relay-bridge-record.js";
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import { registerRequiredQueuedSubagent } from "../agents/subagents/registry/subagent-registry-queued-registration.js";
-import { saveSubagentRegistryToSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";

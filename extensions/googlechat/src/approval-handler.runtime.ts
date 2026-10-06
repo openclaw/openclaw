@@ -1,7 +1,6 @@
 import {
   createChannelApprovalNativeRuntimeAdapter,
   type ChannelApprovalCapabilityHandlerContext,
-  type ChannelApprovalKind,
   type ExpiredApprovalView,
   type PendingApprovalView,
   type ResolvedApprovalView,
@@ -46,15 +45,6 @@ type GoogleChatApprovalActionToken = {
   decision: ExecApprovalDecision;
 };
 
-type GoogleChatPendingDelivery = {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  expiresAtMs: number;
-  cardsV2: GoogleChatCardV2[];
-  actionTokens: GoogleChatApprovalActionToken[];
-  allowedDecisions: readonly ExecApprovalDecision[];
-};
-
 type PreparedGoogleChatTarget = {
   to: string;
   threadName?: string;
@@ -66,10 +56,6 @@ type GoogleChatPendingEntry = {
   messageName: string;
   threadName?: string;
   actionTokens: GoogleChatApprovalActionToken[];
-};
-
-type GoogleChatFinalDelivery = {
-  cardsV2: GoogleChatCardV2[];
 };
 
 function resolveHandlerAccount(
@@ -142,7 +128,7 @@ function buildPendingPayload(params: {
   actionFunction: string;
   nowMs: number;
   view: PendingApprovalView;
-}): GoogleChatPendingDelivery {
+}) {
   const { actionFunction, nowMs, view } = params;
   const actionTokens: GoogleChatApprovalActionToken[] = [];
   const buttons = view.actions.map((action) => {
@@ -200,7 +186,7 @@ function buildFinalPayload(
   view: ResolvedApprovalView | ExpiredApprovalView,
   outcome: string,
   subtitle: string,
-): GoogleChatFinalDelivery {
+) {
   const kindLabel =
     view.approvalKind === "plugin"
       ? "Plugin"
@@ -221,11 +207,11 @@ function buildFinalPayload(
 }
 
 export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
-  GoogleChatPendingDelivery,
+  ReturnType<typeof buildPendingPayload>,
   PreparedGoogleChatTarget,
   GoogleChatPendingEntry,
   readonly string[],
-  GoogleChatFinalDelivery
+  ReturnType<typeof buildFinalPayload>
 >({
   eventKinds: ["exec", "plugin", "system-agent"],
   availability: {

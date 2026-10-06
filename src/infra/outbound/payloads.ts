@@ -51,19 +51,11 @@ export type NormalizedOutboundPayload = {
 };
 
 /** JSON-safe outbound payload projection used for envelopes and diagnostics. */
-export type OutboundPayloadJson = {
-  text: string;
-  isError?: boolean;
-  mediaUrl: string | null;
-  mediaUrls?: string[];
-  audioAsVoice?: boolean;
-  presentation?: MessagePresentation;
-  presentationTextMode?: ReplyPayload["presentationTextMode"];
-  delivery?: ReplyPayloadDelivery;
-  interactive?: LegacyInteractiveReply;
-  channelData?: Record<string, unknown>;
-  location?: ReplyPayload["location"];
-};
+export type OutboundPayloadJson = Omit<
+  NormalizedOutboundPayload,
+  "mediaUrls" | "hookContent" | "isStatusNotice"
+> &
+  Pick<ReplyPayload, "isError" | "mediaUrls"> & { mediaUrl: string | null };
 
 type OutboundPayloadPlanContext = {
   cfg?: OpenClawConfig;

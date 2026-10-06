@@ -14,9 +14,10 @@ remain unavailable while the startup admission owner completes their inspection
 and session/model preparation after the listener is ready. Other agents and the
 Control UI can start in the meantime. Inspection starts during foreground
 readiness and continues without an idle retry delay. Deferred writable admission
-starts as soon as the listener binds, with at most two databases opening
-concurrently. Agent-local session preparation waits for restored recovery owners,
-then runs with up to four agents concurrently. Only credential/model publication
+starts after Gateway sidecars are ready, with at most two databases opening
+concurrently. Slow opens and index repairs therefore cannot occupy shared SQLite
+workers ahead of plugin-service startup. Agent-local session preparation then
+runs with up to four agents concurrently. Only credential/model publication
 and final admission are serialized, in the order agents finish session preparation;
 a slow open or migration does not hold that publication turn. Readiness reports
 pending required stores in
@@ -31,7 +32,7 @@ they do not activate background agent preparation.
 
 Missing or changed canonical index definitions also defer an agent to that same
 startup owner, even with a reusable clean-close receipt. Foreground inspection
-compares schema metadata without rebuilding indexes. After the listener binds,
+compares schema metadata without rebuilding indexes. After sidecars are ready,
 the SQLite worker repairs the indexes atomically before admitting the agent.
 That agent's session reads and writes remain unavailable; health, Control UI,
 and admitted agents can proceed. The repair log names the rebuilt indexes and

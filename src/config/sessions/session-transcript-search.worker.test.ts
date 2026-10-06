@@ -4,6 +4,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
+import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
@@ -83,18 +84,31 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       indexing: false,
     });
 
-    const unavailableStatus = vi
-      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
-      .mockRejectedValueOnce(new Error("projection writer unavailable"));
-    try {
-      expect(await searchSessionTranscripts(request, database)).toEqual({
-        ...golden,
-        indexing: true,
-      });
-      expect(unavailableStatus).toHaveBeenCalledTimes(1);
-      expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(false);
-    } finally {
-      unavailableStatus.mockRestore();
+    for (const makeUnavailable of [
+      () =>
+        vi
+          .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
+          .mockRejectedValueOnce(new Error("projection writer unavailable")),
+      () =>
+        vi
+          .spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution")
+          .mockImplementationOnce(() => {
+            throw new Error("projection writer admission unavailable");
+          }),
+    ]) {
+      const unavailableStatus = makeUnavailable();
+      try {
+        expect(await searchSessionTranscripts(request, database)).toEqual({
+          ...golden,
+          indexing: true,
+        });
+        expect(unavailableStatus).toHaveBeenCalledTimes(1);
+        expect(isSessionTranscriptIndexReconcileRunning({ ...database, env: state.env })).toBe(
+          false,
+        );
+      } finally {
+        unavailableStatus.mockRestore();
+      }
     }
 
     runOpenClawAgentWriteTransaction(

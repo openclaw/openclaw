@@ -295,10 +295,10 @@ export function collectSqliteNamedIndexContract(
     return undefined;
   }
   const index = (
-    database.prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`).all() as
-      | SqliteIndexListRow[]
-      | undefined
-  )?.find((candidate) => candidate.name === indexName);
+    database
+      .prepare(`PRAGMA main.index_list(${quoteSqliteIdentifier(row.tbl_name)})`)
+      .all() as SqliteIndexListRow[]
+  ).find((candidate) => candidate.name === indexName);
   return index ? collectSqliteIndexContract(database, index) : undefined;
 }
 

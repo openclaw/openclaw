@@ -184,10 +184,7 @@ function normalizeTarget(to: string): string {
   return normalized;
 }
 
-function resolveLineMessagingAccount(opts: LineClientOpts): {
-  account: ReturnType<typeof resolveLineAccount>;
-  token: string;
-} {
+function resolveLineMessagingAccount(opts: LineClientOpts) {
   const cfg = requireRuntimeConfig(opts.cfg, "LINE send");
   const account = resolveLineAccount({
     cfg,

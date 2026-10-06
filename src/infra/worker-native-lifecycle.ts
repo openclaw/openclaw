@@ -41,6 +41,8 @@ type NativeRuntime = NativeWorkerRuntime & {
 
 export type RetainedNativeWorkerSource = {
   readonly hasActiveWorkers: boolean;
+  /** Start shared resource custody separately from a caller's synchronous Worker construction. */
+  prepareResources(): void;
   create(
     filename: string | URL,
     options?: WorkerOptions,
@@ -124,6 +126,18 @@ async function joinNativeBrokerCloses(attempts: readonly Promise<void>[]): Promi
   if (failures.length > 1) {
     throw new AggregateError(failures, "Native broker retirement failed");
   }
+}
+
+function nativeResourceBroker(source: NativeSource): SpawnBrokerHost {
+  if (source.closing) {
+    throw new Error("Native worker source is closing");
+  }
+  if (source.runtime?.failure) {
+    throw source.runtime.failure;
+  }
+  return (source.broker ??= runInDetachedAsyncContext(() =>
+    createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
+  ));
 }
 
 function nativeRuntime(source: NativeSource): NativeRuntime {
@@ -242,9 +256,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
         port1.postMessage(message, [...transfers]);
       },
       resourceBroker() {
-        return (source.broker ??= runInDetachedAsyncContext(() =>
-          createSpawnBrokerHost({ nativeResources: true, workerUrl: source.brokerModuleUrl }),
-        ));
+        return nativeResourceBroker(source);
       },
       refreshReference() {
         retireSource();
@@ -343,6 +355,9 @@ export function captureRetainedNativeWorkerSource(options?: {
     retiringBrokers: new Set(),
     get hasActiveWorkers() {
       return Boolean(source.runtime?.handles.size);
+    },
+    prepareResources() {
+      nativeResourceBroker(source);
     },
     async retireIdleBroker() {
       // Handles remain until their native execution and resource close receipts join.

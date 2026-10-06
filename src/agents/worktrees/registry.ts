@@ -350,6 +350,27 @@ export function releaseWorktreeRunLeaseRow(
   );
 }
 
+/** Check removal custody before a session mutation waits for checkout allocation. */
+export function assertWorktreeRemovalAvailable(
+  env: NodeJS.ProcessEnv,
+  worktreeId: string,
+  ownToken?: string,
+): void {
+  const db = dbFor(env);
+  const token = collectLiveRunLeases(
+    db,
+    kyselyFor(db),
+    worktreeRunLeaseScope(worktreeId),
+    false,
+  ).removingToken;
+  if (token !== undefined && token !== ownToken) {
+    throw new WorktreeRemovalContentionError(
+      "busy",
+      "Worktree removal is in progress; retry after cleanup settles",
+    );
+  }
+}
+
 export function hasLiveWorktreeRunLeaseRow(env: NodeJS.ProcessEnv, worktreeId: string): boolean {
   return (
     withExistingOpenClawStateDatabaseCurrentReadOnly(

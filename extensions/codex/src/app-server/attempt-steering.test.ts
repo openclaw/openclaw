@@ -1,4 +1,5 @@
 // Codex tests cover attempt steering plugin behavior.
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -36,7 +37,12 @@ describe("Codex app-server steering queue", () => {
     options: Partial<
       Pick<
         QueueParams,
-        "signal" | "requestTimeoutMs" | "prepareMessage" | "beforeSubmit" | "withCurrent"
+        | "signal"
+        | "requestTimeoutMs"
+        | "prepareMessage"
+        | "beforeSubmit"
+        | "withCurrent"
+        | "withPreparedCurrent"
       >
     > = {},
   ) {
@@ -58,6 +64,83 @@ describe("Codex app-server steering queue", () => {
     assertCurrent: expect.any(Function),
     onIngressRejected: expect.any(Function),
   };
+
+  it.each(["owner", "compat"] as const)(
+    "handles %s refusal at the native wire boundary",
+    async (kind) => {
+      const harness = createClientHarness({
+        onWrite: (line, send) => {
+          const request = JSON.parse(line);
+          send({ id: request.id, result: { turnId: "turn-1" } });
+        },
+      });
+      const authority = createNativeSessionBindingAuthority([], () => {});
+      const queue = createQueue(harness.client, {
+        withCurrent: authority.withCurrent,
+        withPreparedCurrent: authority.withPreparedCurrent,
+      });
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      let callerCurrent = true;
+      const rejectedAcceptance = vi.fn();
+      const survivorAcceptance = vi.fn();
+      const revoked = queue
+        .queue("revoked", { debounceMs: 5, onQueueAccepted: rejectedAcceptance }, () => {}, {
+          assertCurrent() {
+            if (kind === "owner" && !callerCurrent) {
+              throw new Error("caller policy changed");
+            }
+          },
+          async prepareCurrent() {
+            entered.resolve();
+            await resume.promise;
+          },
+          compatAssertCurrent() {
+            if (kind === "compat" && !callerCurrent) {
+              throw new Error("caller policy changed");
+            }
+          },
+        })
+        .catch((error: unknown) => error);
+      const survivor = queue
+        .queue("survivor", { debounceMs: 5, onQueueAccepted: survivorAcceptance }, () => {}, {
+          assertCurrent() {},
+          async prepareCurrent() {},
+          compatAssertCurrent() {},
+        })
+        .catch((error: unknown) => error);
+      try {
+        await vi.advanceTimersByTimeAsync(5);
+        await entered.promise;
+        callerCurrent = false;
+        expect(harness.writes).toEqual([]);
+        resume.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(await revoked).toMatchObject({ message: "caller policy changed" });
+        expect(rejectedAcceptance).toHaveBeenCalledExactlyOnceWith(false);
+        if (kind === "compat") {
+          expect(await survivor).toMatchObject({ message: "caller policy changed" });
+          expect(survivorAcceptance).toHaveBeenCalledExactlyOnceWith(false);
+          expect(harness.writes).toEqual([]);
+          expect(queue.getAcceptedMessages()).toEqual([]);
+          return;
+        }
+        expect(harness.writes).toHaveLength(1);
+        const request = JSON.parse(harness.writes[0]!);
+        expect(request.params.expectedTurnId).toBe("turn-1");
+        expect(request.params.input).toEqual(buildCodexUserInput("survivor"));
+        expect(queue.confirmConsumed(request.params.clientUserMessageId)).toBe(true);
+        await survivor;
+        expect(survivorAcceptance).toHaveBeenCalledExactlyOnceWith(true);
+        expect(queue.getAcceptedMessages()).toHaveLength(1);
+      } finally {
+        resume.resolve();
+        queue.cancel();
+        await Promise.allSettled([revoked, survivor]);
+        harness.client.close();
+      }
+    },
+  );
 
   it("does not accept a steering batch aborted while fresh authority is pending", async () => {
     const harness = createClientHarness();

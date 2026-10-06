@@ -477,6 +477,13 @@ The ready output includes the suspension ID, lease expiry, and the matching
 resume command. Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
 
+Suspension blocker messages name active root requests and include run IDs and
+session keys for chat runs and pending terminal writes. Each category lists up
+to eight holders, with an omitted count for the rest. `gateway.suspend.status`
+returns the same details while draining, and each draining observation writes
+one `DRAINING` line to the Gateway log. Pending final writes remain protected
+until their persistence owner settles, even after a chat client disconnects.
+
 ### `gateway resume <suspensionId>`
 
 Release a prepared suspension after thaw or when the host operation is

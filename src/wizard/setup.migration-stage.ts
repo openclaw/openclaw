@@ -16,14 +16,12 @@ import type {
   MigrationItem,
   MigrationPlan,
 } from "../plugins/types.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -313,7 +311,7 @@ export async function createSetupMigrationStage(params: {
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
-    disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
+    await disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };

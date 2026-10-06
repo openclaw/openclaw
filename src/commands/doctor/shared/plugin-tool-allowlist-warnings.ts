@@ -26,12 +26,7 @@ type ToolAllowlistSource = {
   entries: string[];
 };
 
-type ActiveSandboxToolPolicy = {
-  labels: string[];
-  dedupeKey: string;
-  policy: Record<string, unknown>;
-  nonSandboxToolPolicyBlocksMcp: boolean;
-};
+type ActiveSandboxToolPolicy = ReturnType<typeof buildEffectiveSandboxToolPolicy>;
 
 function normalizePluginIdMaybe(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? normalizePluginId(value) : undefined;
@@ -131,7 +126,7 @@ function buildEffectiveSandboxToolPolicy(params: {
   agentLabel?: string;
   globalPolicy: unknown;
   nonSandboxToolPolicyBlocksMcp: boolean;
-}): ActiveSandboxToolPolicy {
+}) {
   const agentLabel = params.agentLabel ?? "agents.entries.*.tools.sandbox.tools";
   const policy: Record<string, unknown> = {};
   const fieldLabels: Partial<Record<"allow" | "alsoAllow" | "deny", string>> = {};
@@ -260,7 +255,7 @@ function toolPolicyAllowsMcpServers(
   mode: "any" | "every",
 ): boolean {
   const allow = getList(policy, "allow");
-  if (Array.isArray(allow) && allow.length === 0) {
+  if (allow?.length === 0) {
     return true;
   }
   const entries = [...(allow ?? []), ...(getList(policy, "alsoAllow") ?? [])];
@@ -277,7 +272,7 @@ function nonSandboxToolPolicyBlocksMcp(policy: unknown, serverNames: readonly st
     return true;
   }
   const allow = getList(policy, "allow");
-  if (!Array.isArray(allow) || allow.length === 0) {
+  if (!allow?.length) {
     return false;
   }
   const entries = [...allow, ...(getList(policy, "alsoAllow") ?? [])];

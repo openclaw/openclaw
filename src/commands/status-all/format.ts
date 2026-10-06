@@ -318,23 +318,17 @@ function formatGatewaySelfSummary(gatewaySelf: StatusGatewaySelf): string | null
     : null;
 }
 
-export function buildGatewayStatusJsonPayload(params: {
-  gatewayMode: "local" | "remote";
-  gatewayConnection: StatusGatewayConnection;
-  remoteUrlMissing: boolean;
-  gatewayReachable: boolean;
-  gatewayProbe:
-    | {
-        connectLatencyMs?: number | null;
-        error?: string | null;
-        health?: unknown;
-        startupPhase?: string;
-      }
-    | null
-    | undefined;
-  gatewaySelf: StatusGatewaySelf;
-  gatewayProbeAuthWarning?: string | null;
-}) {
+export function buildGatewayStatusJsonPayload(
+  params: Pick<
+    Parameters<typeof buildStatusOverviewSurfaceRows>[0],
+    | "gatewayMode"
+    | "gatewayConnection"
+    | "remoteUrlMissing"
+    | "gatewayReachable"
+    | "gatewaySelf"
+    | "gatewayProbeAuthWarning"
+  > & { gatewayProbe: StatusGatewayProbe | undefined },
+) {
   return {
     mode: params.gatewayMode,
     url: projectGatewayUrlForDiagnostics(params.gatewayConnection.url),

@@ -134,12 +134,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     const existing = this.intents.get(key);
     if (existing) {
       existing.context = params.context;
-      if (this.activeAttempts.has(key)) {
-        this.retryAfterActiveKeys.add(key);
-      } else {
-        this.pendingKeys.add(key);
-      }
-      this.pump();
+      this.retry(params);
       return;
     }
     const identityBytes =

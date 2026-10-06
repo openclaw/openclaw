@@ -19,6 +19,7 @@ import {
 import { AsyncWorkScope, captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveAmbientOwnerAgentId } from "./agent-scope-config.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
 import {
   DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
@@ -285,26 +286,15 @@ function parseExecAutoReviewResponse(text: string): ExecAutoReviewDecision {
   }
 }
 
-function extractTextContent(result: Awaited<ReturnType<typeof complete>>) {
-  return result.content
-    .filter((block): block is { type: "text"; text: string } => block.type === "text")
-    .map((block) => block.text)
-    .join("")
-    .trim();
-}
-
 function extractCompletionFailure(
   result: Awaited<ReturnType<typeof complete>>,
 ): string | undefined {
-  const stopReason = "stopReason" in result ? result.stopReason : undefined;
+  const stopReason = result.stopReason;
   if (stopReason === "stop") {
     return undefined;
   }
   if (stopReason === "error") {
-    const message =
-      "errorMessage" in result && typeof result.errorMessage === "string"
-        ? result.errorMessage
-        : undefined;
+    const message = result.errorMessage;
     return message?.trim() ? message : "model returned an error";
   }
   return `model stopped without a complete response (${stopReason ?? "unknown"})`;
@@ -503,7 +493,7 @@ export function createModelExecAutoReviewer(params: {
           completionFailure,
         );
       }
-      return parseExecAutoReviewResponse(extractTextContent(result));
+      return parseExecAutoReviewResponse(collectTextContentBlocks(result.content).join("").trim());
     } catch (err) {
       params.signal?.throwIfAborted();
       if (completionController?.signal.aborted) {

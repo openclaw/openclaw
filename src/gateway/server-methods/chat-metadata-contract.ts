@@ -2,6 +2,7 @@ import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CurrentReadAuthority } from "../../shared/current-read-authority.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 
 export const chatMetadataSessionFields = [
@@ -36,6 +37,10 @@ export type ChatMetadataReadParams = {
   /** Saved reads retain their selected row and physical store until response settlement. */
   isCurrent?: () => boolean;
   assertCurrent?: () => void;
+  /** Refresh saved-session authority and begin preparation before yielding again. */
+  withCurrent?: CurrentReadAuthority["withCurrent"];
+  /** Synchronous saved-session authority at credential-bearing provider dispatch. */
+  beforeRequest?: () => void;
   release?: () => void;
   draftAccountSelection?: UserModelAccountSelection;
 };

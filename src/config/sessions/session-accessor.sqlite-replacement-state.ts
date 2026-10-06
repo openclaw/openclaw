@@ -27,6 +27,7 @@ import type {
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
@@ -89,6 +90,7 @@ export function commitSessionEntryReplacementsInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -181,7 +183,13 @@ export function commitSessionEntryReplacementsInDatabase(
   const preservation = maintenance?.preservation;
   const maintenancePlan =
     maintenance && preservation
-      ? applySessionEntryMaintenanceInDatabase(database, maintenance, () => preservation)
+      ? applySessionEntryMaintenanceInDatabase(
+          database,
+          maintenance,
+          () => preservation,
+          undefined,
+          refreshCandidates,
+        )
       : emptySessionEntryMaintenancePlan();
   return {
     // Fresh creation must not retry another session's failed export.

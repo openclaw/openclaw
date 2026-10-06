@@ -28,14 +28,6 @@ interface InitResponse {
   supported_auth_methods: string[];
 }
 
-interface BeginResult {
-  deviceCode: string;
-  qrUrl: string;
-  userCode: string;
-  interval: number;
-  expireIn: number;
-}
-
 interface RawBeginResponse {
   device_code: string;
   verification_uri: string;
@@ -118,7 +110,7 @@ export async function initAppRegistration(domain: FeishuDomain = "feishu"): Prom
  * Step 2: Begin the device-code flow. Returns a device code and a QR URL
  * that the user should scan with Feishu/Lark mobile app.
  */
-export async function beginAppRegistration(domain: FeishuDomain = "feishu"): Promise<BeginResult> {
+export async function beginAppRegistration(domain: FeishuDomain = "feishu") {
   const baseUrl = accountsBaseUrl(domain);
   const res = await postRegistration<RawBeginResponse>(baseUrl, {
     action: "begin",

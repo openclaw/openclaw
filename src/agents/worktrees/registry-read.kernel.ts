@@ -83,6 +83,27 @@ export function rowToRecord(row: WorktreeRecordRow): ManagedWorktreeRecord {
     typeof protection.reason === "string"
   ) {
     record.gcProtection = protection.reason;
+    const retry = protection.retry;
+    if (
+      isRecord(retry) &&
+      typeof retry.stage === "string" &&
+      typeof retry.elapsedMs === "number" &&
+      Number.isSafeInteger(retry.elapsedMs) &&
+      retry.elapsedMs >= 0 &&
+      typeof retry.attempts === "number" &&
+      Number.isSafeInteger(retry.attempts) &&
+      retry.attempts > 0 &&
+      typeof retry.retryAt === "number" &&
+      Number.isSafeInteger(retry.retryAt) &&
+      retry.retryAt >= 0
+    ) {
+      record.gcRetry = {
+        stage: retry.stage,
+        elapsedMs: retry.elapsedMs,
+        attempts: retry.attempts,
+        retryAt: retry.retryAt,
+      };
+    }
   }
   return record;
 }
