@@ -3,7 +3,6 @@
 // (account, room, event) is claimed before handling. Durable turn adoption or
 // terminal handling commits it; failure or abandonment before adoption releases it.
 import {
-  type ChannelReplayClaimHandle,
   createChannelReplayGuard,
   resolvePersistentDedupePluginStateNamespace,
 } from "openclaw/plugin-sdk/persistent-dedupe";
@@ -75,30 +74,3 @@ export function createMatrixInboundEventDeduper(params: {
 }
 
 export type MatrixInboundEventDeduper = ReturnType<typeof createMatrixInboundEventDeduper>;
-
-/**
- * Settle a debounced burst as one replay unit: the merged event's claim and the
- * claims for the events absorbed into it commit or release together.
- */
-export function joinMatrixInboundReplayClaims(
-  primary: ChannelReplayClaimHandle,
-  absorbed: readonly ChannelReplayClaimHandle[],
-): ChannelReplayClaimHandle {
-  if (absorbed.length === 0) {
-    return primary;
-  }
-  return {
-    keys: [...primary.keys, ...absorbed.flatMap((handle) => handle.keys)],
-    commit: async (options) => {
-      const [primaryCommitted] = await Promise.all(
-        [primary, ...absorbed].map((handle) => handle.commit(options)),
-      );
-      return primaryCommitted ?? false;
-    },
-    release: (options) => {
-      for (const handle of [primary, ...absorbed]) {
-        handle.release(options);
-      }
-    },
-  };
-}

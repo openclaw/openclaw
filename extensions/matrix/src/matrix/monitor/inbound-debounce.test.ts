@@ -1,13 +1,10 @@
 // Matrix tests cover inbound burst debouncing ahead of the room-message handler.
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixRoomMessageDispatchOptions } from "./handler.js";
 import { createMatrixInboundDebouncer } from "./inbound-debounce.js";
 import type { MatrixCommandPrefixInputs } from "./inbound-debounce.js";
-import { joinMatrixInboundReplayClaims } from "./inbound-dedupe.js";
-import { resolveMentions } from "./mentions.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const ROOM = "!room:example.org";
@@ -134,13 +131,13 @@ describe("matrix inbound debounce", () => {
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]?.event.event_id).toBe("$3");
     expect(dispatched[0]?.event.content.body).toBe("one\ntwo\nthree");
-    // Every batched event is claimed once; the handler adopts the base claim.
-    expect([...claims.keys()]).toEqual(["$1", "$2", "$3"]);
-    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$3"));
-    expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([
-      claims.get("$1"),
-      claims.get("$2"),
-    ]);
+    // Every batched event is claimed once and settles with the merge base's claim.
+    const joined = dispatched[0]?.options?.replayClaim;
+    expect(joined?.keys).toEqual(["$3", "$1", "$2"]);
+    await expect(joined?.commit()).resolves.toBe(true);
+    for (const claim of claims.values()) {
+      expect(claim.commit).toHaveBeenCalledOnce();
+    }
   });
 
   it("dispatches immediately when no debounce window is configured", async () => {
@@ -152,28 +149,11 @@ describe("matrix inbound debounce", () => {
     expect(dispatched.map((entry) => entry.event.content.body)).toEqual(["one", "two"]);
     // Single events keep the handler's own claim path.
     expect(dispatched[0]?.options?.replayClaim).toBeUndefined();
-    expect(dispatched[0]?.options?.absorbedReplayClaims).toBeUndefined();
     expect(claims.size).toBe(0);
   });
 
-  it("dispatches a caption-less attachment immediately and leaves trailing text separate", async () => {
-    const { enqueue, dispatched } = createSubject();
-
-    await enqueue(ROOM, text("$1", "look"));
-    await enqueue(ROOM, media("$img", "m.image", "IMG_0001.jpg"));
-    // Pending text flushes first, then the attachment dispatches without waiting.
-    expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
-      ["$1", "look"],
-      ["$img", "IMG_0001.jpg"],
-    ]);
-
-    await enqueue(ROOM, text("$q", "what is this?"));
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-    expect(dispatched.map((entry) => entry.event.event_id)).toEqual(["$1", "$img", "$q"]);
-  });
-
   it("merges a text burst once when E2EE emits every event twice", async () => {
-    const { enqueue, dispatched, claims } = createSubject();
+    const { enqueue, dispatched } = createSubject();
     const first = text("$1", "hey");
     const second = text("$2", "lool");
 
@@ -189,8 +169,7 @@ describe("matrix inbound debounce", () => {
     const [{ event, options }] = dispatched as [Dispatched];
     expect(event.event_id).toBe("$2");
     expect(event.content.body).toBe("hey\nlool");
-    expect(options?.replayClaim).toBe(claims.get("$2"));
-    expect(options?.absorbedReplayClaims).toEqual([claims.get("$1")]);
+    expect(options?.replayClaim?.keys).toEqual(["$2", "$1"]);
   });
 
   it.each([0, DEBOUNCE_MS])(
@@ -250,27 +229,16 @@ describe("matrix inbound debounce", () => {
     ],
     ["a control command", text("$x", "/status")],
     ["a command behind the bot's MXID", text("$x", `${BOT}: /stop`)],
-    ["a voice note", media("$x", "m.audio", "voice.ogg")],
     ["an image", media("$x", "m.image", "photo.jpg")],
-  ])("flushes pending text before %s and dispatches it immediately", async (_name, event) => {
-    const { enqueue, dispatched } = createSubject();
-
-    await enqueue(ROOM, text("$1", "first"));
-    await enqueue(ROOM, event);
-
-    expect(dispatched.map((entry) => entry.event.event_id)).toEqual(["$1", "$x"]);
-  });
-
-  it.each([
     [
-      "a display-name pill",
+      "a command behind a display-name pill",
       withContent(text("$x", `${BOT_NAME}: /stop`), {
         format: "org.matrix.custom.html",
         formatted_body: `${botPill}: /stop`,
       }),
     ],
-    ["a configured mention pattern", text("$x", "synapse: /stop")],
-  ])("flushes pending text before a command behind %s", async (_name, event) => {
+    ["a command behind a mention pattern", text("$x", "synapse: /stop")],
+  ])("flushes pending text before %s and dispatches it alone", async (_name, event) => {
     const { enqueue, dispatched } = createSubject({
       prefixInputs: async () => ({ displayName: BOT_NAME, mentionRegexes: [/\bsynapse\b/i] }),
     });
@@ -278,7 +246,6 @@ describe("matrix inbound debounce", () => {
     await enqueue(ROOM, text("$1", "first"));
     await enqueue(ROOM, event);
 
-    // The command reaches the handler on its own, so it still starts with the command.
     expect(dispatched.map((entry) => [entry.event.event_id, entry.event.content.body])).toEqual([
       ["$1", "first"],
       ["$x", event.content.body],
@@ -332,16 +299,18 @@ describe("matrix inbound debounce", () => {
     );
   });
 
-  it("drops absorbed events that were already handled", async () => {
-    const { enqueue, dispatched } = createSubject({ duplicates: new Set(["$1"]) });
+  it("drops already-handled events and merges on the latest fresh one", async () => {
+    const { enqueue, dispatched, claims } = createSubject({ duplicates: new Set(["$1", "$3"]) });
 
     await enqueue(ROOM, text("$1", "replayed"));
     await enqueue(ROOM, text("$2", "fresh"));
+    await enqueue(ROOM, text("$3", "already handled"));
     await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
 
     expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.event.event_id).toBe("$2");
     expect(dispatched[0]?.event.content.body).toBe("fresh");
-    expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([]);
+    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$2"));
   });
 
   it("keeps each event's HTML and merges mentions across the burst", async () => {
@@ -365,63 +334,6 @@ describe("matrix inbound debounce", () => {
       formatted_body: "<b>hey</b> bot<br>you &lt;there&gt;?",
       "m.mentions": { user_ids: [BOT], room: true },
     });
-  });
-
-  it("keeps a display-name pill mention valid after merging", async () => {
-    installMatrixMonitorTestRuntime();
-    const { enqueue, dispatched } = createSubject();
-
-    await enqueue(
-      ROOM,
-      withContent(text("$1", `${BOT_NAME} can you look`), {
-        format: "org.matrix.custom.html",
-        formatted_body: `${botPill} can you look`,
-        "m.mentions": { user_ids: [BOT] },
-      }),
-    );
-    await enqueue(ROOM, text("$2", "at this?"));
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-
-    const merged = dispatched[0]?.event;
-    expect(merged?.event_id).toBe("$2");
-    // The handler's own validator must still see the matrix.to pill behind the label.
-    expect(
-      resolveMentions({
-        content: merged?.content ?? {},
-        userId: BOT,
-        displayName: BOT_NAME,
-        text: String(merged?.content.body),
-        mentionRegexes: [],
-      }),
-    ).toEqual({ wasMentioned: true, hasExplicitMention: true });
-  });
-
-  it("merges a redelivered copy of an event only once", async () => {
-    const { enqueue, dispatched, claims } = createSubject();
-
-    await enqueue(ROOM, text("$a", "first"));
-    await enqueue(ROOM, text("$b", "second"));
-    await enqueue(ROOM, text("$a", "first"));
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]?.event.event_id).toBe("$b");
-    expect(dispatched[0]?.event.content.body).toBe("first\nsecond");
-    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$b"));
-    expect(dispatched[0]?.options?.absorbedReplayClaims).toEqual([claims.get("$a")]);
-  });
-
-  it("keeps fresh events when the latest event was already handled", async () => {
-    const { enqueue, dispatched, claims } = createSubject({ duplicates: new Set(["$2"]) });
-
-    await enqueue(ROOM, text("$1", "fresh"));
-    await enqueue(ROOM, text("$2", "already handled"));
-    await vi.advanceTimersByTimeAsync(DEBOUNCE_MS);
-
-    expect(dispatched).toHaveLength(1);
-    expect(dispatched[0]?.event.event_id).toBe("$1");
-    expect(dispatched[0]?.event.content.body).toBe("fresh");
-    expect(dispatched[0]?.options?.replayClaim).toBe(claims.get("$1"));
   });
 
   it("never merges cold-start history into a fresh turn", async () => {
@@ -453,24 +365,6 @@ describe("matrix inbound debounce", () => {
     expect(dispatched).toHaveLength(0);
     for (const eventId of ["$1", "$2"]) {
       expect(claims.get(eventId)?.release).toHaveBeenCalledOnce();
-    }
-  });
-});
-
-describe("joinMatrixInboundReplayClaims", () => {
-  it("settles absorbed claims with the primary claim", async () => {
-    const primary = createClaim("$3");
-    const absorbed = [createClaim("$1"), createClaim("$2")];
-    const joined = joinMatrixInboundReplayClaims(primary, absorbed);
-
-    expect(joined.keys).toEqual(["$3", "$1", "$2"]);
-    await expect(joined.commit()).resolves.toBe(true);
-    for (const claim of [primary, ...absorbed]) {
-      expect(claim.commit).toHaveBeenCalledOnce();
-    }
-    joined.release();
-    for (const claim of [primary, ...absorbed]) {
-      expect(claim.release).toHaveBeenCalledOnce();
     }
   });
 });

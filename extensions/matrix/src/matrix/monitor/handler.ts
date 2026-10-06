@@ -38,7 +38,6 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import { loadMatrixSendModule } from "./handler-runtime.js";
 import { createMatrixHandlerState } from "./handler-state.js";
 import type { MatrixHandlerRuntimeConfig, MatrixMonitorHandlerParams } from "./handler-types.js";
-import { joinMatrixInboundReplayClaims } from "./inbound-dedupe.js";
 import { createRoomHistoryTracker } from "./room-history.js";
 import type { MatrixRawEvent } from "./types.js";
 import { EventType } from "./types.js";
@@ -54,10 +53,8 @@ type MatrixReplayClaimHandle =
 
 /** Inbound debounce context for one dispatch; see inbound-debounce.ts. */
 export type MatrixRoomMessageDispatchOptions = {
-  /** This event's replay claim, already taken by the debounce flush; adopted instead of reclaimed. */
+  /** Claim for every event merged into this one, taken by the debounce flush; adopted instead of reclaimed. */
   replayClaim?: MatrixReplayClaimHandle;
-  /** Claims for burst events merged into this event; they settle with its own claim. */
-  absorbedReplayClaims?: readonly MatrixReplayClaimHandle[];
   /** Releases the debounce lane once the turn is adopted or deferred, not when it ends. */
   admission?: {
     onAdopted: () => Promise<void>;
@@ -137,13 +134,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
   ) => {
     const eventId = typeof event.event_id === "string" ? event.event_id.trim() : "";
     let inboundReplayClaim: MatrixReplayClaimHandle | undefined;
-    // Debounce-owned claims join this event's claim once ingress accepts it; otherwise
-    // finally releases them so the events stay replayable.
+    // A debounce-owned claim becomes this event's claim once ingress accepts it; otherwise
+    // finally releases it so the events stay replayable.
     const preclaimedReplay = dispatchOptions?.replayClaim;
-    let unjoinedAbsorbedClaims = [
-      ...(preclaimedReplay ? [preclaimedReplay] : []),
-      ...(dispatchOptions?.absorbedReplayClaims ?? []),
-    ];
+    let unadoptedPreclaim = preclaimedReplay;
     const debounceAdmission = dispatchOptions?.admission;
     let draftControllerRef: Awaited<ReturnType<typeof createMatrixDraftController>> | undefined;
     try {
@@ -207,11 +201,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           logVerboseMessage,
           directTracker,
           claimInboundReplay: (handle) => {
-            inboundReplayClaim = joinMatrixInboundReplayClaims(
-              handle,
-              unjoinedAbsorbedClaims.filter((claim) => claim !== handle),
-            );
-            unjoinedAbsorbedClaims = [];
+            inboundReplayClaim = handle;
+            unadoptedPreclaim = undefined;
           },
         });
       const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
@@ -661,9 +652,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         await draftStream.cleanupPending();
       }
       inboundReplayClaim?.release();
-      for (const claim of unjoinedAbsorbedClaims) {
-        claim.release();
-      }
+      unadoptedPreclaim?.release();
     }
   };
 }

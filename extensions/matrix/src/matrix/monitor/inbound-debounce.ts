@@ -6,6 +6,7 @@ import {
   resolveInboundDebounceMs,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { asNullableObjectRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -33,21 +34,19 @@ const MATRIX_HTML_FORMAT = "org.matrix.custom.html";
 const REPEAT_SIGHTING_TTL_MS = 60_000;
 const REPEAT_SIGHTING_MAX = 1024;
 
-function readRelation(event: MatrixRawEvent) {
-  return asNullableObjectRecord(event.content["m.relates_to"]);
-}
+const readTextBody = (event: MatrixRawEvent) => readStringValue(event.content.body)?.trim() ?? "";
 
-function resolveThreadRootId(event: MatrixRawEvent): string {
-  const relation = readRelation(event);
-  return relation?.rel_type === "m.thread" ? (readStringValue(relation.event_id) ?? "") : "";
-}
+const readFormattedBody = (event: MatrixRawEvent) =>
+  event.content.format === MATRIX_HTML_FORMAT
+    ? readStringValue(event.content.formatted_body)
+    : undefined;
 
 /** New, unedited messages only; edits, reactions, and real replies keep their own turn. */
 function isPlainNewMessage(event: MatrixRawEvent): boolean {
   if (event.unsigned?.redacted_because || event.unsigned?.["m.relations"]?.["m.replace"]) {
     return false;
   }
-  const relation = readRelation(event);
+  const relation = asNullableObjectRecord(event.content["m.relates_to"]);
   if (!relation) {
     return true;
   }
@@ -58,69 +57,65 @@ function isPlainNewMessage(event: MatrixRawEvent): boolean {
   return relation["m.in_reply_to"] === undefined || relation.is_falling_back === true;
 }
 
-function readFormattedBody(event: MatrixRawEvent): string | undefined {
-  return event.content.format === MATRIX_HTML_FORMAT
-    ? readStringValue(event.content.formatted_body)
-    : undefined;
-}
-
-function readTextBody(event: MatrixRawEvent): string {
-  return readStringValue(event.content.body)?.trim() ?? "";
-}
-
-function mergeMentions(events: readonly MatrixRawEvent[]): Record<string, unknown> | undefined {
-  const userIds = new Set<string>();
-  let room = false;
-  let present = false;
-  for (const event of events) {
-    const mentions = asNullableObjectRecord(event.content["m.mentions"]);
-    if (!mentions) {
-      continue;
-    }
-    present = true;
-    room ||= mentions.room === true;
-    for (const userId of Array.isArray(mentions.user_ids) ? mentions.user_ids : []) {
-      if (typeof userId === "string") {
-        userIds.add(userId);
-      }
-    }
+function buildBatchKey(roomId: string, event: MatrixRawEvent): string | null {
+  if (event.type !== EventType.RoomMessage || !event.sender) {
+    return null;
   }
-  if (!present) {
-    return undefined;
-  }
-  return { ...(userIds.size > 0 ? { user_ids: [...userIds] } : {}), ...(room ? { room } : {}) };
+  const relation = asNullableObjectRecord(event.content["m.relates_to"]);
+  const threadRootId =
+    relation?.rel_type === "m.thread" ? (readStringValue(relation.event_id) ?? "") : "";
+  return `${roomId}\u0000${event.sender}\u0000${threadRootId}`;
 }
 
 /** Build the single event dispatched for a text burst; the latest event's id is kept for reply threading. */
-function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[]): MatrixRawEvent {
-  const base = events.at(-1);
-  if (!base) {
-    throw new Error("cannot merge an empty Matrix inbound burst");
-  }
-  const textEvents = events.filter((event) => readTextBody(event));
-  const text = textEvents.map(readTextBody).join("\n");
+function mergeMatrixInboundBurst(events: readonly MatrixRawEvent[], base: MatrixRawEvent) {
+  const textEvents = events.filter(readTextBody);
+  const { format: _format, formatted_body: _formattedBody, ...content } = base.content;
+  content.body = textEvents.map(readTextBody).join("\n");
   // Keep each event's HTML in the merged formatted_body: the handler validates native
   // mentions from matrix.to anchors there, and bare m.mentions metadata is not trusted.
-  const hasHtml = textEvents.some(readFormattedBody);
-  const { format: _format, formatted_body: _formattedBody, ...content } = base.content;
-  if (hasHtml) {
+  if (textEvents.some(readFormattedBody)) {
     content.format = MATRIX_HTML_FORMAT;
     content.formatted_body = textEvents
       .map((event) => readFormattedBody(event) ?? escapeHtml(readTextBody(event)))
       .join("<br>");
   }
-  const mentions = mergeMentions(events);
-  if (mentions) {
-    content["m.mentions"] = mentions;
+  const mentions = events.flatMap((event) => {
+    const record = asNullableObjectRecord(event.content["m.mentions"]);
+    return record ? [record] : [];
+  });
+  if (mentions.length > 0) {
+    const userIds = new Set(
+      mentions
+        .flatMap((m) => (Array.isArray(m.user_ids) ? m.user_ids : []))
+        .filter((id): id is string => typeof id === "string"),
+    );
+    content["m.mentions"] = {
+      ...(userIds.size > 0 ? { user_ids: [...userIds] } : {}),
+      ...(mentions.some((m) => m.room === true) ? { room: true } : {}),
+    };
   }
-  content.body = text;
   return { ...base, content };
 }
 
-function buildBatchKey(roomId: string, event: MatrixRawEvent): string | null {
-  return event.type === EventType.RoomMessage && event.sender
-    ? `${roomId}\u0000${event.sender}\u0000${resolveThreadRootId(event)}`
-    : null;
+/** Settle a merged burst as one replay unit; the merge base's claim comes first. */
+function joinMatrixInboundReplayClaims(
+  claims: readonly ChannelReplayClaimHandle[],
+): ChannelReplayClaimHandle | undefined {
+  const [primary, ...absorbed] = claims;
+  if (!primary || absorbed.length === 0) {
+    return primary;
+  }
+  return {
+    keys: [...primary.keys, ...absorbed.flatMap((claim) => claim.keys)],
+    commit: async (options) =>
+      (await Promise.all(claims.map((claim) => claim.commit(options))))[0] ?? false,
+    release: (options) => {
+      for (const claim of claims) {
+        claim.release(options);
+      }
+    },
+  };
 }
 
 export function createMatrixInboundDebouncer(params: {
@@ -140,108 +135,36 @@ export function createMatrixInboundDebouncer(params: {
   ) => Promise<MatrixCommandPrefixInputs>;
   onError: (err: unknown) => void;
 }) {
-  const { readConfig, handleRoomMessage, inboundDeduper, logVerboseMessage } = params;
-
-  const shouldDebounce = ({ event, commandCheckText }: MatrixInboundDebounceEntry): boolean => {
-    if (
-      event.type !== EventType.RoomMessage ||
-      event.sender === params.selfUserId ||
-      !isPlainNewMessage(event) ||
-      params.isPreStartupEvent(event)
-    ) {
-      return false;
-    }
-    if (event.content.msgtype !== "m.text") {
-      return false;
-    }
-    return shouldDebounceTextInbound({ text: commandCheckText, cfg: readConfig() });
-  };
-
-  /**
-   * Claim every batched event before choosing the merge base, so a redelivered copy or an
-   * already-handled event drops out on its own instead of rejecting the whole merged turn.
-   */
-  const claimBatch = async (roomId: string, events: readonly MatrixRawEvent[]) => {
-    const kept: Array<{ event: MatrixRawEvent; claim?: ChannelReplayClaimHandle }> = [];
-    const seen = new Set<string>();
-    for (const event of events) {
-      const eventId = event.event_id?.trim();
-      if (!eventId) {
-        kept.push({ event });
-        continue;
-      }
-      if (seen.has(eventId)) {
-        logVerboseMessage(`matrix: skip repeated debounced event room=${roomId} id=${eventId}`);
-        continue;
-      }
-      seen.add(eventId);
-      const claim = await inboundDeduper.claim({ roomId, eventId });
-      if (claim.kind === "claimed") {
-        kept.push({ event, claim: claim.handle });
-      } else if (claim.kind === "invalid") {
-        kept.push({ event });
-      } else {
-        logVerboseMessage(`matrix: skip duplicate debounced event room=${roomId} id=${eventId}`);
-      }
-    }
-    return kept;
-  };
+  const { readConfig, selfUserId, logVerboseMessage } = params;
+  const isTextMessage = (event: MatrixRawEvent) =>
+    event.type === EventType.RoomMessage && event.content.msgtype === "m.text";
 
   // First sighting per message id, held until that event's batch settles. Without this, the
   // second emit of a pending message joins its own batch, or a bypassed copy dispatches
   // ahead of it. Once settled, the replay guard owns duplicates: a
   // committed event stays suppressed there, and a released one must be processable again.
-  const recentSightings = new Map<string, number>();
-  const sightingKeyOf = (roomId: string, event: MatrixRawEvent) => {
-    const eventId = event.event_id?.trim();
-    return event.type === EventType.RoomMessage && eventId ? `${roomId}\u0000${eventId}` : null;
-  };
-  const settleSightings = (entries: readonly MatrixInboundDebounceEntry[]) => {
-    for (const { roomId, event } of entries) {
-      const sightingKey = sightingKeyOf(roomId, event);
-      if (sightingKey) {
-        recentSightings.delete(sightingKey);
-      }
-    }
-  };
+  const sightings = new Map<string, number>();
+  const sightingKeyOf = (roomId: string, event: MatrixRawEvent) =>
+    `${roomId}\u0000${event.event_id?.trim() ?? ""}`;
   const isRepeatSighting = (roomId: string, event: MatrixRawEvent): boolean => {
-    const sightingKey = sightingKeyOf(roomId, event);
-    if (!sightingKey) {
+    if (event.type !== EventType.RoomMessage || !event.event_id?.trim()) {
       return false;
     }
+    const key = sightingKeyOf(roomId, event);
     const now = Date.now();
-    for (const [id, seenAt] of recentSightings) {
-      if (now - seenAt < REPEAT_SIGHTING_TTL_MS && recentSightings.size < REPEAT_SIGHTING_MAX) {
+    for (const [id, seenAt] of sightings) {
+      if (now - seenAt < REPEAT_SIGHTING_TTL_MS && sightings.size < REPEAT_SIGHTING_MAX) {
         break;
       }
-      recentSightings.delete(id);
+      sightings.delete(id);
     }
-    if (recentSightings.has(sightingKey)) {
+    if (sightings.has(key)) {
       logVerboseMessage(`matrix: debounce skip repeated emit room=${roomId} id=${event.event_id}`);
       return true;
     }
-    recentSightings.set(sightingKey, now);
+    sightings.set(key, now);
     return false;
   };
-
-  const { debouncer } = createChannelInboundDebouncer<MatrixInboundDebounceEntry>({
-    cfg: readConfig(),
-    channel: "matrix",
-    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "matrix" }),
-    buildKey: ({ roomId, event }) => buildBatchKey(roomId, event),
-    shouldDebounce,
-    onFlush: (entries, createFlush) =>
-      createFlush({
-        dispatch: async (admission) => {
-          try {
-            await dispatchBatch(entries, admission);
-          } finally {
-            settleSightings(entries);
-          }
-        },
-      }),
-    onError: params.onError,
-  });
 
   async function dispatchBatch(
     entries: readonly MatrixInboundDebounceEntry[],
@@ -253,25 +176,31 @@ export function createMatrixInboundDebouncer(params: {
     }
     const { roomId } = last;
     let event = last.event;
-    let options: MatrixRoomMessageDispatchOptions = { admission };
+    const options: MatrixRoomMessageDispatchOptions = { admission };
     if (entries.length > 1) {
-      const kept = await claimBatch(
-        roomId,
-        entries.map((entry) => entry.event),
-      );
+      // Claim every event before choosing the merge base, so an already-handled event drops
+      // out on its own instead of rejecting the whole merged turn.
+      const kept: Array<{ event: MatrixRawEvent; claim?: ChannelReplayClaimHandle }> = [];
+      for (const entry of entries) {
+        const eventId = entry.event.event_id?.trim();
+        const claim = eventId ? await params.inboundDeduper.claim({ roomId, eventId }) : undefined;
+        if (claim?.kind === "claimed") {
+          kept.push({ event: entry.event, claim: claim.handle });
+        } else if (!claim || claim.kind === "invalid") {
+          kept.push({ event: entry.event });
+        } else {
+          logVerboseMessage(`matrix: skip duplicate debounced event room=${roomId} id=${eventId}`);
+        }
+      }
       const base = kept.at(-1);
       if (!base) {
         return;
       }
-      event =
-        kept.length > 1 ? mergeMatrixInboundBurst(kept.map((entry) => entry.event)) : base.event;
-      options = {
-        admission,
-        replayClaim: base.claim,
-        absorbedReplayClaims: kept
-          .filter((entry) => entry !== base)
-          .flatMap((entry) => (entry.claim ? [entry.claim] : [])),
-      };
+      const events = kept.map((k) => k.event);
+      event = kept.length > 1 ? mergeMatrixInboundBurst(events, base.event) : base.event;
+      options.replayClaim = joinMatrixInboundReplayClaims(
+        [base, ...kept.slice(0, -1)].flatMap((k) => (k.claim ? [k.claim] : [])),
+      );
       logVerboseMessage(
         `matrix: debounce merged ${kept.length} events room=${roomId} into id=${event.event_id ?? "unknown"}`,
       );
@@ -281,36 +210,54 @@ export function createMatrixInboundDebouncer(params: {
       `debounced room message handler room=${roomId} id=${event.event_id ?? "unknown"}`,
       async () => {
         started = true;
-        await handleRoomMessage(roomId, event, options);
+        await params.handleRoomMessage(roomId, event, options);
       },
     );
     if (!started) {
       // The monitor stopped before this batch's timer fired; leave the events replayable.
       options.replayClaim?.release();
-      for (const claim of options.absorbedReplayClaims ?? []) {
-        claim.release();
-      }
       logVerboseMessage(`matrix: dropped debounced batch after monitor stop room=${roomId}`);
     }
   }
 
+  const { debouncer } = createChannelInboundDebouncer<MatrixInboundDebounceEntry>({
+    cfg: readConfig(),
+    channel: "matrix",
+    resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "matrix" }),
+    buildKey: ({ roomId, event }) => buildBatchKey(roomId, event),
+    shouldDebounce: ({ event, commandCheckText }) =>
+      isTextMessage(event) &&
+      event.sender !== selfUserId &&
+      isPlainNewMessage(event) &&
+      !params.isPreStartupEvent(event) &&
+      shouldDebounceTextInbound({ text: commandCheckText, cfg: readConfig() }),
+    onFlush: (entries, createFlush) =>
+      createFlush({
+        dispatch: async (admission) => {
+          try {
+            await dispatchBatch(entries, admission);
+          } finally {
+            for (const { roomId, event } of entries) {
+              sightings.delete(sightingKeyOf(roomId, event));
+            }
+          }
+        },
+      }),
+    onError: params.onError,
+  });
+
   /** Normalize like the handler does, so "@Bot: /stop" bypasses batching too. */
   const resolveCommandCheckText = async (roomId: string, event: MatrixRawEvent) => {
-    if (event.type !== EventType.RoomMessage || event.content.msgtype !== "m.text") {
+    if (!isTextMessage(event)) {
       return undefined;
     }
     const inputs = await params.resolveCommandPrefixInputs(roomId, event);
-    return stripMatrixMentionPrefix({
-      text: readTextBody(event),
-      userId: params.selfUserId,
-      displayName: inputs.displayName,
-      mentionRegexes: inputs.mentionRegexes,
-    });
+    return stripMatrixMentionPrefix({ text: readTextBody(event), userId: selfUserId, ...inputs });
   };
 
-  // Prefix resolution is async; chain it per key so a burst still reaches the debouncer in
-  // arrival order. Each link ends once its item is registered, not when its turn finishes.
-  const ingressChains = new Map<string, Promise<void>>();
+  // Prefix resolution is async; queue it per key so a burst still reaches the debouncer in
+  // arrival order. Each task ends once its item is registered, not when its turn finishes.
+  const ingressQueue = new KeyedAsyncQueue();
 
   return async (roomId: string, event: MatrixRawEvent) => {
     if (isRepeatSighting(roomId, event)) {
@@ -321,20 +268,11 @@ export function createMatrixInboundDebouncer(params: {
       await debouncer.enqueue({ roomId, event });
       return;
     }
-    let enqueued: Promise<void> = Promise.resolve();
-    const registered = (ingressChains.get(key) ?? Promise.resolve()).then(async () => {
+    const { enqueued } = await ingressQueue.enqueue(key, async () => {
       // A failed lookup leaves no command text, which dispatches the event on its own.
       const commandCheckText = await resolveCommandCheckText(roomId, event).catch(() => "");
-      enqueued = debouncer.enqueue({ roomId, event, commandCheckText });
+      return { enqueued: debouncer.enqueue({ roomId, event, commandCheckText }) };
     });
-    const settled = registered.catch(() => undefined);
-    ingressChains.set(key, settled);
-    void settled.then(() => {
-      if (ingressChains.get(key) === settled) {
-        ingressChains.delete(key);
-      }
-    });
-    await registered;
     await enqueued;
   };
 }
