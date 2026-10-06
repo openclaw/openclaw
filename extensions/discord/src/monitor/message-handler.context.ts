@@ -442,23 +442,6 @@ export async function buildDiscordMessageProcessContext(params: {
     return null;
   }
 
-  // Auto-thread creation has finished: the return link belongs to that thread,
-  // while nativeChannelId can still identify the channel where the mention arrived.
-  const conversationThreadId = threadChannel?.id ?? autoThreadContext?.createdThreadId;
-  const conversationChannelId = conversationThreadId ?? messageChannelId;
-  const conversationGuildId = isGuildMessage
-    ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id)
-    : "@me";
-  const conversationLink =
-    /^\d+$/.test(conversationChannelId) &&
-    conversationGuildId &&
-    (conversationGuildId === "@me" || /^\d+$/.test(conversationGuildId))
-      ? {
-          url: `https://discord.com/channels/${conversationGuildId}/${conversationChannelId}`,
-          label: conversationThreadId ? "Discord Thread" : "Discord Conversation",
-        }
-      : undefined;
-
   const batchMessageIds =
     ctx.sourceMessageIds && ctx.sourceMessageIds.length > 1 ? [...ctx.sourceMessageIds] : undefined;
   const ctxPayload = await (ctx.buildContext ?? buildChannelInboundEventContext)({
@@ -492,7 +475,6 @@ export async function buildDiscordMessageProcessContext(params: {
       }),
       nativeChannelId: messageChannelId,
       avatar: ctx.conversationAvatar,
-      link: conversationLink,
       label: fromLabel,
       spaceId: isGuildMessage
         ? (guildInfo?.id ?? data.guild?.id ?? data.guild_id ?? guildSlug) || undefined

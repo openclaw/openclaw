@@ -194,18 +194,15 @@ const ASSET_RUNTIME_STEP_LABELS = [
   ...RUNTIME_FINALIZE_STEP_LABELS,
 ];
 const BUILD_METADATA_STEP_LABELS = ["write-build-info", "write-cli-startup-metadata"] as const;
-const SDK_DECLARATION_STEP_LABELS = [
-  "write-plugin-sdk-entry-dts",
-  "check-plugin-sdk-exports",
-] as const;
 const FINAL_BUILD_ARTIFACTS_STEP_LABELS = [
-  ...SDK_DECLARATION_STEP_LABELS,
+  "check-plugin-sdk-exports",
   "ui:build",
   ...BUILD_METADATA_STEP_LABELS,
 ] as const;
 const CI_ARTIFACT_STEP_LABELS = [
   "native-protocol",
   ...ASSET_RUNTIME_STEP_LABELS,
+  "write-plugin-sdk-entry-dts",
   ...FINAL_BUILD_ARTIFACTS_STEP_LABELS,
 ];
 const FULL_COMPILER_STEP_LABELS = [
@@ -214,7 +211,7 @@ const FULL_COMPILER_STEP_LABELS = [
   "tsdown-unified",
   "write-unified-entry-dts",
 ] as const;
-// Typed builds cache declaration groups separately from the runtime graph.
+// The full declaration generation includes SDK outputs and has its own runtime-independent cache.
 const FULL_RUNTIME_STEP_LABELS = ASSET_RUNTIME_STEP_LABELS.flatMap((step) =>
   step === "tsdown" ? FULL_COMPILER_STEP_LABELS : [step],
 );
@@ -229,11 +226,11 @@ const BUILD_ALL_PROFILES: Record<string, string[]> = {
   package: ["clean:dist", ...FULL_BUILD_STEP_LABELS],
   ciArtifacts: [...CI_ARTIFACT_STEP_LABELS],
   // Smoke builds retain typed compilation and publication checks without the UI/metadata tail.
-  strictSmoke: [...FULL_RUNTIME_STEP_LABELS, ...SDK_DECLARATION_STEP_LABELS],
+  strictSmoke: [...FULL_RUNTIME_STEP_LABELS, "check-plugin-sdk-exports"],
   pluginSdkStrictSmoke: [
     ...FULL_COMPILER_STEP_LABELS,
     ...RUNTIME_STEP_LABELS,
-    ...SDK_DECLARATION_STEP_LABELS,
+    "check-plugin-sdk-exports",
   ],
   gatewayWatch: ["tsdown", ...RUNTIME_STEP_LABELS],
   qaRuntime: [...ASSET_RUNTIME_STEP_LABELS],
@@ -269,7 +266,7 @@ const BUILD_ALL_PROFILE_STEP_ENV: Record<string, Record<string, NodeJS.ProcessEn
     tsdown: {
       // Global declaration emission is ~95% of the tsdown wall clock and PR
       // CI's dist consumers are runtime JS only; the plugin-sdk gate below
-      // stages the two canonical SDK declaration groups instead. Release/package builds
+      // stages the canonical SDK-only declaration graph instead. Release/package builds
       // (full profile, docker packaging) keep canonical dts.
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
       OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",

@@ -1,7 +1,5 @@
 import fs from "node:fs/promises";
-import { expectDefined } from "@openclaw/normalization-core";
 import type { App } from "@slack/bolt";
-import type { WebClientOptions } from "@slack/web-api";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   registerSessionBindingAdapter,
@@ -263,72 +261,6 @@ describe("slack prepareSlackMessage inbound contract", () => {
       ctx,
     };
   }
-
-  it("links the Slack conversation without an API lookup and reuses its stored link", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const fetch = vi
-      .fn<NonNullable<WebClientOptions["fetch"]>>()
-      .mockRejectedValue(new Error("the return link must not call Slack's API"));
-    const ctx = createInboundSlackCtx({
-      cfg: { session: { store: storePath }, channels: { slack: { enabled: true } } },
-      app: {
-        client: { token: "unscoped-fixture" },
-        webClientOptions: { fetch },
-      } as unknown as App,
-      defaultRequireMention: false,
-    });
-    ctx.resolveChannelName = async () => ({ name: "general", type: "channel" });
-    ctx.resolveUserName = async () => ({ name: "Alice" });
-    const eventScope = {
-      teamId: "T123ENTERPRISE",
-      client: {
-        token: "event-fixture",
-        slackApiUrl: "https://slack-gov.com/api/",
-      } as SlackEventScope["client"],
-    };
-    const message: SlackMessageEvent = {
-      type: "message",
-      user: "U1",
-      text: "hi",
-      channel: "D123",
-      channel_type: "im",
-      ts: "10.000",
-    };
-    const prepared = await prepareSlackMessage({
-      ctx,
-      account: createSlackAccount({ replyToMode: "off" }),
-      message,
-      opts: { source: "message", eventScope },
-    });
-
-    assert(prepared);
-    const expectedLink = {
-      url: "https://slack-gov.com/app_redirect?channel=D123&team=T123ENTERPRISE",
-      label: "Slack",
-    };
-    expect(prepared.ctxPayload.ConversationLink).toEqual(expectedLink);
-    expect(fetch).not.toHaveBeenCalled();
-
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: expectDefined(prepared.ctxPayload.SessionKey, "session key"),
-      entry: {
-        sessionId: "existing-slack-session",
-        updatedAt: Date.now(),
-        conversationLink: expectedLink,
-      },
-    });
-    fetch.mockClear();
-    const repeated = await prepareSlackMessage({
-      ctx,
-      account: createSlackAccount({ replyToMode: "off" }),
-      message,
-      opts: { source: "message", eventScope },
-    });
-    assert(repeated);
-    expect(repeated.ctxPayload.ConversationLink).toEqual(expectedLink);
-    expect(fetch).not.toHaveBeenCalled();
-  });
 
   it("logs inbound metadata without logging message content", async () => {
     const body = "confidential acquisition target: northstar; do not include this text in logs";

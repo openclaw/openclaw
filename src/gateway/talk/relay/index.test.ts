@@ -45,9 +45,15 @@ import {
 } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
+  createIdleRelayProvider,
+  createRelayAgentConfig,
+  makeRelayTransport,
+} from "./index.test-support.js";
+import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
+import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
+  closeRelaySession,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
   registerTalkRealtimeRelayAgentRun,
@@ -55,14 +61,8 @@ import {
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
-} from "./index.js";
-import {
-  createIdleRelayProvider,
-  createRelayAgentConfig,
-  makeRelayTransport,
-} from "./index.test-support.js";
-import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
-import { closeRelaySession } from "./operations.js";
+} from "./operations.js";
+import { createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw } from "./session-create.js";
 import { usePersistentRelayTestState } from "./session-state.test-support.js";
 import { drainingRelaySessions, relaySessions } from "./state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./tool-call-ledger.js";

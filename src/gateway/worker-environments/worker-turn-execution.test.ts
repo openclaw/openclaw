@@ -300,6 +300,7 @@ describe("worker turn execution", () => {
         capacity: { total: 1, available: 1 },
         environmentSession: 1,
         capturedExecPolicy: true,
+        promptContext: 1,
         ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");

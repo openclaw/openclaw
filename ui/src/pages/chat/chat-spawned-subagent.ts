@@ -11,13 +11,15 @@ import {
 
 /** The session's direct children as the pane holds them. */
 export type SubagentRoster = {
+  /** Owner-qualified ancestry key from the pane's admitted read target. */
+  subagentParentKey?: string;
   subagentSessions?: readonly GatewaySessionRow[];
   /** True once the pane's own child query answered; seeded rows can be partial. */
   subagentSessionsHydrated?: boolean;
 };
 
 /** What a launch row needs to show its subagent's session and open it. */
-export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions"> & {
+export type SubagentRowContext = Pick<SubagentRoster, "subagentSessions" | "subagentParentKey"> & {
   /** Shows a subagent the Subagents panel lists. */
   onOpenSubagent?: (sessionKey: string) => void;
   /** Opens a session; any other subagent opens this way. */

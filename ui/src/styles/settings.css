@@ -38,10 +38,7 @@
   width: 100%;
 }
 
-.content-header + .settings-workspace {
-  margin-top: var(--space-5);
-}
-
+.content-header + .settings-workspace,
 .settings-workspace__body > * + * {
   margin-top: var(--space-5);
 }

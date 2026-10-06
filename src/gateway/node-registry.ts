@@ -1,5 +1,3 @@
-// Gateway node registry.
-// Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   addTimerTimeoutGraceMs,
@@ -136,7 +134,6 @@ type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
   expiresAtMs: number | null;
 };
 
-/** Connectivity probe result for a registered node. */
 export type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
@@ -176,7 +173,6 @@ export type NodeRegistryOptions = {
   onDesktopAvailabilityChanged?: (nodeId: string) => void;
 };
 
-/** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, PairingBoundNodeSession>();
   private nodesByConn = new Map<string, string>();
@@ -605,7 +601,6 @@ export class NodeRegistry {
     return unregistersCurrentNode ? nodeId : null;
   }
 
-  /** List connected node sessions. */
   listConnected(): NodeSession[] {
     return this.listConnectedSessions();
   }
@@ -720,7 +715,6 @@ export class NodeRegistry {
     return node.client.invalidated === true;
   }
 
-  /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.getRegisteredSession(nodeId);
   }

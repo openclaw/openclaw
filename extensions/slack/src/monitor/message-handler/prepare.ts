@@ -86,10 +86,7 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoomHistory } from "./prepare-room-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
-import {
-  resolveSlackConversationLink,
-  resolveSlackGroupSessionSubject,
-} from "./prepare-session-presentation.js";
+import { resolveSlackGroupSessionSubject } from "./prepare-session-presentation.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
 import { resolveSlackThreadMentionPolicy } from "./prepare-thread-mentions.js";
 import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
@@ -1225,12 +1222,6 @@ export async function prepareSlackMessage(params: {
     storePath,
     sessionKey,
   });
-  const conversationLink = resolveSlackConversationLink({
-    channelId: message.channel,
-    teamId: opts.eventScope?.teamId ?? ctx.teamId,
-    slackApiUrl: slackClient.slackApiUrl,
-    existingLink: sessionEntry?.conversationLink,
-  });
   const previousTimestamp = sessionEntry?.updatedAt;
   const excludedMessageIds = new Set(opts.sourceMessageIds);
   if (message.ts) {
@@ -1428,7 +1419,6 @@ export async function prepareSlackMessage(params: {
       threadId: boundMessageThreadId,
       nativeChannelId: message.channel,
       avatar: conversationAvatar,
-      link: conversationLink,
     },
     route: {
       ...route,
