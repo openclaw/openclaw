@@ -219,6 +219,7 @@ it.each([
 ] as const)(
   "refuses %s changes at the copy mutation boundary before exposing plugin bytes",
   async (change) => {
+    const advanceCtime = createFileMutationClock();
     const f = await fixture(false, async (source) => {
       // Use a representable time so restored-mtime coverage cannot pass on rounding.
       await fs.utimes(path.join(source, "payload.txt"), 1_700_000_000, 1_700_000_000);
@@ -247,7 +248,9 @@ it.each([
             ? before.mtime
             : new Date(before.mtime.getTime() + 60_000),
         );
+        advanceCtime(before);
         const changed = fsSync.lstatSync(f.file, { bigint: true });
+        expect(changed.ctimeNs).not.toBe(before.ctimeNs);
         expect(changed).toMatchObject({
           dev: before.dev,
           ino: before.ino,
@@ -347,9 +350,11 @@ it.each(["uid", "gid"] as const)("refuses changed inventoried ownership (%s)", a
 it.skipIf(process.platform !== "linux")(
   "verifies bytes when Linux reports ctime as birthtime without statx",
   async () => {
-    const lstat = fs.lstat;
-    const lstatSync = fsSync.lstatSync;
-    const fstatSync = fsSync.fstatSync;
+    const advanceCtime = createFileMutationClock();
+    // Compose with the clock implementations; the spies themselves are replaced below.
+    const lstat = vi.mocked(fs.lstat).getMockImplementation()!;
+    const lstatSync = vi.mocked(fsSync.lstatSync).getMockImplementation()!;
+    const fstatSync = vi.mocked(fsSync.fstatSync).getMockImplementation()!;
     const fallbackBirthtime = <T extends fsSync.Stats | fsSync.BigIntStats | undefined>(
       stat: T,
     ): T => {
@@ -385,6 +390,8 @@ it.skipIf(process.platform !== "linux")(
         }
         entry.birthtimeNs = (BigInt(entry.birthtimeNs) - 1n).toString();
       }
+      advanceCtime(before);
+      expect((await fs.lstat(f.file, { bigint: true })).ctimeNs).not.toBe(before.ctimeNs);
       if (change === "link") {
         await f.copy();
         expect(await fs.readFile(path.join(f.destination, "payload.txt"), "utf8")).toBe(
