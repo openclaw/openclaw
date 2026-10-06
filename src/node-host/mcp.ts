@@ -124,10 +124,6 @@ type NodeHostMcpManagerDeps = {
   signal?: AbortSignal;
 };
 
-function defaultWarn(message: string): void {
-  console.warn(message);
-}
-
 function formatMcpError(error: unknown): string {
   return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
 }
@@ -254,7 +250,7 @@ export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
 ) {
-  const warn = deps.warn ?? defaultWarn;
+  const warn = deps.warn ?? ((message: string) => console.warn(message));
   const createClient =
     deps.createClient ??
     ((_serverName, options) =>

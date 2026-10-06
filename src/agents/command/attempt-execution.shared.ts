@@ -20,6 +20,7 @@ export async function persistAgentSession(
   params: PersistSessionEntryParams,
 ): Promise<SessionEntry | undefined> {
   let rejectedMissingEntry = false;
+  let published = false;
   const persisted = await patchSessionEntryCore(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
@@ -52,8 +53,12 @@ export async function persistAgentSession(
     {
       fallbackEntry: params.sessionStore[params.sessionKey] ?? params.entry,
       replaceEntry: true,
-      assertCommitAllowed: params.assertCommitAllowed,
+      workerGuard: { source: params.assertCommitAllowed },
       requireWriteSuccess: params.creation !== undefined,
+      onCommitted: (entry) => {
+        published = true;
+        params.sessionStore[params.sessionKey] = entry;
+      },
     },
   );
   if (rejectedMissingEntry) {
@@ -61,7 +66,9 @@ export async function persistAgentSession(
     return undefined;
   }
   if (persisted) {
-    params.sessionStore[params.sessionKey] = persisted;
+    if (!published) {
+      params.sessionStore[params.sessionKey] = persisted;
+    }
   } else {
     delete params.sessionStore[params.sessionKey];
   }

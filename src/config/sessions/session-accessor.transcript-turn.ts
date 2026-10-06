@@ -154,6 +154,13 @@ export async function persistSessionTranscriptTurn(
   if (expectedSessionId) {
     return await persistExpectedSessionTranscriptTurn(scope, { ...options, expectedSessionId });
   }
+  if (
+    options.messages.some(
+      (append) => append.workerPreparation?.prepareMessageAfterIdempotencyCheckAsync,
+    )
+  ) {
+    throw new Error("Awaited transcript preparation requires an expected session id");
+  }
   if (options.sessionLifecyclePatch || options.sessionTurnMutation || options.initialSessionEntry) {
     throw new Error("Cannot mutate a session turn without an expected session id");
   }

@@ -20,7 +20,10 @@ import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend, type SandboxBackendFactory } from "../../sandbox/backend.js";
 import { createSandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
-import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
+import {
+  installSessionPlacementAdmissionProvider,
+  prepareSessionPlacementSandbox,
+} from "../../session-placement-admission.js";
 import * as workspaceSandbox from "../../workspace-sandbox.js";
 import { requireGit } from "../../worktrees/git.js";
 import { insertRegistryWorktree } from "../../worktrees/registry.js";
@@ -473,9 +476,9 @@ it.each(dispatchCases)(
           sourceExistedAtRetirement = existsSync(workspaceDir);
           admission.close();
         }
-        return remoteSandbox;
+        return { sandbox: remoteSandbox, assertCurrent() {}, [Symbol.dispose]() {} };
       });
-      const sandboxProvider = { resolveSandbox: resolvePlacementSandbox };
+      const sandboxProvider = { prepareSandbox: resolvePlacementSandbox };
       const restorePlacement = installSessionPlacementAdmissionProvider({
         assertCompactionSuccessorAllowed() {},
         executeLocalTurn: async (_claim, runLocal) => runLocal(),
@@ -494,23 +497,28 @@ it.each(dispatchCases)(
       });
       const preparation =
         managedWorkspace && !realManagedWorkspace
-          ? vi.spyOn(workspaceSandbox, "resolveAttemptWorkspaceSandbox").mockResolvedValue({
-              effectiveCwd: projection,
-              effectiveWorkspace: projection,
-              resolvedWorkspace: workspaceDir,
-              effectiveFsWorkspaceOnly: true,
-              sessionPermissionRoot: projection,
-              sessionPermissionPolicy: { root: projection, mode: "guarded" },
-              sandbox: projectedSandbox,
-              sandboxReport: { mode: "all", sandboxed: true },
-              sandboxSessionKey: "global",
-              sessionAgentId: agentId,
-            })
+          ? vi
+              .spyOn(workspaceSandbox, "preparePluginHarnessWorkspace")
+              .mockImplementation(async (request) => ({
+                ...(await prepareSessionPlacementSandbox(request)),
+                workspace: {
+                  effectiveCwd: projection,
+                  effectiveWorkspace: projection,
+                  resolvedWorkspace: workspaceDir,
+                  effectiveFsWorkspaceOnly: true,
+                  sessionPermissionRoot: projection,
+                  sessionPermissionPolicy: { root: projection, mode: "guarded" },
+                  sandbox: projectedSandbox,
+                  sandboxReport: { mode: "all", sandboxed: true },
+                  sandboxSessionKey: "global",
+                  sessionAgentId: agentId,
+                },
+              }))
           : undefined;
       try {
         if (retirePlacement) {
           await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toThrow(
-            "admitted run authority is no longer active",
+            "Sandbox preparation requires an active admitted run",
           );
           expect(resolvePlacementSandbox).toHaveBeenCalledOnce();
           expect(localBackend).not.toHaveBeenCalled();

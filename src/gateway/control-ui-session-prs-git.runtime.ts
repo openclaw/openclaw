@@ -235,14 +235,15 @@ async function untrackedStats(root: string): Promise<{ additions: number; files:
 async function diffStatsAgainst(
   root: string,
   base: string,
+  refreshIndex: boolean,
 ): Promise<{ additions: number; deletions: number; changedFiles: number } | null> {
   try {
     // Checkout-configurable diff drivers must never execute in the Gateway
     // process (same guard as sessions-diff).
-    // A read must not refresh index stat data and invalidate its own revision.
+    // Managed checkouts own their index; user checkouts keep read-only stat data.
     const result = await runGit(root, [
       "-c",
-      "diff.autoRefreshIndex=false",
+      `diff.autoRefreshIndex=${refreshIndex}`,
       "diff",
       "--shortstat",
       "--no-ext-diff",
@@ -292,7 +293,9 @@ export async function readPullRequestBranchFacts(
   input: GitReadOperations["pull-request.branch-facts"]["input"],
 ): Promise<GitReadOperations["pull-request.branch-facts"]["output"]> {
   const landing = await resolveBranchLanding(input.root, input);
-  const stats = landing.statsBase ? await diffStatsAgainst(input.root, landing.statsBase) : null;
+  const stats = landing.statsBase
+    ? await diffStatsAgainst(input.root, landing.statsBase, input.refreshIndex === true)
+    : null;
   // The diff validates equal recorded tips without a separate ancestry probe.
   // Missing objects must still retain the unknown-comparison fallback.
   const noPushedChanges =

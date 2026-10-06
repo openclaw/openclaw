@@ -66,6 +66,7 @@ import {
   watcher,
 } from "./session-state-events.test-support.js";
 import * as notices from "./session-state-notices.js";
+import { readSessionUpstreamLink, upsertSessionUpstreamLink } from "./session-upstream-links.js";
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -106,11 +107,30 @@ it("keeps queued signal cleanup on its captured store and removes newly committe
         )
         .run(watcher, "late-target");
     }
+    for (const options of [database, replacement]) {
+      expect(
+        upsertSessionUpstreamLink(
+          {
+            sessionKey: child,
+            agentId: "main",
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "late-link",
+            upstreamKind: "codex-app-server",
+            upstreamRef: null,
+            marker: null,
+          },
+          options,
+        ),
+      ).toBe(true);
+    }
     release.resolve();
     await withinTest(Promise.all([blocking, resetting, deleting]), signal);
     expect(readCursor(database, watcher, "late-target")).toBeUndefined();
     expect(await getSessionStateVersion(child, "main", database)).toBe(0);
+    expect(readSessionUpstreamLink(child, "main", database)).toBeUndefined();
     expect(readCursor(replacement, watcher, "late-target")).toBeDefined();
+    expect(readSessionUpstreamLink(child, "main", replacement)?.threadId).toBe("late-link");
   } finally {
     read.release();
     release.resolve();
@@ -199,12 +219,7 @@ it("keeps adoption and lifecycle signal SQL off the caller thread", async () => 
     await handleSessionStateSessionReset(child, database);
     expect(sql.queries).toEqual([]);
     await handleSessionStateSessionDeleted(child, "main", database);
-    // Upstream-link deletion retains its released synchronous SDK owner in this cutover.
-    expect(
-      sql.queries.filter((query) =>
-        /\bsession_(?:state_events|state_heads|watch_cursors)\b/.test(query),
-      ),
-    ).toEqual([]);
+    expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
   }

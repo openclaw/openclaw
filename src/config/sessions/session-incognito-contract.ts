@@ -1,4 +1,6 @@
 import type { IncognitoComputeOperations } from "./session-incognito-compute-contract.js";
+import type { IncognitoEntryCreationOperations } from "./session-incognito-entry-creation-contract.js";
+import type { IncognitoEntryPatchOperations } from "./session-incognito-entry-patch-contract.js";
 import type { IncognitoSessionFacts } from "./session-incognito-facts.types.js";
 import type { IncognitoHistoryOperations } from "./session-incognito-history-contract.js";
 import type { IncognitoLifecycleOperations } from "./session-incognito-lifecycle-contract.js";
@@ -31,7 +33,9 @@ export type IncognitoSessionCreate = {
   cwd?: string;
 };
 
-type DomainOperations = IncognitoSideDataOperations &
+type DomainOperations = IncognitoEntryCreationOperations &
+  IncognitoEntryPatchOperations &
+  IncognitoSideDataOperations &
   IncognitoComputeOperations &
   IncognitoHistoryOperations &
   IncognitoLifecycleOperations &

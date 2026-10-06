@@ -1,13 +1,10 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
 import {
-  loadSubagentMaintenanceRunsInDatabase,
-  loadVersionedSubagentRunsInDatabase,
-  loadSubagentRunsForSessionsInDatabase,
   loadSubagentRunsForChildSessionFromSqlite,
-  loadSubagentRunsForSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
@@ -269,47 +266,7 @@ serveOwnedWorkerTasks(
               return stateReadRegistry.execute(command, db);
             }
             if (command.type === "subagents.runs") {
-              if (command.scope.kind === "all") {
-                return { type: command.type, ...loadVersionedSubagentRunsInDatabase({ db }) };
-              }
-              if (command.scope.kind === "maintenance") {
-                const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
-                return {
-                  type: command.type,
-                  projection: "maintenance",
-                  runs: maintenance.runs,
-                  maintenanceDigest: maintenance.digest,
-                };
-              }
-              if (command.scope.kind === "descendants") {
-                const descendants = loadSubagentRunsForSessionsInDatabase(
-                  { db },
-                  command.scope.sessionKeys,
-                  command.scope.liveTopology,
-                );
-                return {
-                  type: command.type,
-                  runs: descendants.runs,
-                  descendantBasis: {
-                    digest: descendants.digest,
-                    sessionKeys: descendants.sessionKeys,
-                    runIds: descendants.runIds,
-                  },
-                };
-              }
-              if (command.scope.kind === "ids") {
-                return {
-                  type: command.type,
-                  ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
-                };
-              }
-              const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, {
-                db,
-              });
-              return {
-                type: command.type,
-                runs: new Map(rows.map((entry) => [entry.runId, entry])),
-              };
+              return readSubagentRunsInWorker(db, command);
             }
             if (
               command.type === "mcpOAuth.statuses" ||

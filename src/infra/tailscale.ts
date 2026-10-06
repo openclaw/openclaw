@@ -608,8 +608,7 @@ function readCachedWhois(ip: string, now: number): TailscaleWhoisIdentity | null
   if (!cached) {
     return undefined;
   }
-  const expiresAt = asDateTimestampMs(cached.expiresAt);
-  if (expiresAt === undefined || expiresAt <= validNow) {
+  if (cached.expiresAt <= validNow) {
     whoisCache.delete(ip);
     return undefined;
   }

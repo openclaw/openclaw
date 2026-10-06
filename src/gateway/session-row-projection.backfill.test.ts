@@ -19,6 +19,7 @@ import {
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjectionBackfill } from "./session-row-projection-backfill.js";
 import { create, type Row } from "./session-row-projection-record.js";
@@ -170,7 +171,12 @@ it("refreshes committed metadata and lifecycle marks during a transcript window"
       displayName: "Renamed immediately",
       parentSessionKey: "agent:main:parent",
     });
-    expect(projection.snapshot(query).row?.displayName).toBe("Renamed immediately");
+    const renamed = await withReadySessionRows(
+      projection,
+      () => [query],
+      () => projection.snapshot(query).row,
+    );
+    expect(renamed?.displayName).toBe("Renamed immediately");
     await projection.ensureMaterialized();
     const afterMetadata = projection.materializedCount;
     emitSessionLifecycleEvent({ ...target, reason: "updated" });
@@ -290,14 +296,16 @@ it("eventually fills legacy titles and previews without waiting during startup o
         });
       });
       replaceSessionEntrySync(target, { sessionId: "replacement", updatedAt: 2 });
-      expect(
-        repairedProjection.snapshot(
-          { agentId: "main", key: target.sessionKey },
-          {
-            includeLastMessage: true,
-          },
-        ).row,
-      ).toMatchObject({ sessionId: "replacement", lastMessagePreview: undefined });
+      const query = { agentId: "main", key: target.sessionKey };
+      const replacement = await withReadySessionRows(
+        repairedProjection,
+        () => [query],
+        () => repairedProjection.snapshot(query, { includeLastMessage: true }).row,
+      );
+      expect(replacement).toMatchObject({
+        sessionId: "replacement",
+        lastMessagePreview: undefined,
+      });
     } finally {
       repairedProjection.dispose();
     }
@@ -505,7 +513,13 @@ it("preserves a stored fallback model without requiring a terminal transcript", 
           },
         },
       );
-      expect(projection.snapshot({ agentId: "main", key }).row).toMatchObject({
+      const query = { agentId: "main", key };
+      const replacement = await withReadySessionRows(
+        projection,
+        () => [query],
+        () => projection.snapshot(query).row,
+      );
+      expect(replacement).toMatchObject({
         activeModelProvider: "unit-test",
         activeModel: "replacement",
       });

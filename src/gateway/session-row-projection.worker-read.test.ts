@@ -16,7 +16,6 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
@@ -42,6 +41,7 @@ import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   identifiedClient,
   listSessions,
@@ -290,11 +290,13 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
-    const projection = await createSessionRowProjection({
-      cfg: { agents: { entries: { main: {} } } },
-    });
+    let describing: Promise<void> | undefined;
+    const cfg = { agents: { entries: { main: {} } } };
+    const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();
+      const original = projection.capture(query);
+      expect(original).toBeDefined();
       observeRowFacts(
         (owner) => async (input) => {
           const reply = await owner.readRowFacts(input);
@@ -307,19 +309,36 @@ it("preserves a keyed replacement while an older worker reply is pending", async
       sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
       reading = projection.ensureMaterialized();
       await entered.promise;
-      // A direct reader can discover a new lifecycle independently of bulk publication.
-      vi.spyOn(entryCache, "readCommittedSessionEntryCache").mockReturnValueOnce(
-        new Map([[query.key, { ...entry, sessionId: "replacement" }]]),
+      // The committed replacement retires authority before the older reply returns.
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        { ...entry, sessionId: "replacement" },
+      );
+      expect(projection.isCurrent(original!)).toBe(false);
+      const respond = vi.fn();
+      describing = Promise.resolve(
+        sessionByKeyReadHandlers["sessions.describe"]!({
+          req: { type: "req", id: "worker-replacement", method: "sessions.describe" },
+          params: query,
+          context: bindSessionRowProjection(requestContext(cfg), () => projection),
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        }),
+      );
+      release.resolve();
+      await Promise.all([reading, describing]);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({ session: expect.objectContaining({ sessionId: "replacement" }) }),
       );
       const replacement = projection.describe(query);
       expect(replacement?.entry.sessionId).toBe("replacement");
-      release.resolve();
-      await reading;
       expect(projection.isCurrent(replacement!)).toBe(true);
       expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
     } finally {
       release.resolve();
-      await reading;
+      await Promise.allSettled([reading, describing]);
       projection.dispose();
       releaseForeground();
     }

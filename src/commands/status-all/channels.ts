@@ -25,10 +25,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
-import {
-  summarizeTokenConfig,
-  type ChannelAccountTokenSummaryRow,
-} from "./channels-token-summary.js";
+import { summarizeTokenConfig } from "./channels-token-summary.js";
 import { formatTimeAgo } from "./format.js";
 
 type ChannelRow = {
@@ -39,10 +36,8 @@ type ChannelRow = {
   detail: string;
 };
 
-type ChannelAccountRow = ChannelAccountTokenSummaryRow & {
-  kind: ChannelAccountInspectionResult["kind"];
+type ChannelAccountRow = ChannelAccountInspectionResult & {
   accountId: string;
-  configured: boolean | undefined;
 };
 
 function existsSyncMaybe(p: string | undefined): boolean | null {
@@ -199,14 +194,7 @@ export async function buildChannelsTable(
     includeSetupFallbackPlugins?: boolean;
     liveChannelStatus?: unknown;
   },
-): Promise<{
-  rows: ChannelRow[];
-  details: Array<{
-    title: string;
-    columns: string[];
-    rows: Array<Record<string, string>>;
-  }>;
-}> {
+) {
   const showSecrets = opts?.showSecrets === true;
   const rows: ChannelRow[] = [];
   const details: Array<{
@@ -474,7 +462,7 @@ export async function buildChannelsTable(
       continue;
     }
     const hint = missingHintsByChannelId.get(channelId);
-    if (!hint || hint.channelId !== channelId) {
+    if (!hint) {
       if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
         // Fast mode intentionally skips setup fallback plugins, but configured ids still deserve visibility.
         addFastModeRow(channelId);

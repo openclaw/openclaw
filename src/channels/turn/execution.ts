@@ -8,6 +8,9 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginServiceSchedulerBinding } from "../../plugins/service-scheduler-binding.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { getAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { isRecentOutboundMessageIdentity } from "../message/outbound-echo.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
 import {
@@ -217,23 +220,30 @@ async function runPreparedChannelTurnCoreInTrace<
   // path before the next group turn can replay stale context.
   try {
     const recordSessionKey = resolveRecordSessionKey(params);
-    if (params.ctxPayload.SessionTranscriptContext) {
-      const { mergeSessionTranscriptContext } =
-        await import("../inbound-event/session-transcript-context.runtime.js");
-      await mergeSessionTranscriptContext({
-        agentId: params.ctxPayload.AgentId,
-        ctx: params.ctxPayload,
-        sessionKey: recordSessionKey,
-        storePath: params.storePath,
-      });
-    }
-    emit(params, {
-      stage: "record",
-      event: "start",
-      sessionKey: recordSessionKey,
-      admission: admission.kind,
-    });
     try {
+      const agentId =
+        params.ctxPayload.AgentId ?? parseAgentSessionKey(params.routeSessionKey)?.agentId;
+      if (agentId) {
+        await getAgentDatabaseStartupAdmission()?.waitForAgentPreparation(agentId, {
+          signal: getPluginServiceSchedulerBinding()?.().signal,
+        });
+      }
+      if (params.ctxPayload.SessionTranscriptContext) {
+        const { mergeSessionTranscriptContext } =
+          await import("../inbound-event/session-transcript-context.runtime.js");
+        await mergeSessionTranscriptContext({
+          agentId: params.ctxPayload.AgentId,
+          ctx: params.ctxPayload,
+          sessionKey: recordSessionKey,
+          storePath: params.storePath,
+        });
+      }
+      emit(params, {
+        stage: "record",
+        event: "start",
+        sessionKey: recordSessionKey,
+        admission: admission.kind,
+      });
       await params.recordInboundSession({
         storePath: params.storePath,
         sessionKey: recordSessionKey,

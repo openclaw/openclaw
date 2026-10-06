@@ -46,12 +46,6 @@ type ConfigModelRefResolver = (params: {
   ref: TouchedModelRef;
 }) => Promise<string | undefined>;
 
-type ConfigModelRefCheckResult = {
-  refsChecked: number;
-  refsTotal: number;
-  errors: string[];
-};
-
 function isPathPrefix(prefix: readonly string[], path: readonly string[]): boolean {
   return prefix.length <= path.length && prefix.every((segment, index) => path[index] === segment);
 }
@@ -489,7 +483,7 @@ export async function checkTouchedTextModelRefs(params: {
   resolveModelRef?: ConfigModelRefResolver;
   createModelRefResolver?: () => Promise<ConfigModelRefResolver>;
   redactDependencyValues?: boolean;
-}): Promise<ConfigModelRefCheckResult> {
+}) {
   const touchedPaths = params.touchedPaths;
   const modelDependenciesTouched = touchedPaths.some(
     (path) =>

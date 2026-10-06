@@ -55,7 +55,6 @@ export function generatedPackage(
 ): {
   manifest: ClawManifest;
   profile?: ClawOpenClawProfile;
-  body?: Buffer;
   packageFiles: Map<string, Buffer>;
 } {
   const bootstrapFiles: ClawManifest["workspace"]["bootstrapFiles"] = {};
@@ -108,7 +107,7 @@ export function generatedPackage(
   if (profile) {
     packageFiles.set("profiles/openclaw.yml", Buffer.from(stringifyYaml(profile), "utf8"));
   }
-  return { manifest, profile, body, packageFiles };
+  return { manifest, profile, packageFiles };
 }
 
 export async function createGeneratedPackage(

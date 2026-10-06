@@ -99,7 +99,6 @@ vi.mock("./session-state-events.kernel.js", () => ({
   rowToSessionStateEvent: vi.fn(),
 }));
 vi.mock("./session-state-notices.js", () => ({ enqueueSessionStateNotice: edge.notice }));
-vi.mock("./session-upstream-links.js", () => ({ deleteSessionUpstreamLink: vi.fn() }));
 
 const notice: SessionStateNotice = {
   watcherSessionKey: "agent:main:main",

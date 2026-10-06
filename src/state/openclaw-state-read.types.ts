@@ -169,6 +169,7 @@ export type OpenClawStateReadAuthority = {
 
 export type OpenClawStateReadCommand =
   | RegisteredStateReadCommand
+  | { type: "admit" }
   | { type: "backup.runs" }
   | TuiLastSessionReadCommand
   | ChannelIngressReadCommand
@@ -193,7 +194,7 @@ export type OpenClawStateReadCommand =
   | {
       type: "subagents.runs";
       scope:
-        | { kind: "all" }
+        | { kind: "page"; after?: string }
         | { kind: "maintenance" }
         | { kind: "session"; sessionKey: string }
         | { kind: "ids"; runIds: readonly string[] }
@@ -286,7 +287,7 @@ export type OpenClawStateReadRequest = {
   checkFreshAdmission: boolean;
   expectedIdentity?: string;
   snapshotRoot?: string;
-  command: OpenClawStateReadCommand | { type: "admit" };
+  command: OpenClawStateReadCommand;
 };
 type ReadResult<Reply> = Reply extends { ok: true } ? Omit<Reply, "ok" | "sourceAdmitted"> : never;
 
@@ -422,6 +423,7 @@ export type OpenClawStateReadResult =
       projection?: never;
       runs: Map<string, SubagentRunRecord>;
       versions?: Map<string, string | null>;
+      page?: { order: readonly (readonly [string, number])[]; nextRunId: string | null };
       descendantBasis?: { digest: string; sessionKeys: Set<string>; runIds: readonly string[] };
     }
   | {

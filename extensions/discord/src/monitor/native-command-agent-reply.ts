@@ -36,11 +36,6 @@ type NativeCommandEffectiveRoute = {
   sessionKey: string;
 };
 
-type DispatchDiscordNativeAgentReplyResult = {
-  dispatched: boolean;
-  hiddenFinalReply?: ReplyPayload;
-};
-
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
@@ -56,7 +51,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
   dispatchReplyFromConfig?: DiscordDispatchReplyFromConfig;
   log: ReturnType<typeof createSubsystemLogger>;
   pluginCommandDispatch: PluginCommandCatalogDecision;
-}): Promise<DispatchDiscordNativeAgentReplyResult> {
+}) {
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(params.discordConfig);
 
   let didReply = false;

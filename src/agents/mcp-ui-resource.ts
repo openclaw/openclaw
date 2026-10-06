@@ -154,12 +154,9 @@ export function releaseMcpAppView(viewId: string, runtime: SessionMcpRuntime): v
   }
 }
 
-function pruneViewStore(
-  additionalBytes = 0,
-  options?: { reserveEntry?: boolean; nowMs?: number },
-): void {
+function pruneViewStore(additionalBytes = 0, reserveEntry = false): void {
   const store = getViewStore();
-  const nowMs = options?.nowMs ?? Date.now();
+  const nowMs = Date.now();
   for (const [viewId, view] of store) {
     if (view.expiresAtMs <= nowMs) {
       deleteView(viewId, view);
@@ -167,7 +164,7 @@ function pruneViewStore(
   }
   let totalBytes = Array.from(store.values()).reduce((sum, view) => sum + (view.byteSize ?? 0), 0);
   while (
-    store.size + (options?.reserveEntry ? 1 : 0) > MCP_APP_VIEW_MAX_ENTRIES ||
+    store.size + (reserveEntry ? 1 : 0) > MCP_APP_VIEW_MAX_ENTRIES ||
     totalBytes + additionalBytes > MCP_APP_VIEW_STORE_MAX_BYTES
   ) {
     const oldest = store.keys().next().value;
@@ -361,7 +358,7 @@ export async function fetchMcpAppView(params: {
     const viewId = params.viewId ?? `mcp-app-${randomUUID()}`;
     releaseRuntimeLease = params.runtime.acquireLease?.();
     deleteView(viewId);
-    pruneViewStore(byteSize, { reserveEntry: true });
+    pruneViewStore(byteSize, true);
     const view: McpAppViewLease = {
       viewId,
       runtime: params.runtime,

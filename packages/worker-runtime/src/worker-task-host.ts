@@ -31,7 +31,7 @@ export type WorkerTaskHost = {
   prepareResources(): Promise<unknown>;
   releaseTemporaryDirectory(directory: string): Promise<void>;
   captureTaskContext(): unknown;
-  createTaskObserver?(url: URL, sharedCompute?: boolean): () => WorkerTaskObservation;
+  createTaskObserver?(url: URL): (operation?: string) => WorkerTaskObservation;
   receiveMessage(worker: WorkerLifecycle, message: unknown): boolean;
   workerStarted(worker: WorkerLifecycle, pool: object): void;
   workerRetiring(worker: WorkerLifecycle, reason: WorkerRetirementReason): void;

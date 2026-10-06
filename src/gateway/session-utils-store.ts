@@ -49,7 +49,6 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-ag
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
   withGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTarget,
@@ -261,46 +260,29 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
 }): Promise<T> {
-  let consumed = false;
-  const read = () =>
-    withQualifiedGatewaySessionStoreTarget({
-      ...params,
-      consume: (target, membership, assertSourceCurrent) => {
-        const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
-        // Qualification retains the selected store key even before its row exists.
-        const storeKey = canonicalMatch?.key ?? params.target.storeKey;
-        const assertCurrent = () => {
-          assertSourceCurrent();
-          params.assertConfigCurrent();
-        };
-        assertCurrent();
-        consumed = true;
-        return params.consume(
-          {
-            cfg: params.cfg,
-            ...target,
-            entry: canonicalMatch?.entry,
-            legacyKey: storeKey !== target.canonicalKey ? storeKey : undefined,
-          },
-          membership,
-          assertCurrent,
-        );
-      },
-    });
-  // Refresh only before consumption; a callback may already have started effects.
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await read();
-    } catch (error) {
-      if (
-        consumed ||
-        !(error instanceof GatewaySessionFactsChangedDuringReadError) ||
-        attempt >= 2
-      ) {
-        throw error;
-      }
-    }
-  }
+  return withQualifiedGatewaySessionStoreTarget({
+    ...params,
+    consume: (target, membership, assertSourceCurrent) => {
+      const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+      // Qualification retains the selected store key even before its row exists.
+      const storeKey = canonicalMatch?.key ?? params.target.storeKey;
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        params.assertConfigCurrent();
+      };
+      assertCurrent();
+      return params.consume(
+        {
+          cfg: params.cfg,
+          ...target,
+          entry: canonicalMatch?.entry,
+          legacyKey: storeKey !== target.canonicalKey ? storeKey : undefined,
+        },
+        membership,
+        assertCurrent,
+      );
+    },
+  });
 }
 
 export function resolveCanonicalSessionEntryFromStoreKeys(

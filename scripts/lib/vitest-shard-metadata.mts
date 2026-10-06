@@ -79,8 +79,19 @@ export function createCompactSplitTimingGeneration(params: CompactSplitTimingGen
   timingKeys: string[];
 } {
   const parentIncludePatterns = params.stripes.flat();
-  if (new Set(parentIncludePatterns).size !== parentIncludePatterns.length) {
-    throw new Error(`split timing generation repeats files for ${params.parentShardName}`);
+  const fileOwners = new Map<string, number>();
+  for (const [index, files] of params.stripes.entries()) {
+    const stripe = index + 1;
+    for (const file of files) {
+      const previousStripe = fileOwners.get(file);
+      if (previousStripe !== undefined) {
+        throw new Error(
+          `duplicate test ownership for ${file} in ${params.parentShardName} ` +
+            `(configs: ${params.configs.join(", ")}; stripes: ${previousStripe} and ${stripe})`,
+        );
+      }
+      fileOwners.set(file, stripe);
+    }
   }
   const selector = JSON.stringify({
     configs: [...params.configs],

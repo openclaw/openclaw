@@ -8,6 +8,7 @@ import {
   type resolveSandboxRuntimeStatus,
   withSandboxRuntimeStatusInWorker,
 } from "./sandbox/runtime-status.js";
+import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 
 export type WorkspaceSandboxParams = Pick<
@@ -61,6 +62,25 @@ export function resolveHarnessWorkspace(
     cwd: projected ? prepared.effectiveCwd : params.cwd,
     sessionRoot: projected ? prepared.sessionPermissionRoot : params.sessionRoot,
   };
+}
+
+/** Retains placement custody across local workspace preparation and harness dispatch. */
+export async function preparePluginHarnessWorkspace(
+  params: WorkspaceSandboxParams & { agentId: string },
+) {
+  const placement = await prepareSessionPlacementSandbox(params);
+  try {
+    placement.assertCurrent();
+    const workspace = await resolveAttemptWorkspaceSandbox({
+      ...params,
+      placementSandbox: placement.sandbox,
+    });
+    placement.assertCurrent();
+    return { ...placement, workspace };
+  } catch (error) {
+    placement[Symbol.dispose]();
+    throw error;
+  }
 }
 
 /** Resolves the shared workspace and sandbox policy used by native and plugin harnesses. */

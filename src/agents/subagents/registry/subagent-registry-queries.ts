@@ -14,7 +14,7 @@ import {
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 
-function resolveConcurrencyOwnerSessionKey(entry: SubagentRunRecord): string {
+function resolveConcurrencyOwnerSessionKey(entry: SubagentRunReadRecord): string {
   return entry.collect
     ? entry.swarmRequesterSessionKey?.trim() || resolveControllerSessionKey(entry)
     : resolveControllerSessionKey(entry);
@@ -197,7 +197,7 @@ export type SubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRe
 };
 
 export type LatestSubagentRunReadIndex<T extends SubagentRunReadRecord = SubagentRunRecord> = {
-  getLatestSubagentRun(childSessionKey: string, childAgentId?: string): T | null;
+  getLatestSubagentRun: (childSessionKey: string, childAgentId?: string) => T | null;
 };
 
 export function buildLatestSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecord>(
@@ -429,12 +429,12 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
  * newest row of that class rather than the newest row overall. Without it a
  * sibling registered at a higher generation hides the row the caller owns.
  */
-export function getLatestSubagentRunByChildSessionKeyFromRuns(
-  runs: Map<string, SubagentRunRecord> | Iterable<SubagentRunRecord>,
+export function getLatestSubagentRunByChildSessionKeyFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T> | Iterable<T>,
   childSessionKey: string,
-  matches?: (entry: SubagentRunRecord) => boolean,
+  matches?: (entry: T) => boolean,
   childAgentId?: string,
-): SubagentRunRecord | undefined {
+): T | undefined {
   const key = childSessionKey.trim();
   if (!key) {
     return undefined;
@@ -443,6 +443,28 @@ export function getLatestSubagentRunByChildSessionKeyFromRuns(
     runs instanceof Map ? runs.values() : runs,
     (entry) =>
       matchesSubagentChildSessionOwner(entry, key, childAgentId) && (!matches || matches(entry)),
+  );
+}
+
+/** Admission prefers a retained active run, then the latest generation. */
+export function getSubagentRunByChildSessionKeyFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
+  childSessionKey: string,
+  childAgentId?: string,
+  liveRuns?: ReadonlyMap<string, SubagentRunRecord>,
+): T | null {
+  return (
+    getLatestSubagentRunByChildSessionKeyFromRuns(
+      runs,
+      childSessionKey,
+      (entry) => {
+        const live = liveRuns?.get(entry.runId);
+        return isRetainedUnendedSubagentRun(live && isSameSubagentRun(live, entry) ? live : entry);
+      },
+      childAgentId,
+    ) ??
+    getLatestSubagentRunByChildSessionKeyFromRuns(runs, childSessionKey, undefined, childAgentId) ??
+    null
   );
 }
 
@@ -456,31 +478,6 @@ export function getLatestSubagentRunForChild(
     child.childSessionKey,
     undefined,
     child.childAgentId,
-  );
-}
-
-/** Returns the preferred run for a child session, active first then latest ended. */
-export function getSubagentRunByChildSessionKeyFromRuns(
-  runs: Map<string, SubagentRunRecord>,
-  childSessionKey: string,
-  childAgentId?: string,
-): SubagentRunRecord | null {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return null;
-  }
-
-  return (
-    latestSubagentRun(
-      runs.values(),
-      (entry) =>
-        matchesSubagentChildSessionOwner(entry, key, childAgentId) &&
-        isRetainedUnendedSubagentRun(entry),
-    ) ??
-    latestSubagentRun(runs.values(), (entry) =>
-      matchesSubagentChildSessionOwner(entry, key, childAgentId),
-    ) ??
-    null
   );
 }
 
@@ -529,12 +526,12 @@ export function shouldIgnorePostCompletionAnnounceForSessionFromRuns(
   );
 }
 
-export function listSwarmRunsForGroupFromRuns(
-  runs: Map<string, SubagentRunRecord>,
+export function listSwarmRunsForGroupFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
   groupId: string,
   requesterSessionKey?: string,
   requesterAgentId?: string,
-): SubagentRunRecord[] {
+): T[] {
   const key = groupId.trim();
   const requesterKey = requesterSessionKey?.trim();
   return [...runs.values()].filter(
@@ -548,8 +545,8 @@ export function listSwarmRunsForGroupFromRuns(
 }
 
 /** Counts active direct child runs plus completed children that still have pending descendants. */
-export function countActiveRunsForSessionFromRuns(
-  runs: Map<string, SubagentRunRecord>,
+export function countActiveRunsForSessionFromRuns<T extends SubagentRunReadRecord>(
+  runs: Map<string, T>,
   controllerSessionKey: string,
   options?: { collect?: boolean; requesterAgentId?: string },
 ): number {
@@ -559,9 +556,9 @@ export function countActiveRunsForSessionFromRuns(
   }
 
   const now = Date.now();
-  let readIndex: SubagentRunReadIndex | undefined;
+  let readIndex: SubagentRunReadIndex<T> | undefined;
 
-  const latestByChildSessionKey = new Map<string, SubagentRunRecord>();
+  const latestByChildSessionKey = new Map<string, T>();
   // Records already carry collect, and spawn admission is not request-hot, so a
   // filtered snapshot is simpler than maintaining a second registry index.
   for (const entry of runs.values()) {
