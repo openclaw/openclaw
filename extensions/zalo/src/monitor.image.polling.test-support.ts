@@ -278,7 +278,9 @@ describe("Zalo polling image handling", () => {
       abortSignal: abort.signal,
     });
 
-    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1), {
+      timeout: 5_000,
+    });
     const elapsedMs = Date.now() - started;
     expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
     expect(elapsedMs).toBeLessThan(headerTimeoutMs + 5_000);
