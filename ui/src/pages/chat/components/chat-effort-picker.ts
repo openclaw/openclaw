@@ -8,10 +8,7 @@ import type {
   ChatFastModeSelectState,
   ChatFastModeSelectValue,
 } from "../../../lib/chat/model-select-state.ts";
-import {
-  normalizeThinkingOptionValue,
-  type ChatThinkingSelectState,
-} from "../../../lib/chat/thinking.ts";
+import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerModelControlsEnglish();
@@ -40,7 +37,7 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
     return nothing;
   }
   const selection = params.thinking.selection;
-  const effortIsOff = normalizeThinkingOptionValue(selection.value) === "off";
+  const effortIsOff = selection.value === "off";
   const effortFraction =
     effortIsOff || selection.kind === "unanchored"
       ? 0

@@ -107,8 +107,6 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
-    typealias SessionTarget = OpenClawChatSessionTarget
-
     let connection: GatewayConnection
     let outboxGatewayID: String?
     private let routingIdentity: RoutingIdentity
@@ -164,7 +162,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         }
     }
 
-    func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> SessionTarget {
+    func sessionTarget(for sessionKey: String, overrideAgentID: String? = nil) -> OpenClawChatSessionTarget {
         OpenClawChatSessionTarget.resolve(
             sessionKey,
             selectedAgentID: self.chatGatewayAgentID,
@@ -349,18 +347,10 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
         let data = try await connection.request(request)
         var decoded = try OpenClawChatGatewayPayloadCodec.decodeSessionsList(
             data, agentID: request.params["agentId"]?.value as? String)
-        let mainSessionKey = await connection.cachedMainSessionKey()
-        let defaults = OpenClawChatSessionsDefaults(
-            modelProvider: decoded.defaults?.modelProvider,
-            model: decoded.defaults?.model,
-            contextTokens: decoded.defaults?.contextTokens,
-            thinkingLevels: decoded.defaults?.thinkingLevels,
-            thinkingOptions: decoded.defaults?.thinkingOptions,
-            thinkingDefault: decoded.defaults?.thinkingDefault,
-            mainSessionKey: mainSessionKey,
-            modelSelectionTarget: decoded.defaults?.modelSelectionTarget,
-            agentRuntime: decoded.defaults?.agentRuntime)
-        decoded.defaults = defaults
+        if decoded.defaults == nil {
+            decoded.defaults = OpenClawChatSessionsDefaults(model: nil, contextTokens: nil)
+        }
+        decoded.defaults?.mainSessionKey = await self.connection.cachedMainSessionKey()
         return decoded
     }
 
@@ -520,7 +510,7 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
     }
 
     private func withNativeSendOwnership(
-        _ target: SessionTarget,
+        _ target: OpenClawChatSessionTarget,
         send: () async throws -> OpenClawChatSendResponse) async throws -> OpenClawChatSendResponse
     {
         let scope = await self.connection.conversationOwnershipScope(
@@ -723,10 +713,7 @@ private enum MacChatMessageSpeechError: LocalizedError {
     case unsupportedTransport
 
     var errorDescription: String? {
-        switch self {
-        case .unsupportedTransport:
-            "Gateway TTS is unavailable for this chat transport"
-        }
+        "Gateway TTS is unavailable for this chat transport"
     }
 }
 
@@ -914,7 +901,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
 
     private let conversationController: NativeConversationController?
     private let viewModel: OpenClawChatViewModel
-    private let contentController: NSViewController
+    private let contentController: NSHostingController<MacChatSurface>
     private var routingIdentityTask: Task<Void, Never>?
     private var window: ExperienceWindow?
     var onBecameKey: (() -> Void)?
@@ -1296,7 +1283,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     }
 
     private static func makeWindow(
-        contentViewController: NSViewController,
+        contentViewController: NSHostingController<MacChatSurface>,
         title: String,
         autosaveName: String,
         webConversation: OpenClawWebConversation?) -> ExperienceWindow
@@ -1317,8 +1304,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
         window.contentViewController = contentViewController
         // Attaching an NSHostingController resets scene bridging to `.all`;
         // opt back into toolbar items only so SwiftUI cannot restore the title.
-        (contentViewController as? NSHostingController<MacChatSurface>)?
-            .sceneBridgingOptions = [.toolbars]
+        contentViewController.sceneBridgingOptions = [.toolbars]
         window.isReleasedWhenClosed = false
         window.isRestorable = false
         // Keep the SwiftUI toolbar controls, but merge their unified row
@@ -1351,7 +1337,7 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     }
 
     var _testSceneBridgingOptions: NSHostingSceneBridgingOptions? {
-        (self.contentController as? NSHostingController<MacChatSurface>)?.sceneBridgingOptions
+        self.contentController.sceneBridgingOptions
     }
 
     var _testDraft: String {

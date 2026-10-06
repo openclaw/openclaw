@@ -223,8 +223,14 @@ type TranscriptInteractionProps = Pick<
   | "onCompanionSelection"
 >;
 
-function createTranscriptState(): ChatThreadState {
-  return {
+const transcriptStates = new Map<string, ChatThreadState>();
+
+export function getTranscriptState(paneId: string): ChatThreadState {
+  const existing = transcriptStates.get(paneId);
+  if (existing) {
+    return existing;
+  }
+  const state: ChatThreadState = {
     asyncQuestionDrafts: new Map(),
     asyncQuestionRevision: 0,
     turnRecapWatch: null,
@@ -236,16 +242,6 @@ function createTranscriptState(): ChatThreadState {
     transcriptRenderDependencies: [],
     transcriptRenderContext: {},
   };
-}
-
-const transcriptStates = new Map<string, ChatThreadState>();
-
-export function getTranscriptState(paneId: string): ChatThreadState {
-  const existing = transcriptStates.get(paneId);
-  if (existing) {
-    return existing;
-  }
-  const state = createTranscriptState();
   transcriptStates.set(paneId, state);
   return state;
 }

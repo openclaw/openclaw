@@ -506,7 +506,6 @@ src/infra/update-startup.test.ts
 src/interactive/payload.ts
 src/logging/diagnostic-stability-bundle.ts
 src/logging/diagnostic-stability.ts
-src/logging/diagnostic-support-export.ts
 src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.test.ts

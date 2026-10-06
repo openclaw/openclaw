@@ -456,15 +456,9 @@ export function assertOpenClawAgentDatabaseLease(
   }
 }
 
-export type OpenClawAgentDatabaseWorkerLeaseReceipt = {
-  leaseId: string;
-  agentId: string;
-  path: string;
-  ownerPid: number;
-  ownerStartTime: number | null;
-  sharedStatePath: string;
-  sharedStateIdentity: string;
-};
+export type OpenClawAgentDatabaseWorkerLeaseReceipt = ReturnType<
+  typeof readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim
+>;
 
 /** Preparation grants no access; claim repeats admission on the captured shared owner. */
 export function prepareOpenClawAgentDatabaseWorkerLease(
@@ -533,7 +527,7 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
 export function readOpenClawAgentDatabaseWorkerLeaseReceiptFromClaim(
   leaseId: string,
   params: { agentId: string; path: string; env?: NodeJS.ProcessEnv },
-): OpenClawAgentDatabaseWorkerLeaseReceipt {
+) {
   assertOpenClawAgentDatabaseLease(leaseId, params);
   const database = openOpenClawStateDatabase({
     env: params.env,

@@ -1,6 +1,3 @@
-/**
- * Runs native harness tool-result middleware around tool execution results.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";

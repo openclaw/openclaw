@@ -1,4 +1,3 @@
-// Prepares config writes by diffing current state and preserving metadata.
 import { isDeepStrictEqual } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
@@ -1640,7 +1639,6 @@ export function resolvePersistCandidateForWrite(
       : restoreAuthoredAgentRoster(persisted, rootAuthoredConfig);
   if (wantsCanonicalRoster) {
     // A roster rewrite must never drop entries the mutation did not explicitly delete.
-    // A 2026-07-25 production incident lost agents.entries.main twice through silent rewrites.
     assertCanonicalAgentRosterRetainsEntries({
       currentConfig: params.sourceConfig,
       canonicalConfig: withAuthoredRoster,

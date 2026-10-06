@@ -1,4 +1,3 @@
-// Session store maintenance prunes stale entries, caps count, and handles quota TTL state.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
@@ -127,10 +126,6 @@ function resolveHighWaterBytes(
   }
 }
 
-/**
- * Resolve maintenance settings from openclaw.json (`session.maintenance`).
- * Falls back to built-in defaults when config is missing or unset.
- */
 export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {
@@ -308,13 +303,12 @@ export function pruneStaleModelRunEntries(
   return pruned;
 }
 
-const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000;
 const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
 
 type QuotaSuspensionEntryMaintenanceResult = {
   /** Patch to apply to the entry, or null when no TTL transition is due. */
   patch: Partial<SessionEntry> | null;
-  /** True when the quota-suspension marker should be removed. */
   cleared: boolean;
 };
 

@@ -3,7 +3,6 @@ import { setImmediate as yieldToGateway } from "node:timers/promises";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -27,6 +26,7 @@ import {
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
 import type { SqliteSessionWriteOperation } from "./session-accessor.sqlite-write-operation.js";
+import { captureIncognitoProjectionBinding } from "./session-incognito-projection.js";
 import { drainTranscriptIndexStatus } from "./session-transcript-index-maintenance.js";
 import {
   deleteOrphanedTranscriptIndexRowsInTransaction,
@@ -34,7 +34,7 @@ import {
 } from "./session-transcript-index.js";
 import type {
   TranscriptProjectionPublicationOperations,
-  TranscriptProjectionRebuildOperations,
+  ProjectionPublisher,
 } from "./session-transcript-projection-publication.worker.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
@@ -55,10 +55,6 @@ export type ReconcileDatabaseOptions = OpenClawAgentDatabaseOptions & {
   path: string;
   assertCurrent?: () => void;
 };
-export type ProjectionPublisher = Pick<
-  SqliteWorkerStore<TranscriptProjectionRebuildOperations>,
-  "execute"
->;
 export type ActivePreparedProjection = {
   claimId: number;
   plan: PreparedSessionTranscriptProjectionMetadata;
@@ -276,6 +272,23 @@ export async function readSessionTranscriptIndexStatus(
     path: resolveOpenClawAgentSqlitePath(params),
     assertCurrent,
   };
+  const incognito = captureIncognitoProjectionBinding(options);
+  if (incognito) {
+    const pending = await incognito.actor.sessions.withCompute(
+      incognito.authority,
+      undefined,
+      async (compute) => {
+        const status = await drainTranscriptIndexStatus(() =>
+          compute.execute({ type: "session.compute.store.preflight", input: {} }),
+        );
+        return status.hasMore || status.sessionIds.length > 0;
+      },
+    );
+    incognito.actor.assertReadable();
+    incognito.authority.assertCurrent();
+    incognito.sharedBinding?.admissionSignal?.throwIfAborted();
+    return pending;
+  }
   const execution = supportsOpenClawAgentDatabaseExecution(options)
     ? captureOpenClawAgentDatabaseExecution(options)
     : undefined;

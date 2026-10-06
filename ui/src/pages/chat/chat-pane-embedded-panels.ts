@@ -71,6 +71,7 @@ type SidebarPanelDefinitionParams = {
   linkReaderTabsInHeader?: boolean;
   onCloseLinkReader?: () => void;
   terminalTabsInHeader: boolean;
+  onCloseTerminal?: () => void;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
@@ -182,6 +183,7 @@ export function sidebarPanelDefinitions(
     ? html`<openclaw-terminal-panel
         embedded
         .tabsInHeader=${params?.terminalTabsInHeader ?? false}
+        .onClose=${params?.onCloseTerminal}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}

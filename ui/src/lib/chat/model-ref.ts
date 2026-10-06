@@ -159,7 +159,7 @@ function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
-  return buildQualifiedChatModelValue(entry.id, entry.provider).trim().toLowerCase();
+  return buildQualifiedChatModelValue(entry.id, entry.provider).toLowerCase();
 }
 
 function createNameProviderKey(name: string, provider?: string | null): string {

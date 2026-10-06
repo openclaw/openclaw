@@ -488,16 +488,6 @@ describe("gateway agent handler", () => {
       entry: { pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git" },
       reason: "workspace is not ready. Wait for setup to finish or retry in chat.",
     },
-    {
-      state: "worktree preparation",
-      entry: {
-        pendingWorktree: {
-          workspace: "/tmp/project",
-          titleSource: "Prepare workspace",
-        },
-      },
-      reason: "workspace is not ready. Wait for setup to finish or retry in chat.",
-    },
   ])(
     "clears pending dedupe when the routed recipient session awaits $state",
     async ({ entry, reason }) => {

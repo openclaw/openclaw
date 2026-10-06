@@ -1,6 +1,4 @@
-/* ── Settings design language ──────────────────────────────────────────────
- *
- * One structural pattern for every settings surface:
+/* One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
  * Rules (see ui/docs/design-system/settings-design.md):
@@ -34,8 +32,6 @@
   font-size: var(--control-ui-text-lg);
   font-weight: 600;
 }
-
-/* ── Workspace shell (shared by every settings takeover page) ── */
 
 .settings-workspace,
 .settings-workspace__body {
@@ -291,8 +287,6 @@
   font-weight: 600;
 }
 
-/* ── Group (the only surface) ── */
-
 .settings-group {
   background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
@@ -305,8 +299,7 @@
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border) 65%);
 }
 
-/* ── Advanced tier ──
- * Lives here rather than config.css because every schema-driven surface
+/* Lives here rather than config.css because every schema-driven surface
  * (config pages and the channel detail forms) renders the same split. */
 
 .config-tier-groups {
@@ -388,7 +381,6 @@
   margin-left: auto;
 }
 
-/* Plain right-aligned value text ("Default", "v2026.7.1", …). */
 .settings-row__value {
   font-size: var(--control-ui-text-sm);
   color: var(--muted);
@@ -452,7 +444,6 @@
   cursor: not-allowed;
 }
 
-/* Clickable drill-in row. */
 .settings-row--nav {
   width: 100%;
   border: none;
@@ -498,7 +489,6 @@
   transform: rotate(90deg);
 }
 
-/* Indented child rows (e.g. per-item options under a parent toggle). */
 .settings-subrows .settings-row {
   padding-left: var(--space-7);
 }
@@ -586,8 +576,6 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
-/* ── Secret input (inset reveal toggle; no trailing button) ── */
-
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
 .settings-row--stacked .settings-row__control > .settings-secret {
@@ -616,8 +604,6 @@ textarea.settings-input {
     font-size: 16px;
   }
 }
-
-/* ── Status (dot + text — replaces status pills) ── */
 
 .settings-status {
   display: inline-flex;
@@ -864,8 +850,6 @@ textarea.settings-input {
   letter-spacing: 0.08em;
   user-select: all;
 }
-
-/* ── Mobile ── */
 
 .shell--embed-settings {
   --settings-control-height: 44px;

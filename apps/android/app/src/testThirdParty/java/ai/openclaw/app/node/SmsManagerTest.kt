@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -11,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmsManagerTest {
-  private val json = SmsManager.JsonConfig
+  private val json = Json
 
   private fun smsMessage(
     id: Long,
@@ -80,8 +81,8 @@ class SmsManagerTest {
     val result = SmsManager.parseParams("{\"to\":\"  +1555  \",\"message\":\"Hello\"}")
     assertTrue(result is SmsManager.ParseResult.Ok)
     val ok = result as SmsManager.ParseResult.Ok
-    assertEquals("+1555", ok.params.to)
-    assertEquals("Hello", ok.params.message)
+    assertEquals("+1555", ok.to)
+    assertEquals("Hello", ok.message)
   }
 
   @Test

@@ -41,7 +41,6 @@ import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerDesktopEnglish();
 
-/** `<openclaw-desktop-panel>` — dockable RFB access to Gateway desktop sources. */
 class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   @property({ attribute: false }) sessions!: Pick<SessionCapability, "describe">;
@@ -54,7 +53,6 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
   @property({ attribute: false }) basePath = "";
   /** Host-owned inventory; null preserves the standalone/session inventory owner. */
   @property({ attribute: false }) suppliedEnvironments: readonly EnvironmentSummary[] | null = null;
-  /** Show the canonical focus/fullscreen controls inside an embedded workspace. */
   @property({ type: Boolean }) workspaceControls = false;
   /** Hosted by a side panel or workspace, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;

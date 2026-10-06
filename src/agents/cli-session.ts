@@ -121,7 +121,6 @@ export function setCliSessionBinding(
   entry.cliSessionIds = { ...entry.cliSessionIds, [normalized]: trimmed };
 }
 
-/** Remove the stored CLI session binding for one provider. */
 export function clearCliSession(entry: SessionEntry, provider: string): void {
   const normalized = normalizeProviderId(provider);
   if (entry.cliSessionBindings?.[normalized] !== undefined) {
@@ -147,7 +146,6 @@ export function shouldClearInterruptedCliSessionBinding(params: {
   return params.interrupted && params.bindingReplacedDuringRun;
 }
 
-/** Decide whether a failed CLI turn invalidates the binding it tried to resume. */
 export function shouldClearFailedCliSessionBinding(params: {
   error: unknown;
   binding?: CliSessionBinding;
@@ -170,7 +168,6 @@ export function shouldClearFailedCliSessionBinding(params: {
   });
 }
 
-/** Stable reason used when recording why a failed reused CLI session was cleared. */
 export function resolveCliSessionClearReason(error: unknown): string {
   return isFailoverError(error) ? error.reason : (readErrorName(error) ?? "error");
 }
@@ -192,7 +189,6 @@ export type CliSessionReuseResult =
 const CLI_SESSION_DRIFT_NOTE_PREFIX =
   "OpenClaw resumed this CLI session after prompt content changed.";
 
-/** User-turn note telling a resumed CLI session that its prompt content drifted. */
 export function buildCliSessionDriftNote(reasons: readonly CliSessionContentDriftReason[]): string {
   return `${CLI_SESSION_DRIFT_NOTE_PREFIX} Follow the current turn's instructions; changed=${reasons.join(",")}.`;
 }
@@ -229,7 +225,6 @@ function normalizeCliMessageToolPolicyHash(value: string | undefined): string | 
     : hash;
 }
 
-/** Decide whether a stored CLI session can be reused for the current auth/prompt/cwd/MCP state. */
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;

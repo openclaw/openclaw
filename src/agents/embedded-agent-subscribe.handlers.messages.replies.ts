@@ -234,7 +234,6 @@ export function consumePendingAssistantReplyDirectivesIntoReply(
   };
 }
 
-/** True when a reply payload has text, media, or voice content worth sending. */
 export function hasAssistantVisibleReply(params: {
   text?: string;
   mediaUrls?: string[];

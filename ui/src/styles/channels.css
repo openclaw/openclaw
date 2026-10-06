@@ -23,7 +23,6 @@
   text-align: left;
 }
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
   width: var(--channels-art-size, 44px);
@@ -53,7 +52,6 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
 }
 
-/* Wide cover art used by the detail overlay header. */
 .channels-cover {
   display: grid;
   width: 100%;

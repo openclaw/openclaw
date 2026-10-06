@@ -1,7 +1,4 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-/**
- * Handles assistant message lifecycle boundaries, and final reconciliation.
- */
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";

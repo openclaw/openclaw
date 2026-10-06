@@ -83,6 +83,9 @@ export class MockProvider implements VoiceCallProvider {
       case "call.active":
         return { ...base, type: evt.type };
 
+      case "call.amd":
+        return evt.answeredBy ? { ...base, type: evt.type, answeredBy: evt.answeredBy } : null;
+
       case "call.speaking": {
         return {
           ...base,
@@ -161,6 +164,8 @@ export class MockProvider implements VoiceCallProvider {
   async hangupCall(_input: HangupCallInput): Promise<void> {}
 
   async playTts(_input: PlayTtsInput): Promise<void> {}
+
+  async playMessageAndHangup(_input: PlayTtsInput): Promise<void> {}
 
   async sendDtmf(_input: SendDtmfInput): Promise<void> {}
 

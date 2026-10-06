@@ -1909,7 +1909,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   flex: 0 0 auto;
 }
 
-/* The model trigger fills its shrinkable wrapper; effort keeps its content width. */
 .chat-controls__model-settings .chat-controls__effort-trigger {
   width: auto;
 }
@@ -3375,7 +3374,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
-/* Welcome state (new session) */
 .agent-chat__welcome {
   display: flex;
   flex-direction: column;
@@ -3432,7 +3430,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   line-height: 1;
 }
 
-/* The 120x120 Clawd canvas stays centered in the existing hero slot. */
 .agent-chat__welcome-clawd {
   width: 128px;
   height: 112px;
@@ -3482,7 +3479,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   }
 }
 
-/* Recent user chats replace the canned suggestions once any exist. */
 .agent-chat__welcome-secondary {
   display: grid;
   grid-template-rows: minmax(0, 1fr);

@@ -58,6 +58,7 @@ import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import { createChatSendGoalCommitGuard } from "./chat-send-work-admission.js";
 import { prepareChatSendAckTiming } from "./chat-server-timing.js";
 import { createGatewayChatUserTurnController } from "./chat-user-turn-recorder.js";
+import { isDirectGatewayUserClient } from "./cron-creator-authority-admission.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
@@ -95,10 +96,12 @@ async function handleChatSendWithOptions(
   } = handlerOptions;
   using diagnostics =
     readChatSendDiagnostics(handlerOptions) ?? startChatSendDiagnostics(context.logGateway);
+  const isDirectExternalUser =
+    externalAuthorityAdmission !== undefined && isDirectGatewayUserClient(client);
   const setup = await prepareAndAdmitChatSend(
     { params, respond, context, client, hasCurrentClientAuthority, sessionMutationAuthorization },
     onAdmissionOwned,
-    options,
+    { ...options, isDirectExternalUser },
     diagnostics,
   );
   if (!setup) {
@@ -241,6 +244,7 @@ async function handleChatSendWithOptions(
       request,
       session,
       transcript: options?.transcript,
+      isDirectExternalUser,
       startedAt: admissionStartedAt,
       warn: (message) => context.logGateway.warn(message),
       mentionInbox: context.mentionInbox,

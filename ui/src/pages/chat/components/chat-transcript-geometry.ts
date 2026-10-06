@@ -89,20 +89,16 @@ export function resolvePositionRailReaderViewport(
   return { state, scheduleLayout };
 }
 
-function transcriptScrollMargin(element: Element | null): number {
-  if (!(element instanceof HTMLElement) || typeof getComputedStyle !== "function") {
-    return 0;
-  }
-  const margin = Number.parseFloat(getComputedStyle(element).paddingTop);
-  return Number.isFinite(margin) ? margin : 0;
-}
-
 /** Row offsets start below the scroll padding plus the in-flow history header. */
 export function resolveTranscriptScrollMargin(
   scrollElement: Element | null,
   headerHeight: number,
 ): number {
-  return transcriptScrollMargin(scrollElement) + headerHeight;
+  const margin =
+    scrollElement instanceof HTMLElement && typeof getComputedStyle === "function"
+      ? Number.parseFloat(getComputedStyle(scrollElement).paddingTop)
+      : 0;
+  return (Number.isFinite(margin) ? margin : 0) + headerHeight;
 }
 
 export function syncScrollMargin(

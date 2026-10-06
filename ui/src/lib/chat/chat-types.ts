@@ -1,9 +1,6 @@
 import type { HumanMention } from "@openclaw/gateway-protocol";
 import type { MediaKind } from "@openclaw/media-core/constants";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
-/**
- * Chat message types for the UI layer.
- */
 import type {
   AgentActivityItem,
   ChatSendIntent,
@@ -207,7 +204,6 @@ export type ChatQueueItem = {
   sender?: SenderIdentity;
 };
 
-/** Union type for items in the chat thread */
 export type ChatItem =
   | {
       kind: "message";
@@ -382,7 +378,6 @@ export type MessageImageSource = {
   height?: number;
 };
 
-/** Content item types in a normalized message */
 export type MessageContentItem =
   | ClawHubRecommendation
   | {
@@ -441,7 +436,6 @@ export type MessageContentItem =
       rawText?: string | null;
     };
 
-/** Normalized message structure for rendering */
 export type NormalizedMessage = {
   role: string;
   content: MessageContentItem[];
@@ -471,7 +465,6 @@ export type ToolOutputMetadata = {
   captureTruncated?: true;
 };
 
-/** Tool card representation for inline tool call/result rendering */
 export type ToolCard = {
   id: string;
   callId?: string;

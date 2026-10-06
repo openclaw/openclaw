@@ -4,7 +4,7 @@
  *
  * Active runs stay in chatAbortControllers. Queued waits must NOT look like
  * active runs (projection, timeout ownership, terminal dedupe), but they must
- * remain abortable by authorized requesters after chat.send terminalizes.
+ * remain abortable by authorized requesters until their input is consumed.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";

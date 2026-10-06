@@ -86,7 +86,6 @@ openclaw-lobster-pet .lobster-pet {
   }
 }
 
-/* Departure/dismissal: duck down behind the ledge and fade. */
 openclaw-lobster-pet .lobster-pet--away {
   opacity: 0;
   visibility: hidden;
@@ -126,7 +125,6 @@ wa-dropdown.lobster-pet-dismiss-menu {
   pointer-events: auto;
 }
 
-/* The Elder does everything at Elder speed. */
 .lobster-pet--elder {
   transition: left 2.6s ease-in-out;
 }
@@ -152,9 +150,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   pointer-events: none;
 }
 
-/* ---- Rare palette variants (lobster-pet-palettes.ts + lobster-pet-lore.ts) ---- */
-
-/* Ghost/albino: pale translucent shell, icy glints. */
 .lobster-pet--palette-ghost {
   --lob-glint: #a8dcff;
 }
@@ -582,7 +577,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
 }
 
 /* Retro: homage to the classic OpenClaw logo — white sticker outline around
-   the whole sprite (the halo is two stacked 1px drop-shadows). */
+   the whole sprite. */
 .lobster-pet--palette-retro .lobster-pet__svg,
 .lobster-pet--palette-goldenretro .lobster-pet__svg {
   filter: drop-shadow(0 0 1.2px #f5f7fa) drop-shadow(0 0 1.2px #f5f7fa)
@@ -666,7 +661,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   filter: none;
 }
 
-/* Offline also dims the lumen running lights - no power, no glow. */
 .lobster-pet--offline .lob-lumen {
   filter: none;
   animation: none;
@@ -752,8 +746,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   fill: color-mix(in srgb, var(--lob-shell, #ff4f40) 78%, #10181f);
 }
 
-/* ---- Idle blinking: crossfade open pupils and closed-lid curves ---- */
-
 .lobster-pet .lob-eye-closed {
   opacity: 0;
 }
@@ -770,8 +762,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: var(--lob-blink-delay, 0s);
 }
 
-/* ---- Entrances ----
-   Walk pops up from behind the footer ledge; rare arrivals descend under a
+/* Walk pops up from behind the footer ledge; rare arrivals descend under a
    balloon or pop out of a bubble. Durations mirror LOBSTER_PET_ENTRANCE_MS
    in lobster-pet-plans.ts. */
 
@@ -915,7 +906,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: var(--lob-act-delay, 0s);
 }
 
-/* Petting: content closed eyes and a floating heart. */
 .lobster-pet--act-pet .lob-eye-open,
 .lobster-pet--act-nap .lob-eye-open {
   opacity: 0;
@@ -981,13 +971,11 @@ openclaw-lobster-pet[data-dex-complete]::after {
   transform: translateY(6%) scaleY(0.94);
 }
 
-/* Molt: shiver, squash, pop. */
 .lobster-pet--act-molt .lobster-pet__body {
   animation: lobster-pet-molt 2.6s ease-in-out;
   animation-delay: var(--lob-act-delay, 0s);
 }
 
-/* The abandoned shell: frozen, washed out, fading over a minute. */
 .lobster-pet--shell {
   pointer-events: none;
   cursor: default;
@@ -1003,8 +991,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
 .lobster-pet--shell .lob-eye-closed {
   opacity: 1;
 }
-
-/* ---- Nap: eyes shut, z's drift up ---- */
 
 .lobster-pet__z {
   position: absolute;
@@ -1024,7 +1010,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-delay: calc(var(--i, 0) * 0.7s);
 }
 
-/* Party days: confetti-colored z's. */
 .lobster-pet--party .lobster-pet__z:nth-of-type(1) {
   color: #ffd166;
 }
@@ -1406,8 +1391,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Pass-through visitors ---- */
-
 /* All species cross the measured free lane, not the whole composer width. */
 .lobster-pet--passer {
   pointer-events: none;
@@ -1423,18 +1406,14 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation-name: lobster-pet-cross, lobster-pet-cross-hop;
 }
 
-/* The crab walks sideways by definition: it crosses while facing you and
-   feels no need to explain itself. */
 .lobster-pet--crab .lobster-pet__body {
   animation: lobster-pet-crab-scuttle 0.24s ease-in-out infinite;
 }
 
-/* The snail neither waddles nor hurries. */
 .lobster-pet--snail .lobster-pet__body {
   animation: none;
 }
 
-/* The duck bobs like the bath toy it is. */
 .lobster-pet--duck .lobster-pet__body {
   animation: lobster-pet-duck-bob 1.6s ease-in-out infinite;
 }
@@ -1453,7 +1432,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* The jellyfish drifts above the ledge, pulsing softly. */
 .lobster-pet--jellyfish {
   margin-top: -8px;
 }
@@ -1526,8 +1504,7 @@ openclaw-lobster-pet[data-dex-complete]::after {
   }
 }
 
-/* ---- Message in a bottle ----
-   Washes up on its own schedule, bobs until opened, and ebbs away. The
+/* Washes up on its own schedule, bobs until opened, and ebbs away. The
    fortune travels in the title tooltip. */
 
 .lobster-bottle {
@@ -1584,7 +1561,6 @@ openclaw-lobster-pet[data-dex-complete]::after {
   animation: none;
 }
 
-/* Unseen palettes are dim silhouettes until one visits. */
 .lobsterdex__mini--unseen {
   filter: grayscale(1) brightness(0.45) opacity(0.55);
 }

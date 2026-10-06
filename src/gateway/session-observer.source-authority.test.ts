@@ -15,7 +15,7 @@ import {
   resetSessionObserverEventSequence,
 } from "./session-observer.test-utils.js";
 
-it("queues background digest persistence after its publisher and joins it before disposal", async ({
+it("lets the publisher finish its nested write before persisting the background digest", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -50,6 +50,9 @@ it("queues background digest persistence after its publisher and joins it before
         );
         expect(persistDigest).toHaveBeenCalledOnce();
         expect(digestEntered).toBe(false);
+        await runOpenClawAgentWorkerWrite(options, async () => {
+          order.push("publisher");
+        });
       });
       await withinTest(entered.promise, signal);
       successor = runOpenClawAgentWriteAdmission(options, () =>
@@ -62,8 +65,8 @@ it("queues background digest persistence after its publisher and joins it before
       });
       release.resolve();
       await withinTest(Promise.all([successor, disposal]), signal);
-      expect(order[0]).toBe("persisted");
-      expect(order).toHaveLength(3);
+      expect(order.slice(0, 2)).toEqual(["publisher", "persisted"]);
+      expect(order).toHaveLength(4);
     } finally {
       release.resolve();
       await Promise.allSettled([successor, disposal]);

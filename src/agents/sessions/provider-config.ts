@@ -20,19 +20,16 @@ export interface ProviderConfigBase {
   apiKey?: string;
   /** API type. Required at provider or model level when defining models. */
   api?: Api;
-  /** Optional streamSimple handler for custom APIs. */
   streamSimple?: (
     model: Model,
     context: Context,
     options?: SimpleStreamOptions,
   ) => AssistantMessageEventStreamContract;
-  /** Custom headers to include in requests. */
   headers?: Record<string, string>;
   /** If true, adds Authorization: Bearer header with the resolved API key. */
   authHeader?: boolean;
 }
 
-/** Configuration for a model within a provider. */
 export interface ProviderModelConfig
   extends
     Pick<
@@ -55,9 +52,6 @@ export interface ProviderModelConfig
 
 export interface OAuthLoginCallbacks extends ProviderOAuthLoginCallbacks {}
 
-// Provider Registration Types
-
-/** Configuration for registering a provider via api.registerProvider(). */
 export interface ProviderConfig extends ProviderConfigBase {
   /** Models to register. If provided, replaces all existing models for this provider. */
   models?: ProviderModelConfig[];

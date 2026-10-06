@@ -17,20 +17,6 @@ final class RemotePortTunnel: @unchecked Sendable {
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
         let preferredLocalPort: UInt16?
-
-        init(
-            target: CommandResolver.SSHParsedTarget,
-            identity: String,
-            remotePort: Int,
-            hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
-            preferredLocalPort: UInt16? = nil)
-        {
-            self.target = target
-            self.identity = identity
-            self.remotePort = remotePort
-            self.hostKeyPolicy = hostKeyPolicy
-            self.preferredLocalPort = preferredLocalPort
-        }
     }
 
     let localPort: UInt16

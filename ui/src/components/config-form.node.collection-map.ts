@@ -61,7 +61,7 @@ export function renderMapField(
     existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
     validateKey,
   };
-  const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
+  const entries = Object.entries(value).filter(([key]) => !reservedKeys.has(key));
   const visibleEntries =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? entries.filter(([key, entryValue]) =>

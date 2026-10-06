@@ -171,8 +171,8 @@ extension OpenClawChatMessage {
         }
         let blocks = self.content.filter { ChatMessageVisibleText.isVisibleContentType($0.type, role: "assistant") }
         let phases = blocks.map { block -> String? in
-            guard let data = block.textSignature?.data(using: .utf8),
-                  let signature = try? JSONDecoder().decode(Signature.self, from: data),
+            guard let text = block.textSignature,
+                  let signature = try? JSONDecoder().decode(Signature.self, from: Data(text.utf8)),
                   signature.v == 1,
                   let phase = signature.phase,
                   ["commentary", "final_answer"].contains(phase)

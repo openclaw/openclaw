@@ -62,12 +62,6 @@ type TrajectoryRuntimeSinkParams = {
   assertCommitAllowed?: () => void;
 };
 
-type TrajectoryRuntimeSink = {
-  describeFlushState: () => string | undefined;
-  flush: () => Promise<void>;
-  write: (event: TrajectoryEvent, line: string) => void;
-};
-
 function captureTrajectoryTarget(params: TrajectoryRuntimeSinkParams) {
   return params.sessionTarget
     ? {
@@ -79,9 +73,7 @@ function captureTrajectoryTarget(params: TrajectoryRuntimeSinkParams) {
     : undefined;
 }
 
-export async function createSqliteTrajectoryRuntimeSink(
-  input: TrajectoryRuntimeSinkParams,
-): Promise<TrajectoryRuntimeSink | null> {
+export async function createSqliteTrajectoryRuntimeSink(input: TrajectoryRuntimeSinkParams) {
   const params = {
     ...input,
     env: { ...input.env, OPENCLAW_STATE_DIR: resolveStateDir(input.env) },
@@ -131,7 +123,7 @@ function buildSqliteTrajectoryRuntimeSink(
   params: TrajectoryRuntimeSinkParams,
   readEntry: typeof loadSessionEntry,
   preparedDatabase?: OpenClawAgentDatabaseOptions,
-): TrajectoryRuntimeSink | null {
+) {
   const target = captureTrajectoryTarget(params);
   const legacyMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const completeTarget = Boolean(
@@ -322,7 +314,7 @@ function buildSqliteTrajectoryRuntimeSink(
       backgroundFailed = false;
       await flushPending();
     },
-    write: (event, line) => {
+    write: (event: TrajectoryEvent, line: string) => {
       const bytes = Buffer.byteLength(line, "utf8") + 1;
       pendingEvents.set(event, bytes);
       queuedBytes += bytes;

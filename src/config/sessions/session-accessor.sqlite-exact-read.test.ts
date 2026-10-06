@@ -141,12 +141,12 @@ describe("exact SQLite session batches", () => {
       const original = openOpenClawAgentDatabase(scope);
       closeOpenClawAgentDatabaseByPath(original.path);
       const database = openOpenClawAgentDatabase(scope);
-      const read = () => {
+      const read = (sessionKey = scope.sessionKey) => {
         if (reader === "single") {
-          return loadExactSessionEntryReadOnly(scope);
+          return loadExactSessionEntryReadOnly({ ...scope, sessionKey });
         }
         const result = loadExactSessionEntryCandidatesReadOnlyBatch([
-          { ...scope, sessionKeys: [scope.sessionKey] },
+          { ...scope, sessionKeys: [sessionKey] },
         ])[0]!;
         if (!result.ok) {
           throw result.error;
@@ -155,6 +155,8 @@ describe("exact SQLite session batches", () => {
       };
       if (admission !== "cold") {
         expect(read()?.entry.label).toBe("before");
+        // Keep admission warm while evicting the target row so the race reaches SQL.
+        expect(read("agent:main:missing")).toBeUndefined();
       }
       if (admission === "policy") {
         setCanonicalSqliteSessionMainKey(database, "custom");
@@ -738,6 +740,13 @@ describe("exact SQLite session batches", () => {
         expect(read(projection).every((result) => result.ok)).toBe(true);
       }
       const database = openOpenClawAgentDatabase(scope);
+      for (const sessionKey of [keys[0], retained]) {
+        database.db
+          .prepare(
+            "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, 'tab', 'Board', 0, 'user', 0)",
+          )
+          .run(sessionKey);
+      }
       database.db
         .prepare(
           table === "entries"
@@ -758,10 +767,13 @@ describe("exact SQLite session batches", () => {
           [...keys, retained],
           projection,
           "canonical",
+          { includeBoardPresence: true },
         );
         expect(readRow(keys[0])?.entry.sessionId).toBe(keys[0]);
+        expect(readRow(keys[0])?.row.board_present).toBe(1);
         expect(() => readRow(keys[1])).toThrow(originalError);
         expect(readRow(keys[2])?.entry.sessionId).toBe(keys[2]);
+        expect(readRow(keys[2])?.row.board_present).toBe(0);
         expect(readRow(retained)).toBeUndefined();
         const entry = (sessionKey: string) => ({
           sessionKey,
