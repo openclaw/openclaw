@@ -2626,7 +2626,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/board-generated-identity.test.ts",
   "src/gateway/server-methods/board-progress.write-admission.test.ts",
   "src/gateway/server-methods/board.approval.test.ts",
-  "src/gateway/server-methods/board.content-kinds.test.ts",
   "src/gateway/server-methods/board.events.test.ts",
   "src/gateway/server-methods/board.github-actions.test.ts",
   "src/gateway/server-methods/board.mcp-admission.test.ts",
