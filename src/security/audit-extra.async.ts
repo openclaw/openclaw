@@ -70,7 +70,7 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
 
 class DockerProbeTimeoutError extends Error {
   constructor(timeoutMs: number) {
-    super(`Docker probe timed out after ${timeoutMs}ms`);
+    super(`Docker check timed out after ${timeoutMs}ms`);
     this.name = "DockerProbeTimeoutError";
   }
 }
@@ -288,7 +288,7 @@ function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): Securi
   return {
     checkId: "sandbox.browser_container.docker_probe_timeout",
     severity: "warn",
-    title: "Sandbox browser Docker audit probe timed out",
+    title: "Sandbox browser Docker audit check timed out",
     detail:
       `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +
       "OpenClaw skipped any remaining sandbox browser container drift checks for this status run.",

@@ -160,7 +160,7 @@ Status combines the fleet registry row, live container inspection, and a short b
 http://127.0.0.1:<host-port>/healthz
 ```
 
-The health result is `ok`, `failed`, or `skipped`. `/healthz` proves Gateway liveness, not full readiness of every configured channel or plugin. The probe is skipped when there is no usable local endpoint to check.
+The health result is `ok`, `failed`, or `skipped`. `/healthz` proves Gateway liveness, not full readiness of every configured channel or plugin. The check is skipped when there is no usable local endpoint to check.
 
 ## `fleet logs`
 

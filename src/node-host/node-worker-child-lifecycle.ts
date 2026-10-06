@@ -11,6 +11,7 @@ import {
   type WorkerProcessMessage,
 } from "../worker/worker-process-protocol.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
+import { nodeWorkerLaunchSecrets } from "./node-worker-child-secrets.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
@@ -29,6 +30,10 @@ import {
   sendNodeWorkerInput,
   type NodeWorkerChildAdapter,
 } from "./node-worker-launch-transport.js";
+import {
+  assertNodeWorkerNativeInferenceAvailable,
+  type NodeWorkerNativeInferenceSnapshot,
+} from "./node-worker-native-inference.js";
 import {
   createNodeWorkerCredentialScrubber,
   sanitizeNodeWorkerDiagnostic,
@@ -58,16 +63,6 @@ import {
 } from "./node-worker-supervisor-recovery.js";
 import { stopOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
-
-function nodeWorkerDescriptorSecrets(descriptor: WorkerLaunchDescriptor): string[] {
-  const endpoint = descriptor.connectionEndpoint;
-  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
-  return [
-    descriptor.admission.credential,
-    ...(access ? [access.clientId, access.clientSecret] : []),
-    ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
-  ];
-}
 
 /** Owns physical children and their observed exit, turn settlement, and retained idle lifetime. */
 export class NodeWorkerChildLifecycle {
@@ -99,6 +94,7 @@ export class NodeWorkerChildLifecycle {
   constructor(
     private readonly options: {
       bundleRoot: string;
+      nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
       engineEnv: NodeJS.ProcessEnv;
       store: NodeWorkerLaunchStore;
       turns: NodeWorkerTurnStore;
@@ -185,7 +181,10 @@ export class NodeWorkerChildLifecycle {
     signal?: AbortSignal;
     idleGeneration?: number;
   }): Promise<NodeWorkerLaunchReceipt> {
-    const sensitiveValues = nodeWorkerDescriptorSecrets(params.descriptor);
+    const sensitiveValues = nodeWorkerLaunchSecrets(
+      params.descriptor,
+      this.options.nativeInferenceSnapshot,
+    );
     const scrubber = createNodeWorkerCredentialScrubber(sensitiveValues);
     // Turn cancellation can beat the child's admission retry deadline. Retain the
     // producer's latest cause so the durable terminal receipt does not become generic.
@@ -210,6 +209,7 @@ export class NodeWorkerChildLifecycle {
         bundleRoot: this.options.bundleRoot,
         workerEnv: params.workerEnv,
         engineEnv: this.options.engineEnv,
+        nativeInferenceSnapshot: this.options.nativeInferenceSnapshot,
         input: params.input,
         descriptor: params.descriptor,
         planHash: params.planHash,
@@ -362,6 +362,7 @@ export class NodeWorkerChildLifecycle {
     signal: AbortSignal,
     idleGeneration?: number,
   ): Promise<NodeWorkerLaunchReceipt> {
+    assertNodeWorkerNativeInferenceAvailable(this.options.nativeInferenceSnapshot, descriptor);
     const isCurrent = () => this.owners.get(active.launchId) === active && !this.options.isClosed();
     const assertCurrent = () => {
       signal.throwIfAborted();
@@ -393,7 +394,7 @@ export class NodeWorkerChildLifecycle {
       await this.stopChild(active, signal.aborted ? "cancelled" : "interrupted");
       return (await this.options.turns.get(claim.launchId)) ?? admitted.receipt;
     }
-    const secrets = nodeWorkerDescriptorSecrets(descriptor);
+    const secrets = nodeWorkerLaunchSecrets(descriptor, this.options.nativeInferenceSnapshot);
     for (const value of secrets) {
       registerSecretValueForRedaction(value);
     }

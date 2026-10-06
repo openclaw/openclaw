@@ -419,7 +419,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["before_tool_call block result", "before_tool_call approval result"],
-    diagnostics: ["hook runner contract probe"],
+    diagnostics: ["hook runner contract check"],
     tests: ["src/agents/agent-tools.before-tool-call.e2e.test.ts"],
   },
   {
@@ -429,7 +429,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/hooks",
     surfaces: ["llm_input", "llm_output", "agent_end", "allowConversationAccess"],
-    diagnostics: ["conversation access hook contract probe"],
+    diagnostics: ["conversation access hook contract check"],
     tests: ["src/agents/cli-runner.reliability.test.ts", "src/config/schema.help.quality.test.ts"],
   },
   {
@@ -443,7 +443,7 @@ export const PLUGIN_COMPAT_RECORDS = [
       "capturePluginRegistration",
       "OpenClawPluginApi",
     ],
-    diagnostics: ["runtime registration capture contract probe"],
+    diagnostics: ["runtime registration capture contract check"],
     tests: ["src/plugins/captured-registration.test.ts"],
   },
   {
@@ -453,7 +453,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     introduced: "2026-04-29",
     docsPath: "/plugins/sdk-channel-plugins",
     surfaces: ["api.registerChannel", "channel setup metadata", "channel message envelope"],
-    diagnostics: ["channel runtime contract probe"],
+    diagnostics: ["channel runtime contract check"],
     tests: [
       "src/plugin-sdk/channel-entry-contract.test.ts",
       "src/plugins/captured-registration.test.ts",

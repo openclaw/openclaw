@@ -71,7 +71,7 @@ function readinessFailureReason(status: DaemonStatus): string {
     return "Gateway is not running.";
   }
   return status.rpc?.error
-    ? `Gateway probe failed: ${status.rpc.error}`
+    ? `Gateway check failed: ${status.rpc.error}`
     : "Gateway is not healthy.";
 }
 

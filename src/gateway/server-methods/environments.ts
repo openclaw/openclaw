@@ -15,9 +15,6 @@ import {
   validateWorkerDesktopObserveParams,
   validateWorkerDesktopLaunchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
-import { projectNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveDesktopObserveRequester } from "../desktop/observe-requester.js";
@@ -26,15 +23,15 @@ import {
   WRITE_SCOPE,
   authorizeOperatorScopesForRequiredScope,
 } from "../method-scopes.js";
-import { createKnownNodeCatalog, listKnownNodes } from "../node-catalog.js";
+import { readKnownNodeCatalog } from "../node-catalog-read.js";
 import {
   isNodeCommandAllowed,
   resolveNodeCommandAllowlist,
   resolveRequiredNodeCommandAuthority,
 } from "../node-command-policy.js";
-import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
 import { readNodeSessionWithheldCommands, type NodeSession } from "../node-registry.js";
 import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { workerInferenceMetadata } from "../worker-environments/inference-placement.js";
 import { resolveWorkerPlacementCapabilities } from "../worker-environments/placement-capabilities.js";
 import type { WorkerEnvironmentServiceRecord } from "../worker-environments/service-contract.js";
 import { formatForLog } from "../ws-log.js";
@@ -135,8 +132,11 @@ export async function listGatewayEnvironments(
   runtimeId?: string,
   includeDesktopSetup = false,
 ): Promise<EnvironmentSummary[]> {
-  const devices = await listDevicePairing();
-  const nodes = projectNodePairing(devices.paired);
+  const placement = runtimeId ? resolveWorkerPlacementCapabilities(runtimeId) : undefined;
+  const { nodes, connectedNodes } = await readKnownNodeCatalog(
+    context.nodeRegistry,
+    placement?.executionMode === "worker-turn" ? "worker-environments" : "environments",
+  );
   // Orphaned or failed rows that retain a node binding still own its pairing role.
   // Only destroyed proves enrollment retirement; teardown-failed rows clear nodeDeviceId.
   const managedCloudNodeIds = new Set(
@@ -148,26 +148,8 @@ export async function listGatewayEnvironments(
         : [],
     ),
   );
-  const visibleDevices = devices.paired.filter(
-    (device) => !managedCloudNodeIds.has(device.deviceId),
-  );
-  const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
-    projectPairedDeviceNodeBindings(visibleDevices),
-  );
-  const placement = runtimeId ? resolveWorkerPlacementCapabilities(runtimeId) : undefined;
-  const runtimeState = collectNodeCatalogRuntimeState(
-    context.nodeRegistry,
-    connectedNodes,
-    placement?.executionMode === "worker-turn",
-  );
   const connectedNodesById = new Map(connectedNodes.map((node) => [node.nodeId, node]));
   const requiredCommands = placement?.devicePlacement?.requiredNodeCommands ?? [];
-  const catalog = createKnownNodeCatalog({
-    pairedDevices: visibleDevices,
-    pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
-    connectedNodes: connectedNodes.filter((node) => !managedCloudNodeIds.has(node.nodeId)),
-    ...runtimeState,
-  });
   const config = context.getRuntimeConfig();
   let gateway: EnvironmentSummary =
     config.desktop?.host?.enabled === true
@@ -182,9 +164,16 @@ export async function listGatewayEnvironments(
   }
   return [
     gateway,
-    ...listKnownNodes(catalog).map((node) =>
-      summarizeNodeEnvironment(node, config, requiredCommands, connectedNodesById.get(node.nodeId)),
-    ),
+    ...nodes
+      .filter((node) => !managedCloudNodeIds.has(node.nodeId))
+      .map((node) =>
+        summarizeNodeEnvironment(
+          node,
+          config,
+          requiredCommands,
+          connectedNodesById.get(node.nodeId),
+        ),
+      ),
   ];
 }
 function readWorkerInventory(context: GatewayRequestContext, includePreparedDetails: boolean) {
@@ -207,7 +196,15 @@ export function listWorkerProfiles(context: GatewayRequestContext) {
   return Object.entries(profiles)
     .flatMap(([id, profile]) => {
       const providerId = typeof profile.provider === "string" ? profile.provider.trim() : "";
-      return id.trim() && providerId ? [{ id: id.trim(), providerId }] : [];
+      return id.trim() && providerId
+        ? [
+            {
+              id: id.trim(),
+              providerId,
+              ...workerInferenceMetadata({ providerId, profileSnapshot: profile }),
+            },
+          ]
+        : [];
     })
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }

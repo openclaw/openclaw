@@ -105,7 +105,7 @@ function createCapabilities(select: () => unknown) {
           const { probeSqliteNativeClose } = await import("./bun-sqlite-close-probe.js");
           return decide({ ...(await probeSqliteNativeClose()), decided: true });
         } catch (error) {
-          return decide(conservative(`SQLite close probe failed: ${String(error)}`));
+          return decide(conservative(`SQLite close check failed: ${String(error)}`));
         }
       })();
       return initialization;

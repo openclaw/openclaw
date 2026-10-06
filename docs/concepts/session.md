@@ -326,9 +326,9 @@ sessions retain their sidebar nesting; subagent runs appear in transcript activi
 and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
-Gateway model-run probe sessions are short-lived by default. Rows matching
+Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
-pressure-gated: it only removes stale probe rows when session-entry
+pressure-gated: it only removes stale check rows when session-entry
 maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.

@@ -710,7 +710,7 @@ export async function runCapability(params: {
   const resolveNativeVisionFlag = (): Promise<boolean | undefined> => {
     nativeVisionProbe ??= activeModelSupportsNativeVision(params).catch((err: unknown) => {
       if (shouldLogVerbose()) {
-        logVerbose(`native vision support probe failed: ${String(err)}`);
+        logVerbose(`native vision support check failed: ${String(err)}`);
       }
       return undefined;
     });
