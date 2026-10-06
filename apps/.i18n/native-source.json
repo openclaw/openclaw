@@ -1549,7 +1549,6 @@
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5878b3d2ce4713de","source":"The voice provider returned an empty SDP answer."},
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8b194a101a2db584","source":"The voice provider returned an invalid SDP answer."},
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.286c63ffe3f01919","source":"This Gateway did not provide a usable Gateway-controlled WebRTC session."},
-    {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.c77108fac3872bbb","source":"Voice could not encode its Gateway request."},
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.a2269cb74de6d0cb","source":"Voice did not connect. Check your network and try again."},
     {"path":"apps/ios/WatchApp/Sources/WatchRealtimeCallController.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1eec0c3f30993373","source":"Voice encountered an error. Try speaking again."},
     {"path":"apps/ios/WatchApp/Sources/WatchInboxMessages.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.22dd41d3f3e29fa1","source":"Main"},
