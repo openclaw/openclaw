@@ -404,6 +404,8 @@ server.listen(requestedPort, bindHost, () => {
   try {
     fs.writeFileSync(tempFile, String(server.address().port));
     fs.renameSync(tempFile, portFile);
+    // Node test callers own IPC; shell callers retain the atomic port-file receipt.
+    process.send?.(server.address().port);
   } finally {
     fs.rmSync(tempFile, { force: true });
   }
