@@ -148,7 +148,7 @@ warning identify the failed fresh-generation retry.
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
 native login. When Claude Code is logged out, its models stay listed as unavailable
-and the Control UI picker says to run `claude auth login`.
+and the Control UI picker suggests `claude auth login`.
 
 If discovery fails, **Settings > Models** and `openclaw models list` report the
 failure and keep the last compatible model list. Without one, OpenClaw shows

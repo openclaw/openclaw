@@ -153,11 +153,13 @@ describe("model catalog refresh presentation", () => {
     }
   });
 
+  // missing-auth on a Claude CLI row also means a disabled anthropic plugin or a missing
+  // account pin, so the hint must stay true for a user who is already signed in.
   it.each([
-    ["anthropic", "claude-cli", "Claude Code needs login — run claude auth login"],
+    ["anthropic", "claude-cli", "Claude Code isn't ready. If signed out, run claude auth login."],
     ["openai", undefined, "No models available"],
   ] as const)(
-    "explains an empty picker of logged-out %s rows (runtime %s)",
+    "explains an empty picker of missing-auth %s rows (runtime %s)",
     (provider, agentRuntimeId, label) => {
       const container = document.createElement("div");
       render(
@@ -188,8 +190,8 @@ describe("model catalog refresh presentation", () => {
         container,
       );
       expect(
-        container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
-      ).toContain(label);
+        container.querySelector(".chat-controls__model-catalog-state-label")?.textContent?.trim(),
+      ).toBe(label);
       expect(container.querySelector("[data-chat-model-setup]")).not.toBeNull();
     },
   );
