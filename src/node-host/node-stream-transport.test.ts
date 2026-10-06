@@ -675,7 +675,12 @@ describe("node stream close acknowledgement", () => {
   });
 
   it("bounds cleanup when a protocol error has already started the close", async () => {
+    let peerClosed = false;
     const gateway = net.createServer((socket) => {
+      socket.on("error", () => undefined);
+      socket.on("close", () => {
+        peerClosed = true;
+      });
       let buffer = Buffer.alloc(0);
       let upgraded = false;
       socket.on("data", (chunk: Buffer) => {
@@ -716,6 +721,7 @@ describe("node stream close acknowledgement", () => {
       },
     });
     const delays: number[] = [];
+    const retire: Array<() => void> = [];
     const controller = new AbortController();
     try {
       await expect(
@@ -727,13 +733,21 @@ describe("node stream close acknowledgement", () => {
           metadata: { ok: true },
           streamName: "desktop",
           signal: controller.signal,
-          scheduleCloseAck: (_callback, delayMs) => {
+          scheduleCloseAck: (callback, delayMs) => {
             delays.push(delayMs);
+            if (delayMs >= 30_000) {
+              retire.push(callback);
+            }
             return () => undefined;
           },
         }),
       ).rejects.toThrow();
       expect(delays).toContain(30_000);
+      expect(peerClosed).toBe(false);
+      for (const callback of retire) {
+        callback();
+      }
+      await expect.poll(() => peerClosed).toBe(true);
     } finally {
       controller.abort();
       target.destroy();
