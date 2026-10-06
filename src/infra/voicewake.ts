@@ -1,4 +1,3 @@
-// Stores voice wake trigger configuration.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineStateWithMetadata } from "../state/config-machine-state.js";
@@ -23,7 +22,6 @@ function stateDatabaseOptions(stateDir?: string) {
   return stateDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } } : {};
 }
 
-/** Return the built-in voice wake trigger list. */
 export function defaultVoiceWakeTriggers() {
   return [...DEFAULT_TRIGGERS];
 }
@@ -43,7 +41,6 @@ export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeCo
   };
 }
 
-/** Persist the configured voice wake trigger list. */
 export async function setVoiceWakeTriggers(
   triggers: string[],
   baseDir?: string,

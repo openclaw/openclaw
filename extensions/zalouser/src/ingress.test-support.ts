@@ -1,7 +1,15 @@
 // Zalouser tests share isolated durable-ingress state and raw zca-js envelopes.
-import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
-import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, vi } from "vitest";
+import {
+  createChannelIngressQueueForTests,
+  observeChannelIngressQueueWrite,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  createOpenClawTestState,
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "openclaw/plugin-sdk/test-state";
+import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { afterAll, beforeAll, expect } from "vitest";
 import type { createZalouserIngressMonitor } from "./ingress.js";
 import type { ZaloInboundMessage } from "./types.js";
 import type { Message } from "./zca-client.js";
@@ -53,36 +61,76 @@ export function createRawZalouserMessageFromNormalized(message: ZaloInboundMessa
   return raw;
 }
 
+function createTestQueue(stateDir: string): ZalouserTestQueue {
+  return createChannelIngressQueueForTests<ZalouserTestIngressPayload>({
+    channelId: "zalouser",
+    accountId: "default",
+    stateDir,
+  });
+}
+
 export async function withZalouserIngressTestQueue<T>(
   fn: (queue: ZalouserTestQueue) => Promise<T>,
 ): Promise<T> {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-zalouser-ingress-" },
-    ({ stateDir }) =>
-      fn(
-        createChannelIngressQueueForTests<ZalouserTestIngressPayload>({
-          channelId: "zalouser",
-          accountId: "default",
-          stateDir,
-        }),
-      ),
+    ({ stateDir }) => fn(createTestQueue(stateDir)),
   );
 }
 
-export async function waitForZalouserIngressVerdict(
+// Policy fixtures start no external processes; lifecycle/credential tests keep callback-owned state.
+// Each callback must stop its monitor before returning so purge cannot race a producer.
+export function useZalouserMonitorTestQueue() {
+  let state: OpenClawTestState | undefined;
+  beforeAll(async () => {
+    state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-zalouser-monitor-",
+    });
+  });
+  afterAll(async () => {
+    await state?.cleanup();
+  });
+
+  return async <T>(fn: (queue: ZalouserTestQueue) => Promise<T>): Promise<T> => {
+    if (!state) {
+      throw new Error("Zalouser monitor test state is not initialized");
+    }
+    const queue = createTestQueue(state.stateDir);
+    const purge = queue.purge?.bind(queue);
+    if (!purge) {
+      throw new Error("Zalouser monitor test queue requires purge support");
+    }
+    try {
+      return await fn(queue);
+    } finally {
+      // Keep exact account identity and remove every row kind, including tombstones.
+      await purge();
+    }
+  };
+}
+
+// Register before admitting or recovering the event so a fast commit cannot be missed.
+export async function observeZalouserIngressVerdict(
   queue: ZalouserTestQueue,
   eventId: string,
   expected: "completed" | "failed",
 ): Promise<void> {
-  await vi.waitFor(
-    async () => {
-      const verdict = await queue.enqueue(eventId, {
-        version: 1,
-        receivedAt: 0,
-        rawMessage: "{}",
-      });
-      expect(verdict.kind).toBe(expected);
-    },
-    { timeout: 5_000 },
-  );
+  await expect(
+    withTimeout(
+      observeChannelIngressQueueWrite(
+        queue,
+        expected === "completed" ? "complete" : "fail",
+        eventId,
+      ),
+      5_000,
+      `Zalouser ${expected} verdict for ${eventId}`,
+    ),
+  ).resolves.toBe(true);
+  const verdict = await queue.enqueue(eventId, {
+    version: 1,
+    receivedAt: 0,
+    rawMessage: "{}",
+  });
+  expect(verdict.kind).toBe(expected);
 }

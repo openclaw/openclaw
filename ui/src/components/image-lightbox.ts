@@ -1,6 +1,7 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, query, queryAll, state } from "lit/decorators.js";
+import { BROWSER_IMAGE_MIME_TYPES } from "../../../src/shared/browser-image-mime-types.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
@@ -14,14 +15,6 @@ import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
 import { imageLightboxStyles } from "./image-lightbox.styles.ts";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import "./modal-dialog.ts";
-
-const SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-]);
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -46,6 +39,24 @@ function mimeTypeEssence(value: string): string {
 function dataUrlMimeType(source: string): string | undefined {
   const mediaType = /^data:([^,]*)/i.exec(source)?.[1];
   return mediaType === undefined ? undefined : mimeTypeEssence(mediaType);
+}
+
+function renderLightboxAction(
+  className: string,
+  label: string,
+  disabled: boolean,
+  action: () => unknown,
+  content: string | TemplateResult,
+) {
+  return html`<button
+    class=${"action " + className}
+    type="button"
+    aria-label=${t(label)}
+    aria-disabled=${disabled}
+    @click=${action}
+  >
+    ${content}
+  </button>`;
 }
 
 class OpenClawImageLightbox extends OpenClawLitElement {
@@ -287,24 +298,8 @@ class OpenClawImageLightbox extends OpenClawLitElement {
           ${
             this.hasGallery
               ? html`
-                  <button
-                    class="action navigation previous"
-                    type="button"
-                    aria-label=${t(this.mediaKind === "video" ? "common.previous" : "chat.imageLightbox.previous")}
-                    aria-disabled=${!this.galleryController.canMove(-1) || this.galleryController.busy}
-                    @click=${() => this.navigate(-1)}
-                  >
-                    ${icons.chevronLeft}
-                  </button>
-                  <button
-                    class="action navigation next"
-                    type="button"
-                    aria-label=${t(this.mediaKind === "video" ? "common.next" : "chat.imageLightbox.next")}
-                    aria-disabled=${!this.galleryController.canMove(1) || this.galleryController.busy}
-                    @click=${() => this.navigate(1)}
-                  >
-                    ${icons.chevronRight}
-                  </button>
+                  ${renderLightboxAction("navigation previous", this.mediaKind === "video" ? "common.previous" : "chat.imageLightbox.previous", !this.galleryController.canMove(-1) || this.galleryController.busy, () => this.navigate(-1), icons.chevronLeft)}
+                  ${renderLightboxAction("navigation next", this.mediaKind === "video" ? "common.next" : "chat.imageLightbox.next", !this.galleryController.canMove(1) || this.galleryController.busy, () => this.navigate(1), icons.chevronRight)}
                   <p
                     class="gallery-counter"
                     dir="ltr"
@@ -329,33 +324,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
           ${
             this.mediaKind === "image"
               ? html`<div class="zoom-controls">
-                  <button
-                    class="action zoom-control"
-                    type="button"
-                    aria-label=${t("chat.imageLightbox.zoomOut")}
-                    aria-disabled=${!canZoom || this.scale <= 1}
-                    @click=${this.zoomOut}
-                  >
-                    −
-                  </button>
-                  <button
-                    class="action zoom-control zoom-level"
-                    type="button"
-                    aria-label=${t("chat.imageLightbox.resetZoom")}
-                    aria-disabled=${!canZoom || this.scale === 1}
-                    @click=${this.resetZoom}
-                  >
-                    ${Math.round(this.scale * 100)}%
-                  </button>
-                  <button
-                    class="action zoom-control"
-                    type="button"
-                    aria-label=${t("chat.imageLightbox.zoomIn")}
-                    aria-disabled=${!canZoom || this.scale >= MAX_SCALE}
-                    @click=${this.zoomIn}
-                  >
-                    +
-                  </button>
+                  ${renderLightboxAction("zoom-control", "chat.imageLightbox.zoomOut", !canZoom || this.scale <= 1, this.zoomOut, "−")}
+                  ${renderLightboxAction("zoom-control zoom-level", "chat.imageLightbox.resetZoom", !canZoom || this.scale === 1, this.resetZoom, html`${Math.round(this.scale * 100)}%`)}
+                  ${renderLightboxAction("zoom-control", "chat.imageLightbox.zoomIn", !canZoom || this.scale >= MAX_SCALE, this.zoomIn, "+")}
                 </div>`
               : nothing
           }
@@ -648,7 +619,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     const sourceType = isDataUrl ? dataUrlMimeType(source) : undefined;
     // Reject active data formats before fetching. Incoming blob URLs still need
     // their fetched MIME checked because top-level blobs inherit the app origin.
-    if (isDataUrl && (!sourceType || !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(sourceType))) {
+    if (isDataUrl && (!sourceType || !BROWSER_IMAGE_MIME_TYPES.has(sourceType))) {
       return;
     }
     this.resolvingOriginal = true;
@@ -658,7 +629,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       if (
         !this.isConnected ||
         request !== this.originalUrlRequest ||
-        !SAFE_TOP_LEVEL_IMAGE_BLOB_TYPES.has(mimeTypeEssence(blob.type))
+        !BROWSER_IMAGE_MIME_TYPES.has(mimeTypeEssence(blob.type))
       ) {
         return;
       }

@@ -19,10 +19,7 @@ import * as fixture from "./worker-turn-launcher.test-support.js";
 import { captureWorkspaceSnapshot } from "./workspace-manifest-worker.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
-import {
-  applyStagedWorkerWorkspaceResult,
-  workerWorkspaceResultStaging,
-} from "./workspace-result-staging.js";
+import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 
 const unexpected = (): never => {
   throw new Error("Unexpected shutdown recovery operation");
@@ -54,9 +51,9 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       path.join(request.plan.assignment.workspaceDir, "restart-proof.txt"),
       "slept-ok\n",
     );
-    fixture
-      .openSessionManager()
-      .appendMessage(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
+    await (
+      await fixture.openSessionManager()
+    ).appendMessageAsync(makeTextToolResult("sleep", "exec", "slept-ok", false, 1));
     edited.resolve();
     await finish.promise;
     return {
@@ -72,38 +69,40 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     environmentId: ENVIRONMENT_ID,
     ownerEpoch: OWNER_EPOCH,
     measureLaunchTurn: fixture.measureLaunchTurn,
+    readLaunchToolNames: fixture.readLaunchToolNames,
     launchTurn,
     runWorkspaceCommand: unexpected,
     syncWorkspace: unexpected,
     stop: unexpected,
     quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
     reconcileWorkspace: async ({ remoteWorkspaceDir, baseManifestRef, source }) => {
-      if (source.kind !== "local" || !source.stagedResult) {
+      if (source.kind !== "local") {
         throw new Error("Expected staged local result");
       }
       const current = await captureWorkspaceSnapshot({
         root: remoteWorkspaceDir,
         baseCommit: null,
       });
-      await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-        root: source.path,
+      const staged = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
+        request: {
+          localPath: source.path,
+          remoteWorkspaceDir,
+          baseManifestRef,
+          journal: source.journal,
+          assertCurrent: source.assertCurrent,
+          stagedResult: source.stagedResult,
+        },
         stagingRoot: remoteWorkspaceDir,
-        stagedResultRef: source.stagedResult.ref,
-        baseManifestRef,
         currentManifestRef: current.manifestRef,
         baseManifestRaw: base.rawManifest,
         currentManifestRaw: current.rawManifest,
-        assertCurrent: source.assertCurrent,
       });
-      source.stagedResult.record(source.stagedResult.ref);
-      const applied = await applyStagedWorkerWorkspaceResult({
-        root: source.path,
-        stagedResultRef: source.stagedResult.ref,
-        expectedBaseManifestRef: baseManifestRef,
-        journal: source.journal,
-        assertCurrent: source.assertCurrent,
-      });
-      return { ...applied, verifyStable: async () => {}, getAppliedWorkspaceResult: () => applied };
+      return {
+        manifestRef: current.manifestRef,
+        changed: current.manifestRef !== baseManifestRef,
+        verifyStable: async () => {},
+        ...staged,
+      };
     },
   };
   const environments = {
@@ -144,7 +143,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     if (!claim) {
       throw new Error("Expected live worker claim");
     }
-    expect(placements.listPendingWorkspaceResults()).toEqual([]); // No finishing ACK yet.
+    expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]); // No finishing ACK yet.
     await expect(fs.readFile(path.join(accepted, "restart-proof.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
@@ -160,14 +159,15 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
     resetGatewayWorkAdmission();
     const recovered = createWorkerSessionPlacementStore({ database });
     const published = vi.fn(async () => {
-      expect(recovered.listPendingWorkspaceResults()[0]?.workspaceAcceptedAtMs).toEqual(
-        expect.any(Number),
-      );
+      expect(
+        (await recovered.listPendingWorkspaceResultsAsync())[0]?.workspaceAcceptedAtMs,
+      ).toEqual(expect.any(Number));
     });
     const recovery = createPlacementRecoveryActions({
       placements: recovered,
       environments: {
         ...environments,
+        fenceWorkerTurnForRecovery: unexpected,
         reconcileEnvironment: async () => {},
         reconcileOnce: async () => {},
         supportsProviderExecutionMode: () => true,
@@ -188,7 +188,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
       "slept-ok\n",
     );
     expect(published).toHaveBeenCalledOnce();
-    expect(recovered.listPendingWorkspaceResults()).toEqual([]);
+    expect(await recovered.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(recovered.get(SESSION_ID)).toMatchObject({
       state: "active",
       turnClaim: null,

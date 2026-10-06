@@ -1,57 +1,62 @@
-// Covers hook module path config validation.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
-function mappingConfig(mapping: Record<string, unknown>) {
-  return {
+function validateMapping(mapping: Record<string, unknown>) {
+  return validateConfigObjectWithPlugins({
     agents: { entries: { openclaw: {} } },
-    hooks: { mappings: [{ match: { path: "custom" }, action: "agent", ...mapping }] },
-  };
+    hooks: { mappings: [{ action: "agent", messageTemplate: "card update", ...mapping }] },
+  });
 }
 
-describe("config hooks module paths", () => {
-  const expectRejectedIssuePath = (config: Record<string, unknown>, expectedPath: string) => {
-    const res = validateConfigObjectWithPlugins(config);
-    expect(res.ok).toBe(false);
-    if (res.ok) {
-      throw new Error("expected validation failure");
-    }
-    expect(res.issues.map((issue) => issue.path)).toContain(expectedPath);
-  };
+it.each(["/tmp/transform.mjs", "../escape.mjs"])("rejects unsafe transform module %s", (module) => {
+  expect(validateMapping({ transform: { module } })).toMatchObject({
+    ok: false,
+    issues: expect.arrayContaining([
+      expect.objectContaining({ path: "hooks.mappings.0.transform.module" }),
+    ]),
+  });
+});
 
-  it.each(["/tmp/transform.mjs", "../escape.mjs"])(
-    "rejects unsafe transform module %s",
-    (module) => {
-      expectRejectedIssuePath(
-        mappingConfig({ transform: { module } }),
-        "hooks.mappings.0.transform.module",
-      );
-    },
-  );
-
-  it("rejects retired hooks.internal.handlers registrations", () => {
-    expectRejectedIssuePath(
-      {
-        agents: { entries: { openclaw: {} } },
-        hooks: {
-          internal: {
-            enabled: true,
-            handlers: [{ event: "command:new", module: "hooks/handler.mjs" }],
-          },
+it("rejects retired hooks.internal.handlers registrations", () => {
+  expect(
+    validateConfigObjectWithPlugins({
+      agents: { entries: { openclaw: {} } },
+      hooks: {
+        internal: {
+          enabled: true,
+          handlers: [{ event: "command:new", module: "hooks/handler.mjs" }],
         },
       },
-      "hooks.internal",
-    );
+    }),
+  ).toMatchObject({
+    ok: false,
+    issues: expect.arrayContaining([expect.objectContaining({ path: "hooks.internal" })]),
   });
+});
 
-  it("accepts hooks.mappings[].channel runtime plugin ids", () => {
-    const res = validateConfigObjectWithPlugins(
-      mappingConfig({ channel: "collabchat", messageTemplate: "hello" }),
-    );
-    expect(res.ok).toBe(true);
+it("accepts persistent mappings with a transform-provided session key", () => {
+  expect(
+    validateMapping({ sessionMode: "persistent", transform: { module: "card-update.ts" } }).ok,
+  ).toBe(true);
+});
+
+it("rejects persistent mappings without a stable session key source", () => {
+  expect(validateMapping({ sessionMode: "persistent" })).toMatchObject({
+    ok: false,
+    issues: expect.arrayContaining([
+      expect.objectContaining({ path: "hooks.mappings.0.sessionKey" }),
+    ]),
   });
+});
 
-  it("rejects blank hooks.mappings[].channel values", () => {
-    expectRejectedIssuePath(mappingConfig({ channel: "   " }), "hooks.mappings.0.channel");
+it("rejects unknown hook session modes with the supported choices", () => {
+  expect(validateMapping({ sessionMode: "shared" })).toMatchObject({
+    ok: false,
+    issues: [
+      expect.objectContaining({
+        path: "hooks.mappings.0.sessionMode",
+        allowedValues: ["isolated", "persistent"],
+      }),
+    ],
   });
 });

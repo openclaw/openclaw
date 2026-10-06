@@ -655,30 +655,28 @@ describe("scanDirectoryWithSummary", () => {
       },
     },
     {
-      name: "scans only included files when onlyIncludeFiles is set",
+      name: "keeps other source files when entry files are explicitly included",
       files: {
         "entry.js": `export const ok = true;`,
         "scripts/harness.js": `const x = eval("hack");`,
       },
       options: {
         includeFiles: ["entry.js"],
-        onlyIncludeFiles: true,
       },
       expected: {
-        scannedFiles: 1,
-        findingCount: 0,
+        scannedFiles: 2,
+        findingCount: 1,
       },
     },
     {
-      name: "excludes test helper source when test files are excluded",
+      name: "scans test helpers alongside runtime source",
       files: {
         "runtime.ts": `export const ok = true;`,
         "worker.test-helper.ts": `import { spawn } from "node:child_process"; spawn("node");`,
       },
-      options: { excludeTestFiles: true },
       expected: {
-        scannedFiles: 1,
-        findingCount: 0,
+        scannedFiles: 2,
+        findingCount: 1,
       },
     },
   ];
@@ -841,7 +839,7 @@ describe("scanDirectoryWithSummary", () => {
       await fs.symlink(outside, path.join(root, "alias.js"));
       includeFiles.push("alias.js");
     }
-    const summary = await scanDirectoryWithSummary(root, { includeFiles, onlyIncludeFiles: true });
+    const summary = await scanDirectoryWithSummary(root, { includeFiles });
     expect(summary.scannedFiles).toBe(includeFiles.length);
     expect(summary.critical).toBe(includeFiles.length);
   });
@@ -914,10 +912,13 @@ describe("scanDirectoryWithSummary", () => {
     const root = makeTmpDir();
     const fixture = path.join(root, "asset.png");
     await fs.writeFile(fixture, "image");
-    const readDirectory = fs.readdir.bind(fs);
-    const readdir = vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-      const [entry] = await readDirectory(...args);
-      return Array.from({ length: 100_001 }, () => entry!);
+    const openDirectory = fs.opendir.bind(fs);
+    const opendir = vi.spyOn(fs, "opendir").mockImplementation(async (...args) => {
+      const directory = await openDirectory(...args);
+      const entry = await directory.read();
+      let remaining = 100_001;
+      directory.read = async () => (remaining-- > 0 ? entry : null);
+      return directory;
     });
     try {
       const summary = await scanDirectoryWithSummary(root);
@@ -925,7 +926,7 @@ describe("scanDirectoryWithSummary", () => {
       expect(summary.truncated).toBe(true);
       expect(summary.findings).toEqual([]);
     } finally {
-      readdir.mockRestore();
+      opendir.mockRestore();
     }
   });
 });

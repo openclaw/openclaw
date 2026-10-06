@@ -128,7 +128,10 @@ describe("status shared-state ownership", () => {
   }, 120_000);
 
   it("keeps healthy and unreachable Gateway degradation summaries empty", async () => {
-    const instance = await createOpenClawTestInstance({ name: "status-runtime-healthy" });
+    const instance = await createOpenClawTestInstance({
+      name: "status-runtime-healthy",
+      reserveIdlePort: false,
+    });
     try {
       await instance.startGateway();
       const healthy = await instance.cli(["status", "--json"]);
@@ -160,6 +163,7 @@ describe("status shared-state ownership", () => {
     async ({ name, args }) => {
       const instance = await createOpenClawTestInstance({
         name: `status-read-only-${name.replaceAll(" ", "-")}`,
+        reserveIdlePort: false,
       });
       const databasePath = path.join(instance.stateDir, "state", "openclaw.sqlite");
       try {

@@ -79,8 +79,19 @@ export function createCompactSplitTimingGeneration(params: CompactSplitTimingGen
   timingKeys: string[];
 } {
   const parentIncludePatterns = params.stripes.flat();
-  if (new Set(parentIncludePatterns).size !== parentIncludePatterns.length) {
-    throw new Error(`split timing generation repeats files for ${params.parentShardName}`);
+  const fileOwners = new Map<string, number>();
+  for (const [index, files] of params.stripes.entries()) {
+    const stripe = index + 1;
+    for (const file of files) {
+      const previousStripe = fileOwners.get(file);
+      if (previousStripe !== undefined) {
+        throw new Error(
+          `duplicate test ownership for ${file} in ${params.parentShardName} ` +
+            `(configs: ${params.configs.join(", ")}; stripes: ${previousStripe} and ${stripe})`,
+        );
+      }
+      fileOwners.set(file, stripe);
+    }
   }
   const selector = JSON.stringify({
     configs: [...params.configs],
@@ -188,7 +199,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/commands/doctor-lint.state-isolation.test.ts", 32.5],
   ["src/commands/doctor-lint.test.ts", 26.9],
   ["src/commands/doctor-maintenance.finish-revalidation.test.ts", 23.3],
-  ["src/commands/doctor-plugin-install-config.process.test.ts", 53.1],
   ["src/commands/doctor-session-sqlite.deferred-plugin.test.ts", 31],
   ["src/commands/doctor-session-sqlite.memory.test.ts", 45.1],
   ["src/commands/doctor-state-migrations.test.ts", 20.4],
@@ -295,7 +305,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/agents/worktrees/service.diagnostics.test.ts", 18],
   ["src/agents/worktrees/service.naming.test.ts", 10],
   ["src/agents/worktrees/service.provisioned.test.ts", 24],
-  ["src/agents/worktrees/service.run-end-cleanup.test.ts", 11],
   // Storage-state stripe anchors: CI checkmark walls from compact run
   // 31814517685; without them the hosted split packs all three fat files
   // into one stripe (observed 204s vs the ~90s target in run 31856622489).
@@ -318,6 +327,18 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/scripts/bundled-plugin-install-uninstall-probe.test.ts", 4],
   ["test/scripts/changed-lanes.test.ts", 5],
   // Updated process-fixture walls include imports/setup from run 33364935118.
+  // Preserved case maxima from PR runs 36394634707, 36394423189 and
+  // 36394835419, plus 20s for each newly split file's process/import overhead.
+  // Policy retains the tooling-owner table; process owners also cover leaf configs.
+  // Keep cold projections until complete split-file CI walls arrive.
+  ["test/scripts/ci-changed-node-test-plan.test.ts", 143],
+  ["test/scripts/ci-changed-node-test-plan.source-owners.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.policy.test.ts", 130],
+  // Two-CPU / 7.65-GiB native replay took 146.24s plus the outer shard wrapper.
+  ["test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts", 148],
+  ["test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.config-fallback.test.ts", 130],
+  ["test/scripts/ci-changed-node-test-plan.process-owners.test.ts", 143],
   ["test/scripts/ci-git-owner.test.ts", 187],
   // Blacksmith PR runs 33532741896/33545657559 recorded 127.288s/135.808s wrapper
   // spans; canonical push plans omit this tooling workload.

@@ -1,8 +1,3 @@
-/**
- * transcripts built-in tool.
- *
- * Manages live capture, manual import, summarization, and process-local transcript sessions.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
@@ -14,10 +9,12 @@ import {
   exportTranscriptSummary,
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
-import { assertTranscriptCaptureEnabled } from "../../transcripts/capture-startup.js";
-import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
 import {
   activeSessions,
+  assertTranscriptCaptureEnabled,
+} from "../../transcripts/capture-startup.js";
+import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
+import {
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
@@ -145,6 +142,7 @@ async function importTranscripts(params: {
     await params.store.appendUtteranceForSession(session, utterance);
   }
   const persisted = await persistTranscriptSummary({
+    stateDir: params.ctx.stateDir,
     config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
     cfg: params.ctx.config,
     store: params.store,
@@ -196,6 +194,7 @@ async function summarizeExisting(params: {
   try {
     persisted = await persistTranscriptSummary({
       ...params,
+      stateDir: params.ctx.stateDir,
       cfg: params.ctx.config,
       session,
       expectedInputRevision: selection.historicalRevision,
@@ -337,11 +336,8 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   );
 }
 
-/** Create the agent-facing transcripts tool. */
 export function createTranscriptsTool(options?: {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
   config?: OpenClawConfig;
@@ -353,8 +349,6 @@ export function createTranscriptsTool(options?: {
     stateDir: options?.stateDir ?? resolveStateDir(),
     logger: options?.logger ?? console,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
-    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
     ...(options?.caller ? { caller: options.caller } : {}),
     ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };

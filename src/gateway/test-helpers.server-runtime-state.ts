@@ -40,7 +40,7 @@ export async function createGatewayRuntimeStateForTest(
   };
   const connectionState = createGatewayConnectionState({ ...params, bootId: randomUUID() });
   onTestFinished(async () => {
-    connectionState.mentionInbox.dispose();
+    await connectionState.mentionInbox.dispose();
     await params.scheduler.stop();
   });
   const httpTransport = await createGatewayHttpTransport({

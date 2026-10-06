@@ -1,4 +1,3 @@
-// Doctor runtime checks inspect provider catalogs, local audio, and Gateway services.
 import { formatUnsupportedNodeVersionMessage } from "../../node-version.mjs";
 import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
@@ -6,12 +5,12 @@ import { collectUnavailableAgentSkills } from "../commands/doctor-skills-core.js
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isNodeRuntime } from "../daemon/runtime-binary.js";
 import { resolveNodeRuntimeInfo } from "../daemon/runtime-paths.js";
-import {
-  getSystemdCgroupHygieneSummary,
-  type GatewayServiceRuntime,
-} from "../daemon/service-runtime.js";
+import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
+import { getSystemdCgroupHygieneSummary } from "../daemon/service-runtime.js";
 import { resolveGatewayService, readGatewayServiceState } from "../daemon/service.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../infra/install-owner.js";
+import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
@@ -63,10 +62,6 @@ export async function collectLocalAudioAccelerationFindings(): Promise<readonly 
   ];
 }
 
-function gatewayRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | undefined {
-  return runtime?.status ?? runtime?.state ?? runtime?.subState;
-}
-
 export async function collectGatewayDaemonFindings(
   ctx: Pick<HealthCheckContext, "cfg">,
 ): Promise<readonly HealthFinding[]> {
@@ -75,6 +70,11 @@ export async function collectGatewayDaemonFindings(
   }
   const service = resolveGatewayService();
   const state = await readGatewayServiceState(service, { env: process.env });
+  const layout = await summarizeGatewayServiceLayout(state.command);
+  const serviceOwner = await readInstallOwner(
+    layout?.packageRootReal ?? layout?.packageRoot ?? null,
+  );
+  const ownerHint = serviceOwner ? formatInstallOwnerMessage(serviceOwner) : undefined;
   const findings: HealthFinding[] = [];
   if (state.loadState.status === "unknown") {
     findings.push({
@@ -84,12 +84,26 @@ export async function collectGatewayDaemonFindings(
       path: state.command?.sourcePath,
       target: service.label,
       fixHint:
+        ownerHint ??
         service.unsupportedReason ??
         "Run `openclaw gateway status --deep`, restore service-manager access, and retry.",
     });
     return findings;
   }
   if (!state.installed) {
+    const owner = await readInstallOwner(
+      await resolveOpenClawPackageRoot({ moduleUrl: import.meta.url, argv1: process.argv[1] }),
+    );
+    if (owner) {
+      return [
+        {
+          checkId: "core/doctor/gateway-daemon",
+          severity: "info",
+          message: formatInstallOwnerMessage(owner),
+          target: owner.displayName,
+        },
+      ];
+    }
     findings.push({
       checkId: "core/doctor/gateway-daemon",
       severity: "warning",
@@ -116,12 +130,14 @@ export async function collectGatewayDaemonFindings(
         target: nodePath,
         ...(runtime.status !== "supported"
           ? {
-              fixHint: [
-                ...(runtime.status === "unsupported"
-                  ? [formatUnsupportedNodeVersionMessage(runtime.version)]
-                  : []),
-                "Repair the Node runtime, then run `openclaw gateway install`.",
-              ].join("\n"),
+              fixHint:
+                ownerHint ??
+                [
+                  ...(runtime.status === "unsupported"
+                    ? [formatUnsupportedNodeVersionMessage(runtime.version)]
+                    : []),
+                  "Repair the Node runtime, then run `openclaw gateway install`.",
+                ].join("\n"),
             }
           : {}),
       });
@@ -134,10 +150,11 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service is installed but not loaded.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: "Start the installed service with `openclaw gateway start`.",
+      fixHint: ownerHint ?? "Start the installed service with `openclaw gateway start`.",
     });
   }
-  const status = gatewayRuntimeStatus(state.runtime);
+  const runtime = state.runtime;
+  const status = runtime?.status ?? runtime?.state ?? runtime?.subState;
   if (state.loadState.status === "loaded" && !state.running) {
     findings.push({
       checkId: "core/doctor/gateway-daemon",
@@ -168,7 +185,7 @@ export async function collectGatewayDaemonFindings(
       message: "Gateway service supervision metadata is missing.",
       path: state.command?.sourcePath,
       target: service.label,
-      fixHint: state.runtime.detail ?? "Reinstall or reload the Gateway service.",
+      fixHint: ownerHint ?? state.runtime.detail ?? "Reinstall or reload the Gateway service.",
     });
   }
   const hygiene = getSystemdCgroupHygieneSummary(state.runtime?.systemd);
@@ -209,26 +226,6 @@ function isReadableRecord(value: unknown): value is Record<string, unknown> {
 
 function isTrimmedNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim() === value && value.length > 0;
-}
-
-function hasProviderCatalogKey(params: {
-  value: Record<string, unknown>;
-  key: string;
-  providerId: string;
-  pluginId?: string;
-}): { ok: true; present: boolean } | { ok: false; finding: HealthFinding } {
-  try {
-    return { ok: true, present: params.key in params.value };
-  } catch (error) {
-    return {
-      ok: false,
-      finding: providerCatalogProjectionFinding(
-        params,
-        `Provider catalog ${params.providerId} result keys cannot be checked during doctor validation.`,
-        error,
-      ),
-    };
-  }
 }
 
 function readProviderCatalogValue(params: {
@@ -281,14 +278,9 @@ function collectProviderCatalogModelFindings(params: {
       ),
     ];
   }
-  let modelEntries: Array<[number, unknown]>;
+  let modelEntries: unknown[];
   try {
-    modelEntries = [];
-    let index = 0;
-    for (const model of models) {
-      modelEntries.push([index, model]);
-      index += 1;
-    }
+    modelEntries = [...models];
   } catch (error) {
     return [
       providerCatalogProjectionFinding(
@@ -298,42 +290,34 @@ function collectProviderCatalogModelFindings(params: {
       ),
     ];
   }
-  for (const [index, model] of modelEntries) {
-    const modelId = readProviderCatalogValue({
-      value: model,
-      key: "id",
-      providerId: params.providerId,
-      pluginId: params.pluginId,
-    });
-    if (!modelId.ok) {
-      findings.push(modelId.finding);
-      continue;
-    }
-    if (!isTrimmedNonEmptyString(modelId.value)) {
+  for (const [index, model] of modelEntries.entries()) {
+    try {
+      const modelId = isReadableRecord(model) ? model.id : undefined;
+      if (!isTrimmedNonEmptyString(modelId)) {
+        findings.push(
+          providerCatalogProjectionFinding(
+            params,
+            `Provider catalog ${params.providerId} model row ${index} has an invalid model id.`,
+            new Error("model id must be a non-empty trimmed string"),
+          ),
+        );
+      }
+      const modelName = isReadableRecord(model) ? model.name : undefined;
+      if (modelName !== undefined && typeof modelName !== "string") {
+        findings.push(
+          providerCatalogProjectionFinding(
+            params,
+            `Provider catalog ${params.providerId} model row ${index} has an invalid model name.`,
+            new Error("model name must be a string when present"),
+          ),
+        );
+      }
+    } catch (error) {
       findings.push(
         providerCatalogProjectionFinding(
           params,
-          `Provider catalog ${params.providerId} model row ${index} has an invalid model id.`,
-          new Error("model id must be a non-empty trimmed string"),
-        ),
-      );
-    }
-    const modelName = readProviderCatalogValue({
-      value: model,
-      key: "name",
-      providerId: params.providerId,
-      pluginId: params.pluginId,
-    });
-    if (!modelName.ok) {
-      findings.push(modelName.finding);
-      continue;
-    }
-    if (modelName.value !== undefined && typeof modelName.value !== "string") {
-      findings.push(
-        providerCatalogProjectionFinding(
-          params,
-          `Provider catalog ${params.providerId} model row ${index} has an invalid model name.`,
-          new Error("model name must be a string when present"),
+          `Provider catalog ${params.providerId} entry cannot be read during doctor validation.`,
+          error,
         ),
       );
     }
@@ -358,14 +342,17 @@ function collectProviderCatalogResultFindings(params: {
       ),
     ];
   }
-  const hasProvider = hasProviderCatalogKey({
-    value: params.result,
-    key: "provider",
-    providerId: params.providerId,
-    pluginId: params.pluginId,
-  });
-  if (!hasProvider.ok) {
-    return [hasProvider.finding];
+  let hasProvider: boolean;
+  try {
+    hasProvider = "provider" in params.result;
+  } catch (error) {
+    return [
+      providerCatalogProjectionFinding(
+        params,
+        `Provider catalog ${params.providerId} result keys cannot be checked during doctor validation.`,
+        error,
+      ),
+    ];
   }
   const provider = readProviderCatalogValue({
     value: params.result,
@@ -376,7 +363,7 @@ function collectProviderCatalogResultFindings(params: {
   if (!provider.ok) {
     return [provider.finding];
   }
-  if (hasProvider.present && !isReadableRecord(provider.value)) {
+  if (hasProvider && !isReadableRecord(provider.value)) {
     return [
       providerCatalogProjectionFinding(
         params,
@@ -478,35 +465,6 @@ function collectProviderCatalogResultFindings(params: {
   return findings;
 }
 
-function readProviderCatalogOrder(
-  provider: ProviderPlugin,
-): { ok: true; order: ProviderCatalogOrder } | { ok: false; finding: HealthFinding } {
-  let order: unknown;
-  try {
-    order = provider.staticCatalog?.order ?? "late";
-  } catch (error) {
-    return {
-      ok: false,
-      finding: providerCatalogProjectionFinding(
-        { providerId: provider.id, pluginId: provider.pluginId },
-        `Provider catalog ${provider.id} order cannot be read during doctor validation.`,
-        error,
-      ),
-    };
-  }
-  if (PROVIDER_CATALOG_ORDER_SET.has(order as ProviderCatalogOrder)) {
-    return { ok: true, order: order as ProviderCatalogOrder };
-  }
-  return {
-    ok: false,
-    finding: providerCatalogProjectionFinding(
-      { providerId: provider.id, pluginId: provider.pluginId },
-      `Provider catalog ${provider.id} order is invalid during doctor validation.`,
-      new Error("order must be simple, profile, paired, or late"),
-    ),
-  };
-}
-
 function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
   findings: HealthFinding[];
   byOrder: Record<ProviderCatalogOrder, ProviderPlugin[]>;
@@ -519,13 +477,30 @@ function groupProviderCatalogsForDoctor(providers: readonly ProviderPlugin[]): {
     late: [],
   };
   for (const provider of providers) {
-    const order = readProviderCatalogOrder(provider);
-    if (!order.ok) {
-      findings.push(order.finding);
-      byOrder.late.push(provider);
-      continue;
+    let order: ProviderCatalogOrder = "late";
+    try {
+      const declaredOrder = provider.staticCatalog?.order ?? "late";
+      if (PROVIDER_CATALOG_ORDER_SET.has(declaredOrder)) {
+        order = declaredOrder;
+      } else {
+        findings.push(
+          providerCatalogProjectionFinding(
+            { providerId: provider.id, pluginId: provider.pluginId },
+            `Provider catalog ${provider.id} order is invalid during doctor validation.`,
+            new Error("order must be simple, profile, paired, or late"),
+          ),
+        );
+      }
+    } catch (error) {
+      findings.push(
+        providerCatalogProjectionFinding(
+          { providerId: provider.id, pluginId: provider.pluginId },
+          `Provider catalog ${provider.id} order cannot be read during doctor validation.`,
+          error,
+        ),
+      );
     }
-    byOrder[order.order].push(provider);
+    byOrder[order].push(provider);
   }
   for (const order of PROVIDER_CATALOG_ORDERS) {
     byOrder[order].sort((a, b) => a.label.localeCompare(b.label));

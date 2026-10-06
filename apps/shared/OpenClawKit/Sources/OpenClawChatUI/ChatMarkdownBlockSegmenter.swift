@@ -64,10 +64,7 @@ struct ChatMarkdownList: Equatable {
 }
 
 struct ChatMarkdownListItem: Equatable {
-    enum Checkbox: Equatable {
-        case checked
-        case unchecked
-    }
+    typealias Checkbox = Markdown.Checkbox
 
     let checkbox: Checkbox?
     let content: [ChatMarkdownListItemContent]
@@ -895,11 +892,6 @@ enum ChatMarkdownBlockSegmenter {
             itemCount += 1
             guard itemCount <= self.maxListItems else { return nil }
 
-            let checkbox: ChatMarkdownListItem.Checkbox? = switch item.checkbox {
-            case .checked?: .checked
-            case .unchecked?: .unchecked
-            case nil: nil
-            }
             var content: [ChatMarkdownListItemContent] = []
             for child in item.children {
                 if let code = child as? Markdown.CodeBlock {
@@ -926,7 +918,7 @@ enum ChatMarkdownBlockSegmenter {
                     content.append(.markdown(markdown))
                 }
             }
-            renderedItems.append(ChatMarkdownListItem(checkbox: checkbox, content: content))
+            renderedItems.append(ChatMarkdownListItem(checkbox: item.checkbox, content: content))
         }
         return ChatMarkdownList(kind: kind, items: renderedItems)
     }
@@ -1089,19 +1081,15 @@ enum ChatMarkdownBlockSegmenter {
         func tableLineRange(reportedRange: Range<Int>, columnCount: Int) -> Range<Int> {
             guard reportedRange.count > 1 else { return reportedRange }
             for delimiterIndex in reportedRange.dropFirst().indices
-                where self.isTableDelimiter(self.lines[delimiterIndex], columnCount: columnCount)
+                where self.isTableDelimiter(at: delimiterIndex, columnCount: columnCount)
             {
                 return reportedRange.index(before: delimiterIndex)..<reportedRange.upperBound
             }
             return reportedRange
         }
 
-        private func isTableDelimiter(_ line: String, columnCount: Int) -> Bool {
-            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            var cells = trimmedLine.split(separator: "|", omittingEmptySubsequences: false)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-            if trimmedLine.hasPrefix("|"), cells.first?.isEmpty == true { cells.removeFirst() }
-            if trimmedLine.hasSuffix("|"), cells.last?.isEmpty == true { cells.removeLast() }
+        private func isTableDelimiter(at lineIndex: Int, columnCount: Int) -> Bool {
+            let cells = self.tableCells(at: lineIndex)
             return cells.count == columnCount && cells.allSatisfy {
                 $0.range(of: #"^:?-+:?$"#, options: .regularExpression) != nil
             }

@@ -38,19 +38,10 @@ export function shouldPrintHelp(argv: readonly string[]): boolean {
     if (arg === "--") {
       return false;
     }
-    if (arg === "--limit") {
-      const value = argv[index + 1];
+    if (arg === "--limit" || arg.startsWith("--limit=")) {
       try {
+        const value = arg === "--limit" ? argv[++index] : arg.slice("--limit=".length);
         parsePositiveInt(value ?? "", "--limit");
-      } catch {
-        return false;
-      }
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith("--limit=")) {
-      try {
-        parsePositiveInt(arg.slice("--limit=".length), "--limit");
       } catch {
         return false;
       }
@@ -193,18 +184,12 @@ function main(): void {
     console.log(usage());
     return;
   }
-  let options: { files: string[]; limit: number };
   try {
-    options = parseArgs(process.argv.slice(2));
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
-  if (options.files.length === 0) {
-    console.error(usage());
-    process.exit(2);
-  }
-  try {
+    const options = parseArgs(process.argv.slice(2));
+    if (options.files.length === 0) {
+      console.error(usage());
+      process.exit(2);
+    }
     for (const file of options.files) {
       summarizeProfile(file, options.limit);
     }

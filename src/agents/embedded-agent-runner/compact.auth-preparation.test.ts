@@ -1,13 +1,14 @@
-import { realpath } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, expect, it, onTestFinished, vi } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { installSessionPlacementAdmissionProvider } from "../session-placement-admission.js";
 import {
   contextEngineCompactMock,
   getApiKeyForModelMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
+  resolveContextEngineMock,
   resolveModelMock,
   sessionCompactImpl,
 } from "./compact.hooks.harness.js";
@@ -16,26 +17,19 @@ const { compactEmbeddedAgentSession, compactEmbeddedAgentSessionDirect } =
   await loadCompactHooksHarness();
 const [
   { upsertSessionEntryCore },
-  { closeOpenClawAgentDatabasesForTest },
   { ensureAuthProfileStoreWithoutExternalProfiles },
   { AsyncWorkScope },
   { prepareProviderRuntimeAuth },
 ] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
-  import("../../state/openclaw-agent-db.js"),
   import("../model-auth.js"),
   import("../../shared/async-work-scope.js"),
   import("../../plugins/provider-runtime.js"),
 ]);
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    cleanup();
-  }),
-);
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-auth-");
 
 async function prepareCompactionParams() {
-  const workspaceDir = await realpath(tempDirs.make("openclaw-compaction-auth-"));
+  const workspaceDir = tempDirs.make();
   resetCompactHooksHarnessMocks(workspaceDir);
   const sessionTarget = {
     agentId: "main",
@@ -117,6 +111,60 @@ it.each(["lookup", "hook", "allowed"] as const)(
           stage === "allowed" ? 1 : 0,
         );
       }
+    }
+  },
+);
+
+it.each([false, true])(
+  "retains sandbox placement through queued engine preparation (revoked=%s)",
+  async (revoke) => {
+    const baseParams = await prepareCompactionParams();
+    let revoked = false;
+    const dispose = vi.fn();
+    const provider = {
+      async prepareSandbox() {
+        return {
+          sandbox: null,
+          assertCurrent() {
+            if (revoked) {
+              throw new Error("placement revoked during engine preparation");
+            }
+          },
+          [Symbol.dispose]: dispose,
+        };
+      },
+    };
+    const uninstall = installSessionPlacementAdmissionProvider({
+      ...provider,
+      assertCompactionSuccessorAllowed() {},
+      executeLocalTurn: async (_claim, run) => await run(),
+      executeTurn: async (_claim, _params, run) => await run(),
+    });
+    resolveContextEngineMock.mockImplementation(async () => {
+      revoked = revoke;
+      return { info: { ownsCompaction: true }, compact: contextEngineCompactMock };
+    });
+    try {
+      const operation = runOwnedCompaction(() =>
+        compactEmbeddedAgentSession({
+          ...baseParams,
+          provider: "openai",
+          model: "gpt-primary",
+          trigger: "manual",
+          enqueue: async (task) => await task(),
+        }),
+      );
+      if (revoke) {
+        await expect(operation).rejects.toThrow("placement revoked during engine preparation");
+        expect(contextEngineCompactMock).not.toHaveBeenCalled();
+      } else {
+        await operation;
+        expect(contextEngineCompactMock).toHaveBeenCalledOnce();
+      }
+      expect(resolveContextEngineMock).toHaveBeenCalled();
+      expect(dispose).toHaveBeenCalledOnce();
+    } finally {
+      uninstall();
     }
   },
 );

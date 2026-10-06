@@ -1,9 +1,9 @@
 package ai.openclaw.app.node
 
+import ai.openclaw.app.hasPermission
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.camera2.CameraCharacteristics
@@ -22,7 +22,6 @@ import androidx.camera.video.Recorder
 import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
-import androidx.core.content.ContextCompat.checkSelfPermission
 import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
 import androidx.lifecycle.Lifecycle
@@ -154,14 +153,12 @@ class CameraCaptureManager(
     }
 
   private fun ensureCameraPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
+    if (context.hasPermission(Manifest.permission.CAMERA)) return
     throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
   }
 
   private fun ensureMicPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (granted) return
+    if (context.hasPermission(Manifest.permission.RECORD_AUDIO)) return
     throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
   }
 
@@ -228,7 +225,7 @@ class CameraCaptureManager(
       val params = parseJsonParamsObject(paramsJson)
       val facing = resolveCameraFacing(parseFacing(params), defaultFacing())
       val quality = (parseJsonDouble(params, "quality") ?: 0.95).coerceIn(0.1, 1.0)
-      val maxWidth = parseMaxWidth(params) ?: 1600
+      val maxWidth = parseJsonInt(params, "maxWidth")?.takeIf { it > 0 } ?: 1600
       val deviceId = parseDeviceId(params)
 
       val provider = context.cameraProvider()
@@ -242,7 +239,7 @@ class CameraCaptureManager(
           // A failed bind can still attach a use case; release only this request's capture.
           provider.bindToLifecycle(owner, selector, capture)
           ensureCurrent()
-          capture.takeJpegWithExif(context.mainExecutor(), context.cacheDir)
+          capture.takeJpegWithExif(ContextCompat.getMainExecutor(context), context.cacheDir)
         } finally {
           // The JPEG bytes are self-contained; release CameraX before decoding and recompressing them.
           provider.unbind(capture)
@@ -256,7 +253,7 @@ class CameraCaptureManager(
               ?: throw IllegalStateException("UNAVAILABLE: failed to decode captured image")
           val rotated = JpegSizeLimiter.normalizeOrientation(decoded, orientation)
           val scaled =
-            if (maxWidth > 0 && rotated.width > maxWidth) {
+            if (rotated.width > maxWidth) {
               val h =
                 (rotated.height.toDouble() * (maxWidth.toDouble() / rotated.width.toDouble()))
                   .toInt()
@@ -344,7 +341,7 @@ class CameraCaptureManager(
         val surfaceTexture = android.graphics.SurfaceTexture(0)
         surfaceTexture.setDefaultBufferSize(640, 480)
         val surface = android.view.Surface(surfaceTexture)
-        request.provideSurface(surface, context.mainExecutor()) {
+        request.provideSurface(surface, ContextCompat.getMainExecutor(context)) {
           surface.release()
           surfaceTexture.release()
         }
@@ -371,7 +368,7 @@ class CameraCaptureManager(
             .prepareRecording(context, outputOptions)
             .apply {
               if (includeAudio) withAudioEnabled()
-            }.start(context.mainExecutor()) { event ->
+            }.start(ContextCompat.getMainExecutor(context)) { event ->
               if (event is VideoRecordEvent.Finalize) {
                 finalized.complete(event)
               }
@@ -408,16 +405,10 @@ class CameraCaptureManager(
     }
   }
 
-  private fun parseMaxWidth(params: JsonObject?): Int? =
-    parseJsonInt(params, "maxWidth")
-      ?.takeIf { it > 0 }
-
   private fun parseDeviceId(params: JsonObject?): String? =
     parseJsonString(params, "deviceId")
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
-
-  private fun Context.mainExecutor(): Executor = ContextCompat.getMainExecutor(this)
 
   private fun resolveCameraSelector(
     provider: ProcessCameraProvider,

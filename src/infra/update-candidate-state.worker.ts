@@ -1,5 +1,7 @@
-import { collectErrorGraphCandidates, formatErrorMessageWithCode } from "./errors.js";
-import { createUpdateStateInspectionReporter } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateInspectionReporter,
+  formatUpdateStateInspectionError,
+} from "./update-candidate-state.diagnostics.js";
 import {
   discoverUpdateStateSchemaInspectionInProcess,
   readUpdateCandidateStateInventoryInProcess,
@@ -29,8 +31,16 @@ async function snapshotCandidateState(): Promise<unknown> {
     | (Parameters<
         typeof import("./update-database-backup.js").createUpdateDatabaseBackupInProcess
       >[0] & { mode: "database-backup" })
+    | (Parameters<
+        typeof import("./update-database-restore-source.js").prepareUpdateDatabaseRestoreSourceInProcess
+      >[0] & { mode: "database-restore-preparation" })
     | { mode: "database-generations"; paths: string[] };
   switch (input.mode) {
+    case "database-restore-preparation": {
+      const { prepareUpdateDatabaseRestoreSourceInProcess } =
+        await import("./update-database-restore-source.js");
+      return prepareUpdateDatabaseRestoreSourceInProcess(input);
+    }
     case "database-generations": {
       const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
       return readUpdateDatabaseGenerations(input.paths);
@@ -72,11 +82,6 @@ async function snapshotCandidateState(): Promise<unknown> {
 void snapshotCandidateState()
   .then((value) => process.stdout.write(JSON.stringify(value)))
   .catch((error: unknown) => {
-    process.stderr.write(formatErrorMessageWithCode(error));
-    const causes = collectErrorGraphCandidates(error, (current) => [current.cause]);
-    if (causes.length > 1) {
-      // The update ledger retains the final diagnostic line within its existing bound.
-      process.stderr.write(`\nCaused by: ${formatErrorMessageWithCode(causes.at(-1))}`);
-    }
+    process.stderr.write(formatUpdateStateInspectionError(error));
     process.exitCode = 1;
   });

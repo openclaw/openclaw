@@ -1,18 +1,10 @@
-/** Diagnostic helpers for embedded-agent compaction. */
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { isRealConversationMessage } from "../compaction-real-conversation.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { estimateTokens } from "../sessions/index.js";
-import type { CompactionMessageMetrics } from "./compact.types.js";
 
 export function createDirectCompactionDiagId(): string {
   return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
-}
-
-export function normalizeObservedTokenCount(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -37,7 +29,7 @@ function resolveMessageToolLabel(msg: AgentMessage): string | undefined {
   return typeof candidate === "string" && candidate.trim().length > 0 ? candidate : undefined;
 }
 
-export function summarizeCompactionMessages(messages: AgentMessage[]): CompactionMessageMetrics {
+export function summarizeCompactionMessages(messages: AgentMessage[]) {
   let historyTextChars = 0;
   let toolResultChars = 0;
   const contributors: Array<{ role: string; chars: number; tool?: string }> = [];

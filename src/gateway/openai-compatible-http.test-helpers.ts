@@ -1,8 +1,10 @@
 /**
  * OpenAI-compatible HTTP gateway startup helper for tests.
  */
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { TestPortClaim } from "../test-utils/port-claims.js";
-import { startClaimedGateway } from "./test-helpers.listener.js";
+import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.js";
+import { reserveGatewayTestListener, startClaimedGateway } from "./test-helpers.listener.js";
 
 type StartGatewayServer = typeof import("./server.js").startGatewayServer;
 type GatewayServerOptions = NonNullable<Parameters<StartGatewayServer>[1]>;
@@ -14,12 +16,22 @@ export async function startOpenAiCompatGatewayServer(options: {
   auth: GatewayServerOptions["auth"];
   openAiChatCompletionsEnabled?: boolean;
 }) {
-  return await startClaimedGateway(options.port, () =>
-    options.startGatewayServer(options.port.port, {
-      host: "127.0.0.1",
-      auth: options.auth,
-      controlUiEnabled: false,
-      openAiChatCompletionsEnabled: options.openAiChatCompletionsEnabled ?? false,
-    }),
-  );
+  gatewayFixtureLifetime.assertAdmission();
+  return await gatewayFixtureLifetime.ownServer(async () => {
+    const reservation = await reserveGatewayTestListener(options.port);
+    return await runQaGatewayFixture(
+      () =>
+        reservation.start(() =>
+          startClaimedGateway({ port: reservation.port, release: reservation.closeUnadopted }, () =>
+            options.startGatewayServer(reservation.port, {
+              host: "127.0.0.1",
+              auth: options.auth,
+              controlUiEnabled: false,
+              openAiChatCompletionsEnabled: options.openAiChatCompletionsEnabled ?? false,
+            }),
+          ),
+        ),
+      reservation.closeUnadopted,
+    );
+  }, process.env.HOME);
 }

@@ -37,7 +37,7 @@ This check finishes before OpenClaw injects history, starts a turn, or commits a
 thread binding. If the snapshot request fails, persistent provisional threads
 are deleted and ephemeral threads are unsubscribed. OpenClaw retires the app-server connection when safe
 cleanup cannot be confirmed. Supervised branches also clean up their temporary
-probe and preserve recovery state if cleanup fails.
+check and preserve recovery state if cleanup fails.
 
 Account-wide app access cannot override an explicitly disabled configured
 workspace plugin. OpenClaw uses its installed snapshot and reads only that
@@ -66,9 +66,9 @@ catalogs, persona files, memory-provider instructions, and tool-routed `MEMORY.m
 are appended to the parent model request instructions by a private inference
 relay. Native base and catalog instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
-native subagents. Connections without that relay carry the eligible skill catalog
+native subagents. Connections without that relay carry eligible skills, persona, and memory
 in thread developer instructions instead, preserving delivery when the model
-owns collaboration-mode instructions. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
 for fallback refresh and inheritance semantics. Active `BOOTSTRAP.md` and, when memory tools are unavailable,
 bounded `MEMORY.md` content travel as plain turn input references. They are
 introduced on a new native thread, after a cold resume or native compaction,
@@ -83,11 +83,8 @@ legacy memory tool names or workspace-file routing.
 
 Custom commands, Desktop proxy attachments, external Unix/WebSocket app-server
 connections, non-OpenAI native providers, custom upstream endpoints, unsupported
-native accounts, locked upstreams, and native `features.respect_system_proxy` profiles retain their existing
-collaboration carrier. Managed relay requests use the Gateway's HTTP(S) proxy
-and TLS configuration instead of changing native networking settings. OpenClaw reports that
-the parent-local workaround is unavailable there rather than replacing another
-application's live configuration. Existing history, including any older embedded
+native accounts, locked upstreams, and native `features.respect_system_proxy` profiles use the thread developer carrier. Managed relay requests use the Gateway's HTTP(S) proxy
+and TLS configuration instead of changing native networking settings. OpenClaw leaves the native network and account configuration unchanged. Existing history, including any older embedded
 persona or explicitly shared task text, is preserved; this is not a retroactive
 history scrub. See [Workspace bootstrap files](/plugins/codex-harness-reference#workspace-bootstrap-files).
 

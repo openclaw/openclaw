@@ -11,7 +11,6 @@ import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
-  now: () => number;
   retryDelaysMs?: readonly number[];
   maxRetries?: number;
   isCurrentChild: (child: ChildState) => boolean;
@@ -98,11 +97,7 @@ export class CodexNativeSubagentCompletionDelivery {
         replyInstruction:
           "Use the Codex native subagent result to continue or wrap up the parent task. If this is a Discord/channel session, send the visible response with the message tool instead of only writing a transcript final answer. Reply in your normal assistant voice and do not expose internal notification markup.",
       });
-      if (
-        !this.dependencies.isCurrentChild(childState) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state)
-      ) {
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       // Keep accepted delivery before a fallible ownership read. A retry cannot
@@ -114,11 +109,7 @@ export class CodexNativeSubagentCompletionDelivery {
         this.prepareDelivery(state, childState);
         return;
       }
-      if (!this.claim(state, childState)) {
-        this.dependencies.unregisterChild(childState);
-        return;
-      }
-      if (delivery.recoveryBlocked) {
+      if (!this.claim(state, childState) || delivery.recoveryBlocked) {
         this.dependencies.unregisterChild(childState);
         return;
       }
@@ -133,11 +124,7 @@ export class CodexNativeSubagentCompletionDelivery {
       const error = delivery.error ?? "completion delivery did not produce a parent response";
       this.scheduleRetry(childState, error);
     } catch (error) {
-      if (
-        !this.dependencies.isCurrentChild(childState) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state)
-      ) {
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       if (!this.claim(state, childState)) {

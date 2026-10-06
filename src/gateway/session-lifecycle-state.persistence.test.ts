@@ -1,9 +1,8 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterAll, afterEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   createAgentRunDirectAbortError,
@@ -31,9 +30,13 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
@@ -54,10 +57,23 @@ import {
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
+
 const routing = vi.hoisted(() => ({ loadSessionEntry: vi.fn() }));
 vi.mock("./session-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-utils.js")>()),
   loadSessionEntry: routing.loadSessionEntry,
+}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: async (
+    params: Parameters<
+      typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+    >[0],
+  ) => {
+    const loaded = routing.loadSessionEntry(params.key, { agentId: params.agentId }, params.cfg);
+    return { ...loaded, storeKeys: loaded.storeKeys ?? [loaded.canonicalKey] };
+  },
 }));
 
 const persistenceTestWarnings = vi.fn();
@@ -81,9 +97,8 @@ it.each([
 ])(
   "retains $stopReason cancellation as $status after reopening a store without a shutdown marker",
   async ({ stopReason, status, recovery, timeoutPhase }) => {
-    const tempDirs = createTempDirTracker();
     const target = {
-      storePath: path.join(tempDirs.make("openclaw-restart-terminal-"), "sessions.json"),
+      storePath: path.join(tempDirs.make(), "sessions.json"),
       sessionKey: "agent:main:restart-terminal",
     };
     const runId = "interrupted-run";
@@ -111,7 +126,8 @@ it.each([
           data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
         },
       });
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored?.status).toBe(status);
       if (recovery === "recoverable") {
@@ -130,16 +146,15 @@ it.each([
       expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
     } finally {
       routing.loadSessionEntry.mockReset();
-      closeOpenClawAgentDatabasesForTest();
-      tempDirs.cleanup();
+      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     }
   },
 );
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
-  const tempDirs = createTempDirTracker();
   const target = {
-    storePath: path.join(tempDirs.make("openclaw-lifecycle-timing-"), "sessions.json"),
+    storePath: path.join(tempDirs.make(), "sessions.json"),
     sessionKey: "agent:main:timing",
   };
   let now = 1_000_000;
@@ -211,7 +226,8 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     now += 11_192;
     recovered.emit("end", { meta: {} });
     await persistence;
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
     expect(loadSessionEntry(target)).toMatchObject({
       status: "done",
       startedAt: 3_600_000,
@@ -224,8 +240,8 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     await persistence;
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
-    closeOpenClawAgentDatabasesForTest();
-    tempDirs.cleanup();
+    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
   }
 });
 
@@ -305,7 +321,7 @@ it.each(["success", "failed-write"])(
     const startPersisted = createDeferred();
     const terminalWrite = createDeferred();
     let persistenceSpy:
-      | MockInstance<typeof lifecycleState.persistGatewaySessionLifecycleEvent>
+      | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
     const restartRecoveryCandidates = new Map();
     const writerStarted = createDeferred();
@@ -357,15 +373,18 @@ it.each(["success", "failed-write"])(
         restartRecoveryCandidates,
         refreshConnectedUserProfiles: vi.fn(),
       });
-      const persistLifecycleEvent = lifecycleState.persistGatewaySessionLifecycleEvent;
+      const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
-        .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
+        .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
         .mockImplementation((params) => {
-          const persistence = persistLifecycleEvent(params);
-          if (params.event.runId === runId && params.event.data?.phase === "start") {
-            startPersisted.resolve(persistence);
-          }
-          return persistence;
+          const persist = prepareLifecycleEvent(params);
+          return () => {
+            const persistence = persist();
+            if (params.event.runId === runId && params.event.data?.phase === "start") {
+              startPersisted.resolve(persistence);
+            }
+            return persistence;
+          };
         });
       emitAgentEvent({
         runId,
@@ -388,7 +407,7 @@ it.each(["success", "failed-write"])(
       });
       await writerStarted.promise;
       if (outcome === "failed-write") {
-        persistenceSpy.mockReturnValueOnce(terminalWrite.promise);
+        persistenceSpy.mockReturnValueOnce(() => terminalWrite.promise);
       }
 
       interruption = startSessionWorkAdmissionInterruption({
@@ -469,9 +488,10 @@ it.each(["success", "failed-write"])(
         "sessions.changed",
         expect.objectContaining({ runId, status: "killed", hasActiveRun: false, runtimeMs: 1_000 }),
         new Set(["session-observer"]),
-        { dropIfSlow: true },
+        { dropIfSlow: true, prepareSessionProjection: expect.any(Function) },
       );
-      closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawAgentDatabasesAsync(state.root);
+      closeOpenClawAgentDatabasesForTest(state.root);
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored).toMatchObject({
         status: "killed",
@@ -524,9 +544,8 @@ it.for([
   "keeps an owner claim active until its queued $label write commits",
   ({ phase, data, status }, { signal }) =>
     ownerClaimFixture.run(async () => {
-      const tempDirs = createTempDirTracker();
       const target = {
-        storePath: path.join(tempDirs.make("openclaw-owner-terminal-"), "sessions.json"),
+        storePath: path.join(tempDirs.make(), "sessions.json"),
         sessionKey: "agent:main:worker-terminal",
       };
       const runId = "worker-terminal-run";
@@ -629,7 +648,7 @@ it.for([
             expect.objectContaining({
               type: "custom_message",
               customType: "run-failed-before-reply",
-              content: "This turn ended before a reply: Preparation failed",
+              content: "Your request couldn't be completed: Preparation failed",
               display: true,
               details: { runId, error: "Preparation failed" },
             }),
@@ -647,8 +666,8 @@ it.for([
         subscriptions?.lifecycleUnsub();
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
-        closeOpenClawAgentDatabasesForTest();
-        tempDirs.cleanup();
+        await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
+        closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
       }
     }),
 );

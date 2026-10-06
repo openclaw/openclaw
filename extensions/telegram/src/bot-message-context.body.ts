@@ -8,12 +8,9 @@ import {
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
   resolveGroupThreadMentionFacts,
-  type GroupThreadMentionFacts,
   resolveUnmentionedGroupInboundPolicy,
   type BuildChannelInboundEventContextParams,
   type BuildMentionRegexesOptions,
-  type InboundEventKind,
-  type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveBotThreadMentionPolicy } from "openclaw/plugin-sdk/channel-mention-gating";
 import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
@@ -66,35 +63,14 @@ import {
   resolveTelegramCommandIngressAuthorization,
   resolveTelegramNativeCommandBody,
 } from "./ingress.js";
+import { resolveStickerVisionSupport } from "./sticker-vision.js";
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
 >;
 
-const loadStickerVisionRuntime = createLazyRuntimeModule(
-  () => import("./sticker-vision.runtime.js"),
-);
-
 const loadMediaUnderstandingRuntime = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/media-runtime"),
 );
-
-type TelegramInboundBodyResult = {
-  bodyText: string;
-  rawBody: string;
-  historyKey?: string;
-  commandAuthorized: boolean;
-  effectiveWasMentioned: boolean;
-  mentionFacts: TelegramMentionFacts;
-  groupThread?: GroupThreadMentionFacts;
-  inboundEventKind: InboundEventKind;
-  canDetectMention: boolean;
-  shouldBypassMention: boolean;
-  commandSource: "native" | "text" | undefined;
-  nativeCommandBody?: string;
-  audioTranscribedMediaIndex?: number;
-  stickerCacheHit: boolean;
-  locationData?: NormalizedLocation;
-};
 
 function resolveTelegramMentionFacts(params: {
   canDetectMention: boolean;
@@ -127,18 +103,6 @@ function resolveTelegramMentionFacts(params: {
   };
 }
 
-async function resolveStickerVisionSupport(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-}): Promise<boolean> {
-  try {
-    const { resolveStickerVisionSupportRuntime } = await loadStickerVisionRuntime();
-    return await resolveStickerVisionSupportRuntime(params);
-  } catch {
-    return false;
-  }
-}
-
 export async function resolveTelegramInboundBody(params: {
   nativeCommandNames?: ReadonlyMap<string, string>;
   cfg: OpenClawConfig;
@@ -167,7 +131,7 @@ export async function resolveTelegramInboundBody(params: {
   requireMentionInBotThreads?: boolean;
   options?: TelegramMessageContextOptions;
   logger: TelegramLogger;
-}): Promise<TelegramInboundBodyResult | null> {
+}) {
   const {
     cfg,
     primaryCtx,

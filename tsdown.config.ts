@@ -1,11 +1,11 @@
 // tsdown config defines package build entrypoints and output options.
 import fs from "node:fs";
-import { createRequire, isBuiltin } from "node:module";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { DtsOptions, TsdownPlugin, UserConfig } from "tsdown";
 import {
   collectBundledPluginBuildEntries,
-  collectChannelConfigDoctorBuildEntries,
+  collectRetainedDoctorBuildEntries,
   collectPluginDeclarationSourceEntries,
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
@@ -116,7 +116,7 @@ function matchesExternalOption(
 function buildInputOptions(
   options: InputOptionsArg,
   build?: { bundleAllDependencies?: boolean },
-): InputOptionsReturn {
+): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -238,11 +238,12 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
+function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define: {
@@ -260,17 +261,26 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
       "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
     },
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      // Rolldown's Node target owns builtin resolution, independently of the build host.
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
     minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
-    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    outputOptions: {
+      codeSplitting: split,
+      strictExecutionOrder: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
+    },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+    inputOptions: (options) => ({
+      ...(buildInputOptions(options, { bundleAllDependencies: true }) ?? options),
+      ...(split ? { preserveEntrySignatures: "allow-extension" as const } : {}),
+    }),
   };
 }
 
@@ -282,11 +292,12 @@ function workerHelperBuildConfig(
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
     outDir: "dist",
+    platform: "node",
     dts: false,
     env,
     define,
     deps: {
-      alwaysBundle: (id) => !isBuiltin(id),
+      alwaysBundle: () => true,
       onlyBundle: false,
     },
     fixedExtension: false,
@@ -405,6 +416,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
+    id === "@openclaw/worker-runtime" ||
+    id.startsWith("@openclaw/worker-runtime/") ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     [
@@ -446,6 +459,7 @@ function buildCoreDistEntries(): Record<string, string> {
     index: "src/index.ts",
     entry: "src/entry.ts",
     "infra/package-lifecycle": "src/infra/package-lifecycle.ts",
+    "commands/doctor-update-schema-guard": "src/commands/doctor-update-schema-guard.ts",
     "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
@@ -455,6 +469,9 @@ function buildCoreDistEntries(): Record<string, string> {
     // Keep long-lived lazy runtime boundaries on stable filenames so rebuilt
     // dist/ trees do not strand already-running gateways on stale hashed chunks.
     "agents/agent-bundle-mcp-runtime": "src/agents/agent-bundle-mcp-runtime.ts",
+    // Published builds lazily import these lifecycle facts from a hashed chunk; update
+    // compatibility bridges need a current chunk that still exports them.
+    "agents/provider-runtime-lifecycle": "src/agents/provider-runtime-lifecycle.ts",
     "agents/mcp-auth-profile.runtime": "src/agents/mcp-auth-profile.runtime.ts",
     "agents/auth-profiles.runtime": "src/agents/auth-profiles.runtime.ts",
     "agents/model-catalog.runtime": "src/agents/model-catalog.runtime.ts",
@@ -520,6 +537,7 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
     "cli/run-main": "src/cli/run-main.ts",
     "commands/onboard-guided": "src/commands/onboard-guided.ts",
     "config/config": "src/config/config.ts",
+    "infra/gateway-scheduler": "src/infra/gateway-scheduler.ts",
     "infra/sqlite-audit-record-store": "src/infra/sqlite-audit-record-store.ts",
     "state/local-onboarding-state": "src/state/local-onboarding-state.ts",
     "system-agent/audit": "src/system-agent/audit.ts",
@@ -663,6 +681,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
         `retry/${entry}`,
         source,
       ]),
+    ),
+    ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("worker-runtime")).map(
+        ([entry, source]) => [`worker-runtime/${entry}`, source],
+      ),
     ),
     ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
@@ -847,6 +870,7 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("worker-runtime"),
   nodeWorkspacePackageBuildConfig("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [
@@ -963,7 +987,16 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig(
+    {
+      "worker/worker": "src/worker/worker-deploy-entry.ts",
+      "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+    },
+    true,
+  ),
+  workerDeployBuildConfig({
+    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
   workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),
@@ -973,19 +1006,27 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
   }),
+  workerDeployBuildConfig({
+    "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts",
+  }),
+  workerDeployBuildConfig({
+    "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
+  }),
   ...createManagedHandoffBuildConfigs().map((config) =>
     Object.assign(config, { name: TSDOWN_UNIFIED_CONFIG_GROUP, env }),
   ),
-  nodeBuildConfig(
-    {
-      name: TSDOWN_UNIFIED_CONFIG_GROUP,
-      // Keep retained config repairs in their own graph: shared public SDK chunks
-      // otherwise pull state-migration exports into these pre-install artifacts.
-      entry: collectChannelConfigDoctorBuildEntries(bundledPluginBuildInventory),
-      outDir: "dist/config-doctor",
-      deps: unifiedDeps,
-    },
-    false,
+  ...["config-doctor", "state-retention"].map((surface) =>
+    nodeBuildConfig(
+      {
+        name: TSDOWN_UNIFIED_CONFIG_GROUP,
+        // Keep retained config repairs in their own graph: shared public SDK chunks
+        // otherwise pull state-migration exports into these pre-install artifacts.
+        entry: collectRetainedDoctorBuildEntries({ ...bundledPluginBuildInventory, surface }),
+        outDir: `dist/${surface}`,
+        deps: unifiedDeps,
+      },
+      false,
+    ),
   ),
   workerHelperBuildConfig({
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",

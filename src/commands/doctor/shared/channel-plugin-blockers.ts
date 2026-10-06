@@ -1,4 +1,3 @@
-// Doctor warnings for configured channels blocked by disabled channel plugins.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
@@ -355,24 +354,18 @@ function formatReason(hit: ChannelPluginBlockerHit): string {
   if (hit.reason === "not enabled and not in allowlist") {
     return `plugin "${sanitizeForLog(hit.pluginId)}" is not enabled and is omitted from plugins.allow. Add plugins.entries.${sanitizeForLog(hit.pluginId)}.enabled=true and include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
   }
-  if (hit.reason === "not in allowlist") {
-    return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
-  }
-  return `plugin "${sanitizeForLog(hit.pluginId)}" is not loadable (${sanitizeForLog(hit.reason)}).`;
+  return `plugin "${sanitizeForLog(hit.pluginId)}" is installed but omitted from plugins.allow. Include "${sanitizeForLog(hit.pluginId)}" in plugins.allow.`;
+}
+
+function formatChannelPluginBlocker(hit: ChannelPluginBlockerHit): string {
+  return `channels.${sanitizeForLog(hit.channelId)}: channel is configured, but ${formatReason(hit)} Fix plugin enablement before relying on setup guidance for this channel.`;
 }
 
 /** Format doctor warnings for configured channels blocked by plugin activation state. */
 export function collectConfiguredChannelPluginBlockerWarnings(
   hits: ChannelPluginBlockerHit[],
 ): string[] {
-  return hits.map(
-    (hit) =>
-      `- channels.${sanitizeForLog(hit.channelId)}: channel is configured, but ${formatReason(hit)} Fix plugin enablement before relying on setup guidance for this channel.`,
-  );
-}
-
-function stripListMarker(message: string): string {
-  return message.startsWith("- ") ? message.slice(2) : message;
+  return hits.map((hit) => `- ${formatChannelPluginBlocker(hit)}`);
 }
 
 /** Convert a configured channel plugin blocker into a structured Doctor finding. */
@@ -382,7 +375,7 @@ export function channelPluginBlockerHitToHealthFinding(
   return {
     checkId: CHANNEL_PLUGIN_BLOCKERS_CHECK_ID,
     severity: "warning",
-    message: stripListMarker(collectConfiguredChannelPluginBlockerWarnings([hit])[0] ?? ""),
+    message: formatChannelPluginBlocker(hit),
     path: `channels.${hit.channelId}`,
     target: hit.pluginId,
     requirement: hit.reason,

@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkspaceTransferHttpRoute } from "./node-workspace-transfer-http-contract.js";
 import {
@@ -14,7 +15,6 @@ import {
   prepareNodeWorkspaceTransferSnapshot,
   type NodeWorkspaceTransferSnapshot,
 } from "./node-workspace-transfer-snapshot.js";
-import { mintNodeWorkspaceTransferToken } from "./node-workspace-transfer-token.js";
 import {
   readNodeWorkspaceUpload,
   type NodeWorkspaceTransferUpload,
@@ -29,41 +29,36 @@ import {
 const TRANSFER_TIMEOUT_MS = 10 * 60_000;
 const MANIFEST_REF_PATTERN = /^sha256:[a-f0-9]{64}$/u;
 
-type DownloadCapability = {
-  direction: "download";
-  token: string;
+type TransferBinding = {
   environmentId: string;
   ownerEpoch: number;
   sessionId: string;
   generation: number;
+};
+
+type DownloadCapability = {
+  direction: "download";
+  token: string;
   manifestRef: string;
   expiresAtMs: number;
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   signal?: AbortSignal;
 };
 
 type UploadOperation = {
   direction: "upload";
   token: string;
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
   baseManifestRef: string;
   expiresAtMs: number;
   state: "ready" | "receiving" | "completed";
-  isAuthorized?: () => boolean;
+  isAuthorized: () => boolean;
   uploaded?: NodeWorkspaceTransferUpload;
   abortController: AbortController;
   receiving?: { result: Promise<{ manifestRef: string }>; signal: AbortSignal };
   disposal?: Promise<void>;
 };
 
-type TransferContext = {
-  environmentId: string;
-  ownerEpoch: number;
-  sessionId: string;
-  generation: number;
+type TransferContext = TransferBinding & {
   localPath?: string;
   temporaryRoot: string;
   currentManifestRef: string;
@@ -73,7 +68,7 @@ type TransferContext = {
   downloads: Map<string, DownloadCapability>;
   upload?: UploadOperation;
   abortController: AbortController;
-  stopWatchingOwnerSignal?: () => void;
+  signal: AbortSignal;
   isAuthorized: () => boolean;
 };
 
@@ -83,29 +78,12 @@ type TransferAuthorization = {
   route: NodeWorkspaceTransferHttpRoute;
 };
 
-function capabilityMatchesContext(
-  capability: DownloadCapability | UploadOperation,
-  context: TransferContext,
-): boolean {
-  return (
-    capability.environmentId === context.environmentId &&
-    capability.ownerEpoch === context.ownerEpoch &&
-    capability.sessionId === context.sessionId &&
-    capability.generation === context.generation
-  );
-}
-
-function watchTransferOwnerSignal(context: TransferContext, signal?: AbortSignal): void {
-  if (!signal) {
-    return;
-  }
-  const abort = () => context.abortController.abort(signal.reason);
-  signal.addEventListener("abort", abort, { once: true });
-  context.stopWatchingOwnerSignal = () => signal.removeEventListener("abort", abort);
-  if (signal.aborted) {
-    abort();
-  }
-}
+type TransferPreparation = Pick<
+  TransferContext,
+  "environmentId" | "ownerEpoch" | "sessionId" | "generation" | "isAuthorized"
+> & { signal?: AbortSignal; authorize?: () => void };
+type RepositoryPreparation = TransferPreparation & { baseCommit: string; baseManifestRef: string };
+type SyncPreparation = TransferPreparation & { localPath: string };
 
 export function createNodeWorkspaceTransferService(options: {
   getOwner: (environmentId: string) => NodeWorkspaceTransferOwner | undefined;
@@ -130,7 +108,7 @@ export function createNodeWorkspaceTransferService(options: {
 
   const isCurrentContext = (context: TransferContext): boolean =>
     contexts.get(context.environmentId) === context &&
-    !context.abortController.signal.aborted &&
+    !context.signal.aborted &&
     context.isAuthorized() &&
     isNodeWorkspaceTransferOwnerCurrent(context, options.getOwner(context.environmentId));
 
@@ -164,10 +142,9 @@ export function createNodeWorkspaceTransferService(options: {
   };
 
   const closeContext = async (context: TransferContext) => {
-    if (!context.abortController.signal.aborted) {
+    if (!context.signal.aborted) {
       context.abortController.abort(new Error("Node workspace transfer context closed"));
     }
-    context.stopWatchingOwnerSignal?.();
     // Readers and pack processes must release scratch before its parent is removed.
     const settled = await Promise.allSettled([
       context.pack?.catch(() => undefined),
@@ -194,24 +171,20 @@ export function createNodeWorkspaceTransferService(options: {
   const mintDownload = (
     context: TransferContext,
     manifestRef: string,
-    isAuthorized?: () => boolean,
+    isAuthorized: () => boolean,
     signal?: AbortSignal,
   ): string => {
     signal?.throwIfAborted();
-    if (!isCurrentContext(context) || isAuthorized?.() === false) {
+    if (!isCurrentContext(context) || !isAuthorized()) {
       throw new Error("Node workspace transfer owner is no longer current");
     }
-    const token = mintNodeWorkspaceTransferToken();
+    const token = generateSecureToken({ bytes: 32, redact: true });
     context.downloads.set(token, {
       direction: "download",
       token,
-      environmentId: context.environmentId,
-      ownerEpoch: context.ownerEpoch,
-      sessionId: context.sessionId,
-      generation: context.generation,
       manifestRef,
       expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
-      ...(isAuthorized ? { isAuthorized } : {}),
+      isAuthorized,
       ...(signal ? { signal } : {}),
     });
     return token;
@@ -231,19 +204,16 @@ export function createNodeWorkspaceTransferService(options: {
 
   const authorizationCurrent = (authorization: TransferAuthorization): boolean => {
     const { capability, context } = authorization;
-    if (
-      !isCurrentContext(context) ||
-      !capabilityMatchesContext(capability, context) ||
-      capability.expiresAtMs <= now()
-    ) {
+    if (!isCurrentContext(context) || capability.expiresAtMs <= now()) {
       return false;
     }
+    // Exact object membership binds the capability to this live context's owner.
     return capability.direction === "download"
       ? context.downloads.get(capability.token) === capability &&
           !capability.signal?.aborted &&
-          capability.isAuthorized?.() !== false
+          capability.isAuthorized()
       : context.upload === capability &&
-          capability.isAuthorized?.() !== false &&
+          capability.isAuthorized() &&
           !capability.abortController.signal.aborted &&
           (capability.state === "receiving" || capability.state === "completed");
   };
@@ -272,6 +242,69 @@ export function createNodeWorkspaceTransferService(options: {
         )
       : route.manifestRef === capability.manifestRef;
   };
+
+  function replaceContext(params: RepositoryPreparation & { kind: "repository" }): Promise<void>;
+  function replaceContext(
+    params: SyncPreparation & { kind: "sync" },
+  ): Promise<{ snapshot: NodeWorkspaceTransferSnapshot; token: string }>;
+  async function replaceContext(
+    params: (RepositoryPreparation & { kind: "repository" }) | (SyncPreparation & { kind: "sync" }),
+  ): Promise<void | { snapshot: NodeWorkspaceTransferSnapshot; token: string }> {
+    const { authorize, ...owner } = params;
+    const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
+      owner,
+      authorize,
+      options.getOwner,
+    );
+    return await contextOperations.enqueue(params.environmentId, async () => {
+      assertCurrent();
+      const previous = contexts.get(params.environmentId);
+      if (previous) {
+        await closeContext(previous);
+        assertCurrent();
+      }
+      await ensureTemporaryRoot();
+      assertCurrent();
+      const abortController = new AbortController();
+      const context: TransferContext = {
+        ...owner,
+        temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
+        currentManifestRef: params.kind === "repository" ? params.baseManifestRef : "",
+        baseCommit: params.kind === "repository" ? params.baseCommit : null,
+        snapshots: new Map(),
+        downloads: new Map(),
+        abortController,
+        signal: params.signal
+          ? AbortSignal.any([params.signal, abortController.signal])
+          : abortController.signal,
+      };
+      try {
+        assertCurrent();
+        let snapshot: NodeWorkspaceTransferSnapshot | undefined;
+        if (params.kind === "sync") {
+          snapshot = await prepareNodeWorkspaceTransferSnapshot({
+            localPath: params.localPath,
+            temporaryRoot: context.temporaryRoot,
+            signal: AbortSignal.any([context.signal, AbortSignal.timeout(TRANSFER_TIMEOUT_MS)]),
+          });
+          assertCurrent();
+          context.snapshots.set(snapshot.manifestRef, snapshot);
+          context.localPath = snapshot.root;
+          context.baseCommit = snapshot.manifest.baseCommit;
+          context.currentManifestRef = snapshot.manifestRef;
+        }
+        contexts.set(context.environmentId, context);
+        // Only this download retains initiating-turn authority; future workspace
+        // operations keep their independent placement owner.
+        return snapshot
+          ? { snapshot, token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized) }
+          : undefined;
+      } catch (error) {
+        await closeContext(context);
+        throw error;
+      }
+    });
+  }
 
   return {
     initialize: ensureTemporaryRoot,
@@ -310,116 +343,10 @@ export function createNodeWorkspaceTransferService(options: {
       };
     },
 
-    async prepareRepository(params: {
-      environmentId: string;
-      ownerEpoch: number;
-      sessionId: string;
-      generation: number;
-      baseCommit: string;
-      baseManifestRef: string;
-      isAuthorized: () => boolean;
-      signal?: AbortSignal;
-      authorize?: () => void;
-    }): Promise<void> {
-      const { authorize, ...owner } = params;
-      const { assertCurrent } = createNodeWorkspaceSyncAuthorization(
-        owner,
-        authorize,
-        options.getOwner,
-      );
-      await contextOperations.enqueue(params.environmentId, async () => {
-        assertCurrent();
-        const previous = contexts.get(params.environmentId);
-        if (previous) {
-          await closeContext(previous);
-          assertCurrent();
-        }
-        await ensureTemporaryRoot();
-        assertCurrent();
-        const abortController = new AbortController();
-        const context: TransferContext = {
-          ...owner,
-          temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
-          currentManifestRef: params.baseManifestRef,
-          snapshots: new Map(),
-          downloads: new Map(),
-          abortController,
-        };
-        watchTransferOwnerSignal(context, params.signal);
-        try {
-          assertCurrent();
-          contexts.set(params.environmentId, context);
-        } catch (error) {
-          await closeContext(context);
-          throw error;
-        }
-      });
-    },
+    prepareRepository: (params: RepositoryPreparation) =>
+      replaceContext({ ...params, kind: "repository" }),
 
-    async prepareSync(params: {
-      environmentId: string;
-      ownerEpoch: number;
-      sessionId: string;
-      generation: number;
-      localPath: string;
-      isAuthorized: () => boolean;
-      signal?: AbortSignal;
-      authorize?: () => void;
-    }) {
-      const { authorize, ...owner } = params;
-      const { assertCurrent, isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
-        owner,
-        authorize,
-        options.getOwner,
-      );
-      return await contextOperations.enqueue(params.environmentId, async () => {
-        assertCurrent();
-        const previous = contexts.get(params.environmentId);
-        if (previous) {
-          await closeContext(previous);
-          assertCurrent();
-        }
-        await ensureTemporaryRoot();
-        assertCurrent();
-        const abortController = new AbortController();
-        const context: TransferContext = {
-          ...owner,
-          localPath: await fsp.realpath(params.localPath),
-          temporaryRoot: await fsp.mkdtemp(path.join(temporaryBaseRoot, "context-")),
-          currentManifestRef: "",
-          snapshots: new Map(),
-          baseCommit: null,
-          downloads: new Map(),
-          abortController,
-        };
-        watchTransferOwnerSignal(context, params.signal);
-        try {
-          assertCurrent();
-          const snapshot = await prepareNodeWorkspaceTransferSnapshot({
-            localPath: params.localPath,
-            temporaryRoot: context.temporaryRoot,
-            signal: AbortSignal.any([
-              context.abortController.signal,
-              AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-            ]),
-          });
-          assertCurrent();
-          context.snapshots.set(snapshot.manifestRef, snapshot);
-          context.baseCommit = snapshot.manifest.baseCommit;
-          context.currentManifestRef = snapshot.manifestRef;
-          contexts.set(context.environmentId, context);
-          // Only this download retains initiating-turn authority; future workspace
-          // operations keep their independent placement owner.
-          return {
-            snapshot,
-            token: mintDownload(context, snapshot.manifestRef, isOperationAuthorized),
-          };
-        } catch (error) {
-          await closeContext(context);
-          throw error;
-        }
-      });
-    },
+    prepareSync: (params: SyncPreparation) => replaceContext({ ...params, kind: "sync" }),
 
     prepareUpload(environmentId: string, baseManifestRef: string, authorize?: () => void): string {
       authorize?.();
@@ -430,7 +357,7 @@ export function createNodeWorkspaceTransferService(options: {
       if (context.upload) {
         throw new Error("Node workspace transfer upload is already active");
       }
-      const token = mintNodeWorkspaceTransferToken();
+      const token = generateSecureToken({ bytes: 32, redact: true });
       const { isOperationAuthorized } = createNodeWorkspaceSyncAuthorization(
         context,
         authorize,
@@ -439,10 +366,6 @@ export function createNodeWorkspaceTransferService(options: {
       context.upload = {
         direction: "upload",
         token,
-        environmentId: context.environmentId,
-        ownerEpoch: context.ownerEpoch,
-        sessionId: context.sessionId,
-        generation: context.generation,
         baseManifestRef,
         expiresAtMs: now() + TRANSFER_TIMEOUT_MS,
         state: "ready",
@@ -459,7 +382,7 @@ export function createNodeWorkspaceTransferService(options: {
         !context ||
         !operation ||
         operation.state !== "completed" ||
-        operation.isAuthorized?.() === false ||
+        !operation.isAuthorized() ||
         operation.abortController.signal.aborted ||
         operation.baseManifestRef !== baseManifestRef ||
         !operation.uploaded ||
@@ -545,9 +468,8 @@ export function createNodeWorkspaceTransferService(options: {
         !isCurrentContext(context) ||
         upload.token !== params.token ||
         upload.state !== "ready" ||
-        upload.isAuthorized?.() === false ||
+        !upload.isAuthorized() ||
         upload.expiresAtMs <= now() ||
-        !capabilityMatchesContext(upload, context) ||
         params.route.kind !== "reconcile" ||
         params.route.environmentId !== context.environmentId ||
         params.route.baseManifestRef !== upload.baseManifestRef
@@ -562,7 +484,7 @@ export function createNodeWorkspaceTransferService(options: {
     isAuthorizationCurrent: authorizationCurrent,
 
     authorizationSignal(authorization: TransferAuthorization): AbortSignal {
-      const signal = authorization.context.abortController.signal;
+      const signal = authorization.context.signal;
       const capability = authorization.capability;
       return capability.direction === "download" && capability.signal
         ? AbortSignal.any([signal, capability.signal])
@@ -599,10 +521,7 @@ export function createNodeWorkspaceTransferService(options: {
           root: context.localPath,
           baseCommit,
           temporaryRoot: context.temporaryRoot,
-          signal: AbortSignal.any([
-            context.abortController.signal,
-            AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
-          ]),
+          signal: AbortSignal.any([context.signal, AbortSignal.timeout(TRANSFER_TIMEOUT_MS)]),
         }).catch((error: unknown) => {
           context.pack = undefined;
           throw error;
@@ -718,7 +637,7 @@ export function createNodeWorkspaceTransferService(options: {
       const context = contexts.get(environmentId);
       // Abort synchronously so every in-flight response and capability for this owner is
       // fenced at once; cleanup (scratch removal, map entry) settles behind the queue.
-      if (context && !context.abortController.signal.aborted) {
+      if (context && !context.signal.aborted) {
         context.abortController.abort(reason ?? new Error("Worker environment credential revoked"));
       }
       void closeEnvironment(environmentId).catch(() => undefined);

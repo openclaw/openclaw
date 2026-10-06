@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getAcpSessionManager } from "../../../acp/control-plane/manager.js";
-import type { AcpSessionTarget } from "../../../acp/control-plane/manager.types.js";
 import { resolveAcpSessionResolutionError } from "../../../acp/control-plane/manager.utils.js";
 import { cleanupFailedAcpSpawn } from "../../../acp/control-plane/spawn.js";
 import {
@@ -16,21 +15,13 @@ import { toAcpRuntimeErrorText } from "../../../acp/runtime/errors.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
-import {
-  resolveAcpSpawnRuntimePolicyError,
-  resolveRuntimeCwdForAcpSpawn,
-} from "../../../agents/subagents/spawn/acp-spawn.js";
-import {
-  readChannelContextAdmissionEvidence,
-  type ChannelAdmissionEvidence,
-} from "../../../channels/message-access/admission-evidence.js";
+import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spawn/acp-spawn-policy.js";
+import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
+import { readChannelContextAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import {
-  getGatewayLocalUserIngress,
-  type GatewayLocalUserIngress,
-} from "../../../gateway/local-user-ingress.js";
+import { getGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 import { prepareChannelRunAdmission } from "../channel-run-admission.js";
@@ -293,21 +284,6 @@ async function resolveAcpSessionForCommandOrStop(params: {
   return null;
 }
 
-async function resolveAcpTokenTargetSessionKeyOrStop(params: {
-  commandParams: HandleCommandsParams;
-  restTokens: string[];
-}): Promise<AcpSessionTarget | CommandHandlerResult> {
-  const token = normalizeOptionalString(params.restTokens.join(" "));
-  const target = await resolveAcpTargetSessionKey({
-    commandParams: params.commandParams,
-    token,
-  });
-  if (!target.ok) {
-    return commandReply(`⚠️ ${target.error}`);
-  }
-  return target;
-}
-
 async function withResolvedAcpSessionTarget(params: {
   commandParams: HandleCommandsParams;
   restTokens: string[];
@@ -318,12 +294,12 @@ async function withResolvedAcpSessionTarget(params: {
   }) => Promise<CommandHandlerResult>;
 }): Promise<CommandHandlerResult> {
   const acpManager = getAcpSessionManager();
-  const target = await resolveAcpTokenTargetSessionKeyOrStop({
+  const target = await resolveAcpTargetSessionKey({
     commandParams: params.commandParams,
-    restTokens: params.restTokens,
+    token: normalizeOptionalString(params.restTokens.join(" ")),
   });
-  if (!("sessionKey" in target)) {
-    return target;
+  if (!target.ok) {
+    return commandReply(`⚠️ ${target.error}`);
   }
   const guardFailure = await resolveAcpSessionForCommandOrStop({
     acpManager,
@@ -350,73 +326,19 @@ export async function handleAcpCancelAction(
     restTokens,
     run: async ({ acpManager, sessionKey, agentId }) =>
       await withAcpCommandErrorBoundary({
-        run: async () =>
+        run: async () => {
           await acpManager.cancelSession({
             assertActive: params.command.assertOwnerCurrent,
             cfg: params.cfg,
             sessionKey,
             agentId,
             reason: "manual-cancel",
-          }),
-        fallbackCode: "ACP_TURN_FAILED",
+          });
+          return commandReply(`✅ Cancel requested for ACP session ${sessionKey}.`);
+        },
         fallbackMessage: "ACP cancel failed before completion.",
-        onSuccess: () => commandReply(`✅ Cancel requested for ACP session ${sessionKey}.`),
       }),
   });
-}
-
-async function runAcpSteer(params: {
-  assertOwnerCurrent?: () => void;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  instruction: string;
-  requestId: string;
-  channelAdmissionEvidence?: ChannelAdmissionEvidence;
-  gatewayLocalUserIngress?: GatewayLocalUserIngress;
-}): Promise<string> {
-  const acpManager = getAcpSessionManager();
-  let output = "";
-  const admittedRunContext = await prepareChannelRunAdmission({
-    assertSourceCurrent: params.assertOwnerCurrent,
-    cfg: params.cfg,
-    runId: params.requestId,
-    agentId: params.agentId,
-    ingressKind: "acp",
-    boundary: "acp.command.steer",
-    evidence: params.channelAdmissionEvidence,
-    gatewayLocalUserIngress: params.gatewayLocalUserIngress,
-  }).admit("acp");
-
-  try {
-    await acpManager.runTurn({
-      admittedRunContext,
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      provenance: "agent",
-      text: params.instruction,
-      mode: "steer",
-      requestId: params.requestId,
-      onEvent: (event) => {
-        if (event.type !== "text_delta") {
-          return;
-        }
-        if (event.stream && event.stream !== "output") {
-          return;
-        }
-        if (event.text) {
-          output += event.text;
-          if (output.length > ACP_STEER_OUTPUT_LIMIT) {
-            output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
-          }
-        }
-      },
-    });
-  } finally {
-    closeAdmittedRunDelegatedAuthority(admittedRunContext);
-  }
-  return output.trim();
 }
 
 export async function handleAcpSteerAction(
@@ -460,24 +382,52 @@ export async function handleAcpSteerAction(
   }
 
   return await withAcpCommandErrorBoundary({
-    run: async () =>
-      await runAcpSteer({
-        assertOwnerCurrent: params.command.assertOwnerCurrent,
+    run: async () => {
+      const requestId = `${resolveCommandRequestId(params)}:steer`;
+      const steeringManager = getAcpSessionManager();
+      let output = "";
+      const admittedRunContext = await prepareChannelRunAdmission({
+        assertSourceCurrent: params.command.assertOwnerCurrent,
         cfg: params.cfg,
-        ...target,
-        instruction: parsed.value.instruction,
-        requestId: `${resolveCommandRequestId(params)}:steer`,
-        channelAdmissionEvidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
+        runId: requestId,
+        agentId: target.agentId,
+        ingressKind: "acp",
+        boundary: "acp.command.steer",
+        evidence: readChannelContextAdmissionEvidence(params.rootCtx ?? params.ctx),
         gatewayLocalUserIngress: getGatewayLocalUserIngress(params.rootCtx ?? params.ctx),
-      }),
-    fallbackCode: "ACP_TURN_FAILED",
-    fallbackMessage: "ACP steer failed before completion.",
-    onSuccess: (steerOutput) => {
+      }).admit("acp");
+      try {
+        await steeringManager.runTurn({
+          admittedRunContext,
+          cfg: params.cfg,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          provenance: "agent",
+          text: parsed.value.instruction,
+          mode: "steer",
+          requestId,
+          onEvent: (event) => {
+            if (event.type !== "text_delta" || (event.stream && event.stream !== "output")) {
+              return;
+            }
+            if (event.text) {
+              output += event.text;
+              if (output.length > ACP_STEER_OUTPUT_LIMIT) {
+                output = `${truncateUtf16Safe(output, ACP_STEER_OUTPUT_LIMIT)}…`;
+              }
+            }
+          },
+        });
+      } finally {
+        closeAdmittedRunDelegatedAuthority(admittedRunContext);
+      }
+      const steerOutput = output.trim();
       if (!steerOutput) {
         return commandReply(`✅ ACP steer sent to ${target.sessionKey}.`);
       }
       return commandReply(`✅ ACP steer sent to ${target.sessionKey}.\n${steerOutput}`);
     },
+    fallbackMessage: "ACP steer failed before completion.",
   });
 }
 

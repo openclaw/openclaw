@@ -1,8 +1,5 @@
 import fs from "node:fs";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   type ExecPolicyOverrides,
@@ -30,7 +27,6 @@ import {
 export {
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   resolveSkillCommandInvocation,
 } from "./chat-command-invocation.js";
 
@@ -130,20 +126,20 @@ export async function prepareBundledSkillCommandForWorkspace(
   );
 }
 
-function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
+function finalizeSkillCommands(commands: SkillCommandSpec[]): SkillCommandSpec[] {
   const seen = new Set<string>();
-  const out: SkillCommandSpec[] = [];
-  for (const cmd of commands) {
-    const key = normalizeOptionalLowercaseString(cmd.skillName);
-    if (key && seen.has(key)) {
-      continue;
-    }
-    if (key) {
-      seen.add(key);
-    }
-    out.push(cmd);
-  }
-  return out;
+  return commands
+    .filter((cmd) => {
+      const key = normalizeOptionalLowercaseString(cmd.skillName);
+      if (key && seen.has(key)) {
+        return false;
+      }
+      if (key) {
+        seen.add(key);
+      }
+      return true;
+    })
+    .toSorted((left, right) => left.skillName.localeCompare(right.skillName, "en"));
 }
 
 type AgentSkillCommandParams = {
@@ -218,15 +214,9 @@ function appendSkillCommands(
   commands: SkillCommandSpec[],
 ) {
   for (const command of commands) {
-    used.add(normalizeLowercaseStringOrEmpty(command.name));
+    used.add(command.name);
     entries.push(command);
   }
-}
-
-function finalizeSkillCommands(entries: SkillCommandSpec[]) {
-  return dedupeBySkillName(entries).toSorted((left, right) =>
-    left.skillName.localeCompare(right.skillName, "en"),
-  );
 }
 
 /** Synchronous public SDK contract for native command consumers. */

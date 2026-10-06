@@ -9,12 +9,14 @@ import {
   readOnlySqliteValidationSnapshot,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   OPENCLAW_AGENT_SCHEMA_VERSION,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   readMigrationManifest,
@@ -41,113 +43,53 @@ function createValidationDatabase(label: string, populate: (database: DatabaseSy
 }
 
 describe("runDoctorSessionSqlite", () => {
-  it("uses the requested agent as the owner for explicit-store maintenance", async () => {
-    const stateDir = autoCleanupTempDirs.make("openclaw-doctor-explicit-ops-");
-    const storePath = path.join(stateDir, "shared", "sessions.json");
-    const report = await runDoctorSessionSqlite({
-      agent: "ops",
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      mode: "inspect",
-      store: storePath,
-    });
-
-    expect(report.targets).toHaveLength(1);
-    expect(report.targets[0]).toMatchObject({ agentId: "ops", storePath });
-  });
-
-  it("reads populated v13 session_entries before migration", () => {
-    const target = createValidationDatabase("v13-reader", (database) => {
-      database.exec(`
-        CREATE TABLE session_entries (
-          session_key TEXT NOT NULL PRIMARY KEY,
-          session_id TEXT NOT NULL,
-          entry_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
-        VALUES (
-          'agent:main:v13-reader',
-          'v13-reader-session',
-          '{"sessionId":"v13-reader-session","updatedAt":13}',
-          13
-        );
-        PRAGMA user_version = 13;
-      `);
-    });
-
-    expect(readOnlySqliteValidationSnapshot(target)).toEqual({
-      ok: true,
-      snapshot: {
-        sessionIdsBySessionKey: new Map([["agent:main:v13-reader", "v13-reader-session"]]),
-        sessionKeysBySessionId: new Map(),
-        transcriptEventCountsBySessionId: new Map(),
-      },
-    });
-  });
-
-  it("excludes v14 transcript-only nodes from doctor entry reads", () => {
-    const target = createValidationDatabase("v14-reader", (database) => {
-      database.exec(`
-        CREATE TABLE session_nodes (
-          session_key TEXT NOT NULL PRIMARY KEY,
-          current_session_id TEXT NOT NULL,
-          entry_json TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        INSERT INTO session_nodes VALUES
-          ('agent:main:transcript-only', 'transcript-only-session', '{}', 14),
-          ('agent:main:v14-reader', 'v14-reader-session',
-           '{"sessionId":"v14-reader-session","updatedAt":14}', 14);
-        PRAGMA user_version = 14;
-      `);
-    });
-
-    expect(readOnlySqliteValidationSnapshot(target)).toEqual({
-      ok: true,
-      snapshot: {
-        sessionIdsBySessionKey: new Map([["agent:main:v14-reader", "v14-reader-session"]]),
-        sessionKeysBySessionId: new Map(),
-        transcriptEventCountsBySessionId: new Map(),
-      },
-    });
-  });
-
-  it("reads compact promoted validation identities without parsing large entry JSON", () => {
-    const payload = "x".repeat(2 * 1024 * 1024);
+  it.each([13, 14, 17])("reads v%i validation identities without parsing entry JSON", (version) => {
+    const promoted = version === 17;
+    const sessionKey = `agent:main:v${version}-reader`;
+    const sessionId = promoted ? "promoted-session-id" : `v${version}-reader-session`;
+    const table = version === 13 ? "session_entries" : "session_nodes";
+    const idColumn = version === 13 ? "session_id" : "current_session_id";
     const entryJson = JSON.stringify({
-      payload,
-      sessionId: "embedded-stale-id",
-      updatedAt: 17,
+      ...(promoted ? { payload: "x".repeat(2 * 1024 * 1024) } : {}),
+      sessionId: promoted ? "embedded-stale-id" : sessionId,
+      updatedAt: version,
     });
-    const target = createValidationDatabase("compact-validation", (database) => {
+    const target = createValidationDatabase(`v${version}-reader`, (database) => {
       database.exec(`
-        CREATE TABLE session_nodes (
+        CREATE TABLE ${table} (
           session_key TEXT NOT NULL PRIMARY KEY,
-          current_session_id TEXT NOT NULL,
+          ${idColumn} TEXT NOT NULL,
           entry_json TEXT NOT NULL,
-          entry_valid INTEGER NOT NULL,
+          ${promoted ? "entry_valid INTEGER NOT NULL," : ""}
           updated_at INTEGER NOT NULL
         );
-        CREATE TABLE transcript_events (
-          session_id TEXT NOT NULL,
-          event_json TEXT NOT NULL
-        );
+        PRAGMA user_version = ${version};
       `);
       database
-        .prepare("INSERT INTO session_nodes VALUES (?, ?, ?, 1, 17)")
-        .run("agent:main:compact", "promoted-session-id", entryJson);
-      database
-        .prepare("INSERT INTO transcript_events VALUES (?, '{}'), (?, '{}')")
-        .run("promoted-session-id", "promoted-session-id");
+        .prepare(`INSERT INTO ${table} VALUES (?, ?, ?, ${promoted ? "1," : ""} ?)`)
+        .run(sessionKey, sessionId, entryJson, version);
+      if (version === 14) {
+        database.exec(
+          "INSERT INTO session_nodes VALUES ('agent:main:transcript-only', 'transcript-only-session', '{}', 14)",
+        );
+      }
+      if (promoted) {
+        database.exec(
+          "CREATE TABLE transcript_events (session_id TEXT NOT NULL, event_json TEXT NOT NULL)",
+        );
+        database
+          .prepare("INSERT INTO transcript_events VALUES (?, '{}'), (?, '{}')")
+          .run(sessionId, sessionId);
+      }
     });
     const parseSpy = vi.spyOn(JSON, "parse");
     try {
       expect(readOnlySqliteValidationSnapshot(target)).toEqual({
         ok: true,
         snapshot: {
-          sessionIdsBySessionKey: new Map([["agent:main:compact", "promoted-session-id"]]),
+          sessionIdsBySessionKey: new Map([[sessionKey, sessionId]]),
           sessionKeysBySessionId: new Map(),
-          transcriptEventCountsBySessionId: new Map([["promoted-session-id", 2]]),
+          transcriptEventCountsBySessionId: new Map(promoted ? [[sessionId, 2]] : []),
         },
       });
       expect(parseSpy.mock.calls.some(([value]) => value === entryJson)).toBe(false);
@@ -201,114 +143,90 @@ describe("runDoctorSessionSqlite", () => {
     }
   });
 
-  it("dry-runs a legacy store without writing SQLite rows", async () => {
-    const store = createLegacyStore();
-
+  it.each([
+    "dry-run",
+    "inspect",
+    "explicit-agent",
+    "sqlite-only",
+    "stat-failure",
+    "directory",
+  ] as const)("inspects %s stores without mutating them", async (kind) => {
+    const legacy =
+      kind !== "explicit-agent" && kind !== "sqlite-only" ? createLegacyStore() : undefined;
+    const stateDir = legacy?.stateDir ?? autoCleanupTempDirs.make("openclaw-doctor-inspection-");
+    const storePath =
+      legacy?.storePath ??
+      path.join(
+        stateDir,
+        kind === "explicit-agent" ? "shared" : "agents/main/sessions",
+        "sessions.json",
+      );
+    const env = legacy?.env ?? { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    if (kind === "stat-failure") {
+      // ENOTDIR exercises the non-ENOENT stat failure.
+      fs.rmSync(path.dirname(storePath), { force: true, recursive: true });
+      fs.writeFileSync(path.dirname(storePath), "not a directory\n", { mode: 0o600 });
+    }
+    if (kind === "sqlite-only") {
+      await upsertSessionEntryCore(
+        { agentId: "main", env, sessionKey: "agent:main:main", storePath },
+        { sessionId: "sqlite-session", updatedAt: 1 },
+      );
+    }
     const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "dry-run",
-      store: store.storePath,
-    });
-
-    expect(report.totals).toMatchObject({
-      importedEntries: 0,
-      importedTranscriptEvents: 0,
-      issues: 0,
-      legacyEntries: 1,
-      sqliteEntries: 0,
-      targets: 1,
-      unreferencedJsonlFiles: 2,
-      validatedEntries: 1,
-      validatedTranscriptEvents: 2,
-    });
-    expect(report.targets[0]?.sqlitePath).toBeTruthy();
-    expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
-  });
-
-  it("inspects a legacy store without creating a SQLite database", async () => {
-    const store = createLegacyStore();
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "inspect",
-      store: store.storePath,
-    });
-
-    expect(report.totals).toMatchObject({
-      issues: 0,
-      legacyEntries: 1,
-      sqliteEntries: 0,
-      targets: 1,
-    });
-    expect(report.targets[0]?.sqlitePath).toBeTruthy();
-    expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
-  });
-
-  it("reports store_unreadable instead of crashing when the store stat fails", async () => {
-    const store = createLegacyStore();
-    // Replace the sessions directory with a regular file so statSync on the
-    // store path throws ENOTDIR (non-ENOENT errors bypass throwIfNoEntry).
-    fs.rmSync(store.sessionDir, { force: true, recursive: true });
-    fs.writeFileSync(store.sessionDir, "not a directory\n", { mode: 0o600 });
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "inspect",
-      store: store.storePath,
-    });
-
-    expect(report.targets[0]?.issues).toEqual([
-      expect.objectContaining({ code: "store_unreadable" }),
-    ]);
-  });
-
-  it("reports store_unreadable for a non-regular store path", async () => {
-    const store = createLegacyStore();
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "inspect",
-      store: store.sessionDir,
-    });
-
-    expect(report.targets[0]?.issues).toEqual([
-      expect.objectContaining({
-        code: "store_unreadable",
-        message: expect.stringContaining("not a regular file"),
-      }),
-    ]);
-  });
-
-  it("inspects SQLite-only all-agent targets without requiring a legacy store", async () => {
-    const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
-    const stateDir = path.join(tempDir, "state");
-    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    await upsertSessionEntryCore(
-      { agentId: "main", env, sessionKey: "agent:main:main", storePath },
-      { sessionId: "sqlite-session", updatedAt: Date.now() },
-    );
-
-    const report = await runDoctorSessionSqlite({
-      allAgents: true,
-      cfg: {},
       env,
-      mode: "inspect",
+      mode: kind === "dry-run" ? "dry-run" : "inspect",
+      ...(kind === "sqlite-only"
+        ? { allAgents: true, cfg: {} }
+        : { store: kind === "directory" ? path.dirname(storePath) : storePath }),
+      ...(kind === "explicit-agent" ? { agent: "ops" } : {}),
     });
-
-    expect(fs.existsSync(storePath)).toBe(false);
+    if (kind === "stat-failure" || kind === "directory") {
+      expect(report.targets[0]?.issues).toEqual([
+        expect.objectContaining({
+          code: "store_unreadable",
+          ...(kind === "directory"
+            ? { message: expect.stringContaining("not a regular file") }
+            : {}),
+        }),
+      ]);
+      return;
+    }
+    if (kind === "explicit-agent") {
+      expect(report.targets).toHaveLength(1);
+      expect(report.targets[0]).toMatchObject({ agentId: "ops", storePath });
+      return;
+    }
     expect(report.totals).toMatchObject({
       issues: 0,
-      legacyEntries: 0,
-      sqliteEntries: 1,
+      legacyEntries: kind === "sqlite-only" ? 0 : 1,
+      sqliteEntries: kind === "sqlite-only" ? 1 : 0,
       targets: 1,
+      ...(kind === "dry-run"
+        ? {
+            importedEntries: 0,
+            importedTranscriptEvents: 0,
+            unreferencedJsonlFiles: 2,
+            validatedEntries: 1,
+            validatedTranscriptEvents: 2,
+          }
+        : {}),
     });
+    if (kind === "sqlite-only") {
+      expect(fs.existsSync(storePath)).toBe(false);
+    } else {
+      expect(report.targets[0]?.sqlitePath).toBeTruthy();
+      expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
+    }
   });
 
   it("migrates a dormant historical agent database before all-agent import compaction", async () => {
     const tempDir = autoCleanupTempDirs.make("openclaw-doctor-session-sqlite-");
     const stateDir = path.join(tempDir, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    // This migration fixture has known-empty deletion history, not orphaned retained SQLite.
+    openOpenClawStateDatabase({ env });
+    expect(readAgentDatabaseDeletionSnapshot(env)?.retainedDeletions).toEqual({ status: "empty" });
     const agentIds = ["dormant", "current"] as const;
     for (const agentId of agentIds) {
       const sessionsDir = path.join(stateDir, "agents", agentId, "sessions");
@@ -331,7 +249,7 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await runDoctorSessionSqlite({
       allAgents: true,
-      cfg: { agents: { list: agentIds.map((id) => ({ id })) } },
+      cfg: { agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) } },
       env,
       mode: "import",
     });
@@ -408,7 +326,7 @@ describe("runDoctorSessionSqlite", () => {
 
     const report = await runDoctorSessionSqlite({
       allAgents: true,
-      cfg: { agents: { list: [{ id: "drifted" }] } },
+      cfg: { agents: { entries: { drifted: {} } } },
       env,
       mode: "import",
     });
@@ -442,9 +360,8 @@ describe("runDoctorSessionSqlite", () => {
   });
 });
 
-// Build the physical v1 layout directly so the doctor path, not the runtime
-// opener, owns the upgrade. Empty session tables preserve the dormant-agent
-// reproduction: import has no rows to open before its compact step.
+// Use the shipped July schema so Doctor owns the upgrade. Empty session tables
+// preserve the dormant-agent case: import has no rows to open before compaction.
 function createHistoricalV1AgentDatabase(params: {
   agentId: string;
   env: NodeJS.ProcessEnv;
@@ -454,65 +371,13 @@ function createHistoricalV1AgentDatabase(params: {
   const sqlite = nodeSqlite.requireNodeSqlite();
   const database = new sqlite.DatabaseSync(sqlitePath);
   try {
-    database.exec(`
-      CREATE TABLE schema_meta (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT,
-        app_version TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE sessions (
-        session_id TEXT NOT NULL PRIMARY KEY,
-        session_key TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE TABLE session_entries (
-        session_key TEXT NOT NULL PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        entry_json TEXT NOT NULL,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE memory_index_state (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
-        revision INTEGER NOT NULL
-      );
-      INSERT INTO memory_index_state (id, revision) VALUES (1, 1);
-      CREATE TABLE memory_index_sources (
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT,
-        session_id TEXT,
-        hash TEXT NOT NULL,
-        mtime INTEGER NOT NULL,
-        size INTEGER NOT NULL,
-        PRIMARY KEY (source_kind, source_key),
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      CREATE TABLE memory_index_chunks (
-        id TEXT PRIMARY KEY,
-        source_kind TEXT NOT NULL DEFAULT 'memory',
-        source_key TEXT NOT NULL,
-        path TEXT NOT NULL,
-        session_id TEXT,
-        start_line INTEGER NOT NULL,
-        end_line INTEGER NOT NULL,
-        hash TEXT NOT NULL,
-        model TEXT NOT NULL,
-        text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        embedding_dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        FOREIGN KEY (source_kind, source_key)
-          REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
-        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
-      );
-      PRAGMA user_version = 1;
-    `);
+    database.exec(
+      fs.readFileSync(
+        new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v1.sql", import.meta.url),
+        "utf8",
+      ),
+    );
+    database.exec("PRAGMA user_version = 1;");
     database
       .prepare(
         `

@@ -1,6 +1,3 @@
-/* Settings > System > About — page-specific leftovers on top of settings.css. */
-
-/* Hero: big Clawd, product identity, and community links (iOS About-style). */
 .about-hero {
   display: flex;
   flex-direction: column;
@@ -235,7 +232,6 @@
   grid-template-columns: max-content minmax(0, 1fr);
 }
 
-/* Commit hash, age, and copy button cluster inside the build facts grid. */
 .about-commit {
   display: inline-flex;
   align-items: center;

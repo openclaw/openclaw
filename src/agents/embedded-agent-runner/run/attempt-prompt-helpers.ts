@@ -14,7 +14,10 @@ import type {
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
-import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
+import {
+  normalizeInputProvenance,
+  shouldPreserveUserFacingSessionStateForInputProvenance,
+} from "../../../sessions/input-provenance.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { truncateUtf16Safe } from "../../../utils.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
@@ -25,7 +28,14 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
+import { normalizeContextTokenBudget } from "../utils.js";
+import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+export type ResolvedPromptBuildHookResult = PluginHookBeforePromptBuildResult & {
+  decisionPromptBuildFields?: DecisionPromptBuildFields;
+  hasPendingNonPromptBuildContext: boolean;
+};
 
 type PromptBuildHookRunner = Pick<HookRunner, "runBeforePromptBuild"> &
   Partial<Pick<HookRunner, "runAgentTurnPrepare" | "runHeartbeatPromptContribution">> & {
@@ -57,18 +67,13 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
-/**
- * Resolves prompt-build hook contributions for one attempt. Next-turn
- * injections are drained once per run and cached for retries so destructive
- * session-store reads do not lose plugin context after a failed first attempt.
- */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
-}): Promise<PluginHookBeforePromptBuildResult> {
+}): Promise<ResolvedPromptBuildHookResult> {
   const runId = params.hookCtx.runId;
   const cachedInjections = runId ? promptBuildDrainCache.get(runId) : undefined;
   const queuedContext = cachedInjections
@@ -134,7 +139,35 @@ export async function resolvePromptBuildHookResult(params: {
           return undefined;
         })
     : undefined;
+  const decisionPromptBuildFields = promptBuildResult
+    ? Object.fromEntries(
+        (
+          [
+            "systemPrompt",
+            "prependContext",
+            "appendContext",
+            "prependSystemContext",
+            "appendSystemContext",
+          ] as const
+        ).flatMap((field) =>
+          typeof promptBuildResult[field] === "string"
+            ? [[field, promptBuildResult[field]] as const]
+            : [],
+        ),
+      )
+    : undefined;
   return {
+    hasPendingNonPromptBuildContext: Boolean(
+      queuedContext.prependContext?.trim() ||
+      queuedContext.appendContext?.trim() ||
+      turnPrepareResult?.prependContext?.trim() ||
+      turnPrepareResult?.appendContext?.trim() ||
+      heartbeatContribution?.prependContext?.trim() ||
+      heartbeatContribution?.appendContext?.trim(),
+    ),
+    ...(decisionPromptBuildFields && Object.keys(decisionPromptBuildFields).length > 0
+      ? { decisionPromptBuildFields }
+      : {}),
     systemPrompt: promptBuildResult?.systemPrompt,
     ...(promptBuildResult?.toolsAllow !== undefined
       ? { toolsAllow: promptBuildResult.toolsAllow }
@@ -157,9 +190,6 @@ export async function resolvePromptBuildHookResult(params: {
 }
 
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
-  if (!sessionKey) {
-    return "full";
-  }
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
@@ -171,6 +201,9 @@ export function shouldWarnOnOrphanedUserRepair(
 }
 
 const QUEUED_USER_MESSAGE_MARKER =
+  "[Earlier unanswered user message. Address this request alongside the current input; " +
+  "follow the latest user instruction if they conflict.]";
+const QUEUED_INTER_SESSION_MESSAGE_MARKER =
   "[Queued user message from a previous active turn; preserved as context only. " +
   "Continue with the active prompt below.]";
 const MAX_STRUCTURED_MEDIA_REF_CHARS = 300;
@@ -340,14 +373,8 @@ function extractUserMessagePromptText(content: unknown): string | undefined {
 function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: string): boolean {
   const normalizedPrompt = prompt.replace(/\r\n/g, "\n");
   const normalizedOrphanText = orphanText.replace(/\r\n/g, "\n").trim();
-  if (!normalizedOrphanText) {
-    return false;
-  }
-  const queuedBlockPrefix = `${QUEUED_USER_MESSAGE_MARKER}\n${normalizedOrphanText}`;
   return (
-    normalizedPrompt === queuedBlockPrefix ||
-    normalizedPrompt.startsWith(`${queuedBlockPrefix}\n`) ||
-    normalizedPrompt.includes(`\n${queuedBlockPrefix}\n`) ||
+    normalizedOrphanText.length > 0 &&
     `\n${normalizedPrompt}\n`.includes(`\n${normalizedOrphanText}\n`)
   );
 }
@@ -356,14 +383,12 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
  * Merges a trailing user message that was queued in transcript history but not
  * present in the active prompt.
  *
- * External user leaves are eligible to remain canonical (`removeLeaf: false`).
- * Session repair preserves them only for producer-tagged main-session restart
- * recovery; ordinary repair replaces them with the merged prompt. Empty or stale
- * internal leaves are always detached.
+ * External user leaves are eligible to remain canonical (`removeLeaf: false`);
+ * the session boundary owns whether the prompt replaces their transcript leaf.
+ * Empty or stale internal leaves are always detached.
  */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
-  trigger: EmbeddedRunAttemptParams["trigger"];
   leafMessage: { content?: unknown; provenance?: unknown };
 }): { prompt: string; merged: boolean; removeLeaf: boolean } {
   const orphanText = extractUserMessagePromptText(params.leafMessage.content);
@@ -381,8 +406,13 @@ export function mergeOrphanedTrailingUserPrompt(params: {
     return { prompt: params.prompt, merged: false, removeLeaf: false };
   }
 
+  const provenance = normalizeInputProvenance(params.leafMessage.provenance);
+  const marker =
+    !provenance || provenance.kind === "external_user"
+      ? QUEUED_USER_MESSAGE_MARKER
+      : QUEUED_INTER_SESSION_MESSAGE_MARKER;
   return {
-    prompt: [QUEUED_USER_MESSAGE_MARKER, orphanText, "", params.prompt].join("\n"),
+    prompt: [marker, orphanText, "", params.prompt].join("\n"),
     merged: true,
     removeLeaf: false,
   };
@@ -458,7 +488,6 @@ function resolveRuntimeContextSessionTarget(params: {
   };
 }
 
-/** Build runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
@@ -474,6 +503,8 @@ export function buildAfterTurnRuntimeContext(params: {
     attempt: params.attempt,
     activeAgentId: params.activeAgentId,
   });
+  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
+  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext({
       sessionKey: params.attempt.sessionKey,
@@ -520,16 +551,8 @@ export function buildAfterTurnRuntimeContext(params: {
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: "context-engine.after-turn",
     }),
-    ...(typeof params.tokenBudget === "number" &&
-    Number.isFinite(params.tokenBudget) &&
-    params.tokenBudget > 0
-      ? { tokenBudget: Math.floor(params.tokenBudget) }
-      : {}),
-    ...(typeof params.currentTokenCount === "number" &&
-    Number.isFinite(params.currentTokenCount) &&
-    params.currentTokenCount > 0
-      ? { currentTokenCount: Math.floor(params.currentTokenCount) }
-      : {}),
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     ...(params.promptCache ? { promptCache: params.promptCache } : {}),
     transcriptStorage: { kind: "sqlite" },
     ...(sessionTarget ? { sessionTarget } : {}),

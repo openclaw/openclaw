@@ -6,7 +6,6 @@ export type CodexRouteHit = {
   path: string;
   model: string;
   canonicalModel: string;
-  runtime?: string;
 };
 
 export type CompactionOverrideKey = "model" | "provider";
@@ -18,8 +17,6 @@ export type UnsupportedCodexCompactionOverride = {
 };
 
 export type LegacyLosslessCompactionConfig = {
-  path: string;
-  compactionPath: string;
   providerPath: string;
   providerValue: string;
   modelPath?: string;
@@ -49,14 +46,8 @@ export type SharedDefaultCompactionOverrideConsumers = Record<CompactionOverride
 export type ConfigRouteRepairResult = {
   cfg: OpenClawConfig;
   changes: CodexRouteHit[];
-  runtimePinChanges: string[];
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
-};
-
-export type SessionRouteRepairResult = {
-  changed: boolean;
-  sessionKeys: string[];
 };
 
 export type CodexSessionRouteRepairSummary = {

@@ -17,7 +17,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
     }
 
     private var authorizationWaits: [UUID: AuthorizationWait] = [:]
-    private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
     var locationRequestContinuations: [UUID: CheckedContinuation<CLLocation, Swift.Error>] = [:]
     private var cachedAuthorizationSnapshot = LocationAuthorizationSnapshot.undetermined
     private var authorizationChangeHandler: (@MainActor @Sendable (LocationAuthorizationSnapshot) -> Void)?
@@ -26,13 +25,6 @@ final class LocationService: NSObject, CLLocationManagerDelegate, ConcurrentLoca
 
     var locationManager: CLLocationManager {
         self.manager
-    }
-
-    /// Compatibility witness for the shipped single-waiter protocol; app calls use the
-    /// concurrent extension and its per-request continuation dictionary.
-    var locationRequestContinuation: CheckedContinuation<CLLocation, Swift.Error>? {
-        get { self.locationContinuation }
-        set { self.locationContinuation = newValue }
     }
 
     override init() {

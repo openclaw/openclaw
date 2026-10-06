@@ -595,7 +595,7 @@ suite.define(() => {
     { name: "read-only", operatorScopes: ["operator.read"] },
     { name: "read-write", operatorScopes: ["operator.read", "operator.write"] },
   ])(
-    "disables capability mutations and stale clears for a $name operator",
+    "disables unavailable composer controls and capability mutations for a $name operator",
     async ({ operatorScopes }) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, {
@@ -612,6 +612,22 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
+        await gateway.waitForRequest("chat.startup");
+        if (!operatorScopes.includes("operator.write")) {
+          const composer = page.locator(".agent-chat__input");
+          const input = composer.locator("textarea");
+          await input.waitFor();
+          expect(await input.isDisabled()).toBe(true);
+          expect(await composer.getByRole("button", { name: "Add attachment" }).isDisabled()).toBe(
+            true,
+          );
+          expect(
+            await composer.getByRole("button", { name: "Write a message to send." }).isDisabled(),
+          ).toBe(true);
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+          expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+          return;
+        }
         const composer = await openMenu(page);
         const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
         const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');

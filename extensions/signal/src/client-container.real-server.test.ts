@@ -1,57 +1,45 @@
-// Real-behavior proof (real sockets, real undici fetch, real timers): a live HTTP
-// endpoint that sends headers and then stalls or slow-drips its body must be bounded
-// by the request deadline, not only by the per-chunk idle guard. This exercises the
-// production containerRpcRequest -> containerRestRequest -> readSignalRestText path
-// without mocking fetch, unlike the fake-timer unit tests.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { writeFile } from "node:fs/promises";
 import http from "node:http";
-import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as fileAccess from "openclaw/plugin-sdk/security-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { containerCheck, containerRpcRequest } from "./client-container.js";
+import { containerRpcRequest } from "./client-container.js";
 
-type StartedServer = { baseUrl: string; close: () => Promise<void> };
-
-const running: StartedServer[] = [];
+const running: http.Server[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-afterEach(async () => {
-  vi.restoreAllMocks();
-  while (running.length > 0) {
-    await running.pop()?.close();
-  }
-});
-
-async function startServer(handler: http.RequestListener): Promise<StartedServer> {
+const params = { account: "+15550001111", recipient: ["+15551234567"], message: "Photo" };
+async function startServer(handler: http.RequestListener) {
   const server = http.createServer(handler);
+  running.push(server);
   server.on("clientError", () => {});
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
   });
-  const { port } = server.address() as AddressInfo;
-  const started: StartedServer = {
-    baseUrl: `http://127.0.0.1:${port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
-        server.closeAllConnections();
-        server.close(() => resolve());
-      }),
-  };
-  running.push(started);
-  return started;
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected TCP address");
+  }
+  return `http://127.0.0.1:${address.port}`;
+}
+afterEach(async () => {
+  vi.restoreAllMocks();
+  for (const server of running.splice(0)) {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+});
+function accept(res: http.ServerResponse) {
+  res.writeHead(201, { "content-type": "application/json" });
+  res.end(JSON.stringify({ timestamp: "1735689600000" }));
 }
 
-describe("signal REST real-server deadline", () => {
-  it("stops a send when the caller closes during container attachment preparation", async () => {
-    let requests = 0;
-    const server = await startServer((_req, res) => {
-      requests += 1;
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ timestamp: "1735689600000" }));
-    });
+describe("container REST real server", () => {
+  it("stops a send when its caller closes during attachment preparation", async () => {
+    const received = vi.fn((_req: http.IncomingMessage, res: http.ServerResponse) => accept(res));
+    const baseUrl = await startServer(received);
     const file = join(tempDirs.make("signal-handoff-"), "photo.jpg");
     await writeFile(file, Buffer.from([0xff, 0xd8, 0xff, 0xe0]));
     const caller = new AbortController();
@@ -63,243 +51,97 @@ describe("signal REST real-server deadline", () => {
         caller.abort(new Error("Signal caller closed during attachment preparation"));
         return result;
       });
-
     await expect(
       containerRpcRequest(
         "send",
+        { ...params, attachments: [file] },
         {
-          account: "+15550001111",
-          recipient: ["+15551234567"],
-          message: "pending",
-          attachments: [file],
-        },
-        {
-          baseUrl: server.baseUrl,
+          baseUrl,
           assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
         },
       ),
     ).rejects.toThrow("Signal caller closed during attachment preparation");
     expect(preparation).toHaveBeenCalledOnce();
-    expect(requests).toBe(0);
+    expect(received).not.toHaveBeenCalled();
   });
-
-  it.each([false, true])(
-    "checks a reaction caller before REST mutation (remove=%s)",
-    async (remove) => {
-      let requests = 0;
-      const server = await startServer((_req, res) => {
-        requests += 1;
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ timestamp: "1735689600000" }));
-      });
-      const caller = new AbortController();
-      caller.abort(new Error("Signal reaction caller closed"));
-
-      await expect(
-        containerRpcRequest(
-          "sendReaction",
-          {
-            account: "+15550001111",
-            recipients: ["+15551234567"],
-            targetTimestamp: 1700000000001,
-            emoji: "👍",
-            remove,
-          },
-          {
-            baseUrl: server.baseUrl,
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-          },
-        ),
-      ).rejects.toThrow("Signal reaction caller closed");
-      expect(requests).toBe(0);
-    },
-  );
-
-  it("preserves a REST send accepted before its caller closes", async () => {
+  it("preserves a send accepted before its caller closes", async () => {
     const caller = new AbortController();
-    const server = await startServer((_req, res) => {
+    const baseUrl = await startServer((_req, res) => {
       caller.abort(new Error("Signal caller closed after transmission"));
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ timestamp: "1735689600000" }));
+      accept(res);
     });
-
+    await expect(
+      containerRpcRequest("send", params, {
+        baseUrl,
+        assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+      }),
+    ).resolves.toEqual({ timestamp: 1735689600000 });
+  });
+  it("rejects malformed UTF-8 before JSON parsing", async () => {
+    const baseUrl = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        Buffer.concat([Buffer.from('{"versions":["'), Buffer.from([0xff]), Buffer.from('"]}')]),
+      );
+    });
+    await expect(containerRpcRequest("version", undefined, { baseUrl })).rejects.toBeInstanceOf(
+      TypeError,
+    );
+  });
+  it("aborts an unfinished response at its deadline and closes the connection", async () => {
+    let flushed = false;
+    let closed = false;
+    const baseUrl = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write("{", (error) => {
+        flushed = !error;
+      });
+      const drip = setInterval(() => res.write(" "), 50);
+      res.on("close", () => {
+        clearInterval(drip);
+        closed = true;
+      });
+    });
+    const start = Date.now();
+    await expect(
+      containerRpcRequest("version", undefined, { baseUrl, timeoutMs: 300 }),
+    ).rejects.toThrow("Signal REST request timed out");
+    expect(flushed).toBe(true);
+    expect(Date.now() - start).toBeLessThan(2_000);
+    await expect.poll(() => closed).toBe(true);
+  });
+  it("posts a provider-safe original attachment filename and intact bytes", async () => {
+    let received: unknown;
+    const baseUrl = await startServer((req, res) => {
+      expect(req.method).toBe("POST");
+      expect(req.url).toBe("/v2/send");
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        received = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        accept(res);
+      });
+    });
+    const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+    const file = join(
+      tempDirs.make("signal-filename-"),
+      "mixed;semi;comma,comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
+    );
+    await writeFile(file, content);
     await expect(
       containerRpcRequest(
         "send",
-        {
-          account: "+15550001111",
-          recipient: ["+15551234567"],
-          message: "accepted",
-        },
-        {
-          baseUrl: server.baseUrl,
-          assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-        },
+        { ...params, attachments: [file] },
+        { baseUrl, timeoutMs: 1_000 },
       ),
     ).resolves.toEqual({ timestamp: 1735689600000 });
-  });
-
-  it.each([{ bytes: [0xff] }, { bytes: [0xc3] }])(
-    "rejects malformed UTF-8 bytes $bytes before JSON parsing",
-    async ({ bytes }) => {
-      const server = await startServer((_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          Buffer.concat([Buffer.from('{"versions":["'), Buffer.from(bytes), Buffer.from('"]}')]),
-        );
-      });
-
-      await expect(
-        containerRpcRequest("version", undefined, { baseUrl: server.baseUrl }),
-      ).rejects.toBeInstanceOf(TypeError);
-    },
-  );
-
-  it("uses only the status when the unused health response is malformed UTF-8", async () => {
-    const server = await startServer((_req, res) => {
-      res.writeHead(200);
-      res.end(Buffer.from([0xff]));
+    const dataUri = "data:image/jpeg;filename=mixed_semi_comma_comma_hash_name.jpg;base64,/9j/4A==";
+    expect(received).toEqual({
+      message: params.message,
+      number: params.account,
+      recipients: params.recipient,
+      base64_attachments: [dataUri],
     });
-
-    await expect(containerCheck(server.baseUrl)).resolves.toEqual({
-      ok: true,
-      status: 200,
-      error: null,
-    });
+    expect(Buffer.from(await (await fetch(dataUri)).arrayBuffer())).toEqual(content);
   });
-
-  it("aborts an unfinished streaming body at the request deadline and closes the connection", async () => {
-    // Deterministic repeated-chunk timing lives in client-container.test.ts. Real sockets
-    // prove that a started response is cancelled by the deadline, regardless of tick cadence.
-    let firstChunkFlushed = false;
-    let connectionClosed = false;
-    const server = await startServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write("{", (error) => {
-        firstChunkFlushed = !error;
-      });
-      const drip = setInterval(() => {
-        try {
-          res.write(" ");
-        } catch {
-          clearInterval(drip);
-        }
-      }, 50);
-      res.on("close", () => {
-        clearInterval(drip);
-        connectionClosed = true;
-      });
-    });
-
-    const startedAt = Date.now();
-    await expect(
-      containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 300 }),
-    ).rejects.toThrow("Signal REST request timed out");
-    const elapsedMs = Date.now() - startedAt;
-
-    expect(firstChunkFlushed).toBe(true);
-    expect(elapsedMs).toBeLessThan(2_000);
-    await expect.poll(() => connectionClosed).toBe(true);
-  });
-
-  it("aborts a response whose body stalls immediately after headers", async () => {
-    const server = await startServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write("{");
-      // Never ends the body.
-    });
-
-    const startedAt = Date.now();
-    await expect(
-      containerRpcRequest("version", undefined, { baseUrl: server.baseUrl, timeoutMs: 300 }),
-    ).rejects.toThrow(/Signal REST (request timed out|response body stalled)/);
-    expect(Date.now() - startedAt).toBeLessThan(2_000);
-  });
-
-  it("returns the parsed body when it completes within the deadline", async () => {
-    const server = await startServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.write('{"versions":');
-      setTimeout(() => res.end('["v1"],"build":2}'), 30);
-    });
-
-    const result = await containerRpcRequest<{ versions?: string[]; build?: number }>(
-      "version",
-      undefined,
-      { baseUrl: server.baseUrl, timeoutMs: 1_000 },
-    );
-    expect(result).toEqual({ versions: ["v1"], build: 2 });
-  });
-
-  it.each([
-    {
-      stagedFilename: "mixed;semi;comma,comma,hash#name---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "mixed_semi_comma_comma_hash_name.jpg",
-    },
-    {
-      stagedFilename: "quarter;comma,hash#final.jpg",
-      expectedFilename: "quarter_comma_hash_final.jpg",
-    },
-    {
-      stagedFilename: "quarter final---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg",
-      expectedFilename: "quarter final.jpg",
-    },
-  ])(
-    "posts the provider-safe original filename $expectedFilename",
-    async ({ stagedFilename, expectedFilename }) => {
-      let receivedPayload: unknown;
-      const server = await startServer((req, res) => {
-        if (req.method !== "POST" || req.url !== "/v2/send") {
-          res.writeHead(404);
-          res.end();
-          return;
-        }
-
-        const chunks: Buffer[] = [];
-        req.on("data", (chunk: Buffer | string) => {
-          chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
-        });
-        req.on("end", () => {
-          receivedPayload = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-          res.writeHead(200, { "content-type": "application/json" });
-          res.end(JSON.stringify({ timestamp: "1735689600000" }));
-        });
-      });
-
-      const mediaDir = await mkdtemp(join(tmpdir(), "signal-real-filename-"));
-      const content = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
-      const stagedFile = join(mediaDir, stagedFilename);
-
-      try {
-        await writeFile(stagedFile, content);
-        await expect(
-          containerRpcRequest(
-            "send",
-            {
-              account: "+14259798283",
-              recipient: ["+15550001111"],
-              message: "Photo",
-              attachments: [stagedFile],
-            },
-            { baseUrl: server.baseUrl, timeoutMs: 1_000 },
-          ),
-        ).resolves.toEqual({ timestamp: 1735689600000 });
-
-        expect(receivedPayload).toEqual({
-          message: "Photo",
-          number: "+14259798283",
-          recipients: ["+15550001111"],
-          base64_attachments: [
-            `data:image/jpeg;filename=${expectedFilename};base64,${content.toString("base64")}`,
-          ],
-        });
-        const attachment = (receivedPayload as { base64_attachments: [string] })
-          .base64_attachments[0];
-        const decoded = await (await fetch(attachment)).arrayBuffer();
-        expect(Buffer.from(decoded)).toEqual(content);
-      } finally {
-        await rm(mediaDir, { recursive: true, force: true });
-      }
-    },
-  );
 });

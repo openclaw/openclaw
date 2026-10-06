@@ -7,7 +7,6 @@ import {
 } from "./config.js";
 import {
   findCodexMarketplacePluginSummary,
-  isOpenAiCuratedMarketplace,
   isOpenAiCuratedMarketplaceName,
   listCodexPluginMetadata,
   pluginReadParams,
@@ -89,7 +88,7 @@ export async function ensureCodexPluginActivation(
   );
   if (!resolved) {
     const hasCuratedMarketplace = listed.marketplaces.some((marketplace) =>
-      isOpenAiCuratedMarketplace(marketplace),
+      isOpenAiCuratedMarketplaceName(marketplace.name),
     );
     if (!hasCuratedMarketplace) {
       return activationFailure(params.identity, "marketplace_missing", {

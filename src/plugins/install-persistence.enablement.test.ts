@@ -12,7 +12,9 @@ import {
   resetPluginsCliTestState,
   setInstalledPluginIndexInstallRecords,
   writePersistedInstalledPluginIndexInstallRecordsWithLeaseMock,
+  readConfigFileSnapshotForWriteMock,
 } from "../cli/plugins-cli-test-helpers.js";
+import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
@@ -65,6 +67,10 @@ const installWriteOptions = {
 };
 
 function installSnapshot(config: OpenClawConfig) {
+  readConfigFileSnapshotForWriteMock.mockResolvedValue({
+    snapshot: { ...createTestConfigSnapshot(config), hash: "config-1" },
+    writeOptions: installWriteOptions,
+  });
   return { config, baseHash: "config-1", writeOptions: installWriteOptions };
 }
 
@@ -184,11 +190,7 @@ describe("persistPluginInstall enablement", () => {
       plugins: [{ id: "plain" }],
       diagnostics: [],
     });
-    applyExclusiveSlotSelectionMock.mockReturnValue({
-      config: enabledConfig,
-      warnings: [],
-      changed: false,
-    });
+    applyExclusiveSlotSelectionMock.mockReturnValue(enabledConfig);
 
     const next = await persistPluginInstall({
       snapshot: installSnapshot(baseConfig),

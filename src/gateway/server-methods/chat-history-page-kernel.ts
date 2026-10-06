@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { readLegacyCompactionHistory } from "../../config/sessions/legacy-compaction-history.js";
+import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
@@ -19,32 +19,32 @@ import type { CurrentUserProfileDisplayResolver } from "../current-user-profile-
 import {
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageId,
+  readChatHistoryPaginationKey,
   readChatHistoryRecoveryContext,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
-  type IncrementalChatHistoryTail,
 } from "../session-history-tail.js";
 import type {
-  SessionTranscriptReader,
+  SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
-  SessionTranscriptReadScope,
-} from "../session-transcript-read-kernel.js";
+} from "../session-transcript-read.types.js";
+import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
 
-type ChatHistoryCliTail = {
-  readScope: SessionTranscriptReadScope;
-  incrementalTail: IncrementalChatHistoryTail;
-  activeLeafEntryId: string | null;
-  buildTailPage: (messages: unknown[]) => ChatHistoryPage;
-};
 export type ChatHistoryPageKernelOptions = {
-  readers: SessionTranscriptReader;
+  readers: SessionTranscriptPageReader;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
-  cliSessionId?: string;
-  readCliTailPage?: (tail: ChatHistoryCliTail) => Promise<ChatHistoryPage>;
+  readMessageSequence?: (message: unknown) => number | undefined;
 };
+
+function readPageMessageSequence(message: unknown, messageSequences?: Record<string, number>) {
+  return (
+    messageSequences?.[readChatHistoryPaginationKey(message) ?? ""] ??
+    readChatHistoryMessageSeq(message)
+  );
+}
 
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
@@ -52,11 +52,13 @@ export function resolveChatHistoryNextOffset(params: {
   totalMessages: number;
   offset: number;
   rawPageMessages: number;
+  messageSequences?: Record<string, number>;
 }): number {
+  const sequence = (message: unknown) => readPageMessageSequence(message, params.messageSequences);
   let oldestSeq: number | undefined;
   let boundedSiblings = 0;
   for (const message of params.messages) {
-    const seq = readChatHistoryMessageSeq(message);
+    const seq = sequence(message);
     oldestSeq ??= seq;
     if (seq !== undefined && seq === oldestSeq) {
       boundedSiblings += 1;
@@ -70,7 +72,7 @@ export function resolveChatHistoryNextOffset(params: {
   if (replayOffset > params.offset) {
     let projectedSiblings = 0;
     for (const message of params.projected) {
-      if (readChatHistoryMessageSeq(message) === oldestSeq) {
+      if (sequence(message) === oldestSeq) {
         projectedSiblings += 1;
         if (projectedSiblings > boundedSiblings) {
           return replayOffset;
@@ -98,23 +100,12 @@ function resolveChatHistoryActiveLeafEntryId(
 export function enrichChatHistoryCompactionMarkers(
   messages: unknown[],
   entry: ChatHistoryPageParams["entry"],
+  metrics = readLegacyCompactionMetrics(entry),
 ): unknown[] {
-  let checkpoints: ReturnType<typeof readLegacyCompactionHistory>;
-  try {
-    checkpoints = readLegacyCompactionHistory(entry);
-  } catch {
-    // Corrupt legacy metadata cannot hide readable transcript history.
+  if (metrics.length === 0) {
     return messages;
   }
-  if (checkpoints.length === 0) {
-    return messages;
-  }
-  const checkpointByEntryId = new Map(
-    checkpoints.flatMap((checkpoint) => {
-      const entryId = checkpoint.postCompaction.entryId;
-      return entryId ? [[entryId, checkpoint] as const] : [];
-    }),
-  );
+  const checkpointByEntryId = new Map(metrics.map((metric) => [metric.entryId, metric]));
   let changed = false;
   const enriched = messages.map((message) => {
     const record = asOptionalRecord(message);
@@ -148,23 +139,64 @@ function resolveChatHistoryMessageGroup(
   messages: unknown[],
   index: number,
   messageCost: (message: unknown) => number,
+  messageSequences?: Record<string, number>,
 ): { start: number; end: number; cost: number } {
-  const seq = readChatHistoryMessageSeq(messages[index]);
+  const sequence = (message: unknown) => readPageMessageSequence(message, messageSequences);
+  const seq = sequence(messages[index]);
   let start = index;
   let end = index + 1;
   let cost = messageCost(messages[index]);
   if (seq === undefined) {
     return { start, end, cost };
   }
-  while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
+  while (start > 0 && sequence(messages[start - 1]) === seq) {
     start -= 1;
     cost += messageCost(messages[start]);
   }
-  while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
+  while (end < messages.length && sequence(messages[end]) === seq) {
     cost += messageCost(messages[end]);
     end += 1;
   }
   return { start, end, cost };
+}
+
+export function capChatHistoryTail(params: {
+  messages: unknown[];
+  maxCost: number;
+  maxGroupCost: number;
+  messageCost: (message: unknown) => number;
+  messageSequences?: Record<string, number>;
+}): unknown[] {
+  let start = params.messages.length;
+  let cost = 0;
+  while (start > 0) {
+    const group = resolveChatHistoryMessageGroup(
+      params.messages,
+      start - 1,
+      params.messageCost,
+      params.messageSequences,
+    );
+    if (cost + group.cost > params.maxCost) {
+      if (start === params.messages.length) {
+        if (group.cost <= params.maxGroupCost) {
+          // Numeric offsets cannot resume inside a source row. Keep readable siblings together.
+          start = group.start;
+        } else {
+          do {
+            start -= 1;
+            cost += params.messageCost(params.messages[start]);
+          } while (
+            start > group.start &&
+            cost + params.messageCost(params.messages[start - 1]) <= params.maxGroupCost
+          );
+        }
+      }
+      break;
+    }
+    start = group.start;
+    cost += group.cost;
+  }
+  return start > 0 ? params.messages.slice(start) : params.messages;
 }
 
 export function capChatHistoryAroundMessage(params: {
@@ -250,12 +282,8 @@ export async function readChatHistoryPageKernel(
     sessionKey: canonicalKey,
     storePath,
   };
-  const cliSessionId = options.cliSessionId;
-  // Bound snapshots are terminal by contract, so offset requests return the same
-  // full snapshot. Paging oversized imports needs an opaque snapshot cursor and
-  // is deferred to a follow-up issue. Anchored reads fall through with them: the
-  // full-snapshot merge below still centers on messageId at the handler cap.
-  if (messageId && !cliSessionId) {
+  const readSequence = options.readMessageSequence ?? readChatHistoryMessageSeq;
+  if (messageId) {
     const readPage = await options.readers.readSessionMessagesAroundIdWithStatsAsync(readScope, {
       messageId,
       maxMessages: max,
@@ -289,7 +317,7 @@ export async function readChatHistoryPageKernel(
       });
     const projection = project(localMessages);
     let projected = projection.messages;
-    const newestPageSeq = readChatHistoryMessageSeq(localMessages.at(-1));
+    const newestPageSeq = readSequence(localMessages.at(-1));
     if (readPage.offset > 0 && newestPageSeq !== undefined && projection.assistantErrorPending) {
       const recoveryContext = await readChatHistoryRecoveryContext({
         messages: localMessages,
@@ -306,17 +334,22 @@ export async function readChatHistoryPageKernel(
         displaySource: readPage.displaySource,
         maxBytes: maxHistoryBytes,
         readOnly: options.readOnly,
+        sessionStartedAt: entry?.sessionStartedAt,
       });
       if (recoveryContext.length > 0) {
         projected = project([...localMessages, ...recoveryContext]).messages.filter(
-          (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= newestPageSeq,
+          (message) => (readSequence(message) ?? Infinity) <= newestPageSeq,
         );
       }
     }
     // Numeric offsets do not encode the selected historical transcript source.
     return {
-      messages: augmentChatHistoryWithCanvasBlocks(
-        capChatHistoryAroundMessage({ messages: projected, messageId, maxCost: max }),
+      messages: await attachChatHistoryReplyMessages(
+        augmentChatHistoryWithCanvasBlocks(
+          capChatHistoryAroundMessage({ messages: projected, messageId, maxCost: max }),
+        ),
+        params,
+        options,
       ),
       ...(projection.activity.length ? { activity: projection.activity } : {}),
     };
@@ -333,12 +366,12 @@ export async function readChatHistoryPageKernel(
   });
   const { readPage } = incrementalTail;
   const currentOffset = incrementalTail.windowReset ? 0 : offset;
-  const isOffsetPage = currentOffset !== undefined && !cliSessionId;
+  const isOffsetPage = currentOffset !== undefined;
   const includeActiveLeaf = !isOffsetPage || currentOffset === 0;
   const activeLeafEntryId = includeActiveLeaf
     ? resolveChatHistoryActiveLeafEntryId(readPage)
     : null;
-  const buildTailPage = (messages: unknown[]): ChatHistoryPage => ({
+  return {
     ...(incrementalTail.windowReset ? { windowReset: true } : {}),
     ...(includeActiveLeaf ? { activeLeafEntryId } : {}),
     ...(includeActiveLeaf &&
@@ -347,7 +380,11 @@ export async function readChatHistoryPageKernel(
     !incrementalTail.projection.assistantErrorPending
       ? { deltaCursor: readPage.deltaCursor }
       : {}),
-    messages: augmentChatHistoryWithCanvasBlocks(messages),
+    messages: await attachChatHistoryReplyMessages(
+      augmentChatHistoryWithCanvasBlocks(incrementalTail.projected),
+      params,
+      options,
+    ),
     ...(incrementalTail.projection.activity.length
       ? { activity: incrementalTail.projection.activity }
       : {}),
@@ -357,8 +394,5 @@ export async function readChatHistoryPageKernel(
       totalMessages: readPage.totalMessages,
       rawPageMessages: incrementalTail.rawPageMessages,
     },
-  });
-  return !isOffsetPage && options.readCliTailPage
-    ? options.readCliTailPage({ readScope, incrementalTail, activeLeafEntryId, buildTailPage })
-    : buildTailPage(incrementalTail.projected);
+  };
 }

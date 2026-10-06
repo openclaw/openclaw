@@ -47,38 +47,6 @@ export function resolveDiscordSendEmbeds(params: {
   return params.embeds.map((embed) => (embed instanceof Embed ? embed : new Embed(embed)));
 }
 
-function buildDiscordMessagePayload(params: {
-  text: string;
-  components?: DiscordMessageComponents;
-  embeds?: Embed[];
-  allowedMentions?: DiscordAllowedMentions;
-  flags?: number;
-  files?: MessagePayloadFile[];
-}): MessagePayloadObject {
-  const payload: MessagePayloadObject = {};
-  const hasV2 = hasDiscordV2Components(params.components);
-  const trimmed = params.text.trim();
-  if (!hasV2 && trimmed) {
-    payload.content = params.text;
-  }
-  if (params.components?.length) {
-    payload.components = params.components;
-  }
-  if (!hasV2 && params.embeds?.length) {
-    payload.embeds = params.embeds;
-  }
-  if (params.allowedMentions) {
-    payload.allowed_mentions = params.allowedMentions;
-  }
-  if (params.flags !== undefined) {
-    payload.flags = params.flags;
-  }
-  if (params.files?.length) {
-    payload.files = params.files;
-  }
-  return payload;
-}
-
 export function resolveDiscordMessageFlags(params: {
   silent?: boolean;
   suppressEmbeds?: boolean;
@@ -111,7 +79,27 @@ type DiscordMessageRequestParams = {
 } & ({ endpoint: "create-message"; nonce?: string } | { endpoint: "forum-thread"; nonce?: never });
 
 export function buildDiscordMessageRequest(params: DiscordMessageRequestParams) {
-  const payload = buildDiscordMessagePayload(params);
+  const payload: MessagePayloadObject = {};
+  const hasV2 = hasDiscordV2Components(params.components);
+  const trimmed = params.text.trim();
+  if (!hasV2 && trimmed) {
+    payload.content = params.text;
+  }
+  if (params.components?.length) {
+    payload.components = params.components;
+  }
+  if (!hasV2 && params.embeds?.length) {
+    payload.embeds = params.embeds;
+  }
+  if (params.allowedMentions) {
+    payload.allowed_mentions = params.allowedMentions;
+  }
+  if (params.flags !== undefined) {
+    payload.flags = params.flags;
+  }
+  if (params.files?.length) {
+    payload.files = params.files;
+  }
   const nonce =
     params.endpoint === "create-message"
       ? (params.nonce ?? createDiscordMessageNonce())

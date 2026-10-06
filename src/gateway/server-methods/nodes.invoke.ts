@@ -19,7 +19,7 @@ import { invokeNodeWithReadinessRetry } from "../node-invoke-readiness.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
 import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   captureGatewayClientUploadCommitGuard,
@@ -143,10 +143,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (
-      isAdminOnlyNodeInvokeCommand(command) &&
-      !nodeInvokePolicy.clientHasOperatorAdminScope(client)
-    ) {
+    if (isAdminOnlyNodeInvokeCommand(command) && !hasGatewayAdminScope(client)) {
       respond(
         false,
         undefined,
@@ -306,23 +303,24 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
           );
         }
-        // A reload may revoke authority for an in-flight request, but it must not
-        // retroactively grant one that was denied when admitted before node wake.
-        for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
+        const authorizeNodeCommand = (
+          session: NonNullable<typeof nodeSession>,
+          authorizationCfg: typeof cfg,
+        ): boolean => {
           const allowlist = resolveNodeCommandAllowlist(authorizationCfg, {
-            ...nodeSession,
-            approvedCommands: nodeSession.commands,
+            ...session,
+            approvedCommands: session.commands,
           });
           const allowed = isNodeCommandAllowed({
             command,
-            declaredCommands: nodeSession.commands,
+            declaredCommands: session.commands,
             allowlist,
           });
           if (!allowed.ok) {
             const hint = buildNodeCommandRejectionHint(
               allowed.reason,
               command,
-              nodeSession,
+              session,
               authorizationCfg,
             );
             respond(
@@ -332,6 +330,14 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
                 details: { reason: allowed.reason, command },
               }),
             );
+            return false;
+          }
+          return true;
+        };
+        // A reload may revoke authority for an in-flight request, but it must not
+        // retroactively grant one that was denied when admitted before node wake.
+        for (const authorizationCfg of [cfg, context.getRuntimeConfig()]) {
+          if (!authorizeNodeCommand(nodeSession, authorizationCfg)) {
             return;
           }
         }
@@ -339,6 +345,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
         const forwardedParams = await sanitizeNodeInvokeParamsForForwarding({
           nodeId,
           command,
+          caps: nodeSession.caps,
           rawParams: p.params,
           client,
           execApprovalManager: context.execApprovalManager,
@@ -481,32 +488,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        const resolveDispatchAuthorization = (dispatchCfg: typeof cfg) =>
-          isNodeCommandAllowed({
-            command,
-            declaredCommands: dispatchSession.commands,
-            allowlist: resolveNodeCommandAllowlist(dispatchCfg, {
-              ...dispatchSession,
-              approvedCommands: dispatchSession.commands,
-            }),
-          });
-        const dispatchCfg = context.getRuntimeConfig();
-        const dispatchAllowed = resolveDispatchAuthorization(dispatchCfg);
-        if (!dispatchAllowed.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              buildNodeCommandRejectionHint(
-                dispatchAllowed.reason,
-                command,
-                dispatchSession,
-                dispatchCfg,
-              ),
-              { details: { reason: dispatchAllowed.reason, command } },
-            ),
-          );
+        if (!authorizeNodeCommand(dispatchSession, context.getRuntimeConfig())) {
           return;
         }
         const dispatchTimeoutMs = resolveRemainingInvokeTimeoutMs();
@@ -644,13 +626,9 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
             );
             return;
           }
-          if (
-            !respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
-              nodeCommandDispatched,
-            })
-          ) {
-            return;
-          }
+          respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res, {
+            nodeCommandDispatched,
+          });
           return;
         }
         const payload = res.payloadJSON ? parseGatewayPayload(res.payloadJSON) : res.payload;

@@ -98,18 +98,12 @@ export function isPreRegistrationAbortedAgentDedupeEntryForSession(params: {
     return false;
   }
   const payload = params.entry.payload;
-  const payloadRunId = typeof payload.runId === "string" ? payload.runId.trim() : "";
+  const payloadRunId = normalizeOptionalString(payload.runId);
   if (payloadRunId && payloadRunId !== params.runId) {
     return false;
   }
-  const payloadSessionKey =
-    typeof payload.sessionKey === "string" && payload.sessionKey.trim()
-      ? payload.sessionKey.trim()
-      : undefined;
-  const payloadAgentId =
-    typeof payload.agentId === "string" && payload.agentId.trim()
-      ? payload.agentId.trim()
-      : undefined;
+  const payloadSessionKey = normalizeOptionalString(payload.sessionKey);
+  const payloadAgentId = normalizeOptionalString(payload.agentId);
   if (params.agentId && payloadAgentId !== params.agentId) {
     return false;
   }

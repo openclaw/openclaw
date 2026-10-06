@@ -8,7 +8,8 @@ import {
 } from "../../plugins/runtime.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { publishCanonicalUserChannelPolicy } from "../../state/user-channel-identity-operations.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -169,8 +170,8 @@ async function createFixture(
     admins,
     gateway,
     context,
-    replaceGatewayContext: () => {
-      gateway = createCommandOwnerTestGateway(cfg);
+    replaceGatewayContext: (replacement?: GatewayRequestContext) => {
+      gateway = replacement ?? createCommandOwnerTestGateway(cfg);
     },
     unregister,
     retire: () => {

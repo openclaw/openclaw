@@ -21,7 +21,7 @@ import { MemoryIndexManager } from "./manager.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 
-describe("memory legacy migration cleanup", () => {
+describe("memory dirty source cleanup", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let manager: MemoryIndexManager | undefined;
@@ -49,7 +49,7 @@ describe("memory legacy migration cleanup", () => {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  it("removes migrated chunks and FTS rows when the dirty source file is already deleted", async () => {
+  it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
     const seedDb = openOpenClawAgentDatabase({ agentId: "main" }).db;
     const loaded = await loadSqliteVecExtension({ db: seedDb });
     expect(loaded.ok, loaded.error).toBe(true);
@@ -58,7 +58,8 @@ describe("memory legacy migration cleanup", () => {
     seedDb.exec(`
         INSERT INTO memory_index_sources (path, source, hash, mtime, size)
           VALUES
-            ('memory/deleted.md', 'memory', 'canonical-hash', 200, 20),
+            ('memory/deleted.md', 'memory', '', 200, 20),
+            ('memory/ownerless.md', 'memory', '', 190, 20),
             ('sessions/excluded.jsonl', 'sessions', '', 200, 20);
         INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
@@ -81,33 +82,6 @@ describe("memory legacy migration cleanup", () => {
         INSERT INTO memory_index_meta (key, value)
           VALUES ('memory_vector_rebuild_v1', 'clean');
 
-        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE files (
-          path TEXT PRIMARY KEY,
-          source TEXT NOT NULL DEFAULT 'memory',
-          hash TEXT NOT NULL,
-          mtime INTEGER NOT NULL,
-          size INTEGER NOT NULL
-        );
-        CREATE TABLE chunks (
-          id TEXT PRIMARY KEY,
-          path TEXT NOT NULL,
-          source TEXT NOT NULL DEFAULT 'memory',
-          start_line INTEGER NOT NULL,
-          end_line INTEGER NOT NULL,
-          hash TEXT NOT NULL,
-          model TEXT NOT NULL,
-          text TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        INSERT INTO files VALUES (
-          'memory/deleted.md', 'memory', 'legacy-hash', 100, 10
-        );
-        INSERT INTO chunks VALUES (
-          'chunk-legacy-extra', 'memory/deleted.md', 'memory', 3, 4, 'legacy-chunk-hash',
-          'fts-only', 'stale legacy tail', '[]', 100
-        );
       `);
     expect(seedDb.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_vec").get()).toEqual({
       count: 2,
@@ -126,7 +100,7 @@ describe("memory legacy migration cleanup", () => {
       },
       agents: {
         defaults: { workspace: workspaceDir },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
     };
     const result = await MemoryIndexManager.get({ cfg, agentId: "main" });

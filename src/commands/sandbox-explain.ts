@@ -58,13 +58,10 @@ function normalizeExplainSessionKey(params: {
       agentId: params.agentId,
     });
   }
-  if (raw.includes(":")) {
+  if (raw.includes(":") || raw === "global") {
     // Fully-qualified session keys are already scoped; only short names need
     // agent/main-key expansion.
     return raw;
-  }
-  if (raw === "global") {
-    return "global";
   }
   return buildAgentMainSessionKey({
     agentId: params.agentId,
@@ -261,26 +258,19 @@ export async function sandboxExplainCommand(
   const elevatedFailures: Array<{ gate: string; key: string }> = [];
   // Track each failed gate separately so the human report points at concrete
   // config keys instead of only saying elevated access is disabled.
-  if (!elevatedGlobalEnabled) {
-    elevatedFailures.push({ gate: "enabled", key: "tools.elevated.enabled" });
-  }
-  if (!elevatedAgentEnabled) {
-    elevatedFailures.push({
-      gate: "enabled",
-      key: "agents.entries.*.tools.elevated.enabled",
-    });
-  }
-  if (channel && globalAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${channel}`,
-    });
-  }
-  if (channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {
-    elevatedFailures.push({
-      gate: "allowFrom",
-      key: `agents.entries.*.tools.elevated.allowFrom.${channel}`,
-    });
+  for (const [failed, gate, key] of [
+    [!elevatedGlobalEnabled, "enabled", "tools.elevated.enabled"],
+    [!elevatedAgentEnabled, "enabled", "agents.entries.*.tools.elevated.enabled"],
+    [channel && globalAllowTokens.length === 0, "allowFrom", `tools.elevated.allowFrom.${channel}`],
+    [
+      channel && elevatedAgent?.allowFrom && agentAllowTokens.length === 0,
+      "allowFrom",
+      `agents.entries.*.tools.elevated.allowFrom.${channel}`,
+    ],
+  ] as const) {
+    if (failed) {
+      elevatedFailures.push({ gate, key });
+    }
   }
 
   const fixIt: string[] = [];

@@ -1,5 +1,6 @@
 import { constants, type DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import {
@@ -11,7 +12,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
-import { saveCronJobsStoreWithRevisionNative } from "./store.js";
 import { deleteStaleCronJobFamilyRows, type CronJobFamilyIdentity } from "./store/row-codec.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -54,10 +54,7 @@ async function withFamilyStore(
     db: DatabaseSync;
     activeStore: string;
     staleStore: string;
-    removeFamilyNative: (
-      family: CronJobFamilyIdentity,
-      opts?: { beforeTransaction?: () => void },
-    ) => Promise<number>;
+    removeFamilyNative: (family: CronJobFamilyIdentity) => Promise<number>;
   }) => Promise<void>,
 ) {
   await withOpenClawTestState({ label: "cron-stale-family" }, async (state) => {
@@ -88,8 +85,8 @@ async function withFamilyStore(
         makeJob(`unrelated-${index}`, { description: "x".repeat(workload.descriptionBytes) }),
       ),
     ];
-    saveCronJobsStoreWithRevisionNative(activeStore, { version: 1, jobs: [active] });
-    saveCronJobsStoreWithRevisionNative(staleStore, { version: 1, jobs: stale });
+    seedCronStoreInCurrentDatabase(activeStore, { version: 1, jobs: [active] });
+    seedCronStoreInCurrentDatabase(staleStore, { version: 1, jobs: stale });
     runOpenClawStateWriteTransaction(({ db }) => {
       const insert = db.prepare(
         "INSERT INTO cron_job_scratch (store_key, job_id, content, revision, updated_at_ms) VALUES (?, ?, ?, 1, 1800000000000)",
@@ -118,12 +115,10 @@ async function withFamilyStore(
         db: openOpenClawStateDatabase().db,
         activeStore,
         staleStore,
-        removeFamilyNative: async (identity, opts) => {
-          opts?.beforeTransaction?.();
-          return runOpenClawStateWriteTransaction(({ db }) =>
+        removeFamilyNative: async (identity) =>
+          runOpenClawStateWriteTransaction(({ db }) =>
             deleteStaleCronJobFamilyRows(db, activeStore, identity),
-          );
-        },
+          ),
       });
     } finally {
       cron.stop();
@@ -145,23 +140,16 @@ function withoutJobs(before: ReturnType<typeof readDurableRows>, store: string, 
 const ordinary = { unrelatedCount: 3, descriptionBytes: 32 };
 
 describe("Cron stale-family cleanup", () => {
-  it.each([
-    { label: "ordinary", ...ordinary },
-    { label: "description-rich", unrelatedCount: 32, descriptionBytes: 128 * 1024 },
-  ])(
-    "preserves unrelated $label jobs in the row kernel without fetching their descriptions",
-    async (workload) => {
-      await withFamilyStore(workload, async ({ removeFamilyNative, db, staleStore }) => {
+  it("preserves unrelated description-rich jobs without fetching their descriptions", async () => {
+    await withFamilyStore(
+      { unrelatedCount: 32, descriptionBytes: 128 * 1024 },
+      async ({ removeFamilyNative, db, staleStore }) => {
         const expected = withoutJobs(readDurableRows(db), staleStore, ["z-declared", "a-legacy"]);
         const counter = trackSqliteStatementExecutions(db, ["familyRows"], (sql) =>
           /^select\b/i.test(sql) && sql.includes('"cron_jobs"') ? "familyRows" : null,
         );
-        const commitGuard = vi.fn();
         try {
-          await expect(
-            removeFamilyNative(family, { beforeTransaction: commitGuard }),
-          ).resolves.toBe(2);
-          expect(commitGuard).toHaveBeenCalledOnce();
+          await expect(removeFamilyNative(family)).resolves.toBe(2);
         } finally {
           counter.restore();
         }
@@ -173,9 +161,9 @@ describe("Cron stale-family cleanup", () => {
         expect(counter.counts.familyRows).toBeGreaterThan(0);
         expect(counter.rowCounts.familyRows).toBeGreaterThan(0);
         expect(counter.textBytes.familyRows).toBeLessThan(16 * 1024);
-      });
-    },
-  );
+      },
+    );
+  });
 
   it("preserves decoded Unicode, malformed TEXT, and embedded NUL identities", async () => {
     await withFamilyStore(ordinary, async ({ cron, db, staleStore }) => {
@@ -255,14 +243,11 @@ describe("Cron stale-family cleanup", () => {
           );
           expect(first).toBeDefined();
           try {
-            await expect(
-              removeFamilyNative(family, {
-                beforeTransaction: () => {
-                  db.exec(`CREATE TEMP TRIGGER refuse_family_delete BEFORE DELETE ON main.cron_jobs
+            db.exec(`CREATE TEMP TRIGGER refuse_family_delete BEFORE DELETE ON main.cron_jobs
               BEGIN SELECT RAISE(ABORT, 'refused:' || OLD.job_id); END;`);
-                },
-              }),
-            ).rejects.toThrow(`refused:${String(first?.job_id)}`);
+            await expect(removeFamilyNative(family)).rejects.toThrow(
+              `refused:${String(first?.job_id)}`,
+            );
           } finally {
             db.exec("DROP TRIGGER IF EXISTS temp.refuse_family_delete");
           }
@@ -280,50 +265,33 @@ describe("Cron stale-family cleanup", () => {
       const before = readDurableRows(db);
       for (const column of ["store_key", "job_id", "declaration_key", "name", "description"]) {
         try {
-          await expect(
-            removeFamilyNative(family, {
-              beforeTransaction: () => {
-                db.setAuthorizer((action, table, readColumn) =>
-                  action === constants.SQLITE_READ && table === "cron_jobs" && readColumn === column
-                    ? constants.SQLITE_DENY
-                    : constants.SQLITE_OK,
-                );
-              },
-            }),
-          ).rejects.toThrow(/prohibited|not authorized/i);
+          db.setAuthorizer((action, table, readColumn) =>
+            action === constants.SQLITE_READ && table === "cron_jobs" && readColumn === column
+              ? constants.SQLITE_DENY
+              : constants.SQLITE_OK,
+          );
+          await expect(removeFamilyNative(family)).rejects.toThrow(/prohibited|not authorized/i);
         } finally {
           db.setAuthorizer(null);
         }
         expect(readDurableRows(db)).toEqual(before);
       }
       try {
-        await expect(
-          removeFamilyNative(family, {
-            beforeTransaction: () => {
-              db.setAuthorizer((action, table, column) =>
-                action === constants.SQLITE_READ &&
-                table === "cron_jobs" &&
-                column === "description"
-                  ? constants.SQLITE_IGNORE
-                  : constants.SQLITE_OK,
-              );
-            },
-          }),
-        ).resolves.toBe(1);
+        db.setAuthorizer((action, table, column) =>
+          action === constants.SQLITE_READ && table === "cron_jobs" && column === "description"
+            ? constants.SQLITE_IGNORE
+            : constants.SQLITE_OK,
+        );
+        await expect(removeFamilyNative(family)).resolves.toBe(1);
       } finally {
         db.setAuthorizer(null);
       }
       expect(readDurableRows(db)).toEqual(withoutJobs(before, staleStore, ["z-declared"]));
       try {
-        await expect(
-          removeFamilyNative(family, {
-            beforeTransaction: () => {
-              db.setAuthorizer((action) =>
-                action === constants.SQLITE_FUNCTION ? constants.SQLITE_DENY : constants.SQLITE_OK,
-              );
-            },
-          }),
-        ).resolves.toBe(1);
+        db.setAuthorizer((action) =>
+          action === constants.SQLITE_FUNCTION ? constants.SQLITE_DENY : constants.SQLITE_OK,
+        );
+        await expect(removeFamilyNative(family)).resolves.toBe(1);
       } finally {
         db.setAuthorizer(null);
       }

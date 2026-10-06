@@ -46,7 +46,7 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
     }>;
   };
 
-type InternalRealtimeVoiceProviderApi = {
+export type InternalRealtimeVoiceProviderApi = {
   isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
   resolveBrowserSessionCapabilities?: (
     ctx: RealtimeVoiceProviderConfiguredContext & {

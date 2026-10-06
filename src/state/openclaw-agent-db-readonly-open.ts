@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cache-state.js";
+import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import {
@@ -17,10 +19,12 @@ import {
   assertSupportedAgentSchemaVersion,
   readExistingAgentSchemaMeta,
 } from "./openclaw-agent-db-schema-read.js";
+import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
+import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 export type OpenClawAgentReadOnlyDatabase = {
@@ -54,8 +58,7 @@ export function readOpenClawAgentDatabase<T>(
   }
 }
 
-/** Recheck committed admission facts before using an existing read-only connection. */
-export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
+function hasAdmittedAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
   const userVersion = assertSupportedAgentSchemaVersion(database.db, database.path);
   assertCanonicalAgentPersistenceVersion(database.db, database.path, userVersion);
   const schemaMeta = readExistingAgentSchemaMeta(database.db);
@@ -63,7 +66,17 @@ export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDa
     return false;
   }
   assertExistingAgentSchemaOwner(schemaMeta, database.agentId, database.path);
+  assertCanonicalSessionValidationSchema(database.db);
   return true;
+}
+
+/** Recheck committed admission facts before using an existing read-only connection. */
+export function hasOpenClawAgentReadOnlySchema(database: OpenClawAgentReadOnlyDatabase): boolean {
+  return runSqliteReadOperationSync(
+    database.db,
+    () => hasAdmittedAgentReadOnlySchema(database),
+    "fresh",
+  );
 }
 
 /** Fresh-only callers do not need the writable runtime's process-held connection cache. */
@@ -93,8 +106,19 @@ export function openOpenClawAgentDatabaseReadOnly(
   if (isIncognitoOpenClawAgentSqlitePath(pathname, { agentId, env: options.env })) {
     return { found: false, reason: "database-missing" };
   }
-  if (!fs.existsSync(pathname)) {
+  if (isDeletedAgentDatabasePath(pathname) || !fs.existsSync(pathname)) {
     return { found: false, reason: "database-missing" };
+  }
+  // Verified-corrupt generations stay quarantined for reads as well as writes:
+  // the process terminal latch and the persisted generation-aware quarantine
+  // row must both clear before any fresh read-only physical open proceeds.
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  const persistedQuarantine = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
+    env: options.env,
+  });
+  if (persistedQuarantine) {
+    recordOpenClawAgentDatabaseReadOpenFailure(persistedQuarantine);
+    throw persistedQuarantine;
   }
   // Lock policy belongs to the open: node:sqlite has no busy handler until one
   // is set, so a later PRAGMA leaves every earlier statement unprotected.
@@ -114,20 +138,23 @@ export function openOpenClawAgentDatabaseReadOnly(
     if (closed) {
       return;
     }
-    clearNodeSqliteKyselyCacheForDatabase(db);
     if (db.isOpen) {
       db.close();
     }
     closed = true;
   };
   try {
+    enableNodeSqliteKyselyStatementCache(db);
     registerOpenClawAgentDatabaseIdentity(db);
     const database = { agentId, db, path: pathname, close };
-    if (!hasOpenClawAgentReadOnlySchema(database)) {
+    const hasSchema = runSqliteReadOperationSync(db, () => {
+      admitSqliteSchema(db);
+      return hasAdmittedAgentReadOnlySchema(database);
+    });
+    if (!hasSchema) {
       close();
       return { found: false, reason: "schema-missing" };
     }
-    admitSqliteSchema(db);
     return { found: true, database };
   } catch (error) {
     close();

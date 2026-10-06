@@ -13,7 +13,6 @@ import {
   isCronSessionKey,
   isSubagentSessionKey,
 } from "../../routing/session-key.js";
-import { interruptAdmittedMainSessionRecovery } from "./main-session-recovery-admitted-interruption.js";
 import {
   buildMainSessionRecoveryClearPatch,
   removeMainSessionRecoveryForegroundClaim,
@@ -344,6 +343,10 @@ export function transitionMainSessionRecovery(
 ): MainSessionRecoveryTransitionResult {
   switch (command.kind) {
     case "mark_interrupted": {
+      // Queued announcements add fences too. Retain the executing turn before
+      // releasing its lifecycle identity so retries can join this recovery.
+      entry.restartRecoveryDeliverySourceRunId ??=
+        entry.restartRecoveryDeliveryRunId ?? entry.lifecycleRunId;
       const state = entry.mainRestartRecovery;
       if (!state) {
         entry.mainRestartRecovery = createCycle(command.cycleId);
@@ -446,15 +449,11 @@ export function transitionMainSessionRecovery(
       if (command.attempt !== state.chargedAttempts + 1) {
         return { kind: "rejected", reason: "stale_revision" };
       }
-      const retryExecutionIdentity =
-        command.executionIdentity.state === "enabled" && state.executionIdentity
-          ? state.executionIdentity
-          : undefined;
-      const executionIdentityAdmission = retryExecutionIdentity
-        ? ({ kind: "retry-reference", token: retryExecutionIdentity } as const)
-        : undefined;
       updateRecoveryState(entry, state, {
-        executionIdentity: retryExecutionIdentity,
+        executionIdentity:
+          command.executionIdentity.state === "enabled" && state.executionIdentity
+            ? state.executionIdentity
+            : undefined,
         chargedAttempts: command.attempt,
         reservation: {
           runId: command.runId,
@@ -471,7 +470,6 @@ export function transitionMainSessionRecovery(
           lifecycleGeneration: command.lifecycleGeneration,
           runId: command.runId,
           attempt: command.attempt,
-          ...(executionIdentityAdmission ? { executionIdentityAdmission } : {}),
         },
       };
     }
@@ -574,8 +572,48 @@ export function transitionMainSessionRecovery(
         },
       };
     }
-    case "mark_admitted_recovery_interrupted":
-      return interruptAdmittedMainSessionRecovery(entry, command);
+    case "mark_admitted_recovery_interrupted": {
+      const state = entry.mainRestartRecovery;
+      if (entry.sessionId !== command.sessionId) {
+        return { kind: "rejected", reason: "session_replaced" };
+      }
+      if (
+        !state ||
+        state.cycleId !== command.cycleId ||
+        state.chargedAttempts !== command.attempt ||
+        state.reservation ||
+        state.foregroundClaims ||
+        !entry.restartRecoveryRuns?.some(
+          (run) =>
+            run.runId === command.runId && run.lifecycleGeneration === command.lifecycleGeneration,
+        )
+      ) {
+        return { kind: "rejected", reason: "stale_reservation" };
+      }
+      if (entry.lifecycleRunId !== command.runId) {
+        // A committed restoration may lose its response. Only that exact pending
+        // attempt is repeatable; retained run fences do not authorize newer work.
+        return entry.status === "running" &&
+          entry.abortedLastRun === true &&
+          entry.lifecycleRunId === undefined &&
+          entry.restartRecoveryDeliveryRunId === undefined
+          ? { kind: "no_change" }
+          : { kind: "rejected", reason: "stale_reservation" };
+      }
+      entry.status = "running";
+      entry.lifecycleRunId = undefined;
+      entry.lastRunId = undefined;
+      entry.abortedLastRun = true;
+      entry.startedAt = undefined;
+      entry.endedAt = undefined;
+      entry.runtimeMs = undefined;
+      if (entry.restartRecoveryDeliveryRunId === command.runId) {
+        // Rotate the failed RPC id on retry so dedupe cannot replay its terminal failure.
+        entry.restartRecoveryDeliveryRunId = undefined;
+      }
+      entry.updatedAt = command.now;
+      return { kind: "applied" };
+    }
     case "claim_foreground": {
       if (
         entry.sessionId === command.sessionId &&

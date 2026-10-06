@@ -125,7 +125,7 @@ describe("ClickClack direct-model response prefix", () => {
       {
         label: "identity",
         cfg: {
-          agents: { list: [{ id: "service-bot", identity: { name: "Service Bot" } }] },
+          agents: { entries: { "service-bot": { identity: { name: "Service Bot" } } } },
           channels: { clickclack: { responsePrefix: "auto" } },
         },
         expected: "[Service Bot] service bot online",

@@ -25,7 +25,10 @@ import {
   getPreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime-generation-scope.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
-import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
+import {
+  isPreparedModelRuntimeMissingOwnerError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -45,6 +48,7 @@ import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+export { getPendingPreparedModelRuntimeReplacement } from "./prepared-model-runtime.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -267,7 +271,7 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
         throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
       }
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!isPreparedModelRuntimeMissingOwnerError(error)) {
         throw error;
       }
     }
@@ -304,7 +308,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
     }
     await preparedExact.release?.();
   } catch (error) {
-    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+    if (!isPreparedModelRuntimeMissingOwnerError(error)) {
       throw error;
     }
   }
@@ -544,7 +548,16 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await withPreparedModelCatalogOwnerPolicy(params, "published", (snapshot) => snapshot);
+  return await withPreparedModelCatalogOwnerPolicy(
+    params,
+    "published",
+    (snapshot) => snapshot,
+    async (input) => ({
+      snapshot: await prepareModelRuntimeSnapshot(input, {
+        readPublished: params.readOnly !== false && params.refreshFullCatalog !== true,
+      }),
+    }),
+  );
 }
 
 /** Resolves a complete published owner for long-lived runtime consumers. */

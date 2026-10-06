@@ -32,7 +32,6 @@ This example gives the `research` agent a writable primary workspace, read-only 
     },
     entries: {
       research: {
-        default: true,
         workspace: "/srv/openclaw/research-workspace",
         sandbox: {
           workspaceAccess: "rw",
@@ -94,7 +93,6 @@ openclaw sandbox recreate --agent research
     },
     entries: {
       build: {
-        default: true,
         sandbox: {
           docker: {
             binds: ["/mnt/cache:/cache:rw"],

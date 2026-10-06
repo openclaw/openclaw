@@ -139,8 +139,8 @@ export const createTelegramMessageProcessor = (
             buildContext ?? telegramDeps.buildChannelInboundEventContext,
         }
       : {}),
-    ...(telegramDeps.readSessionUpdatedAt
-      ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
+    ...(telegramDeps.readSessionUpdatedAtAsync
+      ? { readSessionUpdatedAtAsync: telegramDeps.readSessionUpdatedAtAsync }
       : {}),
     ...(telegramDeps.readAmbientTranscriptWatermark
       ? { readAmbientTranscriptWatermark: telegramDeps.readAmbientTranscriptWatermark }
@@ -188,8 +188,7 @@ export const createTelegramMessageProcessor = (
       typeof options?.receivedAtMs === "number" && Number.isFinite(options.receivedAtMs)
         ? options.receivedAtMs
         : undefined;
-    const ingressDebugEnabled =
-      shouldLogVerbose() || process.env.OPENCLAW_DEBUG_TELEGRAM_INGRESS === "1";
+    const ingressDebugEnabled = shouldLogVerbose();
     const ingressContextStartMs = ingressReceivedAtMs ? Date.now() : undefined;
     const context = await buildTelegramMessageContext({
       nativeCommandNames: deps.nativeCommandNames,
@@ -402,18 +401,17 @@ export const createTelegramMessageProcessor = (
                   adoptedResult.kind === "failed-retryable"
                     ? adoptedResult.error
                     : new Error("telegram spooled turn adoption was not completed");
-                throw adoptedResult.kind === "failed-retryable"
-                  ? adoptedResult.error
-                  : new Error("telegram spooled turn adoption was not completed");
+                throw adoptionFinalizationError;
               }
               await drainLifecycle?.onAdopted();
             },
             onDeferred: () => {
               deferred = true;
               drainLifecycle?.onDeferred();
+              turnContext.onTurnDeferred?.();
             },
-            onDeferredHeartbeat: () => drainLifecycle?.onDeferredHeartbeat?.(),
-            deferredHeartbeatIntervalMs: drainLifecycle?.deferredHeartbeatIntervalMs,
+            onDeferredHeartbeat: () => participant.heartbeat(),
+            deferredHeartbeatIntervalMs: participant.heartbeatIntervalMs,
             onAbandoned: () => {
               if (!adopted) {
                 void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");

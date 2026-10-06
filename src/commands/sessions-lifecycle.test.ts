@@ -467,7 +467,7 @@ describe("sessions lifecycle commands", () => {
       vi.stubEnv("OPENCLAW_CONTAINER_HINT", "client-container");
       const key = "agent:work:notes;echo unsafe";
       mocks.getRuntimeConfig.mockReturnValue({
-        agents: { entries: { main: { default: true }, work: {} } },
+        agents: { entries: { main: {}, work: {} } },
         gateway: { mode: "remote", remote: { url: "ws://configured-gateway.test" } },
       });
       mocks.callGateway

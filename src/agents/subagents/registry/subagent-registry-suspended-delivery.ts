@@ -1,14 +1,19 @@
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
-  SUBAGENT_ENDED_REASON_COMPLETE,
-  type SubagentLifecycleEndedReason,
-} from "./subagent-lifecycle-events.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
-import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
+import type {
+  SubagentLifecycleController,
+  SubagentLifecycleOptions,
+} from "./subagent-registry-lifecycle.js";
+import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+export const SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const SUBAGENT_SUSPENDED_DELIVERY_WARNING_COUNT = 25;
 
 export function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
@@ -39,62 +44,53 @@ export function warnSuspendedDeliveryPressure(
   return suspendedCount;
 }
 
-export function resolveSuspendedDeliveryExpiryMs(): number {
-  return SUBAGENT_SUSPENDED_DELIVERY_RETENTION_MS;
-}
-
 export async function discardSuspendedPendingFinalDelivery(params: {
   runId: string;
   entry: SubagentRunRecord;
   now: number;
   reason: "expired";
-  resumedRuns: Set<string>;
+  resumedRuns: Set<object>;
   clearPendingLifecycleError: (runId: string) => void;
   clearPendingLifecycleTimeout: (runId: string) => void;
   discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
-  completeCleanupBookkeeping: (params: {
-    runId: string;
-    entry: SubagentRunRecord;
-    cleanup: "delete" | "keep";
-    completedAt: number;
-    skipRequesterSettleWake: true;
-  }) => void;
-  shouldEmitEndedHookForRun: (params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-  }) => boolean;
-  emitSubagentEndedHookForRun: (params: {
-    entry: SubagentRunRecord;
-    reason: SubagentLifecycleEndedReason;
-    sendFarewell: true;
-  }) => Promise<void>;
+  completeCleanupBookkeeping: SubagentLifecycleController["completeCleanupBookkeeping"];
+  isCurrent: () => boolean;
+  sessionEffectsHostCurrent: SubagentLifecycleController["sessionEffectsHostCurrent"];
+  shouldSuppressSessionEffects: SubagentLifecycleController["shouldSuppressSessionEffects"];
+  shouldEmitEndedHookForRun: SubagentLifecycleOptions["shouldEmitEndedHookForRun"];
+  emitSubagentEndedHookForRun: SubagentLifecycleOptions["emitSubagentEndedHookForRun"];
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }): Promise<void> {
   const { runId, entry, now, reason, resumedRuns } = params;
-  const snapshot = structuredClone(entry);
-  const wasResumed = resumedRuns.has(runId);
-  params.discardTerminalDelivery(entry, now, reason);
-  const suppressSessionEffects = shouldSuppressSubagentRecoverySessionEffects(entry);
+  const stateContext = captureOpenClawStateWorkerContext();
+  const generation = entry.generation;
+  const resumeKey = getSubagentRunRuntimeKey(entry);
+  const isCurrent = () => {
+    assertSubagentRegistryWriteSourceCurrent(stateContext);
+    return entry.generation === generation && params.isCurrent();
+  };
+  const assertCurrent = () => {
+    if (!isCurrent()) {
+      throw new Error("Subagent suspended delivery cleanup owner changed.");
+    }
+  };
+  assertCurrent();
+  const isHookCurrent = () => isCurrent() && params.sessionEffectsHostCurrent(entry);
+  const prepareHookCurrent = async () =>
+    isHookCurrent() && !(await params.shouldSuppressSessionEffects(entry)) && isHookCurrent();
   const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
-  try {
-    params.completeCleanupBookkeeping({
-      runId,
-      entry,
-      cleanup: entry.cleanup,
-      completedAt: now,
-      skipRequesterSettleWake: true,
-    });
-  } catch (error) {
-    for (const key of Object.keys(entry)) {
-      Reflect.deleteProperty(entry, key);
-    }
-    Object.assign(entry, snapshot);
-    if (wasResumed) {
-      resumedRuns.add(runId);
-    }
-    throw error;
-  }
-  resumedRuns.delete(runId);
+  await params.completeCleanupBookkeeping({
+    runId,
+    entry,
+    cleanup: entry.cleanup,
+    completedAt: now,
+    skipRequesterSettleWake: true,
+    stateContext,
+    isCurrent,
+    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, reason),
+  });
+  assertCurrent();
+  resumedRuns.delete(resumeKey);
   params.clearPendingLifecycleError(runId);
   params.clearPendingLifecycleTimeout(runId);
   params.warn("subagent suspended delivery discarded", {
@@ -103,11 +99,12 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     childSessionKey: entry.childSessionKey,
     requesterSessionKey: entry.requesterSessionKey,
   });
-  if (entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry);
+  if (shouldRemoveSubagentAttachments(entry) && isHookCurrent()) {
+    await safeRemoveAttachmentsDir(entry, isHookCurrent);
   }
+  assertCurrent();
   if (
-    !suppressSessionEffects &&
+    (await prepareHookCurrent()) &&
     entry.expectsCompletionMessage === true &&
     params.shouldEmitEndedHookForRun({ entry, reason: completionReason })
   ) {
@@ -115,6 +112,8 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       entry,
       reason: completionReason,
       sendFarewell: true,
+      isCurrent: isHookCurrent,
+      prepareCurrent: prepareHookCurrent,
     });
   }
 }

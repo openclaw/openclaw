@@ -1,18 +1,20 @@
-import type { BigIntStats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
-import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
-
-export type UpdateCandidatePluginTreeEntry = UpdateCandidatePluginTreePlan["entries"][number];
 
 type MaterializablePlan = Omit<UpdateCandidatePluginTreePlan, "bytes" | "entries">;
 
@@ -21,7 +23,7 @@ export const isUpdateCandidateHostLauncher = (file: string) =>
   ["openclaw", "openclaw.cmd", "openclaw.ps1"].includes(path.basename(file));
 
 export function assertUpdateCandidatePluginEntryStat(
-  entry: UpdateCandidatePluginTreeEntry,
+  entry: UpdateCandidatePluginEntry,
   current: BigIntStats,
 ): void {
   const sameKind =
@@ -35,17 +37,26 @@ export function assertUpdateCandidatePluginEntryStat(
   if (!sameKind || !sameIdentity || !sameMode) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
-  const sameFile =
-    entry.kind !== "file" ||
-    sameFileMutationFingerprint(current, {
+  if (entry.kind === "file") {
+    const expected = {
       dev: BigInt(entry.dev),
       ino: BigInt(entry.ino),
       size: BigInt(entry.size),
       birthtimeNs: BigInt(entry.birthtimeNs),
       mtimeNs: BigInt(entry.mtimeNs),
       ctimeNs: BigInt(entry.ctimeNs),
-    });
-  if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
+      mode: BigInt(entry.mode | constants.S_IFREG),
+      uid: BigInt(entry.uid),
+      gid: BigInt(entry.gid),
+    };
+    if (
+      !sameFileMutationMetadata(expected, current) ||
+      (current.ctimeNs !== expected.ctimeNs &&
+        hashFileMutationSnapshotSync(entry.path, expected) !== entry.sha256)
+    ) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  } else if (entry.kind === "symlink" && current.size !== BigInt(entry.size)) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
 }
@@ -85,22 +96,31 @@ export function resolveUpdateCandidatePluginTreeTargets(
     return path.join(owner[1], path.relative(owner[0], source));
   };
   const assertBindings = async () => {
-    for (const [source, real] of plan.moduleBindings) {
-      if ((await fs.realpath(source)) !== real) {
-        throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
-      }
-    }
-    for (const edge of plan.edges) {
-      const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
-      const real = await fs.realpath(edge.source).catch((error: unknown) => {
-        if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
-          return target;
-        }
-        throw error;
-      });
-      if (target !== edge.target || real !== edge.real) {
-        throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
-      }
+    const checked = await runTasksWithConcurrency({
+      limit: 4,
+      errorMode: "stop",
+      tasks: [
+        ...plan.moduleBindings.map(([source, real]) => async () => {
+          if ((await fs.realpath(source)) !== real) {
+            throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
+          }
+        }),
+        ...plan.edges.map((edge) => async () => {
+          const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
+          const real = await fs.realpath(edge.source).catch((error: unknown) => {
+            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ELOOP")) {
+              return target;
+            }
+            throw error;
+          });
+          if (target !== edge.target || real !== edge.real) {
+            throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
+          }
+        }),
+      ],
+    });
+    if (checked.hasError) {
+      throw checked.firstError;
     }
   };
   return {
@@ -199,7 +219,7 @@ export function assertUpdateCandidatePluginLinkTarget(
 }
 
 export async function verifyUpdateCandidatePluginTree(
-  file: string,
+  rootFile: string,
   params: {
     privateRoot: string;
     candidateRoot: string;
@@ -207,28 +227,50 @@ export async function verifyUpdateCandidatePluginTree(
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
   },
 ): Promise<void> {
-  const stat = await fs.lstat(file, { bigint: true });
-  const link = stat.isSymbolicLink() ? await fs.readlink(file) : undefined;
-  if (params.hostLinks.has(file)) {
-    if (
-      !stat.isSymbolicLink() ||
-      path.resolve(path.dirname(file), link!) !== params.candidateRoot
-    ) {
-      throw new Error("Copied plugin host link does not target the update");
+  const readEntry = async (file: string) => {
+    const stat = await fs.lstat(file, { bigint: true });
+    const link = stat.isSymbolicLink() ? await fs.readlink(file) : undefined;
+    return { file, stat, link };
+  };
+  const verify = async ({
+    file,
+    stat,
+    link,
+  }: Awaited<ReturnType<typeof readEntry>>): Promise<void> => {
+    if (params.hostLinks.has(file)) {
+      if (
+        !stat.isSymbolicLink() ||
+        path.resolve(path.dirname(file), link!) !== params.candidateRoot
+      ) {
+        throw new Error("Copied plugin host link does not target the update");
+      }
+    } else if (stat.isSymbolicLink()) {
+      assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
     }
-    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
-    return;
-  }
-  // Inspect the entry before traversal, including standalone module aliases;
-  // following a copied root link can otherwise accept an entirely live tree.
-  if (stat.isSymbolicLink()) {
-    assertUpdateCandidatePluginLinkTarget(file, path.resolve(path.dirname(file), link!), params);
-    params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link!));
-    return;
-  }
-  if (stat.isDirectory()) {
-    for (const entry of await fs.readdir(file)) {
-      await verifyUpdateCandidatePluginTree(path.join(file, entry), params);
+    // Inspect the entry before traversal, including standalone module aliases;
+    // following a copied root link can otherwise accept an entirely live tree.
+    if (link !== undefined) {
+      params.onCodeLink?.(captureUpdateCandidatePluginCodeLink(file, stat, link));
+      return;
     }
-  }
+    if (stat.isDirectory()) {
+      const listing = await fs.readdir(file, { withFileTypes: true });
+      const leaves = await runTasksWithConcurrency({
+        limit: 4,
+        errorMode: "stop",
+        tasks: listing
+          .filter((entry) => !entry.isDirectory())
+          .map((entry) => () => readEntry(path.join(file, entry.name))),
+      });
+      if (leaves.hasError) {
+        throw leaves.firstError;
+      }
+      const observations = new Map(leaves.results.map((entry) => [entry.file, entry]));
+      for (const entry of listing) {
+        const child = path.join(file, entry.name);
+        await verify(entry.isDirectory() ? await readEntry(child) : observations.get(child)!);
+      }
+    }
+  };
+  await verify(await readEntry(rootFile));
 }

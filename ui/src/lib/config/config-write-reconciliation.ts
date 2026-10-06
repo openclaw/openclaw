@@ -164,7 +164,7 @@ export function createConfigWriteReconciliation({
         }
         flight.submission = receipt;
         // Old-connection completions retain their flight receipt only for teardown.
-        if (client && !isDisposed() && isCurrentConfigConnection(state, client, epoch)) {
+        if (!isDisposed() && isCurrentConfigConnection(state, client, epoch)) {
           lastSubmission = submission.rejected && previousSubmission ? previousSubmission : receipt;
           if (submission.ack) {
             clearInterruptedWrite();

@@ -12,12 +12,10 @@ export type DeviceManagementAuthz = DeviceSessionAuthz & {
 };
 
 export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceSessionAuthz {
-  const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  const rawCallerDeviceId = client?.connect?.device?.id;
-  const callerDeviceId =
-    client?.isDeviceTokenAuth && typeof rawCallerDeviceId === "string" && rawCallerDeviceId.trim()
-      ? rawCallerDeviceId.trim()
-      : null;
+  const callerScopes = client?.connect.scopes ?? [];
+  const callerDeviceId = client?.isDeviceTokenAuth
+    ? client.connect.device?.id.trim() || null
+    : null;
   return {
     callerDeviceId,
     callerScopes,
@@ -47,11 +45,7 @@ export function deniesDeviceTokenRoleManagement(
   authz: DeviceManagementAuthz,
   targetRole: string,
 ): boolean {
-  const normalizedTargetRole = targetRole.trim();
-  if (!normalizedTargetRole || authz.isAdminCaller) {
-    return false;
-  }
-  return normalizedTargetRole !== "operator";
+  return !authz.isAdminCaller && requestsNonOperatorDeviceRole({ role: targetRole });
 }
 
 export function requestsNonOperatorDeviceRole(input: { role?: string; roles?: string[] }): boolean {

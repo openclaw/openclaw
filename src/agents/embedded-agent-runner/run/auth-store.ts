@@ -18,12 +18,10 @@ export function resolveAttemptDispatchApiKey(params: {
 
 export function createScopedAuthProfileStore(
   store: AuthProfileStore,
-  profileIds: string | undefined | string[],
+  profileIds: readonly string[],
 ): AuthProfileStore {
   const profiles = store.profiles ?? {};
-  const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
-    .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => Boolean(profileId));
+  const normalizedProfileIds = profileIds.map((profileId) => profileId.trim()).filter(Boolean);
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];

@@ -59,6 +59,10 @@ Two ways to start an ACP session:
 
 ### `sessions_spawn` parameters
 
+<ParamField path="user" type="string">
+  The person's requester_profile.id, required when several people have steered this turn.
+</ParamField>
+
 <ParamField path="task" type="string" required>
   Initial prompt sent to the ACP session.
 </ParamField>
@@ -88,7 +92,9 @@ Two ways to start an ACP session:
 <ParamField path="resumeSessionId" type="string">
   Resume an existing ACP session instead of creating a new one. The agent
   replays its conversation history via `session/load`. Requires
-  `runtime: "acp"`.
+  `runtime: "acp"`. The ID must be recorded for the selected backend and belong
+  to the requester (the requester itself or a session it spawned or parented).
+  Unknown IDs are rejected without enumerating the agent's sessions.
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the requester

@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
@@ -45,7 +46,7 @@ const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
 type TwitchClientManagerState = {
   clients: Map<string, unknown>;
-  messageHandlers: Map<string, (message: TwitchChatMessage) => void>;
+  messageHandlers: Map<string, unknown>;
 };
 
 function managerState(manager: TwitchClientManager): TwitchClientManagerState {
@@ -503,39 +504,34 @@ describe("TwitchClientManager", () => {
   });
 
   describe("onMessage", () => {
-    it("cleanup of an earlier handler does not remove a newer registered handler (#83888)", () => {
-      const handler1 = vi.fn();
-      const handler2 = vi.fn();
-      const key = manager.getAccountKey(testAccount);
+    it.each([false, true])(
+      "keeps the current registration after stale cleanup (same handler: %s)",
+      async (sameHandler) => {
+        await manager.getClient(testAccount);
+        const previous = vi.fn();
+        const current = sameHandler ? previous : vi.fn();
+        const cleanup = manager.onMessage(testAccount, previous);
+        manager.onMessage(testAccount, current);
 
-      const cleanup1 = manager.onMessage(testAccount, handler1);
-      manager.onMessage(testAccount, handler2);
+        cleanup();
+        messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
 
-      // Running the first handler's cleanup must not drop handler2.
-      cleanup1();
+        expect(current).toHaveBeenCalledOnce();
+        expect(current).toHaveBeenCalledWith(expect.objectContaining({ id: "msg-current" }));
+        if (!sameHandler) {
+          expect(previous).not.toHaveBeenCalled();
+        }
+      },
+    );
 
-      expect(managerState(manager).messageHandlers.get(key)).toBe(handler2);
-    });
-
-    it("cleanup of an earlier registration does not remove a newer registration using the same handler", () => {
+    it("cleanup of the current handler stops delivery", async () => {
+      await manager.getClient(testAccount);
       const handler = vi.fn();
-      const key = manager.getAccountKey(testAccount);
-
-      const cleanup1 = manager.onMessage(testAccount, handler);
-      manager.onMessage(testAccount, handler);
-      cleanup1();
-
-      expect(managerState(manager).messageHandlers.get(key)).toBe(handler);
-    });
-
-    it("cleanup of the current handler removes it", () => {
-      const handler = vi.fn();
-      const key = manager.getAccountKey(testAccount);
-
       const cleanup = manager.onMessage(testAccount, handler);
       cleanup();
+      messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-removed"));
 
-      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 
@@ -612,6 +608,75 @@ describe("TwitchClientManager", () => {
   describe("sendMessage", () => {
     beforeEach(async () => {
       await manager.getClient(testAccount);
+    });
+
+    it("admits every chunk before handing the complete batch to Twurple", async () => {
+      const preparing = createDeferred<void>();
+      const prepared = createDeferred<void>();
+      const handedOff = createDeferred<void>();
+      const acknowledgment = createDeferred<void>();
+      const authority = fetchRuntime.captureEffectAuthority();
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparing.resolve();
+          await prepared.promise;
+          const result = authority.initiate(effect);
+          handedOff.resolve();
+          return result;
+        },
+      });
+      mockSay.mockReturnValue(acknowledgment.promise);
+      const sending = manager.sendMessage(testAccount, "testchannel", "a".repeat(501));
+      try {
+        await preparing.promise;
+        expect(mockSay).not.toHaveBeenCalled();
+        prepared.resolve();
+        await handedOff.promise;
+        expect(mockSay.mock.calls).toEqual([
+          ["testchannel", "a".repeat(500)],
+          ["testchannel", "a"],
+        ]);
+        acknowledgment.resolve();
+        await expect(sending).resolves.toMatchObject({ ok: true });
+      } finally {
+        prepared.resolve();
+        acknowledgment.resolve();
+        await sending.catch(() => {});
+        capture.mockRestore();
+      }
+    });
+
+    it("preserves preparation refusal without sending any chunk", async () => {
+      const authority = fetchRuntime.captureEffectAuthority();
+      const refusal = new Error("Twitch message authority ended");
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        initiate: async () => {
+          throw refusal;
+        },
+      });
+      try {
+        await expect(manager.sendMessage(testAccount, "testchannel", "a".repeat(501))).rejects.toBe(
+          refusal,
+        );
+        expect(mockSay).not.toHaveBeenCalled();
+      } finally {
+        capture.mockRestore();
+      }
+    });
+
+    it("reports accepted chunks when a later transport send fails", async () => {
+      const failure = new Error("connection lost");
+      mockSay.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+      await expect(
+        manager.sendMessage(testAccount, "testchannel", "a".repeat(501)),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause: failure,
+        deliveryResult: { visibleReplySent: true, messageIds: [expect.any(String)] },
+      });
+      expect(mockSay).toHaveBeenCalledTimes(2);
     });
 
     it("should send message successfully", async () => {

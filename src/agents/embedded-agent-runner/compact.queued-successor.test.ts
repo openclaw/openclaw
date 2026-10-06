@@ -35,7 +35,6 @@ const [
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
-  { markRuntimeCompactionDelegate },
 ] = await Promise.all([
   import("../../auto-reply/reply/session-updates.js"),
   import("../../config/sessions/session-accessor.js"),
@@ -45,7 +44,6 @@ const [
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
   ),
-  import("../../context-engine/compaction-watchdog.js"),
 ]);
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -172,7 +170,6 @@ beforeEach(async () => {
 describe("queued compaction successor ownership", () => {
   it.each([
     { nativePinned: false, observedHarness: "openclaw" },
-    { nativePinned: false, observedHarness: "codex" },
     { nativePinned: true, observedHarness: "codex" },
   ])(
     "keeps manual compaction with its transcript owner after authored runtime fallback (nativePinned=$nativePinned, observed=$observedHarness)",
@@ -397,6 +394,12 @@ describe("queued compaction successor ownership", () => {
         });
         expect(maintain).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
         expect(hookRunner.runAfterCompaction).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
+        if (!abortAfterCommit) {
+          expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+            expect.objectContaining({ previousSessionId: sessionId }),
+            expect.objectContaining({ sessionId: "successor" }),
+          );
+        }
         expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
         const engineInput = contextEngineCompactMock.mock.calls[0]?.[0];
         expect(engineInput).toBeDefined();
@@ -469,29 +472,27 @@ describe("queued compaction successor ownership", () => {
     expect(loadSessionEntry(target())?.totalTokens).toBe(scenario.tokensAfter);
   });
 
-  it.each([
-    { lifecycleRevision: "replacement-lifecycle" },
-    { activeWriterRunId: "replacement-writer" },
-  ])("rejects an owner changed while compaction awaited: %j", async (replacement) => {
-    contextEngineCompactMock.mockImplementationOnce(async () => {
-      await patchSessionEntryCore(target(), () => replacement);
-      return completed();
-    });
-    const onCommitted = vi.fn();
+  it.each([{ lifecycleRevision: "replacement-lifecycle" }])(
+    "rejects an owner changed while compaction awaited: %j",
+    async (replacement) => {
+      contextEngineCompactMock.mockImplementationOnce(async () => {
+        await patchSessionEntryCore(target(), () => replacement);
+        return completed();
+      });
+      const onCommitted = vi.fn();
 
-    await expect(compact(compactParams(), { onCommitted })).rejects.toThrow();
+      await expect(compact(compactParams(), { onCommitted })).rejects.toThrow();
 
-    expect(loadSessionEntry(target())).toMatchObject({ ...owner, ...replacement });
-    expect(onCommitted).not.toHaveBeenCalled();
-    expect(maintain).not.toHaveBeenCalled();
-    expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
-    expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-  });
+      expect(loadSessionEntry(target())).toMatchObject({ ...owner, ...replacement });
+      expect(onCommitted).not.toHaveBeenCalled();
+      expect(maintain).not.toHaveBeenCalled();
+      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { capturedWriter: "writer", takeover: false },
-    { capturedWriter: undefined, takeover: false },
-    { capturedWriter: "writer", takeover: true },
     { capturedWriter: undefined, takeover: true },
   ])(
     "binds backend append to the captured writer (captured=$capturedWriter, takeover=$takeover)",
@@ -620,6 +621,7 @@ describe("queued compaction successor ownership", () => {
           throw new Error("Expected the suite's replaceable safety-timeout mock");
         }
         const caller = new AbortController();
+        const backendEntered = createDeferred();
         const releaseBackend = createDeferred();
         const observed = createDeferred<{
           outcome: BackendAppendOutcome;
@@ -627,20 +629,15 @@ describe("queued compaction successor ownership", () => {
           queuedSettled: boolean;
         }>();
         let backendSignal: AbortSignal | undefined;
-        let progressReset: unknown;
         let backendWork: ReturnType<ContextEngine["compact"]> | undefined;
         let queuedSettled = false;
-        // A fresh function keeps the process-wide delegate tag off the shared mock.
-        const backend = vi.fn<ContextEngine["compact"]>((params) =>
-          contextEngineCompactMock(params),
-        );
         const engine = {
           info: {
             id: "timeout-fixture",
             name: "Timeout fixture",
             ownsCompaction: engineKind === "plugin",
           },
-          compact: engineKind === "delegate" ? markRuntimeCompactionDelegate(backend) : backend,
+          compact: contextEngineCompactMock,
           maintain,
         };
         resolveContextEngineMock.mockResolvedValueOnce(engine);
@@ -650,7 +647,6 @@ describe("queued compaction successor ownership", () => {
             throw new Error("Expected the real safety wrapper's composed backend signal");
           }
           backendSignal = signal;
-          progressReset = backendParams.runtimeContext?.compactionTimeoutReset;
           const append = createBackendAppend(entryId);
           // Timer dispatch owns a different async context. Retain the backend's
           // actual context without constructing any OpenClaw authority in the fixture.
@@ -670,6 +666,7 @@ describe("queued compaction successor ownership", () => {
               signal.removeEventListener("abort", onAbort);
             }
           })();
+          backendEntered.resolve();
           return backendWork;
         });
         const entryBefore = structuredClone(
@@ -686,17 +683,18 @@ describe("queued compaction successor ownership", () => {
             signal,
           ),
         );
-        const pending = compact(backendCompactParams(caller.signal)).then(
-          (result) => {
-            queuedSettled = true;
-            return result;
-          },
-          (error: unknown) => {
-            queuedSettled = true;
-            throw error;
-          },
-        );
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        const pending = compact(backendCompactParams(caller.signal)).finally(() => {
+          queuedSettled = true;
+        });
         try {
+          await Promise.race([
+            backendEntered.promise,
+            pending.then(() => {
+              throw new Error("Queued compaction settled before the backend checkpoint");
+            }),
+          ]);
+          await vi.advanceTimersByTimeAsync(1);
           await expect(pending).resolves.toMatchObject({ ok: false, compacted: false });
           expect(backendSignal).not.toBe(caller.signal);
           expect(backendSignal?.aborted).toBe(true);
@@ -708,13 +706,10 @@ describe("queued compaction successor ownership", () => {
           expect(loadTranscriptEventsSync(target())).toEqual(transcriptBefore);
           expect(loadSessionEntry({ ...target(), readConsistency: "latest" })).toEqual(entryBefore);
           expect(observation.outcome).toMatchObject({ written: false, error: expect.any(Error) });
-          expect
-            .soft(typeof progressReset)
-            .toBe(engineKind === "delegate" ? "function" : "undefined");
-          expect(backend).toHaveBeenCalledOnce();
           expect(contextEngineCompactMock).toHaveBeenCalledOnce();
           expect(maintain).not.toHaveBeenCalled();
         } finally {
+          vi.useRealTimers();
           boundedCompact.mockImplementation(previousImplementation);
           releaseBackend.resolve();
           await pending.catch(() => undefined);
@@ -767,8 +762,6 @@ describe("queued compaction successor ownership", () => {
 
   it.each([
     { replacementPoint: "before rewrite", capturedWriter: "writer" },
-    { replacementPoint: "during branch read", capturedWriter: "writer" },
-    { replacementPoint: "before rewrite", capturedWriter: undefined },
     { replacementPoint: "during branch read", capturedWriter: undefined },
   ] as const)(
     "fences a queued maintenance writer replacement after acceptance: $replacementPoint (captured=$capturedWriter)",

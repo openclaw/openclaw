@@ -17,10 +17,10 @@ import {
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../../security/external-content.js";
-import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
+import { recordSessionStateEventAsync } from "../../sessions/session-state-events.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { buildModelsListResult } from "./models-list-result.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 const GATEWAY_COPY_MODEL_LABEL_MAX_CHARS = 384;
@@ -178,14 +178,18 @@ export async function copySessionCatalogToGateway(params: {
   if (!created.ok) {
     return created;
   }
-  recordSessionStateEvent({
-    sessionKey: created.key,
-    agentId: created.agentId,
-    kind: "adopted",
-    actorType: "human",
-    dedupeKey: `adopted:${created.key}`,
-    summary: `adopted from ${params.request.catalogId}`,
-    payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
-  });
+  await recordSessionStateEventAsync(
+    {
+      sessionKey: created.key,
+      agentId: created.agentId,
+      kind: "adopted",
+      actorType: "human",
+      dedupeKey: `adopted:${created.key}`,
+      summary: `adopted from ${params.request.catalogId}`,
+      payload: { catalogId: params.request.catalogId, hostId: params.request.hostId },
+    },
+    { assertCurrent: params.commitGuard },
+  );
+  params.commitGuard?.();
   return { ok: true, sessionKey: created.key };
 }

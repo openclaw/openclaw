@@ -40,7 +40,7 @@ it("reveals a reassigned linked card without changing the selected chat agent", 
   let disposeDestination = () => {};
   vi.mocked(host.navigation.openPage).mockImplementation(({ path }) => {
     disposeDestination();
-    const mounted = createWorkboardPage(workboard)(
+    const mounted = createWorkboardPage(workboard, vi.fn())(
       destination,
       createViewContext(host, { boardId: path?.[0] ?? "__all__" }),
     );

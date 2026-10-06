@@ -23,6 +23,7 @@ import {
 } from "./model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import * as openaiRoutes from "./openai-model-routes.js";
+import { createPreparedAccountCatalogAccess } from "./prepared-model-runtime.catalog-auth.js";
 
 const entry: ModelCatalogEntry = { provider: "openai", id: "gpt-5.4", name: "GPT" };
 const config: OpenClawConfig = {
@@ -67,7 +68,351 @@ function nativeOwner(complete: boolean, loggedIn: boolean, isCurrent = () => tru
 }
 
 describe("captured model decisions", () => {
-  afterEach(() => vi.restoreAllMocks());
+  beforeEach(() => {
+    // These cases describe prepared auth facts, not credentials from the host shell.
+    for (const key of [
+      "OPENAI_API_KEY",
+      "CODEX_API_KEY",
+      "OPENAI_OAUTH_TOKEN",
+      "CHATGPT_OAUTH_TOKEN",
+    ]) {
+      vi.stubEnv(key, "");
+    }
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("retains account discovery across request projections until explicit refresh or identity replacement", async () => {
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal);
+    const credential = {
+      type: "token",
+      provider: "openai",
+      token: "synthetic-account-token",
+    } as const;
+    const load = vi.fn(async () => [
+      { provider: "openai", profileId: "account", status: "ready" as const },
+    ]);
+    const request = { profileId: "account", credential, load, allowDiscovery: true };
+    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+    const first = await owner.acquire(request);
+    await owner.acquire({ ...request, credential: { ...credential } });
+    await owner.acquire({ ...request, allowDiscovery: false });
+    expect(load).toHaveBeenCalledOnce();
+    const refreshed = await owner.acquire({ ...request, refresh: true });
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(first.isCurrent()).toBe(false);
+    await owner.acquire({
+      ...request,
+      credential: { ...credential, token: "synthetic-replacement-token" },
+    });
+    expect(refreshed.isCurrent()).toBe(false);
+    expect(load).toHaveBeenCalledTimes(3);
+    retirement.abort();
+    await expect(owner.acquire(request)).rejects.toThrow("changed");
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps response tier observations account-bound without completing discovery and revokes stale observers", async () => {
+    const retirement = new AbortController();
+    const onChanged = vi.fn();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
+    const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+    const account = {
+      profileId: "openai:account",
+      credential,
+      selectedCredential: {
+        source: "profile" as const,
+        profileId: "openai:account",
+        identityKey: "profile:openai:account",
+      },
+    };
+    const observation = {
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1/",
+      requestedTier: "ultrafast",
+      responseTier: "priority",
+    };
+    const route = { ...observation, identityKey: account.selectedCredential.identityKey };
+    const record = owner.prepareServiceTierObserver(account);
+    expect(record(observation)).toBe(true);
+    expect(record({ ...observation, baseUrl: "https://api.openai.com/v1" })).toBe(false);
+    expect(owner.readServiceTierObservation(route)).toEqual({
+      requestedTier: "ultrafast",
+      responseTier: "priority",
+    });
+    for (const mismatch of [
+      { identityKey: "profile:openai:other" },
+      { modelId: "other-model" },
+      { runtimeId: "codex" },
+      { api: "openai-chatgpt-responses" },
+      { baseUrl: "https://other.example/v1" },
+    ]) {
+      expect(owner.readServiceTierObservation({ ...route, ...mismatch })).toBeUndefined();
+    }
+    const outcomes = [
+      { provider: "openai", profileId: account.profileId, status: "ready" as const },
+    ];
+    const load = vi.fn(async () => outcomes);
+    const request = { ...account, load, allowDiscovery: true };
+    expect((await owner.acquire({ ...request, allowDiscovery: false })).outcomes).toEqual([]);
+    expect(load).not.toHaveBeenCalled();
+    const catalogFailure = new Error("catalog unavailable");
+    await expect(
+      owner.acquire({
+        ...request,
+        load: async () => {
+          throw catalogFailure;
+        },
+      }),
+    ).rejects.toBe(catalogFailure);
+    expect(owner.readServiceTierObservation(route)?.responseTier).toBe("priority");
+    expect((await owner.acquire(request)).outcomes).toEqual(outcomes);
+    expect(owner.readServiceTierObservation(route)?.responseTier).toBe("priority");
+    expect(load).toHaveBeenCalledOnce();
+
+    onChanged.mockClear();
+    await owner.acquire({ ...request, refresh: true });
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(record(observation)).toBe(false);
+    const refreshed = owner.prepareServiceTierObserver(account);
+    expect(refreshed(observation)).toBe(true);
+    onChanged.mockClear();
+    const replaced = owner.prepareServiceTierObserver({
+      ...account,
+      credential: { ...credential, key: "synthetic-replacement-key" },
+    });
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(refreshed(observation)).toBe(false);
+    expect(onChanged).toHaveBeenCalledOnce();
+    expect(replaced(observation)).toBe(true);
+    retirement.abort();
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(replaced(observation)).toBe(false);
+    expect(owner.prepareServiceTierObserver(account)(observation)).toBe(false);
+  });
+
+  it("notifies downgrade, recovery, and expiry while refreshing repeats and canceling retired timers", () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const onChanged = vi.fn();
+    const retirement = new AbortController();
+    const owner = createPreparedAccountCatalogAccess(() => true, retirement.signal, {}, onChanged);
+    const record = owner.prepareServiceTierObserver({
+      selectedCredential: {
+        source: "profile",
+        profileId: "openai:account",
+        identityKey: "profile:openai:account",
+      },
+      credential: { type: "api_key", provider: "openai", key: "synthetic-key" },
+    });
+    const route = {
+      identityKey: "profile:openai:account",
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const observation = { ...route, requestedTier: "ultrafast", responseTier: "priority" };
+    expect(record(observation)).toBe(true);
+    record({ ...observation, modelId: "other-model" });
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(240_000);
+    expect(record(observation)).toBe(false);
+    expect(onChanged).toHaveBeenCalledTimes(2);
+    vi.advanceTimersByTime(60_000);
+    expect(onChanged).toHaveBeenCalledTimes(3);
+    expect(owner.readServiceTierObservation({ ...route, modelId: "other-model" })).toBeUndefined();
+    vi.advanceTimersByTime(239_999);
+    expect(owner.readServiceTierObservation(route)?.responseTier).toBe("priority");
+    expect(onChanged).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(1);
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(onChanged).toHaveBeenCalledTimes(4);
+    expect(record(observation)).toBe(true);
+    expect(record({ ...observation, responseTier: "ultrafast" })).toBe(true);
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(record({ ...observation, responseTier: "ultrafast" })).toBe(false);
+    expect(onChanged).toHaveBeenCalledTimes(6);
+    expect(vi.getTimerCount()).toBe(0);
+    record(observation);
+    expect(vi.getTimerCount()).toBe(1);
+    retirement.abort();
+    expect(vi.getTimerCount()).toBe(0);
+    vi.advanceTimersByTime(300_000);
+    expect(onChanged).toHaveBeenCalledTimes(7);
+  });
+
+  it("bounds response tier observations per account and rejects a superseded owner", () => {
+    let current = true;
+    const owner = createPreparedAccountCatalogAccess(() => current);
+    const account = {
+      profileId: "openai:account",
+      selectedCredential: {
+        source: "profile" as const,
+        profileId: "openai:account",
+        identityKey: "profile:openai:account",
+      },
+      credential: { type: "api_key", provider: "openai", key: "synthetic-key" } as const,
+    };
+    const route = {
+      identityKey: account.selectedCredential.identityKey,
+      modelId: "model-0",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const record = owner.prepareServiceTierObserver(account);
+    for (let index = 0; index <= 128; index++) {
+      record({
+        ...route,
+        modelId: `model-${index}`,
+        requestedTier: "ultrafast",
+        responseTier: "priority",
+      });
+    }
+    expect(owner.readServiceTierObservation(route)).toBeUndefined();
+    expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toEqual({
+      requestedTier: "ultrafast",
+      responseTier: "priority",
+    });
+    current = false;
+    expect(owner.readServiceTierObservation({ ...route, modelId: "model-128" })).toBeUndefined();
+    expect(record({ ...route, requestedTier: "ultrafast", responseTier: "priority" })).toBe(false);
+  });
+
+  it("prepares only the selected account through the existing catalog hook", async () => {
+    const pluginRegistry = harnessRegistry("codex");
+    const catalog = vi.fn(
+      async (ctx: import("../plugins/provider-catalog.types.js").ProviderCatalogContext) => {
+        const auth = ctx.resolveProviderAuth("openai");
+        expect(auth.profileId).toBe("openai:selected");
+        return {
+          provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+          outcomes: [
+            {
+              provider: "openai",
+              profileId: auth.profileId,
+              status: "ready" as const,
+              modelServiceTiers: [
+                {
+                  modelId: entry.id,
+                  runtimeId: "codex",
+                  api: subscriptionRoute.api,
+                  baseUrl: subscriptionRoute.baseUrl,
+                  serviceTiers: ["ultrafast"],
+                },
+              ],
+            },
+          ],
+        };
+      },
+    );
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "fixture",
+      provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: catalog } },
+    });
+    const sharedSnapshot = { entries: [entry], routeVariants: [entry] };
+    const prepared = createModelCatalogDecisions({
+      cfg: config,
+      agentId: "main",
+      agentDir: "/tmp/selected-tier-agent",
+      workspaceDir: "/tmp/selected-tier-workspace",
+      snapshot: sharedSnapshot,
+      accountCatalog: createPreparedAccountCatalogAccess(() => true),
+      metadataSnapshot: metadata,
+      pluginRegistry,
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:shared": { provider: "openai", type: "token", token: "synthetic-shared-token" },
+          "openai:selected": {
+            provider: "openai",
+            type: "token",
+            token: "synthetic-selected-token",
+          },
+        },
+      },
+      preferredProfileId: "openai:selected",
+      pinnedProfileId: "openai:selected",
+      routeResolverFactory: routeResolverFactory(dualRoutes),
+      isCurrent: () => true,
+    });
+    const assertCurrent = vi.fn();
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    await prepared.prepareSelectedAccountCatalog(assertCurrent, { allowDiscovery: true });
+    expect(catalog).toHaveBeenCalledOnce();
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(sharedSnapshot).not.toHaveProperty("providerOutcomes");
+    expect(prepared.snapshot.providerOutcomes?.[0]?.modelServiceTiers?.[0]?.serviceTiers).toEqual([
+      "ultrafast",
+    ]);
+    expect(prepared.evaluateEntry(entry, undefined, "codex")).toMatchObject({
+      selectedProfileId: "openai:selected",
+      availability: true,
+    });
+  });
+
+  it("does not publish a selected-account result after its generation expires", async () => {
+    let current = true;
+    const pluginRegistry = harnessRegistry("codex");
+    pluginRegistry.providers.push({
+      pluginId: "openai",
+      source: "fixture",
+      provider: {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async (ctx) => {
+            current = false;
+            return {
+              provider: { baseUrl: subscriptionRoute.baseUrl, models: [] },
+              outcomes: [
+                {
+                  provider: "openai",
+                  profileId: ctx.resolveProviderAuth("openai").profileId,
+                  status: "ready",
+                },
+              ],
+            };
+          },
+        },
+      },
+    });
+    const prepared = createModelCatalogDecisions({
+      cfg: config,
+      agentId: "main",
+      snapshot: { entries: [entry], routeVariants: [entry] },
+      metadataSnapshot: metadata,
+      pluginRegistry,
+      preparedAuthStore: {
+        version: 1,
+        profiles: {
+          "openai:selected": {
+            provider: "openai",
+            type: "token",
+            token: "synthetic-selected-token",
+          },
+        },
+      },
+      preferredProfileId: "openai:selected",
+      accountCatalog: createPreparedAccountCatalogAccess(() => current),
+      isCurrent: () => current,
+    });
+    await expect(
+      prepared.prepareSelectedAccountCatalog(() => {}, { allowDiscovery: true }),
+    ).rejects.toThrow("changed");
+    expect(prepared.snapshot.providerOutcomes).toEqual([]);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
 
   it.each([true, false])(
     "preserves provider auth for a non-CLI harness (authenticated=%s)",
@@ -98,9 +443,9 @@ describe("captured model decisions", () => {
         pluginRegistry: harnessRegistry("copilot"),
         isCurrent: () => true,
       });
-      const choices = await owner.runtimeChoices(model);
+      const choices = owner.runtimeChoices(model);
       if (authenticated) {
-        expect(await owner.evaluateEntry(model, undefined, "copilot")).toMatchObject({
+        expect(owner.evaluateEntry(model, undefined, "copilot")).toMatchObject({
           availability: true,
           selectedProfileId: "github-copilot:work",
         });
@@ -129,7 +474,7 @@ describe("captured model decisions", () => {
           : {}),
       };
       const owner = nativeOwner(true, true, () => true, cfg);
-      const evaluation = await owner.evaluateEntry(entry);
+      const evaluation = owner.evaluateEntry(entry);
       expect(evaluation).toMatchObject({
         availability: true,
         runtimeAuth: { id: "codex", source: "native" },
@@ -158,7 +503,7 @@ describe("captured model decisions", () => {
       },
     };
     const owner = nativeOwner(true, true, () => true, cfg);
-    const evaluation = await owner.evaluateEntry(entry);
+    const evaluation = owner.evaluateEntry(entry);
     expect(evaluation.availability).not.toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
     expect(
@@ -186,7 +531,7 @@ describe("captured model decisions", () => {
       },
     };
     const owner = nativeOwner(true, false, () => true, cfg);
-    const evaluation = await owner.evaluateEntry(entry);
+    const evaluation = owner.evaluateEntry(entry);
     expect(evaluation.availability).toBe(true);
     expect(evaluation.runtimeAuth).toBeUndefined();
     expect(evaluation.selectedRoute).toMatchObject(platformRoute);
@@ -223,10 +568,10 @@ describe("captured model decisions", () => {
       }),
     });
     expect(
-      await owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
+      owner.evaluateEntry({ provider: entry.provider, id: entry.id }, undefined, "openclaw"),
     ).toMatchObject({ availability: true, selectedProfileId: "openai:platform" });
     expect(
-      await owner.evaluateEntry(
+      owner.evaluateEntry(
         { ...entry, api: subscriptionRoute.api, baseUrl: subscriptionRoute.baseUrl },
         undefined,
         "openclaw",
@@ -235,16 +580,16 @@ describe("captured model decisions", () => {
   });
 
   it("distinguishes unknown choices from authoritative empty choices", async () => {
-    expect(await nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
-    expect(await nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);
+    expect(nativeOwner(false, false).runtimeChoices(entry)).toBeUndefined();
+    expect(nativeOwner(true, false).runtimeChoices(entry)).toEqual([]);
   });
 
   it("rejects a replaced generation instead of returning its old choices", async () => {
     let current = true;
     const owner = nativeOwner(true, true, () => current);
-    expect(await owner.runtimeChoices(entry)).toEqual(["codex"]);
+    expect(owner.runtimeChoices(entry)).toEqual(["codex"]);
     current = false;
-    await expect(owner.runtimeChoices(entry)).rejects.toThrow("Model catalog changed");
+    expect(() => owner.runtimeChoices(entry)).toThrow("Model catalog changed");
   });
 
   it("keeps a different provider's account pin out of the selected route", async () => {
@@ -266,7 +611,7 @@ describe("captured model decisions", () => {
       },
       routeResolverFactory: routeResolverFactory({ ...dualRoutes, routes: [platformRoute] }),
     });
-    expect(await owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
+    expect(owner.evaluateEntry(entry, [entry], "openclaw")).toMatchObject({
       availability: true,
       selectedProfileId: "openai:chosen",
     });
@@ -387,7 +732,7 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       };
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
       const owner = decisionOwner(cfg, "worker", state.workspaceDir);
-      expect(await readRow(owner, "before-order-change")).toMatchObject({
+      expect(readRow(owner, "before-order-change")).toMatchObject({
         availability: true,
         evidence: "runtime",
         selectedAuthMode: "oauth",
@@ -398,9 +743,9 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         state.path("custom-worker"),
       );
       // New keys bypass the intentional completed-row decision memoization.
-      expect((await readRow(owner, "after-order-change")).evidence).not.toBe("runtime");
+      expect(readRow(owner, "after-order-change").evidence).not.toBe("runtime");
       setRuntimeAuthProfileStoreSnapshot(orderStore, state.path("custom-worker"));
-      expect(await readRow(owner, "after-order-restored")).toMatchObject({
+      expect(readRow(owner, "after-order-restored")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });
@@ -419,11 +764,11 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       };
       setRuntimeAuthProfileStoreSnapshot(storedChoice(false), legacyDir);
       const owner = decisionOwner(cfg, "worker", state.workspaceDir);
-      expect((await readRow(owner, "before-relocation")).evidence).not.toBe("runtime");
+      expect(readRow(owner, "before-relocation").evidence).not.toBe("runtime");
 
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" });
       setRuntimeAuthProfileStoreSnapshot(storedChoice(true));
-      expect(await readRow(owner, "after-relocation")).toMatchObject({
+      expect(readRow(owner, "after-relocation")).toMatchObject({
         availability: true,
         evidence: "runtime",
         selectedAuthMode: "oauth",
@@ -450,11 +795,11 @@ describe("catalog decisions with prepared CLI auth directories", () => {
       setRuntimeAuthProfileStoreSnapshot(storedChoice(false), replacementDir);
       const first = decisionOwner(cfg, "first", state.workspaceDir);
       const second = decisionOwner(cfg, "second", state.workspaceDir);
-      expect(await readRow(first, "same-row")).toMatchObject({
+      expect(readRow(first, "same-row")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });
-      expect((await readRow(second, "same-row")).evidence).not.toBe("runtime");
+      expect(readRow(second, "same-row").evidence).not.toBe("runtime");
       const replacement = decisionOwner(
         {
           ...cfg,
@@ -466,8 +811,8 @@ describe("catalog decisions with prepared CLI auth directories", () => {
         "first",
         state.workspaceDir,
       );
-      expect((await readRow(replacement, "same-row")).evidence).not.toBe("runtime");
-      expect(await readRow(first, "old-owner-new-row")).toMatchObject({
+      expect(readRow(replacement, "same-row").evidence).not.toBe("runtime");
+      expect(readRow(first, "old-owner-new-row")).toMatchObject({
         availability: true,
         evidence: "runtime",
       });

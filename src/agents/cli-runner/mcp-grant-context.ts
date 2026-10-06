@@ -10,6 +10,7 @@ import {
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
+import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 const cliMcpDelegationCapability = Symbol("cliMcpDelegationCapability");
@@ -19,13 +20,24 @@ export function finalizeCliMcpGrant(
   context: McpLoopbackRequestContext | undefined,
   toolsAllow: string[] | undefined,
   nativeAuthorityPending: boolean,
-  assertCurrent?: () => void,
+  source: Pick<
+    RunCliAgentParams,
+    | "admittedRunContext"
+    | "assertCurrent"
+    | "messageActionTurnCapability"
+    | "abortSignal"
+    | "toolAuthorityFingerprint"
+    | "replyOperation"
+  > = {},
 ) {
   if (!context) {
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
   const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
+  const personalToolParticipants = source.toolAuthorityFingerprint
+    ? source.replyOperation?.personalToolParticipants
+    : undefined;
   return {
     context: {
       ...context,
@@ -35,7 +47,11 @@ export function finalizeCliMcpGrant(
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
-    assertCurrent,
+    admittedRunContext: source.admittedRunContext,
+    messageActionTurnCapability: source.messageActionTurnCapability,
+    abortSignal: source.abortSignal,
+    assertCurrent: source.assertCurrent,
+    ...(personalToolParticipants ? { personalToolParticipants } : {}),
   };
 }
 
@@ -149,6 +165,10 @@ export function buildCliMcpGrantContext(params: {
     (params.run.clientCaps ?? []).map((cap) => cap.trim()).filter(Boolean),
   );
   const execSession = buildCliMcpExecSession(params.run.sessionEntry, params.run.execOverrides);
+  const sessionPermissionPolicy = resolveStoredSessionPermissionPolicy(
+    params.run.sessionEntry,
+    params.run.workspaceDir,
+  );
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
@@ -175,6 +195,16 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
+    ...(params.run.conversationToolPolicy
+      ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
+      : {}),
+    ...(params.run.trustedInternalHandoff
+      ? {
+          trustedInternalHandoff: params.run.trustedInternalHandoff,
+          inputProvenance: params.run.inputProvenance,
+        }
+      : {}),
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,
@@ -233,6 +263,7 @@ export function buildCliMcpGrantContext(params: {
     ...(execOverrides ? { execOverrides } : {}),
     ...(bashElevated ? { bashElevated } : {}),
     ...(params.run.trigger ? { trigger: params.run.trigger } : {}),
+    ...(params.run.continuesConversation ? { continuesConversation: true } : {}),
     ...(normalizeOptionalString(params.run.approvalReviewerDeviceId)
       ? { approvalReviewerDeviceId: params.run.approvalReviewerDeviceId?.trim() }
       : {}),

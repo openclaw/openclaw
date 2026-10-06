@@ -1,4 +1,11 @@
-import { readAcpSessionEntry, type AcpSessionStoreEntry } from "openclaw/plugin-sdk/acp-runtime";
+import {
+  readAcpSessionEntry,
+  prepareAcpSessionEntryRead,
+  rethrowIncognitoSessionError,
+  type AcpSessionEntryPreparer,
+  type AcpSessionStoreEntry,
+  type PreparedAcpSessionEntryRead,
+} from "openclaw/plugin-sdk/acp-runtime";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -206,12 +213,29 @@ export async function unbindThreadBindingsBySessionKeyAsync(
   );
 }
 
-export async function reconcileAcpThreadBindingsOnStartup(params: {
+type AcpThreadBindingReconciliationParams = {
   cfg: OpenClawConfig;
   accountId?: string;
   sendFarewell?: boolean;
   healthProbe?: AcpThreadBindingHealthProbe;
-}): Promise<AcpThreadBindingReconciliationResult> {
+  prepareSession?: AcpSessionEntryPreparer;
+};
+
+export async function reconcileAcpThreadBindingsOnStartup(
+  params: AcpThreadBindingReconciliationParams,
+): Promise<AcpThreadBindingReconciliationResult> {
+  const preparations = new Map<ThreadBindingRecord, PreparedAcpSessionEntryRead>();
+  try {
+    return await reconcileAcpThreadBindings(params, preparations);
+  } finally {
+    preparations.forEach((prepared) => prepared.release());
+  }
+}
+
+async function reconcileAcpThreadBindings(
+  params: AcpThreadBindingReconciliationParams,
+  preparations: Map<ThreadBindingRecord, PreparedAcpSessionEntryRead>,
+): Promise<AcpThreadBindingReconciliationResult> {
   const manager = getThreadBindingManager(params.accountId);
   if (!manager) {
     return {
@@ -240,11 +264,18 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
       staleBindings.push(binding);
       continue;
     }
-    const session = readAcpSessionEntry({
+    const input = {
       cfg: params.cfg,
       sessionKey,
       agentId: binding.agentId,
-    });
+    };
+    const preparation = (params.prepareSession ?? prepareAcpSessionEntryRead)(input);
+    const prepared = preparation ? await preparation : undefined;
+    if (prepared) {
+      preparations.set(binding, prepared);
+      prepared.assertCurrent();
+    }
+    const session = prepared ? prepared.session : readAcpSessionEntry(input);
     if (!session) {
       staleBindings.push(binding);
       continue;
@@ -280,7 +311,8 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
             binding,
             status: result?.status ?? ("uncertain" satisfies AcpThreadBindingHealthStatus),
           };
-        } catch {
+        } catch (error) {
+          rethrowIncognitoSessionError(error);
           // Treat probe failures as uncertain and keep the binding.
           return {
             binding,
@@ -318,14 +350,28 @@ export async function reconcileAcpThreadBindingsOnStartup(params: {
     ) {
       continue;
     }
-    const unbound = await manager.unbindThread({
-      threadId: binding.threadId,
-      expected: binding,
-      reason: "stale-session",
-      sendFarewell: params.sendFarewell ?? false,
-    });
-    if (unbound) {
-      removed += 1;
+    let sourceFailure: unknown;
+    try {
+      const unbound = await manager.unbindThread({
+        threadId: binding.threadId,
+        expected: binding,
+        assertCurrent() {
+          try {
+            preparations.get(binding)?.assertCurrent();
+          } catch (error) {
+            sourceFailure = error;
+            throw error;
+          }
+        },
+        reason: "stale-session",
+        sendFarewell: params.sendFarewell ?? false,
+      });
+      if (unbound) {
+        removed += 1;
+      }
+    } finally {
+      // Persistence may acknowledge removal before later source revalidation fails.
+      rethrowIncognitoSessionError(sourceFailure);
     }
   }
 

@@ -2,8 +2,10 @@ package ai.openclaw.app.node
 
 import ai.openclaw.app.AppearanceThemeFamily
 import ai.openclaw.app.AppearanceThemeMode
+import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -12,7 +14,14 @@ import kotlinx.serialization.json.contentOrNull
 
 fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
 
+internal fun JsonElement?.asArrayOrNull(): JsonArray? = this as? JsonArray
+
 internal fun escapeSqlLikeLiteral(value: String): String = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+internal fun nodeInvokeError(
+  code: String,
+  message: String,
+): GatewaySession.InvokeResult = GatewaySession.InvokeResult.error(code, "$code: $message")
 
 /** Parses invoke params into a JSON object, returning null for absent/malformed input. */
 fun parseJsonParamsObject(paramsJson: String?): JsonObject? {
@@ -59,12 +68,7 @@ fun parseJsonBooleanFlag(
 }
 
 /** Converts JSON null to Kotlin null while preserving primitive text content. */
-fun JsonElement?.asStringOrNull(): String? =
-  when (this) {
-    is JsonNull -> null
-    is JsonPrimitive -> content
-    else -> null
-  }
+fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
 
 /** Parses #RRGGBB or RRGGBB into opaque ARGB. */
 fun parseHexColorArgb(raw: String?): Long? {

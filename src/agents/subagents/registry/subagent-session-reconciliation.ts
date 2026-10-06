@@ -1,8 +1,3 @@
-/**
- * Subagent session-store reconciliation.
- *
- * Infers child completion from persisted session entries when registry updates arrive late.
- */
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../../../config/config.js";
 import {
@@ -11,11 +6,15 @@ import {
   type InternalSessionEntry as SessionEntry,
 } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../../state/openclaw-state-db-readonly.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
+import {
+  hasRetainedRequiredCompletionDelivery,
+  isSettledSubagentRequesterHistory,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -23,7 +22,6 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { hasSubagentSessionOwnerInDatabase } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -32,7 +30,6 @@ export type SubagentRunOrphanReason =
   | "missing-session-id"
   | "stale-unended-run";
 
-/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
@@ -82,11 +79,10 @@ export function loadSubagentSessionEntry(params: {
     agentId,
     storePath,
     sessionKey: key,
-    clone: false,
+    projection: "list",
   });
 }
 
-/** Resolves whether a registry row is orphaned from its child session entry. */
 export function resolveSubagentRunOrphanReason(params: {
   entry: SubagentRunRecord;
   includeStaleUnended?: boolean;
@@ -142,7 +138,6 @@ export function resolveSubagentRunOrphanReason(params: {
   }
 }
 
-/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
@@ -185,43 +180,62 @@ export function resolveCompletionFromSessionEntry(
   };
 }
 
-/** Resolve child completion by reading its persisted session entry. */
-export function resolveSubagentSessionCompletion(params: {
+export async function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
+  childAgentId?: string;
   fallbackEndedAt: number;
   notBeforeMs?: number;
   cfg?: OpenClawConfig;
-}): SubagentSessionCompletion | null {
-  return resolveCompletionFromSessionEntry(
-    loadSubagentSessionEntry({
-      childSessionKey: params.childSessionKey,
-      cfg: params.cfg,
+  assertCurrent?: () => void;
+}): Promise<SubagentSessionCompletion | null> {
+  return withSubagentSessionEntry(params, (entry) =>
+    resolveCompletionFromSessionEntry(entry, params.fallbackEndedAt, {
+      notBeforeMs: params.notBeforeMs,
     }),
-    params.fallbackEndedAt,
-    { notBeforeMs: params.notBeforeMs },
   );
 }
 
-/** Resolve a fresh child session start time for lifecycle reconciliation. */
-export function resolveSubagentSessionStartedAt(params: {
-  childSessionKey: string;
-  notBeforeMs?: number;
-  cfg?: OpenClawConfig;
-}): number | undefined {
-  const sessionEntry = loadSubagentSessionEntry({
-    childSessionKey: params.childSessionKey,
-    cfg: params.cfg,
-  });
-  return isFreshForRun(sessionEntry, params.notBeforeMs)
-    ? freshSessionStartedAt(sessionEntry, params.notBeforeMs)
-    : undefined;
+async function withSubagentSessionEntry<T>(
+  params: {
+    childSessionKey: string;
+    childAgentId?: string;
+    cfg?: OpenClawConfig;
+    assertCurrent?: () => void;
+  },
+  consume: (entry: SessionEntry | undefined) => T,
+): Promise<T> {
+  const cfg = params.cfg ?? getRuntimeConfig();
+  const { agentId, storePath } = resolveSubagentChildSessionOwner(params, cfg);
+  return withSessionEntryReadOnlyInWorker(
+    { agentId, storePath, sessionKey: params.childSessionKey, projection: "list" },
+    () => params.assertCurrent?.(),
+    async (read) => {
+      if (!read.ok) {
+        throw read.error;
+      }
+      return consume(read.value);
+    },
+  );
 }
 
-/** Startup may only settle session-only rows; any run/task generation retains ownership. */
-export function hasSubagentSessionRecoveryOwner(params: {
+export async function resolveSubagentSessionStartedAt(params: {
+  childSessionKey: string;
+  childAgentId?: string;
+  notBeforeMs?: number;
+  cfg?: OpenClawConfig;
+  assertCurrent?: () => void;
+}): Promise<number | undefined> {
+  return withSubagentSessionEntry(params, (entry) =>
+    isFreshForRun(entry, params.notBeforeMs)
+      ? freshSessionStartedAt(entry, params.notBeforeMs)
+      : undefined,
+  );
+}
+
+/** Child records retain their session; completed descendant history does not own its requester. */
+export function hasLiveSubagentSessionRecoveryOwner(params: {
   sessionKey: string;
   sessionId: string;
-  env: NodeJS.ProcessEnv;
 }): boolean {
   const key = params.sessionKey;
   if (listAgentRunsForSession(params).length > 0) {
@@ -230,17 +244,11 @@ export function hasSubagentSessionRecoveryOwner(params: {
   for (const run of subagentRuns.values()) {
     if (
       run.childSessionKey === key ||
-      run.requesterSessionKey === key ||
-      run.controllerSessionKey === key
+      ((run.requesterSessionKey === key || run.controllerSessionKey === key) &&
+        !isSettledSubagentRequesterHistory(run))
     ) {
       return true;
     }
   }
-  // Failed or incompatible reads propagate: unknown ownership never authorizes mutation.
-  return (
-    withExistingOpenClawStateDatabaseCurrentReadOnly(
-      (database) => hasSubagentSessionOwnerInDatabase(database, key),
-      { env: params.env },
-    ) ?? false
-  );
+  return false;
 }

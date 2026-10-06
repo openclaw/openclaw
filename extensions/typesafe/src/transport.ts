@@ -35,9 +35,9 @@ function httpError(response: Response): EvaluationError {
       retryAfterMs,
     );
   }
-  // 422 is documented request validation; 413 is HTTP Content Too Large.
+  // 400/422 are request validation; 413 is HTTP Content Too Large.
   // Neither establishes the exact tokenizer/context cause, and bodies may reflect secrets.
-  if (response.status === 413 || response.status === 422) {
+  if (response.status === 400 || response.status === 413 || response.status === 422) {
     return new EvaluationError("TypeSafe rejected the supplied input.", "unsupported-input");
   }
   return new EvaluationError("TypeSafe service rejected the evaluation request.", "transport");
@@ -89,6 +89,7 @@ export async function requestEvaluation(params: {
   timeoutMs: number;
   signal?: AbortSignal;
   deadlineMonotonicMs?: number;
+  isAdmissible?: () => boolean;
 }): Promise<unknown> {
   const baseUrl = localBaseUrl(params.baseUrl);
   const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
@@ -116,6 +117,9 @@ export async function requestEvaluation(params: {
       performance.now() >= params.deadlineMonotonicMs
     ) {
       throw new EvaluationError("TypeSafe evaluation timed out.", "transport");
+    }
+    if (params.isAdmissible && !params.isAdmissible()) {
+      throw new EvaluationError("TypeSafe evaluation is no longer admitted.", "transport");
     }
   };
   try {

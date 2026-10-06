@@ -12,6 +12,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { filterStringRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAuthItems } from "./auth.js";
 import { buildConfigItems } from "./config.js";
 import { exists, parseEnv, parseHermesConfig, readText } from "./helpers.js";
@@ -29,30 +30,6 @@ import {
 import { buildSecretItems } from "./secrets.js";
 import { buildSkillItems } from "./skills.js";
 import { discoverHermesSource, hasHermesSource } from "./source.js";
-
-async function addFileItem(params: {
-  items: MigrationItem[];
-  id: string;
-  source?: string;
-  target: string;
-  overwrite?: boolean;
-}): Promise<void> {
-  if (!params.source) {
-    return;
-  }
-  const targetExists = await exists(params.target);
-  params.items.push(
-    createMigrationItem({
-      id: params.id,
-      kind: "workspace",
-      action: "copy",
-      source: params.source,
-      target: params.target,
-      status: targetExists && !params.overwrite ? "conflict" : "planned",
-      reason: targetExists && !params.overwrite ? MIGRATION_REASON_TARGET_EXISTS : undefined,
-    }),
-  );
-}
 
 export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<MigrationPlan> {
   const source = await discoverHermesSource(ctx.source);
@@ -76,11 +53,7 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
   }
   const env = parseEnv(await readText(source.envPath));
   const modelRef = resolveHermesModelRef(config, env);
-  const runtimeEnv = Object.fromEntries(
-    Object.entries(process.env).filter(
-      (entry): entry is [string, string] => typeof entry[1] === "string",
-    ),
-  );
+  const runtimeEnv = filterStringRecord(process.env) ?? {};
   const items: MigrationItem[] = [];
 
   let modelItemIndex: number | undefined;
@@ -120,13 +93,22 @@ export async function buildHermesPlan(ctx: MigrationProviderContext): Promise<Mi
     ["SOUL.md", source.soulPath],
     ["AGENTS.md", source.agentsPath],
   ] as const) {
-    await addFileItem({
-      items,
-      id: `workspace:${filename}`,
-      source: sourcePath,
-      target: path.join(targets.workspaceDir, filename),
-      overwrite: ctx.overwrite,
-    });
+    if (!sourcePath) {
+      continue;
+    }
+    const target = path.join(targets.workspaceDir, filename);
+    const conflict = (await exists(target)) && !ctx.overwrite;
+    items.push(
+      createMigrationItem({
+        id: `workspace:${filename}`,
+        kind: "workspace",
+        action: "copy",
+        source: sourcePath,
+        target,
+        status: conflict ? "conflict" : "planned",
+        reason: conflict ? MIGRATION_REASON_TARGET_EXISTS : undefined,
+      }),
+    );
   }
   for (const [filename, sourcePath] of [
     ["MEMORY.md", source.memoryPath],

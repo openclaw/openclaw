@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import {
   initializeManagedWorktreeTestRepository,
@@ -21,13 +22,11 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  ensureGatewayOwnerProfile,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
+import { recoverGatewaySession } from "./session-recovery-service.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -46,10 +45,6 @@ import {
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 function recoveryWorkerPlacement(params: {
   sessionId: string;
@@ -156,6 +151,26 @@ async function sessionWorktree(dir: string, name: string, sessionKey: string) {
   };
 }
 
+test("recovery source reads and commit guards execute no host SQLite", async () => {
+  const fixture = await recoveryFixture("worker-routed-recovery");
+  const cfg = getRuntimeConfig();
+  const sql = observeHostDataSql();
+  try {
+    const result = await recoverGatewaySession({
+      cfg,
+      key: fixture.sourceKey,
+      agentId: "main",
+      workerPlacementContext: {},
+      launchContinuation: async () => ({ status: "started", runId: "recovery-proof" }),
+    });
+    expect(result).toMatchObject({ ok: true, created: true });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+  expect(fixture.source()?.mainRestartRecovery?.tombstone?.recoveredSessionKey).toBeDefined();
+});
+
 test("sessions.recover settles its active placement before archiving a real session-owned worktree", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   const sourceKey = "agent:main:dashboard:recovery-cloud-active";
@@ -200,7 +215,7 @@ test("sessions.recover settles its active placement before archiving a real sess
         ...request,
         authorize,
         beforeDrain,
-        begin: () => {
+        begin: async () => {
           placement = recoveryWorkerPlacement({
             sessionId: sourceSessionId,
             sessionKey: sourceKey,
@@ -320,7 +335,7 @@ test.each(["before-interrupt", "before-drain"] as const)(
           })
         : undefined;
     releaseAdmission = () => admission?.release();
-    const begin = vi.fn(() => ({ ...placement, state: "draining" as const }));
+    const begin = vi.fn(async () => ({ ...placement, state: "draining" as const }));
     const reclaim = vi.fn(async () => {
       throw new Error("ineligible worker must not be reclaimed");
     });
@@ -536,7 +551,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
   });
   const successorKey = recovered.payload?.key ?? "";
   const successorSessionId = recovered.payload?.sessionId ?? "";
-  expect(concurrentRetry).toMatchObject({
+  expect(concurrentRetry, JSON.stringify(concurrentRetry)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -589,7 +604,7 @@ test("sessions.recover rolls over one tombstone and returns its continuation out
     agentId: "main",
     key: sourceKey,
   });
-  expect(repeated).toMatchObject({
+  expect(repeated, JSON.stringify(repeated)).toMatchObject({
     ok: true,
     payload: {
       key: successorKey,
@@ -677,8 +692,11 @@ test.each([
       context: {
         getRuntimeConfig: () =>
           identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
+        getCommittedRuntimeConfig: () =>
+          identity === "owner" ? { ...cfg, gateway: { ...cfg.gateway, roles: undefined } } : cfg,
       },
     };
+    prepareGatewayRecipientProfile(request.client);
     type RecoveryPayload = { key: string; continuation: { status: string } };
     const recovered = await directSessionReq<RecoveryPayload>(
       "sessions.recover",
@@ -820,7 +838,7 @@ test("sessions.recover revalidates participation at the recovery writer commit",
 
   const mutationEntered = createDeferredCore();
   const releaseMutation = createDeferredCore();
-  const heldMutation = runExclusiveSessionLifecycleMutation({
+  const heldMutation = runExclusiveSessionLifecycleMutation("recover", {
     scope: scope.storePath,
     identities: [sourceKey, sourceSessionId],
     run: async () => {

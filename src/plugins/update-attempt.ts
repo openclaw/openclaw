@@ -18,7 +18,6 @@ import {
   resolveExactNpmSpecVersion,
   resolveNewerExactPinnedClawHubDefaultLine,
   resolveNewerExactPinnedNpmDefaultLine,
-  type PluginUpdateChannelFallback,
   type PluginUpdateIntegrityDriftParams,
   type PluginUpdateLogger,
   type PluginUpdateOutcome,
@@ -62,19 +61,6 @@ export function formatNpmInstallFailure(params: {
     return `Failed to ${params.phase} ${params.pluginId}: npm package not found for ${params.spec}.`;
   }
   return `Failed to ${params.phase} ${params.pluginId}: ${params.result.error}`;
-}
-
-export function formatMarketplaceInstallFailure(params: {
-  pluginId: string;
-  marketplaceSource: string;
-  marketplacePlugin: string;
-  phase: "check" | "update";
-  error: string;
-}): string {
-  return (
-    `Failed to ${params.phase} ${params.pluginId}: ` +
-    `${params.error} (marketplace plugin ${params.marketplacePlugin} from ${params.marketplaceSource}).`
-  );
 }
 
 export function formatClawHubInstallFailure(params: {
@@ -141,51 +127,6 @@ export function isClawHubTrustSkippedOutcome(outcome: { status: string; code?: s
   );
 }
 
-export function formatGitInstallFailure(params: {
-  pluginId: string;
-  spec: string;
-  phase: "check" | "update";
-  error: string;
-}): string {
-  return `Failed to ${params.phase} ${params.pluginId}: ${params.error} (git ${params.spec}).`;
-}
-
-type InstallIntegrityDrift = {
-  spec: string;
-  expectedIntegrity: string;
-  actualIntegrity: string;
-  resolution: {
-    resolvedSpec?: string;
-    version?: string;
-  };
-};
-
-function createPluginUpdateIntegrityDriftHandler(params: {
-  pluginId: string;
-  dryRun: boolean;
-  logger: PluginUpdateLogger;
-  onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
-}) {
-  return async (drift: InstallIntegrityDrift) => {
-    const payload: PluginUpdateIntegrityDriftParams = {
-      pluginId: params.pluginId,
-      spec: drift.spec,
-      expectedIntegrity: drift.expectedIntegrity,
-      actualIntegrity: drift.actualIntegrity,
-      resolvedSpec: drift.resolution.resolvedSpec,
-      resolvedVersion: drift.resolution.version,
-      dryRun: params.dryRun,
-    };
-    if (params.onIntegrityDrift) {
-      return await params.onIntegrityDrift(payload);
-    }
-    params.logger.warn?.(
-      `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
-    );
-    return false;
-  };
-}
-
 type PluginUpdateSpecPlan = {
   installSpec?: string;
   recordSpec?: string;
@@ -220,95 +161,57 @@ type PluginUpdateSuccess = Extract<PluginUpdateInstallResult, { ok: true }>;
 type PluginUpdateAttemptState = {
   activeClawHubInstallSpec?: string;
   channelFallbackSuffix: string;
-  resultSource: UpdatablePluginInstallRecord["source"];
 };
 
 type PluginUpdateAttemptResult =
   | { kind: "exception"; message: string; error: unknown }
   | ({ kind: "result"; result: PluginUpdateInstallResult } & PluginUpdateAttemptState);
 
-function isPluginUpdateUnchanged(
-  params: Parameters<typeof buildPluginUpdateVersionOutcome>[0],
-): boolean {
-  const { record, result, currentVersion, nextVersion } = params;
-  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
-  return record.gitCommit && nextCommit
-    ? record.gitCommit === nextCommit
-    : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
-}
-
-export async function buildPluginUpdateVersionOutcome(params: {
+type PluginUpdateVersionOutcomeParams = {
   pluginId: string;
   record: UpdatablePluginInstallRecord;
   result: PluginUpdateSuccess;
   currentVersion?: string;
   nextVersion?: string;
   channelFallbackSuffix: string;
-  channelFallback?: PluginUpdateChannelFallback;
   checkNewerExactPinnedClawHubDefaultLine?: boolean;
   updateChannel?: UpdateChannel;
   timeoutMs?: number;
-}): Promise<PluginUpdateOutcome> {
-  const currentLabel = params.currentVersion ?? "unknown";
-  const unchanged = isPluginUpdateUnchanged(params);
-  const newerExactPinnedClawHubDefaultLine =
-    unchanged &&
-    params.record.source === "clawhub" &&
-    params.checkNewerExactPinnedClawHubDefaultLine
-      ? await resolveNewerExactPinnedClawHubDefaultLine({
-          currentVersion: params.currentVersion,
-          recordedSpec: params.record.spec,
-          probeClawHubVersion: params.nextVersion,
-          baseUrl: params.record.clawhubUrl,
-          updateChannel: params.updateChannel,
-          timeoutMs: params.timeoutMs,
-        })
-      : undefined;
-  const verb = isPackageVersionDowngrade(params.currentVersion, params.nextVersion)
-    ? "Downgraded"
-    : "Updated";
-  return {
-    pluginId: params.pluginId,
-    status: unchanged ? "unchanged" : "updated",
-    currentVersion: params.currentVersion,
-    nextVersion: newerExactPinnedClawHubDefaultLine?.version ?? params.nextVersion,
-    message: unchanged
-      ? newerExactPinnedClawHubDefaultLine && params.record.spec
-        ? formatNewerExactPinnedClawHubDefaultLineMessage({
-            pluginId: params.pluginId,
-            recordedSpec: params.record.spec,
-            currentVersion: currentLabel,
-            newer: newerExactPinnedClawHubDefaultLine,
-          }) + params.channelFallbackSuffix
-        : `${params.pluginId} already at ${currentLabel}.${params.channelFallbackSuffix}`
-      : `${verb} ${params.pluginId}: ${currentLabel} -> ${params.nextVersion ?? "unknown"}.${params.channelFallbackSuffix}`,
-    ...(params.channelFallback ? { channelFallback: params.channelFallback } : {}),
-  };
-}
+};
 
-export async function buildDryRunPluginUpdateOutcome(params: {
-  pluginId: string;
-  record: UpdatablePluginInstallRecord;
-  result: PluginUpdateSuccess;
-  currentVersion?: string;
-  effectiveSpec?: string;
-  hasSpecOverride: boolean;
-  updateChannel?: UpdateChannel;
-  timeoutMs?: number;
-  channelFallbackSuffix: string;
-  checkNewerExactPinnedClawHubDefaultLine?: boolean;
-}): Promise<PluginUpdateOutcome> {
+export async function buildDryRunPluginUpdateOutcome(
+  params: Omit<PluginUpdateVersionOutcomeParams, "nextVersion"> & {
+    effectiveSpec?: string;
+    hasSpecOverride: boolean;
+  },
+): Promise<PluginUpdateOutcome> {
   const npmProbeVersion =
     params.record.source === "npm" ? params.result.npmResolution?.version : undefined;
   const resolvedProbeVersion =
     params.result.version ??
     npmProbeVersion ??
     (params.record.source === "npm" ? resolveExactNpmSpecVersion(params.effectiveSpec) : undefined);
-  const nextVersion = resolvedProbeVersion ?? "unknown";
+  return await buildPluginUpdateVersionOutcome(
+    { ...params, nextVersion: resolvedProbeVersion },
+    "check",
+    npmProbeVersion,
+  );
+}
+
+export async function buildPluginUpdateVersionOutcome(
+  params: PluginUpdateVersionOutcomeParams & { hasSpecOverride?: boolean },
+  phase: "check" | "update" = "update",
+  npmProbeVersion?: string,
+): Promise<PluginUpdateOutcome> {
   const currentLabel = params.currentVersion ?? "unknown";
-  const unchanged = isPluginUpdateUnchanged({ ...params, nextVersion: resolvedProbeVersion });
+  const { record, result, currentVersion, nextVersion } = params;
+  const nextCommit = record.source === "git" && "git" in result ? result.git.commit : undefined;
+  const unchanged =
+    record.gitCommit && nextCommit
+      ? record.gitCommit === nextCommit
+      : Boolean(currentVersion && nextVersion && currentVersion === nextVersion);
   const newerExactPinnedDefaultLine =
-    unchanged && params.record.source === "npm" && !params.hasSpecOverride
+    phase === "check" && unchanged && params.record.source === "npm" && !params.hasSpecOverride
       ? await resolveNewerExactPinnedNpmDefaultLine({
           currentVersion: params.currentVersion,
           recordedSpec: params.record.spec,
@@ -324,51 +227,46 @@ export async function buildDryRunPluginUpdateOutcome(params: {
       ? await resolveNewerExactPinnedClawHubDefaultLine({
           currentVersion: params.currentVersion,
           recordedSpec: params.record.spec,
-          probeClawHubVersion: resolvedProbeVersion,
+          probeClawHubVersion: params.nextVersion,
           baseUrl: params.record.clawhubUrl,
           updateChannel: params.updateChannel,
           timeoutMs: params.timeoutMs,
         })
       : undefined;
 
-  if (unchanged) {
-    const message =
-      newerExactPinnedDefaultLine && params.record.spec
-        ? formatNewerExactPinnedNpmDefaultLineMessage({
-            pluginId: params.pluginId,
-            recordedSpec: params.record.spec,
-            currentVersion: currentLabel,
-            newer: newerExactPinnedDefaultLine,
-          }) + params.channelFallbackSuffix
-        : newerExactPinnedClawHubDefaultLine && params.record.spec
-          ? formatNewerExactPinnedClawHubDefaultLineMessage({
-              pluginId: params.pluginId,
-              recordedSpec: params.record.spec,
-              currentVersion: currentLabel,
-              newer: newerExactPinnedClawHubDefaultLine,
-            }) + params.channelFallbackSuffix
-          : `${params.pluginId} is up to date (${currentLabel}).${params.channelFallbackSuffix}`;
-    return {
+  const newer = newerExactPinnedDefaultLine ?? newerExactPinnedClawHubDefaultLine;
+  let message: string;
+  if (!unchanged) {
+    const downgrade = isPackageVersionDowngrade(params.currentVersion, params.nextVersion);
+    const verb =
+      phase === "check"
+        ? `Would ${downgrade ? "downgrade" : "update"}`
+        : downgrade
+          ? "Downgraded"
+          : "Updated";
+    message = `${verb} ${params.pluginId}: ${currentLabel} -> ${params.nextVersion ?? "unknown"}.`;
+  } else if (newer && params.record.spec) {
+    const formatPinned = newerExactPinnedDefaultLine
+      ? formatNewerExactPinnedNpmDefaultLineMessage
+      : formatNewerExactPinnedClawHubDefaultLineMessage;
+    message = formatPinned({
       pluginId: params.pluginId,
-      status: "unchanged",
-      currentVersion: params.currentVersion,
-      nextVersion:
-        newerExactPinnedDefaultLine?.version ??
-        newerExactPinnedClawHubDefaultLine?.version ??
-        resolvedProbeVersion,
-      message,
-    };
+      recordedSpec: params.record.spec,
+      currentVersion: currentLabel,
+      newer,
+    });
+  } else {
+    message =
+      phase === "check"
+        ? `${params.pluginId} is up to date (${currentLabel}).`
+        : `${params.pluginId} already at ${currentLabel}.`;
   }
-
-  const verb = isPackageVersionDowngrade(params.currentVersion, resolvedProbeVersion)
-    ? "Would downgrade"
-    : "Would update";
   return {
     pluginId: params.pluginId,
-    status: "updated",
+    status: unchanged ? "unchanged" : "updated",
     currentVersion: params.currentVersion,
-    nextVersion: resolvedProbeVersion,
-    message: `${verb} ${params.pluginId}: ${currentLabel} -> ${nextVersion}.${params.channelFallbackSuffix}`,
+    nextVersion: newer?.version ?? params.nextVersion,
+    message: message + params.channelFallbackSuffix,
   };
 }
 
@@ -378,6 +276,7 @@ export async function runPluginUpdateAttempt(params: {
   config: OpenClawConfig;
   dryRun: boolean;
   effectiveSpec?: string;
+  npmMetadata?: Parameters<typeof installPluginFromNpmSpec>[0]["npmMetadata"];
   extensionsDir?: string;
   timeoutMs?: number;
   workTimeoutMs?: number | null;
@@ -387,16 +286,13 @@ export async function runPluginUpdateAttempt(params: {
   clawhubSpecs?: PluginUpdateSpecPlan;
   trustedSourceLinkedOfficialInstall: boolean;
   expectedReplacementPluginId?: string;
-  installNpmSpecForUpdate: typeof installPluginFromNpmSpec;
+  onNpmInstall: () => void;
   logger: PluginUpdateLogger;
   onIntegrityDrift?: (params: PluginUpdateIntegrityDriftParams) => boolean | Promise<boolean>;
 }): Promise<PluginUpdateAttemptResult> {
   const dryRunOption = params.dryRun ? { dryRun: true } : {};
   const phase = params.dryRun ? "check" : "update";
-  const installNpmSpec = params.dryRun ? installPluginFromNpmSpec : params.installNpmSpecForUpdate;
-  const installParams = <T extends object>(value: T): T =>
-    copyPluginInstallTransactionRequest(params, value);
-  const commonInstallOptions = () => ({
+  const commonInstallOptions = copyPluginInstallTransactionRequest(params, {
     config: params.config,
     mode: "update" as const,
     extensionsDir: params.extensionsDir,
@@ -410,45 +306,53 @@ export async function runPluginUpdateAttempt(params: {
   });
   let result: PluginUpdateInstallResult;
   try {
+    if (params.record.source === "npm" && !params.dryRun) {
+      params.onNpmInstall();
+    }
     result =
       params.record.source === "npm"
-        ? await installNpmSpec(
-            installParams({
-              spec: params.effectiveSpec!,
-              ...commonInstallOptions(),
-              trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-              expectedReplacementPluginId: params.expectedReplacementPluginId,
-              expectedIntegrity: params.expectedIntegrity,
-              onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
+        ? await installPluginFromNpmSpec({
+            spec: params.effectiveSpec!,
+            npmMetadata: params.npmMetadata,
+            ...commonInstallOptions,
+            trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+            expectedReplacementPluginId: params.expectedReplacementPluginId,
+            expectedIntegrity: params.expectedIntegrity,
+            onIntegrityDrift: async (drift) => {
+              const payload: PluginUpdateIntegrityDriftParams = {
                 pluginId: params.pluginId,
+                spec: drift.spec,
+                expectedIntegrity: drift.expectedIntegrity,
+                actualIntegrity: drift.actualIntegrity,
+                resolvedSpec: drift.resolution.resolvedSpec,
+                resolvedVersion: drift.resolution.version,
                 dryRun: params.dryRun,
-                logger: params.logger,
-                onIntegrityDrift: params.onIntegrityDrift,
-              }),
-            }),
-          )
-        : params.record.source === "clawhub"
-          ? await installPluginFromClawHub(
-              installParams({
-                spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
-                baseUrl: params.record.clawhubUrl,
-                ...commonInstallOptions(),
-              }),
-            )
-          : params.record.source === "git"
-            ? await installPluginFromGitSpec(
-                installParams({
-                  spec: params.effectiveSpec!,
-                  ...commonInstallOptions(),
-                }),
-              )
-            : await installPluginFromMarketplace(
-                installParams({
-                  marketplace: params.record.marketplaceSource!,
-                  plugin: params.record.marketplacePlugin!,
-                  ...commonInstallOptions(),
-                }),
+              };
+              if (params.onIntegrityDrift) {
+                return await params.onIntegrityDrift(payload);
+              }
+              params.logger.warn?.(
+                `Integrity drift for "${params.pluginId}" (${payload.resolvedSpec ?? payload.spec}): expected ${payload.expectedIntegrity}, got ${payload.actualIntegrity}`,
               );
+              return false;
+            },
+          })
+        : params.record.source === "clawhub"
+          ? await installPluginFromClawHub({
+              spec: params.effectiveSpec ?? `clawhub:${params.record.clawhubPackage!}`,
+              baseUrl: params.record.clawhubUrl,
+              ...commonInstallOptions,
+            })
+          : params.record.source === "git"
+            ? await installPluginFromGitSpec({
+                spec: params.effectiveSpec!,
+                ...commonInstallOptions,
+              })
+            : await installPluginFromMarketplace({
+                marketplace: params.record.marketplaceSource!,
+                plugin: params.record.marketplacePlugin!,
+                ...commonInstallOptions,
+              });
   } catch (error) {
     return {
       kind: "exception",
@@ -459,7 +363,6 @@ export async function runPluginUpdateAttempt(params: {
 
   let activeClawHubInstallSpec = params.effectiveSpec;
   let channelFallbackSuffix = "";
-  const resultSource = params.record.source;
 
   if (
     !result.ok &&
@@ -475,13 +378,11 @@ export async function runPluginUpdateAttempt(params: {
     params.logger.info?.(
       `Plugin "${params.pluginId}" has no beta ClawHub release for ${params.clawhubSpecs.fallbackLabel ?? params.effectiveSpec}; using ${params.clawhubSpecs.fallbackSpec} instead. Core update can still complete.`,
     );
-    result = await installPluginFromClawHub(
-      installParams({
-        spec: params.clawhubSpecs.fallbackSpec,
-        baseUrl: params.record.clawhubUrl,
-        ...commonInstallOptions(),
-      }),
-    );
+    result = await installPluginFromClawHub({
+      spec: params.clawhubSpecs.fallbackSpec,
+      baseUrl: params.record.clawhubUrl,
+      ...commonInstallOptions,
+    });
     activeClawHubInstallSpec = params.clawhubSpecs.fallbackSpec;
   }
 
@@ -490,6 +391,5 @@ export async function runPluginUpdateAttempt(params: {
     result,
     activeClawHubInstallSpec,
     channelFallbackSuffix,
-    resultSource,
   };
 }

@@ -112,7 +112,7 @@ actor MacNodeRuntime {
     private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
     private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private static let cuaOwnedCommands = Set([
-        MacNodeScreenCommand.snapshot.rawValue,
+        OpenClawScreenCommand.snapshot.rawValue,
         OpenClawComputerCommand.act.rawValue,
     ])
     private let cameraCapture = CameraCaptureService()
@@ -149,7 +149,7 @@ actor MacNodeRuntime {
             await MainActor.run { LiveMacNodeRuntimeMainActorServices() }
         },
         computerControlEnabled: @escaping @Sendable () -> Bool = {
-            MacNodeRuntime.computerControlEnabledDefault()
+            isComputerControlEnabled()
         },
         computerControlProvider: @escaping @Sendable () -> ComputerControlProvider = {
             ComputerControlProvider.current()
@@ -221,7 +221,7 @@ actor MacNodeRuntime {
                 return try await handleCameraInvoke(req)
             case OpenClawLocationCommand.get.rawValue:
                 return try await handleLocationInvoke(req)
-            case MacNodeScreenCommand.record.rawValue:
+            case OpenClawScreenCommand.record.rawValue:
                 return try await handleScreenRecordInvoke(req)
             case OpenClawSystemCommand.notify.rawValue:
                 return try await handleSystemNotify(req)
@@ -356,7 +356,7 @@ actor MacNodeRuntime {
                         throw MacDesktopAvailabilityCoordinator.AvailabilityError.executionClosed
                     }
                     try Task.checkCancellation()
-                    response = req.command == MacNodeScreenCommand.snapshot.rawValue
+                    response = req.command == OpenClawScreenCommand.snapshot.rawValue
                         ? try await self.handleScreenSnapshotInvoke(req, desktopPermit: permit)
                         : try await self.handleComputerActInvoke(req, desktopPermit: permit)
                 }
@@ -484,15 +484,21 @@ actor MacNodeRuntime {
 extension MacNodeRuntime {
     private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
         switch req.command {
-        case OpenClawCanvasCommand.present.rawValue:
-            let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
-                OpenClawCanvasPresentParams()
-            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-            let effectiveURL = try await resolveCanvasTarget(url)
-            let placement = params.placement.map {
-                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+        case OpenClawCanvasCommand.present.rawValue, OpenClawCanvasCommand.navigate.rawValue:
+            let target: String?
+            let placement: CanvasPlacement?
+            if req.command == OpenClawCanvasCommand.present.rawValue {
+                let params = (try? Self.decodeParams(OpenClawCanvasPresentParams.self, from: req.paramsJSON)) ??
+                    OpenClawCanvasPresentParams()
+                target = params.url
+                placement = params.placement.map {
+                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+                }
+            } else {
+                target = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON).url
+                placement = nil
             }
+            let effectiveURL = try await resolveCanvasTarget(target)
             let sessionKey = self.mainSessionKey
             try await MainActor.run {
                 _ = try CanvasManager.shared.show(
@@ -505,16 +511,6 @@ extension MacNodeRuntime {
             let sessionKey = self.mainSessionKey
             await MainActor.run {
                 CanvasManager.shared.hide(sessionKey: sessionKey)
-            }
-            return BridgeInvokeResponse(id: req.id, ok: true)
-        case OpenClawCanvasCommand.navigate.rawValue:
-            let params = try Self.decodeParams(OpenClawCanvasNavigateParams.self, from: req.paramsJSON)
-            let effectiveURL = try await resolveCanvasTarget(params.url)
-            let sessionKey = self.mainSessionKey
-            try await MainActor.run {
-                _ = try CanvasManager.shared.show(
-                    sessionKey: sessionKey,
-                    path: effectiveURL)
             }
             return BridgeInvokeResponse(id: req.id, ok: true)
         default:
@@ -560,7 +556,7 @@ extension MacNodeRuntime {
                 OpenClawCameraSnapParams()
             let delayMs = min(10000, max(0, params.delayMs ?? 2000))
             let res = try await cameraCapture.snap(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 maxWidth: params.maxWidth,
                 quality: params.quality,
                 deviceId: params.deviceId,
@@ -581,11 +577,10 @@ extension MacNodeRuntime {
             let params = (try? Self.decodeParams(OpenClawCameraClipParams.self, from: req.paramsJSON)) ??
                 OpenClawCameraClipParams()
             let res = try await cameraCapture.clip(
-                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                facing: params.facing ?? .front,
                 durationMs: params.durationMs,
                 includeAudio: params.includeAudio ?? true,
-                deviceId: params.deviceId,
-                outPath: nil)
+                deviceId: params.deviceId)
             defer { try? FileManager().removeItem(atPath: res.path) }
             let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
             struct ClipPayload: Encodable {
@@ -754,8 +749,8 @@ extension MacNodeRuntime {
     }
 
     private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenRecordParams()
+        let params = (try? Self.decodeParams(OpenClawScreenRecordParams.self, from: req.paramsJSON)) ??
+            OpenClawScreenRecordParams()
         if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
             return Self.errorResponse(
                 req,
@@ -767,8 +762,7 @@ extension MacNodeRuntime {
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
+            includeAudio: params.includeAudio)
         defer { try? FileManager().removeItem(atPath: res.path) }
         let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
         struct ScreenPayload: Encodable {
@@ -883,11 +877,9 @@ extension MacNodeRuntime {
             task = initializationTask
         }
         let services = await task.value
-        if cachedMainActorServices == nil {
-            cachedMainActorServices = services
-            self.mainActorServicesInitializationTask = nil
-        }
-        return cachedMainActorServices ?? services
+        self.cachedMainActorServices = services
+        self.mainActorServicesInitializationTask = nil
+        return services
     }
 
     /// Releases any synthetic input the computer.act service is still holding
@@ -917,8 +909,7 @@ extension MacNodeRuntime {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: empty notification")
         }
 
-        let priority = params.priority.flatMap { NotificationPriority(rawValue: $0.rawValue) }
-        let delivery = params.delivery.flatMap { NotificationDelivery(rawValue: $0.rawValue) } ?? .system
+        let delivery = params.delivery ?? .system
         let manager = NotificationManager()
 
         if delivery != .overlay {
@@ -926,7 +917,7 @@ extension MacNodeRuntime {
                 title: title,
                 body: body,
                 sound: params.sound,
-                priority: priority)
+                priority: params.priority)
             if ok {
                 return BridgeInvokeResponse(id: req.id, ok: true)
             }
@@ -947,7 +938,7 @@ extension MacNodeRuntime {
 
 extension MacNodeRuntime {
     private static func invalidDesktopParamsResponse(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
-        if req.command == MacNodeScreenCommand.snapshot.rawValue {
+        if req.command == OpenClawScreenCommand.snapshot.rawValue {
             return self.errorResponse(
                 req, code: .invalidRequest, message: "INVALID_REQUEST: invalid screen snapshot params")
         }
@@ -955,22 +946,16 @@ extension MacNodeRuntime {
     }
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
-        guard let json, let data = json.data(using: .utf8) else {
+        guard let json else {
             throw NSError(domain: "Gateway", code: 20, userInfo: [
                 NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
             ])
         }
-        return try JSONDecoder().decode(type, from: data)
+        return try JSONDecoder().decode(type, from: Data(json.utf8))
     }
 
     private static func encodePayload(_ obj: some Encodable) throws -> String {
-        let data = try JSONEncoder().encode(obj)
-        guard let json = String(bytes: data, encoding: .utf8) else {
-            throw NSError(domain: "Node", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
-            ])
-        }
-        return json
+        try String(bytes: JSONEncoder().encode(obj), encoding: .utf8)!
     }
 
     static func projectedOuterFrameBytes(
@@ -1013,10 +998,6 @@ extension MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         AppDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
-    }
-
-    nonisolated static func computerControlEnabledDefault() -> Bool {
-        isComputerControlEnabled()
     }
 
     private nonisolated static func locationMode() -> OpenClawLocationMode {

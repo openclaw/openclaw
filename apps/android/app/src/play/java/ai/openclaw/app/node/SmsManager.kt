@@ -13,25 +13,20 @@ class SmsManager(
 
   fun canSendSms(): Boolean = false
 
-  fun canSearchSms(): Boolean = false
-
   fun canReadSms(): Boolean = false
 
   fun hasTelephonyFeature(): Boolean = false
 
-  suspend fun send(paramsJson: String?): SmsSendResult =
-    SmsSendResult(
+  suspend fun send(paramsJson: String?): SmsResult =
+    SmsResult(
       ok = false,
-      to = "",
-      message = null,
       error = "SMS_PERMISSION_REQUIRED: grant SMS permission",
       payloadJson = unavailablePayload(paramsJson),
     )
 
-  suspend fun search(paramsJson: String?): SmsSearchResult =
-    SmsSearchResult(
+  suspend fun search(paramsJson: String?): SmsResult =
+    SmsResult(
       ok = false,
-      messages = emptyList(),
       error = "SMS_PERMISSION_REQUIRED: grant READ_SMS permission",
       payloadJson = unavailablePayload(paramsJson),
     )

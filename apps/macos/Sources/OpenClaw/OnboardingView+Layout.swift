@@ -61,7 +61,6 @@ extension OnboardingView {
         }
         .task {
             await self.refreshCLIStatus()
-            self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
@@ -96,15 +95,12 @@ extension OnboardingView {
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
-        if let exact = pageOrder.firstIndex(of: previousActivePageIndex) {
-            withAnimation { self.currentPage = exact }
-            return
+        let page = pageOrder.firstIndex(of: previousActivePageIndex) ??
+            pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) ??
+            max(0, pageOrder.count - 1)
+        withAnimation {
+            self.currentPage = page
         }
-        if let next = pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) {
-            withAnimation { self.currentPage = next }
-            return
-        }
-        withAnimation { self.currentPage = max(0, self.pageOrder.count - 1) }
     }
 
     func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {
@@ -352,7 +348,7 @@ extension OnboardingView {
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI || self.aiSetup.isBusy)
+                    .disabled(self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -362,7 +358,7 @@ extension OnboardingView {
 
             HStack(spacing: 0) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
+                    let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
@@ -455,28 +451,12 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureActionRow(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        buttonTitle: String,
-        action: @escaping () -> Void) -> some View
-    {
-        self.featureRow(
-            title: title,
-            subtitle: subtitle,
-            systemImage: systemImage,
-            action: AnyView(
-                Button(buttonTitle, action: action)
-                    .buttonStyle(.link)
-                    .padding(.top, 2)))
-    }
-
     func featureRow(
         title: String,
         subtitle: String,
         systemImage: String,
-        action: AnyView? = nil) -> some View
+        buttonTitle: String? = nil,
+        action: (() -> Void)? = nil) -> some View
     {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
@@ -488,8 +468,10 @@ extension OnboardingView {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                if let action {
-                    action
+                if let buttonTitle, let action {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)

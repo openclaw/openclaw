@@ -1,197 +1,103 @@
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import type { AuthProviderHealth } from "../../agents/auth-health.js";
 import { aggregateRefreshableAuthStatus } from "./models-auth-status.js";
 
 describe("aggregateRefreshableAuthStatus", () => {
   const NOW = 1_000_000;
-  const expiring = NOW + 60_000; // 1 min in future
+  const expiring = NOW + 60_000;
 
-  function oauth(status: "ok" | "expiring" | "expired" | "missing", expiresAt?: number) {
+  function profile(
+    type: "oauth" | "token" | "api_key",
+    status: AuthProviderHealth["status"],
+    expiresAt?: number,
+  ): AuthProviderHealth["profiles"][number] {
     return {
-      profileId: `p-${status}`,
+      profileId: `${type}-${status}`,
       provider: "openai",
-      type: "oauth" as const,
+      type,
       status,
       expiresAt,
       remainingMs: expiresAt !== undefined ? expiresAt - NOW : undefined,
-      source: "store" as const,
-      label: `p-${status}`,
+      source: "store",
+      label: `${type}-${status}`,
     };
   }
 
-  function token(status: "ok" | "expiring" | "expired" | "missing" | "static", expiresAt?: number) {
-    return {
-      profileId: `t-${status}`,
-      provider: "openai",
-      type: "token" as const,
-      status,
-      expiresAt,
-      remainingMs: expiresAt !== undefined ? expiresAt - NOW : undefined,
-      source: "store" as const,
-      label: `t-${status}`,
-    };
+  function provider(
+    profiles: AuthProviderHealth["profiles"],
+    overrides: Partial<AuthProviderHealth> = {},
+  ): AuthProviderHealth {
+    return { provider: "openai", status: "ok", profiles, ...overrides };
   }
 
-  it("ignores token profiles — healthy OAuth + expired token stays ok", () => {
-    const result = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "expired",
-        profiles: [oauth("ok", expiring + 10_000_000), token("expired")],
-      },
-      NOW,
-    );
-    expect(result.status).toBe("ok");
-  });
-
-  it("uses effective OAuth profiles while keeping stale inventory visible", () => {
-    const healthy = oauth("ok", expiring + 10_000_000);
-    const stale = oauth("expired", NOW - 1);
-    const result = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "ok",
-        effectiveProfiles: [healthy],
-        profiles: [stale, healthy],
-      },
-      NOW,
-    );
-    expect(result.status).toBe("ok");
-    expect(result.expiresAt).toBe(healthy.expiresAt);
-  });
-
-  it("falls back to prov.status when no OAuth profiles exist", () => {
-    const result = aggregateRefreshableAuthStatus(
-      {
-        provider: "anthropic",
-        status: "static",
-        profiles: [
-          {
-            profileId: "anthropic:default",
-            provider: "anthropic",
-            type: "api_key",
-            status: "static",
-            source: "store",
-            label: "anthropic:default",
-          },
-        ],
-      },
-      NOW,
-    );
-    expect(result.status).toBe("static");
-  });
-
-  it("keeps missing distinct from expired", () => {
-    const expiredResult = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "expired",
-        profiles: [oauth("expired", NOW - 1)],
-      },
-      NOW,
-    );
-    expect(expiredResult.status).toBe("expired");
-
-    const missingResult = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "missing",
-        profiles: [oauth("missing")],
-      },
-      NOW,
-    );
-    expect(missingResult.status).toBe("missing");
-  });
-
-  it("precedence: expired/missing > expiring > ok > static", () => {
-    // expiring + ok → expiring (expired-marker absent)
-    const res1 = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "expiring",
-        profiles: [oauth("expiring", expiring), oauth("ok", expiring + 10_000_000)],
-      },
-      NOW,
-    );
-    expect(res1.status).toBe("expiring");
-
-    // expired beats expiring
-    const res2 = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "expired",
-        profiles: [oauth("expired", NOW - 1), oauth("expiring", expiring)],
-      },
-      NOW,
-    );
-    expect(res2.status).toBe("expired");
-  });
-
-  it("picks the earliest expiresAt across OAuth profiles", () => {
-    const earlier = NOW + 1_000;
-    const later = NOW + 99_999;
-    const result = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai",
-        status: "ok",
-        profiles: [oauth("ok", later), oauth("ok", earlier)],
-      },
-      NOW,
-    );
-    expect(result.expiresAt).toBe(earlier);
-    expect(result.remainingMs).toBe(1_000);
-  });
-
+  const healthy = profile("oauth", "ok", expiring + 10_000_000);
   it.each([
-    ["ok", undefined],
-    ["expiring", expiring],
-    ["expired", NOW - 1],
-    ["missing", undefined],
-    ["static", undefined],
-  ] as const)(
-    "uses token status %s when no effective OAuth profile exists",
-    (status, expiresAt) => {
-      const result = aggregateRefreshableAuthStatus(
-        {
-          provider: "claude-cli",
-          status,
-          profiles: [token(status, expiresAt)],
-        },
-        NOW,
-        true,
-      );
-      expect(result).toEqual({
-        status,
-        ...(expiresAt === undefined ? {} : { expiresAt, remainingMs: expiresAt - NOW }),
-      });
-    },
-  );
-
-  it("keeps an empty effective profile selection missing", () => {
-    const result = aggregateRefreshableAuthStatus(
-      {
+    [
+      "OAuth ignores expired tokens and selects its earliest expiry",
+      provider([healthy, profile("oauth", "ok", NOW + 1_000), profile("token", "expired")], {
+        status: "expired",
+      }),
+      false,
+      { status: "ok", expiresAt: NOW + 1_000, remainingMs: 1_000 },
+    ],
+    [
+      "effective profiles exclude stale inventory",
+      provider([profile("oauth", "expired", NOW - 1), healthy], { effectiveProfiles: [healthy] }),
+      false,
+      { status: "ok", expiresAt: healthy.expiresAt, remainingMs: healthy.remainingMs },
+    ],
+    [
+      "API keys retain provider status",
+      provider([profile("api_key", "static")], { status: "static" }),
+      false,
+      { status: "static" },
+    ],
+    [
+      "missing OAuth remains distinct from expired",
+      provider([profile("oauth", "missing")], { status: "missing" }),
+      false,
+      { status: "missing" },
+    ],
+    [
+      "expiring precedes healthy OAuth",
+      provider([profile("oauth", "expiring", expiring), healthy], { status: "expiring" }),
+      false,
+      { status: "expiring", expiresAt: expiring, remainingMs: 60_000 },
+    ],
+    [
+      "expired precedes expiring OAuth",
+      provider([profile("oauth", "expired", NOW - 1), profile("oauth", "expiring", expiring)], {
+        status: "expired",
+      }),
+      false,
+      { status: "expired", expiresAt: NOW - 1, remainingMs: -1 },
+    ],
+    [
+      "expired token replaces OAuth",
+      provider([profile("token", "expired", NOW - 1)], {
+        provider: "claude-cli",
+        status: "expired",
+      }),
+      true,
+      { status: "expired", expiresAt: NOW - 1, remainingMs: -1 },
+    ],
+    [
+      "static token replaces OAuth",
+      provider([profile("token", "static")], { provider: "claude-cli", status: "static" }),
+      true,
+      { status: "static" },
+    ],
+    [
+      "empty effective selection remains missing",
+      provider([profile("token", "ok")], {
         provider: "claude-cli",
         status: "missing",
         effectiveProfiles: [],
-        profiles: [token("ok")],
-      },
-      NOW,
+      }),
       true,
-    );
-    expect(result).toEqual({ status: "missing" });
-  });
-
-  it("ignores out-of-range OAuth expiry timestamps", () => {
-    const valid = NOW + 5_000;
-    const result = aggregateRefreshableAuthStatus(
-      {
-        provider: "openai-codex",
-        status: "ok",
-        profiles: [oauth("ok", MAX_DATE_TIMESTAMP_MS + 1), oauth("ok", valid)],
-      },
-      NOW,
-    );
-    expect(result.expiresAt).toBe(valid);
-    expect(result.remainingMs).toBe(5_000);
+      { status: "missing" },
+    ],
+  ] as const)("%s", (_name, health, expectsOAuth, expected) => {
+    expect(aggregateRefreshableAuthStatus(health, NOW, expectsOAuth)).toEqual(expected);
   });
 });

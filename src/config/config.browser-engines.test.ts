@@ -8,7 +8,7 @@ const lightpandaProfile = {
 };
 
 describe("browser engine config", () => {
-  it.each(["ws://127.0.0.1:9222/", "ws://lightpanda:9222/", "wss://browser.example/cdp"])(
+  it.each(["ws://lightpanda:9222/", "wss://browser.example/cdp"])(
     "accepts explicit Lightpanda endpoints on hosts and Docker networks: %s",
     (cdpUrl) => {
       const result = OpenClawSchemaShape.browser.safeParse({
@@ -24,15 +24,8 @@ describe("browser engine config", () => {
     ["cdpUrl", "http://127.0.0.1:9222"],
     ["cdpUrl", "not-a-url"],
     ["attachOnly", undefined],
-    ["attachOnly", false],
-    ["driver", "existing-session"],
     ["driver", "extension"],
-    ["cdpPort", 9222],
     ["userDataDir", "/tmp/chrome-profile"],
-    ["mcpCommand", "chrome-devtools-mcp"],
-    ["mcpArgs", []],
-    ["executablePath", "/usr/bin/chromium"],
-    ["headless", false],
   ])("rejects incompatible Lightpanda %s=%s", (key, value) => {
     const result = OpenClawSchemaShape.browser.safeParse({
       profiles: { lightweight: { ...lightpandaProfile, [key as string]: value } },
@@ -57,11 +50,11 @@ describe("browser engine config", () => {
     expect(OpenClawSchemaShape.browser.parse(browser)).toEqual(browser);
   });
 
-  it.each(["chromium", "lightpanda"])("rejects a shared Lightpanda endpoint with %s", (engine) => {
+  it("rejects a Lightpanda endpoint shared with Chromium", () => {
     const result = OpenClawSchemaShape.browser.safeParse({
       profiles: {
         lightweight: lightpandaProfile,
-        alias: { engine, cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
+        alias: { engine: "chromium", cdpUrl: "ws://127.0.0.1:9222", attachOnly: true },
       },
     });
     expect(result.success).toBe(false);

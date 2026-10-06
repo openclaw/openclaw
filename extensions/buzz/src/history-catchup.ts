@@ -31,10 +31,7 @@ async function waitForBuzzRelayRetry(delayMs: number, signal?: AbortSignal): Pro
 
 type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
 
-type BuzzRoomHistoryPage = {
-  events: Event[];
-  overLimit: boolean;
-};
+type BuzzRoomHistoryPage = Awaited<ReturnType<typeof queryBuzzRoomHistoryPage>>;
 
 async function queryBuzzRoomHistoryPage(params: {
   relay: Relay;
@@ -45,7 +42,7 @@ async function queryBuzzRoomHistoryPage(params: {
   maxEvents: number;
   skipEventIds?: ReadonlySet<string>;
   signal?: AbortSignal;
-}): Promise<BuzzRoomHistoryPage> {
+}) {
   for (let attempt = 0; ; attempt += 1) {
     // A retried page starts from an empty accumulator so a partial first attempt
     // cannot duplicate events into the replay dispatcher.

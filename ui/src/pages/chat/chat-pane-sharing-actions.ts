@@ -1,5 +1,6 @@
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import type { SessionPublicShareSetResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsCompanionResetResult } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type {
   GatewaySessionRow,
   SessionMembersListEvidenceResult as SessionSharingResult,
@@ -17,7 +18,6 @@ import {
 import { showToast } from "../../lib/toast.ts";
 import type { ChatPaneConnectionScope } from "./chat-pane-shared.ts";
 import { ChatPaneSidePanels } from "./chat-pane-side-panels.ts";
-import { resetSessionCompanion } from "./chat-session-companion.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import {
   canManageChatSessionSharing,
@@ -35,7 +35,15 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     const agentId = resolveChatAgentId(scope.state);
     await this.sessionCompanionThreads
-      .reset(key, (sessionKey) => resetSessionCompanion(scope.client, sessionKey, agentId), agentId)
+      .reset(
+        key,
+        (sessionKey) =>
+          scope.client.request<SessionsCompanionResetResult>("sessions.companion.reset", {
+            sessionKey,
+            ...(agentId ? { agentId } : {}),
+          }),
+        agentId,
+      )
       .catch((error: unknown) => {
         if (
           this.presented &&
@@ -78,6 +86,10 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     const rowSessionId = row.sessionId?.trim();
     const currentSessionId = current.sessionId?.trim();
     return rowSessionId && currentSessionId && rowSessionId === currentSessionId ? current : null;
+  }
+
+  private ownsSessionSharing(scope: ChatPaneConnectionScope, row: GatewaySessionRow): boolean {
+    return this.ownsHeaderOutcomeScope(scope) && this.currentSessionSharingRow(scope, row) !== null;
   }
 
   protected async loadSessionSharing(row: GatewaySessionRow, force = false): Promise<void> {
@@ -127,11 +139,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     } catch (error) {
       next = { loading: false, error: formatUiError(error) };
     }
-    if (
-      !this.ownsHeaderOutcomeScope(scope) ||
-      !this.currentSessionSharingRow(scope, currentRow) ||
-      !ownsLoadingState()
-    ) {
+    if (!this.ownsSessionSharing(scope, currentRow) || !ownsLoadingState()) {
       if (this.isConnectionScopeCurrent(scope)) {
         clearOwnedLoadingState();
       }
@@ -301,10 +309,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     try {
       await scope.client.request("session.visibility.set", params);
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
       const outcome = await scope.sessions.reconcileMutation(agentId);
@@ -318,10 +323,7 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
       }
       await this.loadSessionSharing(refreshedRow, true);
     } catch (error) {
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
       this.failSharing(scope, cacheKey, currentRow.key, error);
@@ -356,32 +358,19 @@ export abstract class ChatPaneSharingActions extends ChatPaneSidePanels {
     }
     try {
       await scope.client.request(method, params);
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
       await this.loadSessionSharing(currentRow, true);
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
       const outcome = await scope.sessions.reconcileMutation(agentId);
-      if (
-        outcome.status === "failed" &&
-        this.ownsHeaderOutcomeScope(scope) &&
-        this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (outcome.status === "failed" && this.ownsSessionSharing(scope, currentRow)) {
         this.failSharing(scope, cacheKey, currentRow.key, outcome.error);
       }
     } catch (error) {
-      if (
-        !this.ownsHeaderOutcomeScope(scope) ||
-        !this.currentSessionSharingRow(scope, currentRow)
-      ) {
+      if (!this.ownsSessionSharing(scope, currentRow)) {
         return;
       }
       this.failSharing(scope, cacheKey, currentRow.key, error);

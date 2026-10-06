@@ -84,9 +84,8 @@ class SearchPage extends OpenClawLightDomElement {
   });
 
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
+    .watchStore(
       () => this.context?.runtimeConfig,
-      (runtime, notify) => runtime.subscribe(notify),
       (runtime) => {
         if (!isSearchConfigSettled(runtime.state)) {
           this.invalidateTest();
@@ -98,15 +97,11 @@ class SearchPage extends OpenClawLightDomElement {
         }
       },
     )
-    .watch(
+    .watchStore(
       () => this.context?.settingsAgentSelection,
-      (selection, notify) => selection.subscribe(notify),
       () => this.syncAgent(),
     )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
+    .watchStore(() => this.context?.agents);
 
   override disconnectedCallback() {
     this.invalidate();
@@ -377,9 +372,6 @@ class SearchPage extends OpenClawLightDomElement {
                   path: credential.path,
                   value: readConfigValue(config, credential.path),
                   disabled: !this.canEdit || this.busy,
-                  onPatch: (path, value) => {
-                    void patch(path, value);
-                  },
                 },
                 credential,
                 {
@@ -551,9 +543,7 @@ class SearchPage extends OpenClawLightDomElement {
                         options: [
                           {
                             value: "",
-                            label: result.model
-                              ? `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`
-                              : t("searchPage.agentDefault"),
+                            label: `${t("searchPage.agentDefault")} · ${result.model.provider}/${result.model.id}`,
                           },
                           ...this.models.map((model) => ({
                             value: `${model.provider}/${model.id}`,
@@ -613,7 +603,7 @@ class SearchPage extends OpenClawLightDomElement {
                                 }}
                               />`,
                             })}
-                            ${renderSettingsRow({ title: t("searchPage.test"), description: !result.testProvider && !result.route.testable ? result.route.reason : undefined, control: html`<button class="btn" ?disabled=${!this.canEdit || !(result.testProvider || result.route.testable) || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
+                            ${renderSettingsRow({ title: t("searchPage.test"), control: html`<button class="btn" ?disabled=${!this.canEdit || !this.query.trim() || this.query.trim().length > 500 || this.testing || this.loading || !isSearchConfigSettled(configState) || !this.gateway.connected} @click=${() => this.test(scope, statusGeneration)}>${this.testing ? t("searchPage.testing") : result.testProvider ? t("searchPage.testProvider", { provider: result.testProvider.label }) : t("searchPage.test")}</button>` })}
                           `
                         : nothing
                     }

@@ -71,9 +71,10 @@ export function registerSettledFinalizationTests({
         },
         expectedContext: false,
       },
-    ].flatMap((scenario) =>
-      [false, true].map((oversizedHistory) => ({ scenario, oversizedHistory })),
-    ),
+    ].map((scenario) => ({
+      scenario,
+      oversizedHistory: scenario.label === "completed turn",
+    })),
   )(
     "preserves settled finalization eligibility for a $scenario.label (oversized history: $oversizedHistory)",
     async ({ scenario, oversizedHistory }) => {

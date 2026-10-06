@@ -329,7 +329,9 @@ write permission to every repository. See
 [GitHub identity for agent tools](/gateway/config-tools/github-identity).
 
 An optional `gateway.controlUi.github.token` serves GitHub lookups and project
-discovery. Keep it in a dedicated SecretRef instead of accidentally selecting a
+discovery. For Enterprise, set `gateway.controlUi.github.host` to the selected
+`gateway.github.host` so the service credential is used only for that host.
+Keep it in a dedicated SecretRef instead of accidentally selecting a
 publisher through a process-wide `GH_TOKEN` or `GITHUB_TOKEN`. Read credentials,
 publication credentials, and each person's sign-in identity have different jobs.
 

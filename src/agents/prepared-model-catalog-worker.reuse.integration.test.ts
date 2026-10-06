@@ -55,17 +55,52 @@ it("prepares known provider owners once while keeping catalog execution and auth
           `provider: ${JSON.stringify(provider)}, filename: __filename`,
         );
       const execution = (provider: string) =>
-        `require("node:v8").queryObjects(WeakRef);` +
+        `require("node:v8").queryObjects(WeakRef);
+const retainedPayloads = globalThis[Symbol.for("catalog.reuse.payloads")];
+const activePayload = retainedPayloads.at(-1);
+const currentPayload = activePayload.ref.deref();
+` +
         record(
           "heap.jsonl",
-          `memory: process.memoryUsage(), payloads: globalThis[Symbol.for("catalog.reuse.payloads")].filter(ref => ref.deref()).length`,
+          `memory: process.memoryUsage(),
+          payloads: retainedPayloads.filter(({ ref }) => ref.deref()).length,
+          currentPayload: currentPayload && {
+            filename: activePayload.filename,
+            row: currentPayload.rows[99_999].index,
+            bufferBytes: currentPayload.buffer.byteLength,
+          }`,
         ) +
         record(
           "executions.jsonl",
           `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`,
-        );
+        ) +
+        `
+        const retained = globalThis[Symbol.for("catalog.retired.registries.proof")];
+        if (retained && ++retained.requests % ${2 * providerIds.length} === 0) {
+          fs.writeFileSync(${JSON.stringify(path.join(seed.root, "retention.json"))}, JSON.stringify({
+            registries: retained.registries.filter(ref => ref.deref()).length,
+            captured: retained.registries.length,
+            nativeExports: retained.exports.filter(ref => ref.deref()).length,
+            controlCollected: retained.control.deref() === undefined,
+            memory: process.memoryUsage(),
+          }));
+        }
+      `;
       fs.writeFileSync(path.join(seed.root, "executions.jsonl"), "");
       // Module evaluation alone misses fresh registries built from retained source modules.
+      // Node keeps native ESM exports after their capture files are retired. Identity-sensitive
+      // registrations must not let those exports retain the rest of a disposed registry.
+      fs.writeFileSync(
+        path.join(seed.root, "plugin", "retained.mjs"),
+        'export const speech = { id: "retained-speech", label: "Retention fixture", isConfigured: () => true, synthesize: async () => ({ audio: new Uint8Array() }) };',
+      );
+      const retention = `
+  api.registerSpeechProvider(require("./retained.mjs").speech);
+  const instance = globalThis[Symbol.for("openclaw.pluginInstanceState")].values.get(require("./retained.mjs").speech);
+  const state = globalThis[Symbol.for("catalog.retired.registries.proof")] ??= { registries: [], exports: [], requests: 0, control: new WeakRef({}) };
+  state.registries.push(new WeakRef(instance.owner.registry));
+  state.exports.push(new WeakRef(require("./retained.mjs").speech));
+`;
       const baseEntry = path.join(seed.root, "plugin", "index.cjs");
       fs.writeFileSync(
         path.join(seed.root, "plugin", "payload.mjs"),
@@ -77,13 +112,16 @@ it("prepares known provider owners once while keeping catalog execution and auth
       fs.writeFileSync(
         baseEntry,
         `const { payload } = require("./payload.mjs");
-(globalThis[Symbol.for("catalog.reuse.payloads")] ??= []).push(new WeakRef(payload));
+(globalThis[Symbol.for("catalog.reuse.payloads")] ??= []).push({ ref: new WeakRef(payload), filename: __filename });
 ` +
           fs
             .readFileSync(baseEntry, "utf8")
             // This proof has only provider publication, not a second native acquisition.
             .replace(/ {6}loadModelCatalog: async \(\) => \{[\s\S]*?\n {6}\},\n/u, "")
-            .replace("  register(api) {", `  register(api) {${registration(PROVIDER_ID)}`)
+            .replace(
+              "  register(api) {",
+              `  register(api) {${registration(PROVIDER_ID)}${retention}`,
+            )
             .replace(
               "run(context) {",
               `run(context) {
@@ -242,12 +280,19 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
     ).toEqual(index === 0 ? [PROVIDER_ID, ...providerIds].toSorted() : []);
     const expanded = registrations();
     const footprint = readCatalogCaptureFootprint(captureRoot);
-    // Retired capture files disappear even though Node retains their native ESM payloads.
+    // Retired capture files disappear even if native ESM payloads remain cached.
     expect(footprint.captures).toHaveLength(1);
     await refreshScope((index + 1) % 2, provider);
     expect(registrations()).toEqual(expanded);
     expect(readCatalogCaptureFootprint(captureRoot)).toEqual(footprint);
   }
+  const retained = JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8"));
+  console.log("Retired catalog registries", JSON.stringify(retained));
+  expect(retained.controlCollected).toBe(true);
+  // The auth-only base is replaced once for all known owners; both native exports stay rooted.
+  expect(retained.captured).toBe(2);
+  expect(retained.nativeExports).toBe(retained.captured);
+  expect(retained.registries).toBe(1);
   const warmedRegistrations = registrations();
   const warmedFootprint = readCatalogCaptureFootprint(captureRoot);
   expect(warmedFootprint.bytes).toBeGreaterThan(0);
@@ -281,13 +326,40 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
       expect(readCatalogCaptureFootprint(captureRoot)).toEqual(warmedFootprint);
     }
   }
+  expect(
+    JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8")),
+  ).toMatchObject({
+    captured: 2,
+    nativeExports: 2,
+    registries: 1,
+    controlCollected: true,
+  });
   const heap = fs
     .readFileSync(path.join(fixture.root, "heap.jsonl"), "utf8")
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { memory: NodeJS.MemoryUsage; payloads: number });
+    .map(
+      (line) =>
+        JSON.parse(line) as {
+          memory: NodeJS.MemoryUsage;
+          payloads: number;
+          currentPayload?: { filename: string; row: number; bufferBytes: number };
+        },
+    );
   expect(heap).toHaveLength(providerIds.length * agentIds.length * 2);
-  expect(heap.map(({ payloads }) => payloads)).toEqual(heap.map(() => 2));
+  const currentFilename = warmedRegistrations.findLast(
+    ({ provider }) => provider === PROVIDER_ID,
+  )!.filename;
+  for (const sample of heap) {
+    // Engines may collect the retired ESM payload; the current capture must remain usable.
+    expect(sample.payloads).toBeGreaterThanOrEqual(1);
+    expect(sample.payloads).toBeLessThanOrEqual(2);
+    expect(sample.currentPayload).toEqual({
+      filename: currentFilename,
+      row: 99_999,
+      bufferBytes: 1024 * 1024,
+    });
+  }
   expect(heap.at(-1)!.memory.heapUsed - heap[0]!.memory.heapUsed).toBeLessThan(16 * 1024 * 1024);
   expect(heap.at(-1)!.memory.arrayBuffers - heap[0]!.memory.arrayBuffers).toBeLessThan(1024 * 1024);
   console.log("Provider-scope heap", JSON.stringify({ first: heap[0], last: heap.at(-1) }));

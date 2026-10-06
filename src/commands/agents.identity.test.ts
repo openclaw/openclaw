@@ -1,10 +1,9 @@
-// Agent identity tests cover identity file creation, persistence, and command integration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
-import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
   createCapturingTestRuntime,
@@ -15,11 +14,13 @@ import {
 const TEST_MAX_IDENTITY_FILE_BYTES = 4 * 1024 * 1024;
 
 const configMocks = vi.hoisted(() => {
-  const writeConfigFile = vi.fn().mockResolvedValue(undefined);
+  const writeConfigFile = vi
+    .fn<(config: OpenClawConfig) => Promise<void>>()
+    .mockResolvedValue(undefined);
   return {
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
-    replaceConfigFile: vi.fn(async (params: { sourceConfig: unknown }) => {
+    replaceConfigFile: vi.fn(async (params: { sourceConfig: OpenClawConfig }) => {
       await writeConfigFile(params.sourceConfig);
       return { nextConfig: params.sourceConfig };
     }),
@@ -40,12 +41,28 @@ vi.mock("../config/config.js", async () => ({
   replaceConfigFile: configMocks.replaceConfigFile,
 }));
 
+import type { AgentRouteBinding } from "../config/types.js";
+import { applyAgentBindings, removeAgentBindings } from "./agents.bindings.js";
 import { agentsSetIdentityCommand } from "./agents.commands.identity.js";
+import { applyAgentConfig, buildAgentSummaries, pruneAgentConfig } from "./agents.config.js";
 
 const runtime = createTestRuntime();
-type ConfigWritePayload = {
-  agents?: { entries?: Record<string, { identity?: Record<string, string> }> };
-};
+type IdentityOptions = Parameters<typeof agentsSetIdentityCommand>[0];
+
+function setAgents(agents: OpenClawConfig["agents"]) {
+  configMocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({ agents }));
+}
+
+function writtenAgent(id = "main") {
+  return configMocks.writeConfigFile.mock.calls[0]?.[0].agents?.entries?.[id];
+}
+
+async function jsonIdentity(options: IdentityOptions) {
+  const capture = createCapturingTestRuntime();
+  await agentsSetIdentityCommand({ ...options, json: true }, capture.runtime);
+  const payload: unknown = JSON.parse(capture.logs.at(-1) ?? "{}");
+  return payload;
+}
 
 async function createIdentityWorkspace(subdir = "work") {
   const root = await makeTempWorkspace("openclaw-identity-");
@@ -60,26 +77,8 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
   return identityPath;
 }
 
-function getWrittenMainIdentity() {
-  const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-  if (!written) {
-    throw new Error("expected written agent config");
-  }
-  const payload = written as ConfigWritePayload;
-  return payload.agents?.entries?.main?.identity;
-}
-
-async function runIdentityCommandFromWorkspace(workspace: string, fromIdentity = true) {
-  configMocks.readConfigFileSnapshot.mockResolvedValue(
-    createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
-  );
-  await agentsSetIdentityCommand({ workspace, fromIdentity }, runtime);
-}
-
-async function expectIdentityCommandFailure(
-  options: Parameters<typeof agentsSetIdentityCommand>[0],
-  message: string,
-) {
+async function expectIdentityCommandFailure(options: IdentityOptions, expected: string | RegExp) {
+  const message = typeof expected === "string" ? expected : expect.stringMatching(expected);
   await expect(agentsSetIdentityCommand(options, runtime)).rejects.toMatchObject({
     name: "ExpectedCliError",
     message,
@@ -93,53 +92,15 @@ async function expectIdentityCommandFailure(
 
 describe("agents set-identity command", () => {
   beforeEach(() => {
-    configMocks.readConfigFileSnapshot.mockClear();
-    configMocks.writeConfigFile.mockClear();
-    configMocks.replaceConfigFile.mockClear();
-    runtime.log.mockClear();
-    runtime.error.mockClear();
-    runtime.exit.mockClear();
-  });
-
-  it("sets identity from workspace IDENTITY.md", async () => {
-    const { root, workspace } = await createIdentityWorkspace();
-    await writeIdentityFile(workspace, [
-      "- Name: OpenClaw",
-      "- Creature: helpful sloth",
-      "- Emoji: :)",
-      "- Avatar: avatars/openclaw.png",
-      "",
-    ]);
-
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: {
-          entries: {
-            main: { workspace },
-            ops: { workspace: path.join(root, "ops") },
-          },
-        },
-      }),
-    );
-
-    await agentsSetIdentityCommand({ workspace }, runtime);
-
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    expect(getWrittenMainIdentity()).toEqual({
-      name: "OpenClaw",
-      theme: "helpful sloth",
-      emoji: ":)",
-      avatar: "avatars/openclaw.png",
-    });
+    vi.clearAllMocks();
+    setAgents({ entries: { main: {} } });
   });
 
   it("resolves --from-identity against the selected agent workspace", async () => {
     const { root, workspace } = await createIdentityWorkspace();
     await writeIdentityFile(workspace, ["- Name: Workspace Agent"]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
-    );
+    setAgents({ entries: { main: { workspace } } });
     const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
 
     try {
@@ -148,7 +109,7 @@ describe("agents set-identity command", () => {
       cwdSpy.mockRestore();
     }
 
-    expect(getWrittenMainIdentity()).toEqual({ name: "Workspace Agent" });
+    expect(writtenAgent()?.identity).toEqual({ name: "Workspace Agent" });
   });
 
   it("errors when multiple agents match the same workspace", async () => {
@@ -156,13 +117,7 @@ describe("agents set-identity command", () => {
     const identityPath = await writeIdentityFile(workspace, ["- Name: Echo"]);
     const originalIdentity = await fs.readFile(identityPath, "utf8");
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: {
-          entries: { main: { workspace }, ops: { workspace } },
-        },
-      }),
-    );
+    setAgents({ entries: { main: { workspace }, ops: { workspace } } });
 
     await expectIdentityCommandFailure(
       { workspace },
@@ -175,9 +130,6 @@ describe("agents set-identity command", () => {
     const { workspace } = await createIdentityWorkspace("unmatched");
     const identityPath = await writeIdentityFile(workspace, ["- Name: Untouched"]);
     const originalIdentity = await fs.readFile(identityPath, "utf8");
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-    );
 
     await expectIdentityCommandFailure(
       { workspace, name: "Override", json: true },
@@ -197,9 +149,7 @@ describe("agents set-identity command", () => {
       "",
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
-    );
+    setAgents({ entries: { main: { workspace } } });
 
     await agentsSetIdentityCommand(
       {
@@ -212,7 +162,7 @@ describe("agents set-identity command", () => {
       runtime,
     );
 
-    expect(getWrittenMainIdentity()).toEqual({
+    expect(writtenAgent()?.identity).toEqual({
       name: "Nova",
       theme: "space lobster",
       emoji: "🦞",
@@ -222,9 +172,6 @@ describe("agents set-identity command", () => {
 
   it("sanitizes identity echoes while preserving stored and JSON values", async () => {
     const name = "Operator\u001B]0;identity-injection\u0007🦞\r\nforged-row\tbadge";
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-    );
 
     await agentsSetIdentityCommand({ agent: "main", name }, runtime);
 
@@ -232,25 +179,14 @@ describe("agents set-identity command", () => {
     expect(textOutput).not.toContain("\u001B");
     expect(textOutput).not.toContain("\nforged-row");
     expect(textOutput).toContain("Operator🦞\\r\\nforged-row\\tbadge");
-    expect(getWrittenMainIdentity()).toEqual({ name });
-
-    const jsonRuntime = createCapturingTestRuntime();
-    await agentsSetIdentityCommand({ agent: "main", name, json: true }, jsonRuntime.runtime);
-    const payload = JSON.parse(jsonRuntime.logs.at(-1) ?? "{}") as {
-      agentId: string;
-      identity: { name: string };
-      workspace: string | null;
-      identityFile: string | null;
-      storedWorkspace: string;
-    };
-    expect(payload).toMatchObject({
+    expect(writtenAgent()?.identity).toEqual({ name });
+    expect(await jsonIdentity({ agent: "main", name })).toMatchObject({
       agentId: "main",
       identity: { name },
       workspace: null,
       identityFile: null,
+      storedWorkspace: expect.stringMatching(/\S/),
     });
-    expect(payload.storedWorkspace).toEqual(expect.any(String));
-    expect(payload.storedWorkspace).not.toBe("");
   });
 
   it("reads and reports an explicit IDENTITY.md path", async () => {
@@ -264,159 +200,55 @@ describe("agents set-identity command", () => {
       "- **Avatar:** avatars/c3po.png",
       "",
     ]);
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: { workspace: storedWorkspace } } } }),
-    );
-
-    const jsonRuntime = createCapturingTestRuntime();
-    await agentsSetIdentityCommand(
-      { agent: "main", identityFile: identityPath, json: true },
-      jsonRuntime.runtime,
-    );
-
-    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    expect(written).toMatchObject({
-      agents: {
-        entries: {
-          main: {
-            workspace: storedWorkspace,
-            identity: {
-              name: "C-3PO",
-              theme: "Flustered Protocol Droid",
-              emoji: "🤖",
-              avatar: "avatars/c3po.png",
-            },
-          },
-        },
-      },
-    });
-    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toEqual({
+    setAgents({ entries: { main: { workspace: storedWorkspace } } });
+    const identity = {
+      name: "C-3PO",
+      theme: "Flustered Protocol Droid",
+      emoji: "🤖",
+      avatar: "avatars/c3po.png",
+    };
+    const options = { agent: "main", identityFile: identityPath };
+    expect(await jsonIdentity(options)).toEqual({
       agentId: "main",
-      identity: {
-        name: "C-3PO",
-        theme: "Flustered Protocol Droid",
-        emoji: "🤖",
-        avatar: "avatars/c3po.png",
-      },
+      identity,
       workspace,
       storedWorkspace,
       identityFile: identityPath,
     });
 
-    const textRuntime = createCapturingTestRuntime();
-    await agentsSetIdentityCommand(
-      { agent: "main", identityFile: identityPath },
-      textRuntime.runtime,
-    );
-    expect(textRuntime.logs).toContain(`Workspace: ${storedWorkspace}`);
-    expect(textRuntime.logs).toContain(`Identity source: ${workspace}`);
-    expect(textRuntime.logs.join("\n")).not.toContain("Relocate with");
+    expect(writtenAgent()).toMatchObject({ workspace: storedWorkspace, identity });
+    await agentsSetIdentityCommand(options, runtime);
+    expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
+    expect(runtime.log).toHaveBeenCalledWith(`Identity source: ${workspace}`);
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Relocate with");
   });
 
-  it("accepts avatar-only identity from IDENTITY.md", async () => {
-    const { workspace } = await createIdentityWorkspace();
-    await writeIdentityFile(workspace, ["- Avatar: avatars/only.png"]);
-
-    await runIdentityCommandFromWorkspace(workspace);
-
-    expect(getWrittenMainIdentity()).toEqual({
-      avatar: "avatars/only.png",
-    });
+  it("rejects an invalid agent id without changing config", async () => {
+    const agent = "агент✨";
+    await expectIdentityCommandFailure(
+      { agent, name: "Ghost", json: true },
+      `Agent "${agent}" not found. Create it with \`openclaw agents add\`.`,
+    );
   });
 
-  it("accepts avatar-only updates via flags", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-    );
-
-    await agentsSetIdentityCommand(
-      { agent: "main", avatar: "https://example.com/avatar.png" },
-      runtime,
-    );
-
-    expect(getWrittenMainIdentity()).toEqual({
-      avatar: "https://example.com/avatar.png",
-    });
-  });
-
-  it.each(["агент✨", "   "])(
-    "errors without changing config when --agent names %j",
-    async (agent) => {
-      configMocks.readConfigFileSnapshot.mockResolvedValue(
-        createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-      );
-
-      await expectIdentityCommandFailure(
-        { agent, name: "Ghost", json: true },
-        `Agent "${agent}" not found. Create it with \`openclaw agents add\`.`,
-      );
-    },
-  );
-
-  it("does not create an absent main agent", async () => {
+  it("rejects absent main before reading its identity file", async () => {
     const agentId = "main";
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { ops: {} } } }),
-    );
+    setAgents({ entries: { ops: {} } });
 
     await expectIdentityCommandFailure(
-      { agent: agentId, name: "Hijack" },
+      { agent: agentId, identityFile: "/missing/IDENTITY.md" },
       `Agent "${agentId}" not found. Create it with \`openclaw agents add\`.`,
     );
   });
 
-  it("rejects an unknown agent before attempting to read its explicit identity file", async () => {
-    const { workspace } = await createIdentityWorkspace();
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
-    );
-
-    await expectIdentityCommandFailure(
-      { agent: "ghost", identityFile: path.join(workspace, "missing.md"), json: true },
-      'Agent "ghost" not found. Create it with `openclaw agents add`.',
-    );
-  });
-
-  it("still updates a real existing agent", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: {
-          entries: { ops: { identity: { emoji: "🛠️" } } },
-        },
-      }),
-    );
-
-    await agentsSetIdentityCommand({ agent: "ops", name: "Operator" }, runtime);
-
-    expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    expect(written).toMatchObject({
-      agents: {
-        entries: { ops: { identity: { name: "Operator", emoji: "🛠️" } } },
-      },
-    });
-  });
-
   it("still resolves and updates the implicit default agent by workspace", async () => {
     const { workspace } = await createIdentityWorkspace("implicit-main");
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: {
-          defaults: { workspace },
-          entries: {},
-        },
-      }),
-    );
+    setAgents({ defaults: { workspace }, entries: {} });
 
     await agentsSetIdentityCommand({ workspace, name: "Default Agent" }, runtime);
 
     expect(configMocks.writeConfigFile).toHaveBeenCalledTimes(1);
-    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    expect(written).toMatchObject({
-      agents: {
-        entries: { main: { identity: { name: "Default Agent" } } },
-      },
-    });
+    expect(writtenAgent()?.identity).toEqual({ name: "Default Agent" });
   });
 
   it("errors when an explicit identity file exceeds the size cap", async () => {
@@ -426,36 +258,17 @@ describe("agents set-identity command", () => {
       "x".repeat(TEST_MAX_IDENTITY_FILE_BYTES + 1),
     ]);
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-    );
-
     const originalIdentity = await fs.readFile(identityPath, "utf8");
-    const error = await agentsSetIdentityCommand(
+    await expectIdentityCommandFailure(
       { agent: "main", identityFile: identityPath, json: true },
-      runtime,
-    ).catch((caught: unknown) => caught);
-
-    expect(error).toBeInstanceOf(ExpectedCliError);
-    const renderedError = (error as ExpectedCliError).message;
-    expect(renderedError).toContain(
-      `Identity file ${identityPath} exceeds the maximum size of ${TEST_MAX_IDENTITY_FILE_BYTES} bytes`,
+      /(?=.*exceeds the maximum size of 4194304 bytes)(?=.*File exceeds 4194304 bytes:)(?=.*too-large)/s,
     );
-    expect(renderedError).toContain(`File exceeds ${TEST_MAX_IDENTITY_FILE_BYTES} bytes:`);
-    expect(renderedError).toContain("too-large");
-    expect((error as ExpectedCliError).humanOutput).toBe(renderedError);
-    expect((error as ExpectedCliError).machineOutput).toBe(renderedError);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
     await expect(fs.readFile(identityPath, "utf8")).resolves.toBe(originalIdentity);
   });
 
   it("errors when identity data is missing", async () => {
     const { workspace } = await createIdentityWorkspace();
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: { workspace } } } }),
-    );
+    setAgents({ entries: { main: { workspace } } });
 
     await expectIdentityCommandFailure(
       { workspace, fromIdentity: true, json: true },
@@ -466,90 +279,217 @@ describe("agents set-identity command", () => {
     });
   });
 
-  it("leaves unexpected configuration write failures with the shared root owner", async () => {
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({ agents: { entries: { main: {} } } }),
-    );
-    const writeFailure = new Error("configuration storage is unavailable");
-    configMocks.replaceConfigFile.mockRejectedValueOnce(writeFailure);
-
-    await expect(
-      agentsSetIdentityCommand({ agent: "main", name: "Updated", json: true }, runtime),
-    ).rejects.toBe(writeFailure);
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
-
   it("does not persist --workspace and reports the stored workspace separately", async () => {
     const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
-    const workspaceLocator = path.join(root, "relocated");
+    const workspaceLocator = path.join(root, "My workspace");
     await fs.mkdir(workspaceLocator, { recursive: true });
 
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: { entries: { worker: { workspace: storedWorkspace } } },
-      }),
-    );
-
-    const jsonRuntime = createCapturingTestRuntime();
-    await agentsSetIdentityCommand(
-      {
-        agent: "worker",
-        workspace: workspaceLocator,
-        name: "Worker",
-        json: true,
-      },
-      jsonRuntime.runtime,
-    );
-
-    const [written] = configMocks.writeConfigFile.mock.calls[0] ?? [];
-    expect(written).toMatchObject({
-      agents: {
-        entries: {
-          worker: {
-            workspace: storedWorkspace,
-            identity: { name: "Worker" },
-          },
-        },
-      },
-    });
-    expect(JSON.parse(jsonRuntime.logs.at(-1) ?? "{}")).toEqual({
+    setAgents({ entries: { worker: { workspace: storedWorkspace } } });
+    const options = { agent: "worker", workspace: workspaceLocator, name: "Worker" };
+    expect(await jsonIdentity(options)).toEqual({
       agentId: "worker",
       identity: { name: "Worker" },
       workspace: workspaceLocator,
       storedWorkspace,
       identityFile: null,
     });
-  });
-
-  it("quotes the relocation hint when the locator path contains spaces", async () => {
-    const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
-    const workspaceLocator = path.join(root, "My workspace");
-    await fs.mkdir(workspaceLocator, { recursive: true });
-
-    configMocks.readConfigFileSnapshot.mockResolvedValue(
-      createTestConfigSnapshot({
-        agents: { entries: { worker: { workspace: storedWorkspace } } },
-      }),
-    );
-
-    const { runtime: capturingRuntime, logs } = createCapturingTestRuntime();
-    await agentsSetIdentityCommand(
-      {
-        agent: "worker",
-        workspace: workspaceLocator,
-        name: "Worker",
-      },
-      capturingRuntime,
-    );
-
-    expect(logs).toContain(`Workspace: ${storedWorkspace}`);
-    expect(logs).toContain(`Workspace locator: ${workspaceLocator}`);
-    expect(logs).toContain(
+    expect(writtenAgent("worker")).toMatchObject({
+      workspace: storedWorkspace,
+      identity: { name: "Worker" },
+    });
+    await agentsSetIdentityCommand(options, runtime);
+    expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
+    expect(runtime.log).toHaveBeenCalledWith(`Workspace locator: ${workspaceLocator}`);
+    expect(runtime.log).toHaveBeenCalledWith(
       `Stored workspace unchanged. Relocate with ${formatCliCommand(
         `openclaw config set agents.entries.worker.workspace ${quoteCliArg(workspaceLocator)}`,
       )}.`,
     );
-    expect(logs.join("\n")).not.toContain("Identity source:");
+    expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Identity source:");
+  });
+});
+
+describe("agents helpers", () => {
+  it("applyAgentConfig leaves a first roster entry trivially sole", async () => {
+    const next = applyAgentConfig({}, { agentId: "work", name: "Work" });
+
+    expect(next.agents?.entries).toEqual({ work: { name: "Work" } });
+    expect(await buildAgentSummaries(next)).toMatchObject([{ id: "work", isDefault: true }]);
+  });
+
+  it("preserves the sole agent as the ambient system owner when adding a second agent", () => {
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+
+    const next = applyAgentConfig(cfg, { agentId: "helper", name: "Helper" });
+
+    expect(next.agents).toMatchObject({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, helper: { name: "Helper" } },
+    });
+  });
+
+  it("applyAgentConfig clears a model override", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.6-luna" } },
+        entries: {
+          work: { workspace: "/work-ws", model: "anthropic/claude" },
+        },
+      },
+    };
+
+    const next = applyAgentConfig(cfg, { agentId: "work", model: null });
+    const work = next.agents?.entries?.work;
+
+    expect(work).not.toHaveProperty("model");
+    expect(await buildAgentSummaries(next)).toMatchObject([
+      { id: "work", model: "openai/gpt-5.6-luna" },
+    ]);
+  });
+
+  it("adds distinct routes, upgrades account scope, and reports duplicate ownership", () => {
+    const existing = { agentId: "main", match: { channel: "whatsapp", accountId: "default" } };
+    const channel = { agentId: "main", match: { channel: "telegram" } };
+    const role = {
+      agentId: "main",
+      match: { channel: "discord", accountId: "guild-a", guildId: "123", roles: ["111", "222"] },
+    };
+    const conflict = { ...existing, agentId: "work" };
+    const upgraded = { agentId: "main", match: { channel: "telegram", accountId: "work" } };
+    const added: AgentRouteBinding[] = [
+      { agentId: "work", match: { channel: "discord", accountId: "guild-a", guildId: "123" } },
+      {
+        agentId: "main",
+        match: { channel: "discord", peer: { kind: "direct", id: "a|b" }, accountId: "default" },
+      },
+      {
+        agentId: "main",
+        match: {
+          channel: "discord",
+          peer: { kind: "direct", id: "a" },
+          guildId: "b",
+          accountId: "|default",
+        },
+      },
+    ];
+    const result = applyAgentBindings({ bindings: [existing, channel, role] }, [
+      existing,
+      conflict,
+      upgraded,
+      ...added,
+    ]);
+    expect(result.added).toStrictEqual(added);
+    expect(result.skipped).toStrictEqual([existing]);
+    expect(result.updated).toStrictEqual([upgraded]);
+    expect(result.conflicts).toStrictEqual([{ binding: conflict, existingAgentId: "main" }]);
+    expect(result.config.bindings).toStrictEqual([existing, upgraded, role, ...added]);
+  });
+
+  it("removeAgentBindings does not remove role-based bindings when removing channel-level routes", () => {
+    const match = { channel: "discord", accountId: "guild-a", guildId: "123" };
+    const kept = { agentId: "main", match: { ...match, roles: ["111", "222"] } };
+    const removed = { agentId: "main", match };
+    const result = removeAgentBindings({ bindings: [kept, removed] }, [removed]);
+
+    expect(result.removed).toStrictEqual([removed]);
+    expect(result.conflicts).toStrictEqual([]);
+    expect(result.config.bindings).toEqual([kept]);
+  });
+
+  it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: "/srv/fleet",
+          heartbeat: { agentId: "work", every: "5m" },
+          systemAgent: { agentId: "WORK" },
+          subagents: { allowAgents: ["work", "home"] },
+        },
+        entries: {
+          work: { workspace: "/work-ws" },
+          home: {
+            subagents: { allowAgents: ["WORK", "home"] },
+            tools: { profile: "coding", agentToAgent: { send: ["WORK"] } },
+          },
+        },
+      },
+      bindings: [
+        { agentId: "work", match: { channel: "whatsapp" } },
+        { agentId: "home", match: { channel: "telegram" } },
+      ],
+      broadcast: {
+        strategy: "parallel",
+        "peer-1": ["work", "home"],
+        "peer-2": ["WORK"],
+        "telegram:-100123": { agents: ["WORK", "home"], maxRounds: 2, maxTurns: 4 },
+        "slack:C0123": { agents: ["work"], mentionGating: false },
+      },
+      hooks: {
+        allowedAgentIds: ["*", "work", "home"],
+        mappings: [
+          { id: "work-hook", agentId: "WORK", action: "agent" },
+          { id: "home-hook", agentId: "home", action: "agent" },
+          { id: "default-hook", action: "agent" },
+        ],
+      },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["work", "home"] },
+      },
+      talk: { agentId: "work", provider: "test-provider" },
+    };
+
+    const result = pruneAgentConfig(cfg, "work");
+    expect(result.config.agents?.entries).not.toHaveProperty("work");
+    expect(result.config.agents?.entries?.home?.workspace).toBe("/srv/fleet/home");
+    expect(result.config.bindings).toStrictEqual([
+      { agentId: "home", match: { channel: "telegram" } },
+    ]);
+    expect(result.config.broadcast).toEqual({
+      strategy: "parallel",
+      "peer-1": ["home"],
+      "peer-2": [],
+      "telegram:-100123": { agents: ["home"], maxRounds: 2, maxTurns: 4 },
+      "slack:C0123": { agents: [], mentionGating: false },
+    });
+    expect(result.config.hooks?.allowedAgentIds).toEqual(["*", "home"]);
+    expect(result.config.hooks?.mappings).toEqual([
+      { id: "home-hook", agentId: "home", action: "agent" },
+      { id: "default-hook", action: "agent" },
+    ]);
+    expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.defaults?.heartbeat).toEqual({ every: "5m" });
+    expect(result.config.agents?.defaults?.systemAgent).toBeUndefined();
+    expect(result.config.talk).toEqual({ provider: "test-provider" });
+    expect(result.config.agents?.entries?.home?.subagents?.allowAgents).toEqual(["home"]);
+    expect(result.config.agents?.entries?.home?.tools).toEqual({
+      profile: "coding",
+      agentToAgent: { send: [] },
+    });
+    expect(cfg.agents?.entries?.home?.tools?.agentToAgent?.send).toEqual(["WORK"]);
+    expect(result.removedBindings).toBe(1);
+    expect(result.removedAllow).toBe(1);
+    expect(result.clearedOwnerRefs).toEqual([
+      "agents.defaults.heartbeat.agentId",
+      "agents.defaults.systemAgent.agentId",
+      "talk.agentId",
+    ]);
+  });
+
+  it("removes ambient heartbeat policy when its owner leaves a surviving fleet", () => {
+    const result = pruneAgentConfig(
+      {
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { agentId: "ops", every: "5m" } },
+          entries: { ops: {}, research: {}, writer: {} },
+        },
+      },
+      "ops",
+    );
+
+    expect(result.config.agents?.defaults?.heartbeat).toBeUndefined();
+    expect(result.clearedOwnerRefs).toContain("agents.defaults.heartbeat");
   });
 });

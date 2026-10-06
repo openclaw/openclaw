@@ -37,10 +37,6 @@ type PendingMemoryImport = {
   attempted: boolean;
 };
 
-function toErrorMessage(error: unknown): string {
-  return formatUiError(error, "request failed");
-}
-
 export class MemoryImportPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
@@ -69,18 +65,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.gateway,
-      (gateway, notify) => gateway.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.agentSelection,
-      (selection, notify) => selection.subscribe(notify),
-    );
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.agentSelection);
 
   private readonly planTask = new Task(this, {
     args: () => {
@@ -186,7 +173,9 @@ export class MemoryImportPage extends OpenClawLightDomElement {
   }
 
   private get error(): string | null {
-    return this.planTask.status === TaskStatus.ERROR ? toErrorMessage(this.planTask.error) : null;
+    return this.planTask.status === TaskStatus.ERROR
+      ? formatUiError(this.planTask.error, "request failed")
+      : null;
   }
 
   private get canAdmin(): boolean {
@@ -318,7 +307,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       await this.refresh();
     } catch (error) {
       if (applyEpoch === this.applyEpoch) {
-        this.applyError = toErrorMessage(error);
+        this.applyError = formatUiError(error, "request failed");
       }
     } finally {
       if (applyEpoch === this.applyEpoch) {
@@ -348,19 +337,6 @@ export class MemoryImportPage extends OpenClawLightDomElement {
     };
   }
 
-  private isCurrentBackfillRequest(
-    epoch: number,
-    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>,
-    agentId: string,
-  ): boolean {
-    return (
-      epoch === this.backfillEpoch &&
-      this.context.gateway.snapshot.phase === "connected" &&
-      this.context.gateway.snapshot.client === client &&
-      this.currentAgentId() === agentId
-    );
-  }
-
   private async runBackfill(operation: "preview" | "apply" | "rollback") {
     const client = this.context.gateway.snapshot.client;
     const agentId = this.currentAgentId();
@@ -375,7 +351,11 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       return;
     }
     const epoch = ++this.backfillEpoch;
-    const isCurrent = () => this.isCurrentBackfillRequest(epoch, client, agentId);
+    const isCurrent = () =>
+      epoch === this.backfillEpoch &&
+      this.context.gateway.snapshot.phase === "connected" &&
+      this.context.gateway.snapshot.client === client &&
+      this.currentAgentId() === agentId;
     this.backfillBusy = operation;
     this.backfillError = null;
     if (operation !== "rollback") {
@@ -447,7 +427,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (isCurrent()) {
-        this.backfillError = toErrorMessage(error);
+        this.backfillError = formatUiError(error, "request failed");
       }
     } finally {
       if (isCurrent()) {

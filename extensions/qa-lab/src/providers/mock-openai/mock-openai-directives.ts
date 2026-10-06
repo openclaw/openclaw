@@ -25,32 +25,24 @@ function extractCaptures(text: string, pattern: RegExp) {
 }
 
 export function extractExactReplyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
   return (
+    extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i) ??
     extractLastCapture(text, /reply(?: with)? exactly:\s*([^\n]+)/i) ??
     extractLastCapture(text, /reply(?: with)? exactly\s+(?!with\b)([^\s`.,;:!?]+)/i)
   );
 }
 
 export function extractFinishExactlyDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i);
+  return (
+    extractLastCapture(text, /finish with exactly\s+`([^`]+)`/i) ??
+    extractLastCapture(text, /finish with exactly\s+([^\s`.,;:!?]+)/i)
+  );
 }
 
 export function extractExactMarkerDirective(text: string) {
-  const backtickedMatch = extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i);
-  if (backtickedMatch) {
-    return backtickedMatch;
-  }
-  return extractLastCapture(
-    text,
-    /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
+  return (
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*`([^`]+)`/i) ??
+    extractLastCapture(text, /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i)
   );
 }
 
@@ -211,7 +203,7 @@ function extractBareToolArg(text: string, name: string) {
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   return (
     hasToolDefinition(body, name) ||
-    instructionTextMentionsToolName(extractInstructionsText(body), name)
+    instructionTextDeclaresTool(extractInstructionsText(body), name)
   );
 }
 
@@ -229,20 +221,13 @@ export function findNamedToolDefinition(
   if (depth > 6 || !value || typeof value !== "object") {
     return null;
   }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const match = findNamedToolDefinition(item, name, depth + 1);
-      if (match) {
-        return match;
-      }
+  if (!Array.isArray(value)) {
+    const record = value as Record<string, unknown>;
+    if (record.name === name || record.tool === name || record.functionName === name) {
+      return record;
     }
-    return null;
   }
-  const record = value as Record<string, unknown>;
-  if (record.name === name || record.tool === name || record.functionName === name) {
-    return record;
-  }
-  for (const item of Object.values(record)) {
+  for (const item of Array.isArray(value) ? value : Object.values(value)) {
     const match = findNamedToolDefinition(item, name, depth + 1);
     if (match) {
       return match;
@@ -251,12 +236,18 @@ export function findNamedToolDefinition(
   return null;
 }
 
-function instructionTextMentionsToolName(text: string, name: string) {
-  if (!text) {
-    return false;
-  }
+function instructionTextDeclaresTool(text: string, name: string) {
+  // Mirror the policy-filtered list and availability-gated messaging heading
+  // from system-prompt-tool-list.ts / system-prompt-messaging.ts. Ordinary
+  // instructions (including AGENTS.md's Tools notes) do not declare tools.
+  const sections = text.replaceAll("\r\n", "\n").split(/^## /m);
+  const tooling = sections.find((section) => section.startsWith("Tooling\n")) ?? "";
+  const messaging = sections.find((section) => section.startsWith("Messaging\n")) ?? "";
   const escapedName = escapeRegExp(name);
-  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+  return (
+    new RegExp(`^- ${escapedName}(?:: |$)`, "m").test(tooling) ||
+    new RegExp(`^### ${escapedName} tool$`, "m").test(messaging)
+  );
 }
 
 export function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -301,24 +292,6 @@ export function buildQaA2aMessageToolMirrorSessionsSendArgs(
   };
 }
 
-export function extractToolErrorForNamedCall(params: {
-  input: ResponsesInputItem[];
-  name: string;
-  toolJson: Record<string, unknown> | null;
-}) {
-  const error = typeof params.toolJson?.error === "string" ? params.toolJson.error.trim() : "";
-  if (!error) {
-    return undefined;
-  }
-  const namedFunctionCall = params.input.some(
-    (item) => item.type === "function_call" && item.name === params.name,
-  );
-  if (namedFunctionCall) {
-    return error;
-  }
-  return undefined;
-}
-
 export function hasToolErrorOutput(toolJson: Record<string, unknown> | null, toolOutput: string) {
   if (typeof toolJson?.error === "string" && toolJson.error.trim()) {
     return true;
@@ -337,21 +310,17 @@ export function extractSessionStatusSessionKey(
   toolOutput: string,
 ) {
   const details = toolJson?.details;
-  if (details && typeof details === "object") {
-    const sessionKey = (details as { sessionKey?: unknown }).sessionKey;
-    if (typeof sessionKey === "string" && sessionKey.trim()) {
-      return sessionKey.trim();
-    }
-  }
-  const topLevelSessionKey = toolJson?.sessionKey;
-  if (typeof topLevelSessionKey === "string" && topLevelSessionKey.trim()) {
-    return topLevelSessionKey.trim();
-  }
-  const statusLineSessionKey = /(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1];
-  if (statusLineSessionKey?.trim()) {
-    return statusLineSessionKey.trim();
-  }
-  return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
+  return (
+    normalizeOptionalString(
+      details && typeof details === "object"
+        ? (details as { sessionKey?: unknown }).sessionKey
+        : undefined,
+    ) ??
+    normalizeOptionalString(toolJson?.sessionKey) ??
+    normalizeOptionalString(/(?:^|\n)[^\n]*Session:\s*([^\s•\n]+)/u.exec(toolOutput)?.[1]) ??
+    /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ??
+    ""
+  );
 }
 
 export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {

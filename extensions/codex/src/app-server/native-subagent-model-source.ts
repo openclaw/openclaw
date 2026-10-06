@@ -553,7 +553,7 @@ function executionOwner(
     });
   }
   for (const entry of admitted) {
-    if (entry.kind === "interaction" && entry.modelSource?.owner === owner) {
+    if (entry.modelSource?.owner === owner) {
       consumeNativeChildModelAdmission(entry);
     }
   }

@@ -1,4 +1,3 @@
-// Control UI link builder for local, LAN, tailnet, and custom gateway binds.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import {
@@ -64,8 +63,10 @@ export async function resolveAdvertisedControlUiLinks(
 
 /** Resolve Control UI URLs for co-located readiness probes and health checks. */
 export function resolveLocalControlUiProbeLinks(params: ControlUiLinkParams): ControlUiLinks {
+  // Specific IPv4 binds also require loopback (resolveGatewayRequiredListenHosts).
+  // Local passwords in trusted-proxy mode are accepted only on that listener.
   return resolveControlUiLinks({
     ...params,
-    bind: params.bind === "lan" ? "loopback" : params.bind,
+    bind: "loopback",
   });
 }

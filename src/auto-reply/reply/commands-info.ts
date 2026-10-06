@@ -1,4 +1,3 @@
-/** Handles informational commands such as /help, /commands, /tools, and exports. */
 import {
   resolveEffectiveToolInventory,
   acquireEffectiveToolInventoryRuntimeModelContext,
@@ -51,13 +50,11 @@ async function resolveSkillCommands(
   });
 }
 
-/** Command handler for /help. */
 export const handleHelpCommand: CommandHandler = defineAuthorizedTextCommand(
   { label: "/help", match: (body) => (body === "/help" ? true : null), silentUnauthorized: true },
   (params) => commandReply(buildHelpMessage(params.cfg)),
 );
 
-/** Command handler for /commands. */
 export const handleCommandsListCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/commands",
@@ -107,7 +104,6 @@ function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams[
   return lines.join("\n");
 }
 
-/** Command handler for /skill usage help. */
 export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/skill",
@@ -131,7 +127,6 @@ export const handleSkillCommandUsage: CommandHandler = defineAuthorizedTextComma
   },
 );
 
-/** Command handler for /tools. */
 export const handleToolsCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -173,8 +168,8 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
       modelId: params.model,
     });
     try {
-      return acquired.run((runtimeModelContext) => {
-        const result = resolveEffectiveToolInventory({
+      return await acquired.run(async (runtimeModelContext) => {
+        const result = await resolveEffectiveToolInventory({
           cfg: params.cfg,
           agentId: params.agentId,
           sessionKey: params.sessionKey,
@@ -220,7 +215,6 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 };
 
-/** Command handler for /status. */
 export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/status",
@@ -253,34 +247,15 @@ export const handleStatusCommand: CommandHandler = defineAuthorizedTextCommand(
     }
     const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
     const reply = await buildStatusReply({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      command: params.command,
+      ...params,
       sessionEntry: targetSessionEntry,
-      sessionKey: params.sessionKey,
       parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
-      sessionScope: params.sessionScope,
-      storePath: params.storePath,
-      provider: params.provider,
-      model: params.model,
-      contextTokens: params.contextTokens,
-      thinkingCatalog: params.thinkingCatalog,
-      workspaceDir: params.workspaceDir,
-      resolvedThinkLevel: params.resolvedThinkLevel,
-      resolvedFastMode: params.resolvedFastMode,
-      resolvedVerboseLevel: params.resolvedVerboseLevel,
-      resolvedReasoningLevel: params.resolvedReasoningLevel,
-      resolvedElevatedLevel: params.resolvedElevatedLevel,
-      resolveDefaultThinkingLevel: params.resolveDefaultThinkingLevel,
-      isGroup: params.isGroup,
-      defaultGroupActivation: params.defaultGroupActivation,
       mediaDecisions: params.ctx.MediaUnderstandingDecisions,
     });
     return { shouldContinue: false, reply };
   },
 );
 
-/** Command handler for /export-session. */
 export const handleExportSessionCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/export-session",
@@ -291,7 +266,6 @@ export const handleExportSessionCommand: CommandHandler = defineAuthorizedTextCo
   async (params) => ({ shouldContinue: false, reply: await buildExportSessionReply(params) }),
 );
 
-/** Command handler for /export-trajectory. */
 export const handleExportTrajectoryCommand: CommandHandler = defineAuthorizedTextCommand(
   {
     label: "/export-trajectory",

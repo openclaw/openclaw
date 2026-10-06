@@ -49,7 +49,9 @@ import byteplusPlugin from "./byteplus/index.js";
 import deepinfraPlugin from "./deepinfra/index.js";
 import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
+import kiePlugin from "./kie/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import novitaPlugin from "./novita/index.js";
 import openrouterPlugin from "./openrouter/index.js";
 import pixversePlugin from "./pixverse/index.js";
 import qwenPlugin from "./qwen/index.js";
@@ -58,6 +60,7 @@ import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generati
 import togetherPlugin from "./together/index.js";
 import vydraPlugin from "./vydra/index.js";
 import xaiPlugin from "./xai/index.js";
+import zaiPlugin from "./zai/index.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -116,12 +119,14 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: falPlugin, pluginId: "fal", pluginName: "fal Provider", providerId: "fal" },
   { plugin: googlePlugin, pluginId: "google", pluginName: "Google Provider", providerId: "google" },
+  { plugin: kiePlugin, pluginId: "kie", pluginName: "Kie AI Provider", providerId: "kie" },
   {
     plugin: minimaxPlugin,
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
   },
+  { plugin: novitaPlugin, pluginId: "novita", pluginName: "NovitaAI", providerId: "novita" },
   {
     plugin: openrouterPlugin,
     pluginId: "openrouter",
@@ -144,6 +149,7 @@ const CASES: LiveProviderCase[] = [
   },
   { plugin: vydraPlugin, pluginId: "vydra", pluginName: "Vydra Provider", providerId: "vydra" },
   { plugin: xaiPlugin, pluginId: "xai", pluginName: "xAI Plugin", providerId: "xai" },
+  { plugin: zaiPlugin, pluginId: "zai", pluginName: "Z.AI Provider", providerId: "zai" },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
   .filter((entry) =>

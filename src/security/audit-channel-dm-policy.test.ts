@@ -208,7 +208,7 @@ describe("security audit channel dm policy", () => {
     {
       name: "global session aliases remain isolated by routed agent store",
       cfg: {
-        agents: { list: [{ id: "agent-a" }, { id: "agent-b", default: true }] },
+        agents: { entries: { "agent-a": {}, "agent-b": {} } },
         session: { scope: "global", dmScope: "main" },
         bindings: [
           {
@@ -296,7 +296,7 @@ describe("security audit channel dm policy", () => {
   it("keeps separate collision topologies distinct", async () => {
     const findings = await collectChannelSecurityFindingsCore({
       cfg: {
-        agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
+        agents: { entries: { alpha: {}, beta: {} } },
         session: { dmScope: "main" },
         bindings: [
           { agentId: "alpha", match: { channel: "whatsapp", accountId: "a" } },

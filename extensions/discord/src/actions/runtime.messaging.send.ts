@@ -43,23 +43,6 @@ function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined 
     : undefined;
 }
 
-type DiscordThreadListActionResult = {
-  ok: true;
-  threads: unknown;
-  complete: boolean;
-  hasMore: boolean;
-  returnedCount: number;
-  source: "discord.threadList.archived" | "discord.threadList.active";
-  query: {
-    guildId: string;
-    channelId?: string;
-    includeArchived: boolean;
-    before?: string;
-    limit?: number;
-  };
-  nextBefore?: string;
-};
-
 function normalizeDiscordThreadListActionResult(params: {
   value: unknown;
   includeArchived: boolean;
@@ -67,7 +50,7 @@ function normalizeDiscordThreadListActionResult(params: {
   guildId: string;
   limit?: number;
   before?: string;
-}): DiscordThreadListActionResult {
+}) {
   const record = asOptionalRecord(params.value);
   const threadItems = Array.isArray(record?.threads) ? record.threads : [];
   const hasMore = record?.has_more === true;
@@ -214,6 +197,15 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const sessionKey = readStringParam(ctx.params, "__sessionKey");
       const agentId = readStringParam(ctx.params, "__agentId");
 
+      const sendOptions = {
+        ...ctx.withOpts(),
+        reply: resolveActionReplyReference(ctx, replyTo),
+        silent,
+        mediaAccess: ctx.options?.mediaAccess,
+        mediaLocalRoots: ctx.options?.mediaLocalRoots,
+        mediaReadFile: ctx.options?.mediaReadFile,
+      };
+      let result;
       if (componentSpec) {
         if (asVoice) {
           throw new Error("Discord components cannot be sent as voice messages.");
@@ -225,29 +217,15 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         const payload = componentSpec.text
           ? componentSpec
           : { ...componentSpec, text: normalizedContent };
-        const result = await sendDiscordComponentMessage(to, payload, {
-          ...ctx.withOpts(),
-          silent,
-          reply: resolveActionReplyReference(ctx, replyTo),
-          sessionKey: sessionKey ?? undefined,
-          agentId: agentId ?? undefined,
-          mediaUrl: mediaUrl ?? undefined,
-          filename: filename ?? undefined,
-          mediaAccess: ctx.options?.mediaAccess,
-          mediaLocalRoots: ctx.options?.mediaLocalRoots,
-          mediaReadFile: ctx.options?.mediaReadFile,
+        result = await sendDiscordComponentMessage(to, payload, {
+          ...sendOptions,
+          sessionKey,
+          agentId,
+          mediaUrl,
+          filename,
           ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         });
-        return jsonResult(
-          await appendDiscordThreadRenameResult(ctx, {
-            payload: { ok: true, result, components: true },
-            target: result.receipt?.threadId ?? to,
-            threadName,
-          }),
-        );
-      }
-
-      if (asVoice) {
+      } else if (asVoice) {
         if (!mediaUrl) {
           throw new Error(
             "Voice messages require a media file reference (mediaUrl, path, or filePath).",
@@ -259,44 +237,34 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
           );
         }
         assertMediaNotDataUrl(mediaUrl);
-        const result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(to, mediaUrl, {
-          ...ctx.withOpts(),
-          reply: resolveActionReplyReference(ctx, replyTo),
-          silent,
-          mediaAccess: ctx.options?.mediaAccess,
-          mediaLocalRoots: ctx.options?.mediaLocalRoots,
-          mediaReadFile: ctx.options?.mediaReadFile,
-        });
-        return jsonResult(
-          await appendDiscordThreadRenameResult(ctx, {
-            payload: { ok: true, result, voiceMessage: true },
-            target: to,
-            threadName,
-          }),
+        result = await discordMessagingActionRuntime.sendVoiceMessageDiscord(
+          to,
+          mediaUrl,
+          sendOptions,
         );
+      } else {
+        result = await discordMessagingActionRuntime.sendMessageDiscord(to, content ?? "", {
+          ...sendOptions,
+          mediaUrl,
+          filename,
+          components,
+          embeds,
+          ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
+        });
       }
-
-      const result = await discordMessagingActionRuntime.sendMessageDiscord(to, content ?? "", {
-        ...ctx.withOpts(),
-        mediaAccess: ctx.options?.mediaAccess,
-        mediaUrl,
-        filename: filename ?? undefined,
-        mediaLocalRoots: ctx.options?.mediaLocalRoots,
-        mediaReadFile: ctx.options?.mediaReadFile,
-        reply: resolveActionReplyReference(ctx, replyTo),
-        components,
-        embeds,
-        silent,
-        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
-      });
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
-          payload: { ok: true, result },
-          target: result.receipt?.threadId ?? to,
+          payload: {
+            ok: true,
+            result,
+            ...(componentSpec ? { components: true } : asVoice ? { voiceMessage: true } : {}),
+          },
+          target: asVoice ? to : (result.receipt?.threadId ?? to),
           threadName,
         }),
       );
     }
+
     case "threadCreate": {
       if (!ctx.isActionEnabled("threads")) {
         throw new Error("Discord threads are disabled.");
@@ -351,12 +319,17 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const guildId = readStringParam(ctx.params, "guildId", {
         required: true,
       });
-      const channelId = readStringParam(ctx.params, "channelId");
+      const rawChannelId = readStringParam(ctx.params, "channelId");
+      const channelId = rawChannelId ? resolveDiscordChannelId(rawChannelId) : undefined;
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
       const limit = readPositiveIntegerParam(ctx.params, "limit");
-      if (channelId && includeArchived === true) {
-        await ctx.assertReadTargetAllowed({ guildId, channelId });
+      if (channelId) {
+        await ctx.assertReadTargetAllowed({
+          guildId,
+          channelId,
+          requireGuildMetadata: includeArchived !== true,
+        });
       } else {
         await ctx.assertGuildReadTargetAllowed({
           guildId,
@@ -364,7 +337,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
         });
       }
-      const threads = await discordMessagingActionRuntime.listThreadsDiscord(
+      const response = await discordMessagingActionRuntime.listThreadsDiscord(
         {
           guildId,
           channelId,
@@ -374,6 +347,12 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         },
         ctx.withOpts(),
       );
+      // Discord's active-thread endpoint is guild-wide even when the caller
+      // supplies a parent channel. Never return sibling threads or members.
+      const threads =
+        channelId && includeArchived !== true
+          ? await ctx.filterActiveThreadList({ guildId, channelId, value: response })
+          : response;
       return jsonResult(
         normalizeDiscordThreadListActionResult({
           value: threads,

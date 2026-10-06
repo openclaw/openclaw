@@ -1,4 +1,3 @@
-// Resolves interactive plugin entries from registry metadata.
 import { createInteractiveConversationBindingHelpers } from "./interactive-binding-helpers.js";
 import {
   resolvePluginInteractiveRegistrationsMatch,

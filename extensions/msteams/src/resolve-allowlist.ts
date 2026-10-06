@@ -1,4 +1,7 @@
-import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allow-from";
+import {
+  mapAllowlistResolutionInputs,
+  type BasicAllowlistResolutionEntry,
+} from "openclaw/plugin-sdk/allow-from";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { findGraphUsersByExactIdentity } from "./graph-users.js";
@@ -24,21 +27,9 @@ type MSTeamsChannelResolution = {
   note?: string;
 };
 
-type MSTeamsUserResolution = {
-  input: string;
-  resolved: boolean;
-  id?: string;
-  name?: string;
-  note?: string;
-};
-
 type StableMSTeamsTeamIdMode = "bot-framework" | "graph";
 
 const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
-
-function normalizeExactMatch(value?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(value ?? "");
-}
 
 function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
   const byId = new Map<string, T>();
@@ -55,18 +46,18 @@ function findExactNames<T extends { id?: string; displayName?: string }>(
   items: T[],
   query: string,
 ): T[] {
-  const normalized = normalizeExactMatch(query);
+  const normalized = normalizeLowercaseStringOrEmpty(query);
   return uniqueItemsById(
-    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
+    items.filter((item) => normalizeLowercaseStringOrEmpty(item.displayName) === normalized),
   );
 }
 
 function findExactUsers(items: GraphUser[], query: string): GraphUser[] {
-  const normalized = normalizeExactMatch(query);
+  const normalized = normalizeLowercaseStringOrEmpty(query);
   return uniqueItemsById(
     items.filter((item) =>
       [item.displayName, item.mail, item.userPrincipalName].some(
-        (value) => normalizeExactMatch(value) === normalized,
+        (value) => normalizeLowercaseStringOrEmpty(value) === normalized,
       ),
     ),
   );
@@ -95,7 +86,9 @@ export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] 
   const projected = entries
     .map((entry) => normalizeStaticMSTeamsAllowEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
-  return [...new Map(projected.map((entry) => [normalizeExactMatch(entry), entry])).values()];
+  return [
+    ...new Map(projected.map((entry) => [normalizeLowercaseStringOrEmpty(entry), entry])).values(),
+  ];
 }
 
 export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[] | undefined {
@@ -117,7 +110,7 @@ export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[]
       projected.map((entry) => [
         MSTEAMS_GROUP_CONVERSATION_ID.test(entry)
           ? `conversation:${entry}`
-          : normalizeExactMatch(entry),
+          : normalizeLowercaseStringOrEmpty(entry),
         entry,
       ]),
     ).values(),
@@ -172,27 +165,15 @@ export function parseMSTeamsConversationId(raw: string): string | null {
  */
 export function looksLikeMSTeamsConversationId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^conversation:/i.test(trimmed)) {
-    return true;
-  }
-  if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
-    return true;
-  }
-  if (/^19:.+@unq\.gbl\.spaces$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^a:1[A-Za-z0-9_-]+$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed)) {
-    return true;
-  }
-  // Fallback: anything containing @thread is still treated as a conversation
-  // id so the current matches for tenant-specific suffixes remain accepted.
-  return /@thread\b/i.test(trimmed);
+  return (
+    /^conversation:/i.test(trimmed) ||
+    MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed) ||
+    /^19:.+@unq\.gbl\.spaces$/i.test(trimmed) ||
+    /^a:1[A-Za-z0-9_-]+$/i.test(trimmed) ||
+    /^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed) ||
+    // Preserve tenant-specific thread suffixes beyond the known Graph formats.
+    /@thread\b/i.test(trimmed)
+  );
 }
 
 /**
@@ -532,7 +513,7 @@ export async function resolveMSTeamsTeamsConfig(params: {
 export async function resolveMSTeamsUserAllowlist(params: {
   cfg: unknown;
   entries: string[];
-}): Promise<MSTeamsUserResolution[]> {
+}): Promise<BasicAllowlistResolutionEntry[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
     tokenPromise ??= resolveGraphToken(params.cfg);
@@ -540,7 +521,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
   };
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
-    mapInput: async (input): Promise<MSTeamsUserResolution> => {
+    mapInput: async (input): Promise<BasicAllowlistResolutionEntry> => {
       const query = normalizeQuery(normalizeMSTeamsUserInput(input));
       if (!query) {
         return { input, resolved: false };

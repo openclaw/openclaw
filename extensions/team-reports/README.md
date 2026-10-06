@@ -24,8 +24,10 @@ batches of at most 100 into connection-owned SQLite scratch tables; aggregation
 reads bounded payload batches and keeps only the report's evidence limits.
 SQLite lock waits and source parsing stay off the Gateway event loop. Plugin
 shutdown drains admitted worker and database work before closing the connection.
-Boot catch-up reuses accepted closed days when retrying a partially failed run;
-manual generation still refreshes the requested day.
+Startup does not trigger collection. The first scheduled run catches up yesterday,
+reusing accepted closed days when retrying a partially failed run; manual generation
+still refreshes the requested day. Automatic collection waits at least five minutes
+after service start, and intraday runs keep their aligned UTC boundaries.
 The Control UI tab opens at `/reports` (prefixed by the Control UI base path).
 Model summary calls are optional; set `summaries.enabled: false` for deterministic text.
 

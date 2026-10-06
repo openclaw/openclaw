@@ -7,6 +7,7 @@ import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
+import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
@@ -82,20 +83,11 @@ export async function resolveSubagentSpawnRequest(
     );
   }
   const cleanup: "delete" | "keep" =
-    spawnMode === "session"
-      ? "keep"
-      : params.cleanup === "keep" || params.cleanup === "delete"
-        ? params.cleanup
-        : "keep";
-  const expectsCompletionMessage = params.collect
-    ? false
-    : params.expectsCompletionMessage !== false;
+    spawnMode !== "session" && params.cleanup === "delete" ? "delete" : "keep";
+  const expectsCompletionMessage = !params.collect && params.expectsCompletionMessage !== false;
   const hookRunner: SubagentLifecycleHookRunner | null = getGlobalHookRunner();
   const cfg = getRuntimeConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
-  // preserving current behavior for existing deployments.
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -191,13 +183,11 @@ export async function resolveSubagentSpawnRequest(
   const effectiveRequestedAgentId = usingDefaultAgentId
     ? swarmConfig.defaultAgentId
     : requestedAgentId;
-  if (usingDefaultAgentId) {
-    if (!isValidAgentId(effectiveRequestedAgentId)) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
-      );
-    }
+  if (usingDefaultAgentId && !isValidAgentId(effectiveRequestedAgentId)) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
+    );
   }
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
@@ -220,6 +210,7 @@ export async function resolveSubagentSpawnRequest(
       : undefined;
     return resolveSpawnAdmission({
       cfg,
+      inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       collector: collectorRuns
         ? {
             liveChildren: collectorRuns.filter((entry) => !entry.collectorCompletion).length,
@@ -237,6 +228,8 @@ export async function resolveSubagentSpawnRequest(
     });
   };
   try {
+    ctx.assertActive?.();
+    await prepareSubagentSessionListReadCache();
     ctx.assertActive?.();
   } catch (error) {
     return rejectSubagentSpawnRequest(

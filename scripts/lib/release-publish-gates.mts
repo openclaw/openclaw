@@ -2,6 +2,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { validateReleaseManifestAdvisoryJobs } from "../full-release-validation-policy.mjs";
 import { isRecord } from "./record-shared.mjs";
 import { resolveReleasePublishInputs } from "./release-publish-inputs.mjs";
 import { parseReleaseVersion } from "./release-version.mjs";
@@ -45,6 +46,15 @@ export function evaluateReleasePublishGates(input: {
       remediation: pass ? "" : remediation,
     });
   };
+  if (input.releaseTag.includes("-alpha.") || input.npmDistTag === "alpha") {
+    add(
+      "release-channel",
+      false,
+      "Alpha releases are retired; use a beta prerelease instead.",
+      "Select a beta prerelease.",
+    );
+    return gates;
+  }
   const profile = scalar(field(manifest, "releaseProfile"));
   try {
     resolveReleasePublishInputs(manifest, {
@@ -93,7 +103,7 @@ export function evaluateReleasePublishGates(input: {
     `Full release validation must run rerun_group=all before npm publish; got ${rerunGroup}`,
     "Seal successful Full Release Validation with rerun_group=all using pnpm frv continue.",
   );
-  const stableTag = !input.releaseTag.includes("-alpha.") && !input.releaseTag.includes("-beta.");
+  const stableTag = !input.releaseTag.includes("-beta.");
   const soaked = consumer === "stable-closeout" ? soak === "true" : scalar(soak) === "true";
   const soakRequired = consumer === "stable-closeout" || stableTag;
   const performance = field(field(manifest, "controls"), "performanceBlocking");
@@ -124,12 +134,21 @@ export function evaluateReleasePublishGates(input: {
   const waived =
     field(field(manifest, "validationInputs"), "laneWaiver") ||
     field(field(manifest, "publishInputs"), "stableSoakWaiver");
-  const advisory = field(manifest, "advisoryJobs");
+  const knownFlakyJobs = field(field(manifest, "validationInputs"), "knownFlakyJobsJson");
+  let selectedLanesError =
+    waived || (knownFlakyJobs !== undefined && knownFlakyJobs !== "[]")
+      ? "Release waiver and known-flaky inputs are no longer accepted."
+      : "";
+  try {
+    validateReleaseManifestAdvisoryJobs(manifest);
+  } catch (error) {
+    selectedLanesError ||= error instanceof Error ? error.message : String(error);
+  }
   add(
     "selected-lanes",
-    !waived && (advisory === undefined || (Array.isArray(advisory) && advisory.length === 0)),
-    "Waived or advisory release evidence is no longer accepted.",
-    "Fix failed selected lanes and rerun Full Release Validation without waivers.",
+    selectedLanesError === "",
+    selectedLanesError,
+    "Use authenticated Full Release Validation evidence with every selected lane passing and no waivers.",
   );
   if (consumer === "stable-closeout") {
     for (const gate of gates) {
@@ -215,7 +234,10 @@ export function evaluateStableRollbackDrill(input: {
 
 function main() {
   const { values } = parseArgs({
-    options: { consumer: { type: "string" }, manifest: { type: "string" } },
+    options: {
+      consumer: { type: "string" },
+      manifest: { type: "string" },
+    },
   });
   const consumer = values.consumer;
   if (consumer !== "publisher" && consumer !== "core-npm" && consumer !== "stable-closeout") {

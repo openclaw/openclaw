@@ -1,5 +1,7 @@
-import { responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
+import { isDeepStrictEqual } from "node:util";
+import { bindResponsesInputMessage, responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasRuntimeContextMarker } from "../../../llm/types.js";
 import {
   acceptProviderReviewAcknowledgment,
   assertSessionProviderReviewWorkStart,
@@ -73,10 +75,13 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       throw new Error("Provider review continuation cannot be retried or change transport");
     }
     const message = snapshot.review.review?.continuation?.message;
-    const latest = context.messages.at(-1);
+    const latestIndex = context.messages.findLastIndex((item) => !hasRuntimeContextMarker(item));
+    const latest = context.messages[latestIndex];
     if (!message || latest?.role !== "user") {
       throw new Error("Provider review continuation requires its exact next user input");
     }
+    const continuationInput = { ...latest, content: message };
+    const isContinuationInput = bindResponsesInputMessage(continuationInput);
     pendingCallStarted = true;
     let payloadPrepared = false;
     let dispatched = false;
@@ -91,6 +96,12 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         if (!isRecord(payload) || !Array.isArray(payload.input)) {
           throw new Error("Provider continuation payload has no user input");
         }
+        const inputIndex = payload.input.findIndex(isContinuationInput);
+        if (inputIndex < 0) {
+          throw new Error("Provider continuation payload changed its next user input");
+        }
+        // Hooks may rewrite history, but the acknowledged turn must keep its carrier tail.
+        const inputSuffix = structuredClone(payload.input.slice(inputIndex + 1));
         // Hooks may mutate the input array itself, so capture its user slots before awaiting them.
         const userInputSlots = countUserInputSlots(payload.input);
         const replacement = await options?.onPayload?.(payload, payloadModel);
@@ -108,12 +119,26 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         ) {
           throw new Error("Provider continuation payload changed the reviewed runtime or model");
         }
+        const continuationInputs = finalPayload.input.filter(isContinuationInput);
+        const nextInput = continuationInputs[0];
+        const nextInputIndex = finalPayload.input.indexOf(nextInput);
+        const finalInputSuffix = finalPayload.input.slice(nextInputIndex + 1);
+        if (
+          continuationInputs.length !== 1 ||
+          !isRecord(nextInput) ||
+          nextInput.role !== "user" ||
+          !isDeepStrictEqual(finalInputSuffix, inputSuffix)
+        ) {
+          if (
+            countUserInputSlots(finalPayload.input) > userInputSlots &&
+            finalInputSuffix.length > inputSuffix.length
+          ) {
+            throw new Error("Provider continuation payload added user input");
+          }
+          throw new Error("Provider continuation payload changed its next user input");
+        }
         if (countUserInputSlots(finalPayload.input) > userInputSlots) {
           throw new Error("Provider continuation payload added user input");
-        }
-        const lastInput = finalPayload.input.at(-1);
-        if (!isRecord(lastInput) || lastInput.role !== "user") {
-          throw new Error("Provider continuation payload changed its next user input");
         }
         const rawMetadata = finalPayload.client_metadata;
         if (rawMetadata !== undefined && !isRecord(rawMetadata)) {
@@ -140,10 +165,10 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         payloadPrepared = true;
         return {
           ...finalPayload,
-          input: [
-            ...finalPayload.input.slice(0, -1),
-            { ...lastInput, content: [{ type: "input_text", text: message }] },
-          ],
+          input: finalPayload.input.with(nextInputIndex, {
+            ...nextInput,
+            content: [{ type: "input_text", text: message }],
+          }),
           client_metadata: {
             ...metadata,
             "x-codex-turn-metadata": JSON.stringify({
@@ -198,7 +223,11 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       model,
       {
         ...context,
-        messages: [...context.messages.slice(0, -1), { ...latest, content: message }],
+        messages: [
+          ...context.messages.slice(0, latestIndex),
+          continuationInput,
+          ...context.messages.slice(latestIndex + 1),
+        ],
       },
       requestOptions,
     );

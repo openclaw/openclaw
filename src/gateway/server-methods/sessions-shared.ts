@@ -1,16 +1,16 @@
-// Shared session-handler target resolution and mutation guards.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
+  type ErrorShape,
   type SessionOperationEvent,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
+import type { SessionEntryReadScope } from "../../config/sessions/session-accessor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import {
@@ -22,7 +22,7 @@ import type { SessionWorkerPlacementContext } from "../worker-environments/sessi
 import { resolveWorkerPlacementArchiveRestoreError } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
-export const sessionLog = createSubsystemLogger("gateway/sessions");
+export { sessionLog } from "../session-log.js";
 
 export function resolveSessionWorkerPlacementPatchError(params: {
   agentId: string;
@@ -87,15 +87,11 @@ export const loadSessionsRuntimeModule = createLazyRuntimeModule(
 );
 
 export function requireSessionKey(key: unknown, respond: RespondFn): string | null {
-  const raw =
-    typeof key === "string"
-      ? key
-      : typeof key === "number"
-        ? String(key)
-        : typeof key === "bigint"
-          ? String(key)
-          : "";
-  const normalized = normalizeOptionalString(raw) ?? "";
+  const normalized = normalizeOptionalString(
+    typeof key === "string" || typeof key === "number" || typeof key === "bigint"
+      ? String(key)
+      : undefined,
+  );
   if (!normalized) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "key required"));
     return null;
@@ -107,16 +103,21 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
   key: string;
   cfg: OpenClawConfig;
   agentId?: string;
+  clone?: boolean;
+  projection?: SessionEntryReadScope["projection"];
 }) {
   const target = resolveGatewaySessionStoreTargetWithStore({
     cfg: params.cfg,
     key: params.key,
     exactRead: true,
+    projection: params.projection,
+    ...(params.clone === false ? { clone: false } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
   });
   return {
     target,
     storePath: target.storePath,
+    store: target.store,
     // Exact probes include internal-effects rows that operator inventory reads hide.
     entry: isInternalSessionEffectsKey(target.canonicalKey)
       ? undefined
@@ -124,27 +125,6 @@ export function loadAccessorSessionEntryForGatewayTarget(params: {
     canonicalKey: target.canonicalKey,
     sessionStoreKey: target.canonicalKey,
   };
-}
-
-export function loadSessionEntriesForTarget(params: {
-  key: string;
-  cfg: OpenClawConfig;
-  agentId?: string;
-  includeStoreChildEntries?: boolean;
-}) {
-  const target = resolveGatewaySessionStoreTargetWithStore({
-    cfg: params.cfg,
-    key: params.key,
-    clone: false,
-    exactRead: true,
-    includeStoreChildEntries: params.includeStoreChildEntries,
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-  });
-  const store = target.store;
-  const entry = isInternalSessionEffectsKey(target.canonicalKey)
-    ? undefined
-    : resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
-  return { target, storePath: target.storePath, store, entry };
 }
 
 export function emitSessionOperation(
@@ -180,4 +160,18 @@ export function isAgentMainSessionKey(cfg: OpenClawConfig, sessionKey: string): 
     return false;
   }
   return sessionKey === resolveAgentMainSessionKey({ cfg, agentId: parsed.agentId });
+}
+
+export function resolveProtectedSessionVisibilityError(
+  cfg: OpenClawConfig,
+  canonicalKey: string,
+  action: "archive" | "snooze",
+): ErrorShape | undefined {
+  if (canonicalKey === "unknown") {
+    return errorShape(ErrorCodes.INVALID_REQUEST, `Cannot ${action} the unknown session sentinel.`);
+  }
+  if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
+    return errorShape(ErrorCodes.INVALID_REQUEST, `Cannot ${action} an agent's main session.`);
+  }
+  return undefined;
 }

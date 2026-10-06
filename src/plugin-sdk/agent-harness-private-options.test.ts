@@ -52,6 +52,8 @@ describe("agent harness private options", () => {
       disableToolSearch?: true;
       sessionReadScopeKey?: string;
     }>();
+    expectTypeOf<CodingToolsOptions>().not.toHaveProperty("onProgressCardPlanSaved");
+    expectTypeOf<CodingToolsOptions>().not.toHaveProperty("authProfileStoreSource");
     expectTypeOf<CodingToolsOptions>().toMatchTypeOf<
       NonNullable<Parameters<typeof createCoreCodingTools>[0]>
     >();

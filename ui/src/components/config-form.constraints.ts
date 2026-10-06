@@ -1,7 +1,7 @@
 // Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
-  isJsonSchemaValueValid,
-  jsonSchemaValuesEqual,
+  isJsonSchemaValueValid as isSupportedConfigValueValid,
+  jsonSchemaValuesEqual as configValuesEqual,
 } from "@openclaw/normalization-core/json-schema";
 import {
   asFiniteNumber as finiteNumber,
@@ -11,11 +11,7 @@ import { arrayItemSchema, collectAllOfSchemas, combinedSchema } from "./config-f
 import { decimalRational } from "./config-form.numeric.ts";
 import { schemaType, type JsonSchema } from "./config-form.shared.ts";
 
-export const configValuesEqual = jsonSchemaValuesEqual;
-
-export function isSupportedConfigValueValid(schema: JsonSchema, value: unknown): boolean {
-  return isJsonSchemaValueValid(schema, value);
-}
+export { configValuesEqual, isSupportedConfigValueValid };
 
 function ownPropertySchema(schema: JsonSchema, key: string): JsonSchema | undefined {
   const properties = schema.properties;
@@ -78,11 +74,7 @@ function alignToStep(value: number, step: number, direction: "ceil" | "floor" | 
     direction === "floor"
       ? floor
       : direction === "ceil"
-        ? remainder === 0n
-          ? truncated
-          : remainder > 0n
-            ? truncated + 1n
-            : truncated
+        ? truncated + (remainder > 0n ? 1n : 0n)
         : (dividend - floor * divisor) * 2n < divisor
           ? floor
           : floor + 1n;
@@ -97,21 +89,7 @@ type NumericInputConstraints = {
   step: number | "any";
 };
 
-type ArrayInputConstraints = {
-  minItems: number;
-  maxItems?: number;
-  uniqueItems: boolean;
-};
-
-type EffectiveNumericBound = {
-  value?: number;
-  exclusive: boolean;
-};
-
-function effectiveNumericBound(
-  schemas: JsonSchema[],
-  direction: "lower" | "upper",
-): EffectiveNumericBound {
+function effectiveNumericBound(schemas: JsonSchema[], direction: "lower" | "upper") {
   let value: number | undefined;
   let exclusive = false;
   for (const schema of schemas) {
@@ -168,7 +146,7 @@ function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
   return Number.isFinite(combined) && combined > 0 ? combined : undefined;
 }
 
-export function arrayInputConstraints(schema: JsonSchema): ArrayInputConstraints {
+export function arrayInputConstraints(schema: JsonSchema) {
   const schemas = collectAllOfSchemas(schema);
   let minItems = 0;
   let maxItems: number | undefined;
@@ -221,7 +199,7 @@ export function objectAdditionalPropertiesSchema(
 }
 
 function objectRepairIssueCount(schema: JsonSchema, value: Record<string, unknown>): number {
-  let issues = isSupportedConfigValueValid(schema, value) ? 0 : 1;
+  let issues = 1;
   const knownKeys = new Set(objectPropertyKeys(schema));
   for (const key of requiredPropertyKeys(schema)) {
     if (!Object.hasOwn(value, key)) {

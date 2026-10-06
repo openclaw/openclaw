@@ -17,6 +17,8 @@ suite.define(() => {
     "keeps mobile sidebar titles and menus usable with a %s pointer",
     async (pointer) => {
       const sessionKey = "agent:main:mobile-sidebar-menu";
+      const plainKey = "agent:main:mobile-sidebar-long-title";
+      const privateKey = "agent:main:mobile-sidebar-private";
       const context = await suite.browser.newContext({
         colorScheme: "dark",
         hasTouch: pointer === "coarse",
@@ -35,6 +37,8 @@ suite.define(() => {
               category: "Research",
               lastMessagePreview: "Keep this second line visible during navigation",
             }),
+            sessionRow(plainKey, "Investigate mobile sidebar title readability", 1),
+            sessionRow(privateKey, "Private planning and follow-up tasks", 0, { incognito: true }),
           ]),
         },
         sessionGroups: [
@@ -64,6 +68,21 @@ suite.define(() => {
         const title = row.locator(".sidebar-recent-session__name");
         const titleWidth = () => title.evaluate((element) => element.getBoundingClientRect().width);
         const restingWidth = await titleWidth();
+        // Keep the drawer increase modest; reclaim reading space inside its rows.
+        const drawerBox = await page.locator(".shell-nav").boundingBox();
+        expect(drawerBox?.width).toBeGreaterThanOrEqual(330);
+        expect(drawerBox?.width).toBeLessThanOrEqual(336);
+        expect(restingWidth).toBeGreaterThanOrEqual(240);
+        const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
+        const plainTitle = plainRow.locator(".sidebar-recent-session__name");
+        await plainTitle.waitFor({ state: "visible" });
+        expect(
+          await plainTitle.evaluate((element) => element.getBoundingClientRect().width),
+        ).toBeCloseTo(restingWidth, 1);
+        expect(await plainRow.locator(".sidebar-recent-session__details").isVisible()).toBe(false);
+        await page
+          .locator(`[data-session-key="${privateKey}"] .session-row-badge--incognito`)
+          .waitFor({ state: "visible" });
         if (pointer === "fine") {
           await row.hover();
           expect(await titleWidth()).toBeCloseTo(restingWidth, 1);

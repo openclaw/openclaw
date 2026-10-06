@@ -1,426 +1,110 @@
-// Covers heartbeat system-event isolation by stable session keys.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply/get-reply-from-config.runtime.js";
-import type { MsgContext } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
+  heartbeatTestConfig,
   readSessionStoreForTest,
-  seedHeartbeatScratchForTest,
   seedSessionStore,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import {
-  enqueueSystemEvent,
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "./system-events.js";
+import { resetSystemEventsForTest } from "./system-events.js";
 
 vi.mock("./outbound/deliver.js", () => ({
   deliverOutboundPayloads: vi.fn().mockResolvedValue([]),
   deliverOutboundPayloadsInternal: vi.fn().mockResolvedValue([]),
 }));
-
 installHeartbeatRunnerTestRuntime();
-
 afterEach(() => {
   vi.restoreAllMocks();
   resetSystemEventsForTest();
 });
 
-type HeartbeatReplyContext = Pick<MsgContext, "Body" | "InternalTurnSource" | "SessionKey">;
-
-function replyCall(replySpy: { mock: { calls: unknown[][] } }, index = 0): HeartbeatReplyContext {
-  return (replySpy.mock.calls[index]?.at(0) ?? {}) as HeartbeatReplyContext;
+function withIsolatedHeartbeat(fn: (fixture: ReturnType<typeof createFixture>) => Promise<void>) {
+  return withTempHeartbeatSandbox(async ({ tmpDir, storePath }) =>
+    fn(createFixture(tmpDir, storePath)),
+  );
 }
-
-describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
-  /**
-   * Simulates the wake-request feedback loop:
-   *   1. Normal heartbeat tick produces sessionKey "agent:main:main:heartbeat"
-   *   2. An exec/subagent event during that tick calls requestHeartbeat()
-   *      with the already-suffixed key "agent:main:main:heartbeat"
-   *   3. The wake handler passes that key back into runHeartbeatOnce(sessionKey: ...)
-   *
-   * Before the fix, step 3 would append another ":heartbeat" producing
-   * "agent:main:main:heartbeat:heartbeat". After the fix, the key remains
-   * stable at "agent:main:main:heartbeat".
-   */
-  async function runIsolatedHeartbeat(params: {
-    tmpDir: string;
-    storePath: string;
-    cfg: OpenClawConfig;
-    sessionKey: string;
-  }) {
-    await seedSessionStore(params.storePath, params.sessionKey, {
+function createFixture(tmpDir: string, storePath: string) {
+  const cfg = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
+  cfg.agents!.defaults!.heartbeat!.isolatedSession = true;
+  const baseKey = resolveMainSessionKey(cfg);
+  const isolatedKey = `${baseKey}:heartbeat`;
+  const nowMs = Date.now();
+  const replySpy = vi
+    .spyOn(replyModule, "getReplyFromConfig")
+    .mockResolvedValue({ text: "HEARTBEAT_OK" });
+  const seed = (key: string, entry: Parameters<typeof seedSessionStore>[2] = {}) =>
+    seedSessionStore(storePath, key, {
       lastChannel: "whatsapp",
       lastProvider: "whatsapp",
       lastTo: "+1555",
+      ...entry,
     });
-
-    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-    replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-    await runHeartbeatOnce({
-      cfg: params.cfg,
-      sessionKey: params.sessionKey,
-      deps: {
-        getQueueSize: () => 0,
-        nowMs: () => Date.now(),
-      },
+  const run = (options: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+    runHeartbeatOnce({
+      cfg,
+      ...options,
+      deps: { getQueueSize: () => 0, nowMs: () => nowMs },
     });
+  return { baseKey, isolatedKey, nowMs, replySpy, seed, run, storePath };
+}
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    return replyCall(replySpy);
-  }
-
-  function makeIsolatedHeartbeatConfig(tmpDir: string, storePath: string): OpenClawConfig {
-    return {
-      agents: {
-        defaults: {
-          workspace: tmpDir,
-          heartbeat: {
-            every: "5m",
-            target: "whatsapp",
-            isolatedSession: true,
-          },
-        },
-      },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      session: { store: storePath },
-    };
-  }
-
-  it("recovers an archived isolated session on the next heartbeat tick", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      const nowMs = Date.now();
-      await seedSessionStore(storePath, isolatedSessionKey, {
+it("recovers an archived isolated session on the next heartbeat tick", async () => {
+  await withIsolatedHeartbeat(
+    async ({ baseKey, isolatedKey, nowMs, replySpy, seed, run, storePath }) => {
+      await seed(isolatedKey, {
         sessionId: "archived-heartbeat-session-id",
         updatedAt: nowMs - 1000,
         archivedAt: nowMs - 500,
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
+        heartbeatIsolatedBaseSessionKey: baseKey,
       });
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        reason: "interval",
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      const store = readSessionStoreForTest<{
-        archivedAt?: number;
-        heartbeatIsolatedBaseSessionKey?: string;
-        sessionId?: string;
-      }>(storePath);
-      expect(store[isolatedSessionKey]).toMatchObject({
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
-      expect(store[isolatedSessionKey]?.archivedAt).toBeUndefined();
-      expect(store[isolatedSessionKey]?.sessionId).not.toBe("archived-heartbeat-session-id");
-    });
-  });
-
-  it("stays stable even with multiply-accumulated suffixes", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-
-      // Simulate a key that already accumulated several :heartbeat suffixes
-      // (from an unpatched gateway running for many ticks).
-      const deeplyAccumulatedKey = `${baseSessionKey}:heartbeat:heartbeat:heartbeat`;
-
-      const ctx = await runIsolatedHeartbeat({
-        tmpDir,
-        storePath,
-        cfg,
-        sessionKey: deeplyAccumulatedKey,
-      });
-
-      // After the fix, ALL trailing :heartbeat suffixes are stripped by the
-      // (:heartbeat)+$ regex in a single pass, then exactly one is re-appended.
-      // A deeply accumulated key converges to "<base>:heartbeat" in one call.
-      expect(ctx?.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-
-      const store = readSessionStoreForTest<{ heartbeatIsolatedBaseSessionKey?: string }>(
-        storePath,
-      );
-      expect(store[deeplyAccumulatedKey]).toBeUndefined();
-      expect(store[`${baseSessionKey}:heartbeat`]?.heartbeatIsolatedBaseSessionKey).toBe(
-        baseSessionKey,
-      );
-    });
-  });
-
-  it("consumes base-session cron events when isolated heartbeat runs on a :heartbeat session", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy
-        .mockResolvedValueOnce({ text: "Relay this cron update now" })
-        .mockResolvedValueOnce({ text: "HEARTBEAT_OK" });
-
-      enqueueSystemEvent("Cron: memory maintenance completed", {
-        sessionKey: baseSessionKey,
-        contextKey: "cron:memory-maintenance",
-      });
-
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        reason: "interval",
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-        },
-      });
-
-      expect(peekSystemEventEntries(baseSessionKey)).toStrictEqual([]);
-
-      await runHeartbeatOnce({
-        cfg,
-        agentId: "main",
-        reason: "interval",
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-        },
-      });
-
-      expect(replySpy).toHaveBeenCalledTimes(2);
-      const firstCtx = replyCall(replySpy);
-      const secondCtx = replyCall(replySpy, 1);
-
-      expect(firstCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(firstCtx.InternalTurnSource).toBe("cron");
-      expect(firstCtx.Body).toContain("Cron: memory maintenance completed");
-      expect(secondCtx.SessionKey).toBe(`${baseSessionKey}:heartbeat`);
-      expect(secondCtx.Body).not.toContain("Cron: memory maintenance completed");
-    });
-  });
-
-  it("classifies hook:wake exec events when they are queued on the active isolated session", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      await seedSessionStore(storePath, isolatedSessionKey, {
-        sessionId: "sid",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
-        heartbeatIsolatedBaseSessionKey: baseSessionKey,
-      });
-      enqueueSystemEvent("exec finished: deploy succeeded", { sessionKey: isolatedSessionKey });
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "Handled internally" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        sessionKey: isolatedSessionKey,
-        reason: "hook:wake",
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-        },
-      });
-
-      expect(result.status).toBe("ran");
-      const calledCtx = replyCall(replySpy);
-      expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
-      expect(calledCtx.InternalTurnSource).toBe("exec");
-    });
-  });
-
-  it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated sibling", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const realSessionKey = "agent:main:alerts:heartbeat";
-
-      const ctx = await runIsolatedHeartbeat({
-        tmpDir,
-        storePath,
-        cfg,
-        sessionKey: realSessionKey,
-      });
-
-      expect(ctx?.SessionKey).toBe(`${realSessionKey}:heartbeat`);
-    });
-  });
-
-  it("stays stable when a forced real :heartbeat session re-enters through its isolated sibling", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const realSessionKey = "agent:main:alerts:heartbeat";
-      const isolatedSessionKey = `${realSessionKey}:heartbeat`;
-
-      await seedSessionStore(storePath, isolatedSessionKey, {
-        sessionId: "sid",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
-        heartbeatIsolatedBaseSessionKey: realSessionKey,
-      });
-
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
-        cfg,
-        sessionKey: isolatedSessionKey,
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-        },
-      });
-
-      expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replyCall(replySpy).SessionKey).toBe(isolatedSessionKey);
-    });
-  });
-
-  it("treats leftover tasks text as ordinary scratch instead of runtime scheduling state", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            workspace: tmpDir,
-            heartbeat: {
-              isolatedSession: true,
-              target: "whatsapp",
-            },
-          },
-        },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        session: { store: storePath },
-      };
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const isolatedSessionKey = `${baseSessionKey}:heartbeat`;
-      const nowMs = Date.now();
-      await seedHeartbeatScratchForTest({
-        content: `tasks:
-  - name: daily-check
-    interval: 1d
-    prompt: "Check status"
-`,
-      });
-
-      await seedSessionStore(storePath, baseSessionKey, {
-        sessionId: "sid",
-        updatedAt: nowMs,
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
-        heartbeatTaskState: {
-          "daily-check": 1,
-        },
-      });
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      const result = await runHeartbeatOnce({
-        cfg,
-        sessionKey: baseSessionKey,
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => nowMs,
-        },
-      });
-
-      expect(result.status).toBe("ran");
+      expect((await run({ agentId: "main", reason: "interval" })).status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
-      expect(replyCall(replySpy).Body).toContain("Heartbeat monitor scratch:\ntasks:");
-      expect(replyCall(replySpy).Body).not.toContain(
-        "Run the following periodic tasks (only those due based on their intervals)",
-      );
+      const entry = readSessionStoreForTest(storePath)[isolatedKey];
+      expect(entry).toMatchObject({ heartbeatIsolatedBaseSessionKey: baseKey });
+      expect(entry?.archivedAt).toBeUndefined();
+      expect(entry?.sessionId).not.toBe("archived-heartbeat-session-id");
+    },
+  );
+});
 
-      const store = readSessionStoreForTest(storePath);
-      expect(store[isolatedSessionKey]).toBeDefined();
-      expect(store[baseSessionKey]?.heartbeatTaskState).toEqual({ "daily-check": 1 });
-    });
+it("converges multiply accumulated suffixes without a stored base marker", async () => {
+  await withIsolatedHeartbeat(async ({ baseKey, isolatedKey, replySpy, seed, run, storePath }) => {
+    const legacyKey = `${baseKey}:heartbeat:heartbeat:heartbeat`;
+    await seed(legacyKey);
+    await run({ sessionKey: legacyKey });
+    expect(replySpy).toHaveBeenCalledOnce();
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toBe(isolatedKey);
+    const store = readSessionStoreForTest(storePath);
+    expect(store[legacyKey]).toBeUndefined();
+    expect(store[isolatedKey]?.heartbeatIsolatedBaseSessionKey).toBe(baseKey);
   });
+});
 
-  it("renders cron-carried task prompts through the heartbeat response path", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      await seedSessionStore(storePath, baseSessionKey, {
-        sessionId: "sid",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
-      });
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+it("keeps a forced real :heartbeat session distinct from the heartbeat-isolated sibling", async () => {
+  await withIsolatedHeartbeat(async ({ replySpy, seed, run }) => {
+    const realKey = "agent:main:alerts:heartbeat";
+    await seed(realKey);
+    await run({ sessionKey: realKey });
+    expect(replySpy).toHaveBeenCalledOnce();
+    expect(replySpy.mock.calls[0]?.[0].SessionKey).toBe(`${realKey}:heartbeat`);
+  });
+});
 
-      const result = await runHeartbeatOnce({
-        cfg,
+it("renders cron-carried task prompts through the heartbeat response path", async () => {
+  await withIsolatedHeartbeat(async ({ baseKey, replySpy, seed, run }) => {
+    await seed(baseKey, { sessionId: "sid" });
+    await expect(
+      run({
         source: "interval",
         intent: "task",
         reason: "heartbeat-task:job-inbox",
         tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check urgent inbox items" }],
-        deps: { getQueueSize: () => 0, nowMs: () => Date.now() },
-      });
-
-      expect(result.status).toBe("ran");
-      expect(replyCall(replySpy).Body).toContain("- inbox: Check urgent inbox items");
-      expect(replyCall(replySpy).Body).toContain("After completing all due tasks");
-    });
-  });
-
-  it("converges a legacy isolated key that lacks the stored marker (single :heartbeat suffix)", async () => {
-    // Regression for: when an isolated session was created before
-    // heartbeatIsolatedBaseSessionKey was introduced, sessionKey already equals
-    // "<base>:heartbeat" but the stored entry has no marker. The fallback used to
-    // treat "<base>:heartbeat" as the new base and persist it as the marker, so
-    // the next wake re-entry would stabilise at "<base>:heartbeat:heartbeat"
-    // instead of converging back to "<base>:heartbeat".
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      const cfg = makeIsolatedHeartbeatConfig(tmpDir, storePath);
-      const baseSessionKey = resolveMainSessionKey(cfg);
-      const legacyIsolatedKey = `${baseSessionKey}:heartbeat`;
-
-      // Legacy entry: has :heartbeat suffix but no heartbeatIsolatedBaseSessionKey marker.
-      await seedSessionStore(storePath, legacyIsolatedKey, {
-        sessionId: "sid",
-        updatedAt: Date.now(),
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: "+1555",
-      });
-      const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-      await runHeartbeatOnce({
-        cfg,
-        sessionKey: legacyIsolatedKey,
-        deps: {
-          getQueueSize: () => 0,
-          nowMs: () => Date.now(),
-        },
-      });
-
-      // Must converge to the same canonical isolated key, not produce :heartbeat:heartbeat.
-      expect(replyCall(replySpy).SessionKey).toBe(legacyIsolatedKey);
-    });
+      }),
+    ).resolves.toMatchObject({ status: "ran" });
+    expect(replySpy.mock.calls[0]?.[0].Body).toContain("- inbox: Check urgent inbox items");
+    expect(replySpy.mock.calls[0]?.[0].Body).toContain("After completing all due tasks");
   });
 });

@@ -89,7 +89,11 @@ suite.define(() => {
     async (width) => {
       const artifactDir = suite.artifactDir;
       await suite.withPage(
-        { viewport: { width, height: 900 }, recordVideo: { dir: artifactDir } },
+        {
+          viewport: { width, height: 900 },
+          recordVideo:
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" ? { dir: artifactDir } : undefined,
+        },
         async ({ page }) => {
           const selectedModel = { id: "gpt-5.5", name: "GPT-5.5", provider: "codex" };
           const activeModel = { id: "qwen3.5:9b", name: "Qwen 3.5 9B", provider: "ollama" };
@@ -146,14 +150,14 @@ suite.define(() => {
           const runId = (send.params as { idempotencyKey: string }).idempotencyKey;
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain(activeModel.name);
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
-          expect(await trigger.locator(".btn__spinner").count()).toBe(1);
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
+          expect(await trigger.locator(".btn__spinner").count()).toBe(0);
           await page.screenshot({ path: `${artifactDir}/send-admission-model.png` });
           await gateway.resolveDeferred("chat.send");
           await page.getByRole("button", { name: "Stop generating" }).waitFor();
           await expect.poll(() => trigger.textContent()).toContain(selectedModel.name);
           expect(await trigger.textContent()).not.toContain("Model pending");
-          expect(await trigger.getAttribute("aria-busy")).toBe("true");
+          expect(await trigger.getAttribute("aria-busy")).toBe("false");
           await page.screenshot({ path: `${artifactDir}/pending-executing-model.png` });
           const startedAt = Date.now();
           for (const [index, model] of [selectedModel, activeModel].entries()) {

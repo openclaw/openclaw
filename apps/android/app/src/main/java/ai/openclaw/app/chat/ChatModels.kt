@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.asJsonStringOrNull
 import ai.openclaw.app.gateway.SessionObserverDigest
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
@@ -291,15 +292,14 @@ internal fun parseChatPlanSteps(element: JsonElement?): List<ChatPlanStep> {
   var hasInProgressStep = false
   return entries.mapNotNull { entry ->
     val step =
-      ((if (entry is JsonObject) entry["step"] else entry) as? JsonPrimitive)
-        ?.takeIf { it.isString }
-        ?.content
+      (if (entry is JsonObject) entry["step"] else entry)
+        .asJsonStringOrNull()
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
         ?: return@mapNotNull null
     val status =
       if (entry is JsonObject) {
-        when ((entry["status"] as? JsonPrimitive)?.takeIf { it.isString }?.content) {
+        when (entry["status"].asJsonStringOrNull()) {
           "pending" -> ChatPlanStepStatus.Pending
           "in_progress" -> ChatPlanStepStatus.InProgress
           "completed" -> ChatPlanStepStatus.Completed
@@ -325,9 +325,8 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
   }
   val card = rawCard as? JsonObject ?: error("Invalid progressCard.get response")
   val sessionKey =
-    (card["sessionKey"] as? JsonPrimitive)
-      ?.takeIf { it.isString }
-      ?.content
+    card["sessionKey"]
+      .asJsonStringOrNull()
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
       ?: error("Invalid progress card session key")
@@ -347,9 +346,7 @@ internal fun parseChatProgressCardGetResult(element: JsonElement): ChatProgressC
       ?: error("Invalid progress card update time")
   val markdown =
     if (card.containsKey("markdown")) {
-      (card["markdown"] as? JsonPrimitive)
-        ?.takeIf { it.isString }
-        ?.content
+      card["markdown"].asJsonStringOrNull()
         ?: error("Invalid progress card markdown")
     } else {
       null
@@ -470,10 +467,18 @@ data class ChatSessionEntry(
   val hasColorMetadata: Boolean = color != null,
   val pinned: Boolean? = null,
   val archived: Boolean? = null,
+  val sharingRole: String? = null,
+  val visibility: String? = null,
+  val hasSharingRoleMetadata: Boolean = sharingRole != null,
+  val hasVisibilityMetadata: Boolean = visibility != null,
   val unread: Boolean? = null,
   val lastReadAt: Long? = null,
   val markedUnreadAt: Long? = null,
   val hasMarkedUnreadMetadata: Boolean = markedUnreadAt != null,
+  val snoozedUntil: Long? = null,
+  val snoozedAt: Long? = null,
+  val hasSnoozedUntilMetadata: Boolean = snoozedUntil != null,
+  val hasSnoozedAtMetadata: Boolean = snoozedAt != null,
   val agentStatus: ChatSessionAgentStatus? = null,
   val hasAgentStatusMetadata: Boolean = agentStatus != null,
   val observerDigest: SessionObserverDigest? = null,
@@ -526,7 +531,9 @@ data class ChatSessionEntry(
     inputTokens != null || outputTokens != null || estimatedCostUsd != null,
   val hasRunMetadata: Boolean =
     status != null || startedAt != null || endedAt != null || runtimeMs != null || outputTokens != null,
-)
+) {
+  fun isSnoozed(nowMs: Long): Boolean = snoozedUntil?.let { it > nowMs } == true
+}
 
 // Match Gateway precedence: terminal status wins; only missing live flags use historical status.
 internal fun isSessionRunActive(

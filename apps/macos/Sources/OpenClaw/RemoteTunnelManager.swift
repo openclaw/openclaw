@@ -122,26 +122,19 @@ actor RemoteTunnelManager {
         lifecycleGeneration: UInt64) async throws -> Route?
     {
         try Task.checkCancellation()
+        let currentGeneration = if case let .retired(replacementGeneration) = result {
+            replacementGeneration
+        } else {
+            lifecycleGeneration
+        }
+        guard self.lifecycleGeneration == currentGeneration else { throw CancellationError() }
         switch result {
         case let .route(route):
-            guard self.lifecycleGeneration == lifecycleGeneration else { throw CancellationError() }
             return route
-        case let .retired(replacementGeneration):
-            guard self.lifecycleGeneration == replacementGeneration else {
-                throw CancellationError()
-            }
+        case .retired, .staleConfiguration:
             // Another caller may have installed the replacement during retirement.
-            return try await self.ensureControlTunnelRoute(lifecycleGeneration: replacementGeneration)
-        case .staleConfiguration:
-            guard self.lifecycleGeneration == lifecycleGeneration else {
-                throw CancellationError()
-            }
-            return try await self.ensureControlTunnelRoute(
-                lifecycleGeneration: lifecycleGeneration)
+            return try await self.ensureControlTunnelRoute(lifecycleGeneration: currentGeneration)
         case .none:
-            guard self.lifecycleGeneration == lifecycleGeneration else {
-                throw CancellationError()
-            }
             return nil
         }
     }
@@ -193,13 +186,9 @@ actor RemoteTunnelManager {
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = configuration.preferredLocalPort ?? 18789
             let token = UUID()
             let task = Task {
-                try await RemotePortTunnel.create(
-                    configuration: configuration,
-                    preferredLocalPort: desiredPort,
-                    allowRandomLocalPort: true)
+                try await RemotePortTunnel.create(configuration: configuration)
             }
             self.createInFlight = (
                 token: token,

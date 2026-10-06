@@ -1,3 +1,4 @@
+import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -37,20 +38,6 @@ import {
 } from "./update-command-service-plan.js";
 import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
-// The startup watchdog supplies the floor; ×10 leaves slow-disk headroom.
-// One hour bounds implicit observation of an already-serving Gateway; --timeout wins.
-const PREVIOUS_GATEWAY_READINESS_CAP_MS = 60 * 60_000;
-
-function readinessTimeoutMs(
-  params: { timeoutMs?: number; observedStartupMs?: number },
-  capMs = Infinity,
-) {
-  return (
-    params.timeoutMs ??
-    Math.min(capMs, Math.max(STARTUP_MIGRATION_LEASE_TTL_MS, (params.observedStartupMs ?? 0) * 10))
-  );
-}
-
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
   config: OpenClawConfig;
@@ -67,11 +54,12 @@ export async function verifyPreviousGatewayForUpdate(params: {
   const { config, env } = params;
   const { assertCurrent, proofOptions } = captureUpdateGatewayReadinessOwner(params);
   const run = proofOptions.run;
-  const timeoutMs = readinessTimeoutMs(params, PREVIOUS_GATEWAY_READINESS_CAP_MS);
-  const derivation =
-    params.timeoutMs === undefined
-      ? `min(${PREVIOUS_GATEWAY_READINESS_CAP_MS}ms, max(${STARTUP_MIGRATION_LEASE_TTL_MS}ms, canary startup ${params.observedStartupMs ?? 0}ms × 10))`
-      : "explicit --timeout";
+  const { deadlineMs: timeoutMs, derivation } = resolveGatewayStartupTiming(process.platform, {
+    timeoutMs: params.timeoutMs,
+    observedStartupMs: params.observedStartupMs,
+    migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+    previousGateway: true,
+  });
   const startedAtMs = Date.now();
   const deadline = createGatewayRestartDeadline({ timeoutMs, signal: params.signal });
   let lastProgress = { stage: "", at: -Infinity };
@@ -246,7 +234,11 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
 /** Observe one ready generation before activation or after restart, without recording a verdict. */
 export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadinessParams) {
   const waitForStartup = params.waitForStartup !== false;
-  const timeoutMs = readinessTimeoutMs(params);
+  const { deadlineMs: timeoutMs } = resolveGatewayStartupTiming(process.platform, {
+    timeoutMs: params.timeoutMs,
+    observedStartupMs: params.observedStartupMs,
+    migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+  });
   const settle = params.settle ?? { probes: 12 };
   const settleDurationMs = waitForStartup
     ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
@@ -260,6 +252,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     signal: params.signal,
   });
   const remainingMs = deadline.remainingMs;
+  const inspectionTimeoutMs = () => Math.min(remainingMs(), params.probeTimeoutMs ?? Infinity);
   const probeTimeoutMs = () =>
     waitForStartup && params.probeTimeoutMs === undefined
       ? remainingMs()
@@ -278,6 +271,10 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     env: params.serviceEnv,
     signal: deadline.signal,
     deadline,
+    // One-shot recovery caps network waits, not the preceding native inspection.
+    ...(!waitForStartup
+      ? { probeTimeoutMs: params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS }
+      : {}),
   };
   let health: GatewayRestartSnapshot = params.health ?? {
     runtime: { status: "unknown" },
@@ -292,7 +289,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     if (!waitForStartup) {
       const inspectedHealth = await inspectGatewayRestart({
         ...probeParams,
-        timeoutMs: Math.max(1, probeTimeoutMs()),
+        timeoutMs: Math.max(1, inspectionTimeoutMs()),
       });
       assertCurrent();
       return inspectedHealth;
@@ -349,7 +346,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         return { health, readyz: false, http: undefined, launchAgentRecovery };
       }
       params.onProgress?.("http", "checking Gateway HTTP healthz and readyz endpoints");
-      const context = await deadline.read("HTTP probe context", () =>
+      const context = await deadline.read("HTTP check context", () =>
         resolveGatewayRestartProbeContext(params.serviceEnv, undefined, deadline.signal),
       );
       assertCurrent();
@@ -381,7 +378,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           inspectGatewayRestart({
             ...probeParams,
             probeContext: context,
-            timeoutMs: Math.max(1, probeTimeoutMs()),
+            timeoutMs: Math.max(1, inspectionTimeoutMs()),
           });
         const inspected = await deadline.read("final Gateway identity", inspect);
         assertCurrent();

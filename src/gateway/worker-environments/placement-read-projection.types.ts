@@ -2,7 +2,7 @@ import type { WorkerEnvironmentRecord } from "./environment-record.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementState } from "./placement-state.js";
-import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 
 export type WorkerEnvironmentPlacementFacts = Pick<
   WorkerEnvironmentRecord,
@@ -15,7 +15,7 @@ export type WorkerEnvironmentPlacementFacts = Pick<
   | "ownerEpoch"
   | "nodeDeviceId"
   | "attachedSessionIds"
->;
+> & { inference?: "worker" };
 
 export type WorkerSessionPlacementProjection = {
   placements: ReadonlyMap<string, WorkerSessionPlacementRecord>;

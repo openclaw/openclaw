@@ -61,10 +61,8 @@ class SidebarCatalogGroupingTest {
             hosts =
               listOf(
                 SessionCatalogHost(
-                  catalogId = "codex",
                   hostId = "desktop",
                   label = "Desktop",
-                  kind = "node",
                   connected = true,
                   nextCursor = "next",
                   sessions =
@@ -109,10 +107,8 @@ class SidebarCatalogGroupingTest {
             hosts =
               listOf(
                 SessionCatalogHost(
-                  catalogId = "codex",
                   hostId = "desktop",
                   label = "Desktop",
-                  kind = "node",
                   connected = true,
                   sessions =
                     listOf(
@@ -139,10 +135,8 @@ class SidebarCatalogGroupingTest {
             hosts =
               listOf(
                 SessionCatalogHost(
-                  catalogId = "codex",
                   hostId = "desktop",
                   label = "Desktop",
-                  kind = "node",
                   connected = true,
                   sessions = listOf(entry("archived", cwd = "/work/hidden", recency = 1.0, archived = true)),
                 ),
@@ -165,10 +159,8 @@ class SidebarCatalogGroupingTest {
             hosts =
               listOf(
                 SessionCatalogHost(
-                  catalogId = "codex",
                   hostId = "desktop",
                   label = "Desktop",
-                  kind = "node",
                   connected = true,
                   errorText = "Refresh failed",
                   sessions = listOf(entry("archived", cwd = "/work/hidden", recency = 1.0, archived = true)),
@@ -195,10 +187,8 @@ class SidebarCatalogGroupingTest {
             hosts =
               listOf(
                 SessionCatalogHost(
-                  catalogId = "codex",
                   hostId = "desktop",
                   label = "Desktop",
-                  kind = "node",
                   connected = true,
                   nextCursor = "next",
                   sessions = listOf(entry("archived", cwd = "/work/hidden", recency = 1.0, archived = true)),
@@ -221,24 +211,24 @@ class SidebarCatalogGroupingTest {
         SessionCatalog(
           id = "claude",
           label = "Claude Code",
-          hosts = listOf(host("claude", sessions = listOf(entry("visible", "/work/claude", 2.0, catalogId = "claude")))),
+          hosts = listOf(host(sessions = listOf(entry("visible", "/work/claude", 2.0, catalogId = "claude")))),
         ),
         SessionCatalog(id = "pi", label = "Pi", hosts = emptyList()),
         SessionCatalog(id = "catalog-error", label = "Catalog error", hosts = emptyList(), errorText = "Unavailable"),
         SessionCatalog(
           id = "host-error",
           label = "Host error",
-          hosts = listOf(host("host-error", errorText = "Unavailable")),
+          hosts = listOf(host(errorText = "Unavailable")),
         ),
         SessionCatalog(
           id = "paged",
           label = "Paged",
-          hosts = listOf(host("paged", nextCursor = "next")),
+          hosts = listOf(host(nextCursor = "next")),
         ),
         SessionCatalog(
           id = "archived",
           label = "Archived",
-          hosts = listOf(host("archived", sessions = listOf(entry("archived", "/work/hidden", 1.0, archived = true)))),
+          hosts = listOf(host(sessions = listOf(entry("archived", "/work/hidden", 1.0, archived = true)))),
         ),
       )
 
@@ -251,9 +241,9 @@ class SidebarCatalogGroupingTest {
     assertFalse(sections.any { it.catalog.id == "archived" })
     assertEquals(
       setOf("codex", "claude"),
-      toggleSidebarCatalogExpansion(listOf("claude"), "codex").toSet(),
+      toggleSidebarExpansion(listOf("claude"), "codex").toSet(),
     )
-    assertEquals(emptyList<String>(), toggleSidebarCatalogExpansion(listOf("claude"), "claude"))
+    assertEquals(emptyList<String>(), toggleSidebarExpansion(listOf("claude"), "claude"))
   }
 
   @Test
@@ -459,7 +449,7 @@ class SidebarCatalogGroupingTest {
         catalogState.value =
           SessionCatalogState(
             agentId = "main",
-            catalogs = listOf(SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host("codex", sessions = listOf(pinned, recent))))),
+            catalogs = listOf(SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host(sessions = listOf(pinned, recent))))),
           )
       }
       composeRule.onNodeWithText("Codex").performScrollTo().assertIsDisplayed()
@@ -508,7 +498,7 @@ class SidebarCatalogGroupingTest {
         ),
       )
     val catalogState = ReflectionHelpers.getField<MutableStateFlow<SessionCatalogState>>(runtime, "_sessionCatalogState")
-    val catalog = SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host("codex", sessions = listOf(adopted))))
+    val catalog = SessionCatalog(id = "codex", label = "Codex", hosts = listOf(host(sessions = listOf(adopted))))
 
     try {
       Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
@@ -550,7 +540,7 @@ class SidebarCatalogGroupingTest {
       composeRule.onNodeWithText("Native title").assertDoesNotExist()
 
       composeRule.runOnIdle {
-        val refreshedHost = host("codex", sessions = listOf(adopted.copy(name = "Refreshed native title")))
+        val refreshedHost = host(sessions = listOf(adopted.copy(name = "Refreshed native title")))
         catalogState.value =
           catalogState.value.copy(
             catalogs = listOf(catalog.copy(hosts = listOf(refreshedHost))),
@@ -575,7 +565,7 @@ class SidebarCatalogGroupingTest {
         liveSessions.value = emptyList()
         catalogState.value =
           catalogState.value.copy(
-            catalogs = listOf(catalog.copy(hosts = listOf(host("codex", sessions = listOf(adopted.copy(name = "Refreshed native title", status = "active")))))),
+            catalogs = listOf(catalog.copy(hosts = listOf(host(sessions = listOf(adopted.copy(name = "Refreshed native title", status = "active")))))),
           )
       }
       working.assertIsDisplayed()
@@ -600,16 +590,13 @@ class SidebarCatalogGroupingTest {
   }
 
   private fun host(
-    catalogId: String,
     sessions: List<SessionCatalogEntry> = emptyList(),
     nextCursor: String? = null,
     errorText: String? = null,
   ): SessionCatalogHost =
     SessionCatalogHost(
-      catalogId = catalogId,
       hostId = "desktop",
       label = "Desktop",
-      kind = "node",
       connected = true,
       sessions = sessions,
       nextCursor = nextCursor,

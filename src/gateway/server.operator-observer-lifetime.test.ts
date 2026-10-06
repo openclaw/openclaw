@@ -14,6 +14,7 @@ import * as questionChannel from "../infra/question-channel-runtime.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { issueOperatorToken } from "./device-authz.test-helpers.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
 import { observeHeldGatewayWorkDrain } from "./server-held-work.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -37,6 +38,13 @@ async function startObserverGateway() {
     captured.resolve(context);
     respond(true, { captured: true });
   };
+  registry.gatewayMethodDescriptors.push(
+    createPluginGatewayMethodDescriptor({
+      pluginId: "observer-proof",
+      name: "test.observer-context",
+      handler: registry.gatewayHandlers["test.observer-context"],
+    }),
+  );
   setTestPluginRegistry(registry);
   let gateway: GatewayHarness | undefined;
   let admin: WebSocket | undefined;
@@ -367,8 +375,7 @@ describe("public Gateway close operator observer lifetime", () => {
           await observed;
         }
         if (read === "held-pending") {
-          // Wake the already-captured poll promise through a real accepted mutation.
-          // A leaked continuation will reread immediately, not after a timing-dependent sleep.
+          // A real decision wakes the captured read without waiting for its poll timer.
           expect((await rpcReq(started.admin, "device.pair.reject", { requestId })).ok).toBe(true);
           pendingBefore = await readPending(requestId, stateDir);
           expect(pendingBefore).toBeNull();

@@ -1,6 +1,9 @@
 import { stripVTControlCharacters } from "node:util";
 import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
+import type { NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import {
+  NATIVE_SOLO_TIMING_PROFILE,
+  createNativeSoloTimingKey,
   isRuntimePlacementTiming,
   isRuntimePlacementIncludePatterns,
   runtimePlacementTimingIdentity,
@@ -8,6 +11,7 @@ import {
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
 import {
+  canOverlapTelegramSingletonProcesses,
   createExtensionTestTimingKey,
   splitExtensionTestProcessTargets,
 } from "./extension-test-plan.mts";
@@ -33,14 +37,11 @@ export type CiTimingRun = {
 type Samples = Map<string, number[]>;
 type WorkerCeilings = Map<string, Set<number | "unspecified" | "ambiguous">>;
 
-type RuntimeTimingGroup = {
-  shard_name: string;
-  timing_key?: string;
-  configs: string[];
+type RuntimeTimingGroup = Omit<
+  NodeTestShardGroup,
+  "runner" | "requiresDist" | "pretestBuildMode" | "includePatterns"
+> & {
   includePatterns?: string[] | null;
-  env?: Record<string, string>;
-  fallbackMaxWorkers?: number;
-  minTotalMemoryBytes?: number;
 };
 
 function readRuntimeTimingGroups(text: string): RuntimeTimingGroup[] {
@@ -208,7 +209,12 @@ function readWorkerResources(text: string) {
   ) {
     return undefined;
   }
-  return { logicalCpuCount: values[0]!, totalMemoryBytes: values[1]!, admittedPlans: values[3]! };
+  return {
+    logicalCpuCount: values[0]!,
+    totalMemoryBytes: values[1]!,
+    requestedPlans: values[2]!,
+    admittedPlans: values[3]!,
+  };
 }
 
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
@@ -250,7 +256,7 @@ function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   }
 }
 
-function readSingletonExtensionInvocations(
+function readSingletonVitestInvocations(
   lines: readonly string[],
   config: string,
   files: readonly string[],
@@ -359,6 +365,31 @@ function readSingletonExtensionInvocations(
   return verified && passed && measured.size === declared.size ? measured : undefined;
 }
 
+function hasNativeSoloJobEnvironment(text: string): boolean {
+  const encoded = readLogEnv(text, "OPENCLAW_NODE_TEST_ENV_JSON");
+  if (encoded === null) {
+    return false;
+  }
+  try {
+    const env: unknown = encoded ? JSON.parse(encoded) : {};
+    if (env === null) {
+      return true;
+    }
+    if (
+      typeof env !== "object" ||
+      Array.isArray(env) ||
+      Object.entries(env).some(
+        ([key, value]) => key !== "OPENCLAW_VITEST_MAX_WORKERS" || value !== "8",
+      )
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function readCompactLog(
   text: string,
   labels: string[],
@@ -379,6 +410,20 @@ function readCompactLog(
   const runnerEnvironment = readLogEnv(text, "RUNNER_ENVIRONMENT");
   const frozenTarget = readLogEnv(text, "FROZEN_TARGET");
   const jobExtraArgs = readLogEnv(text, "OPENCLAW_NODE_TEST_VITEST_ARGS_JSON");
+  const nativeSoloHost =
+    labels.length === 1 &&
+    labels[0] === NATIVE_SOLO_TIMING_PROFILE.runner &&
+    descriptors.length === 1 &&
+    Boolean(readLogEnv(text, "OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64")) &&
+    resources?.logicalCpuCount === NATIVE_SOLO_TIMING_PROFILE.logicalCpuCount &&
+    resources.totalMemoryBytes >= NATIVE_SOLO_TIMING_PROFILE.minTotalMemoryBytes &&
+    resources.totalMemoryBytes <= NATIVE_SOLO_TIMING_PROFILE.maxTotalMemoryBytes &&
+    resources.requestedPlans === 1 &&
+    resources.admittedPlans === 1 &&
+    jobWorkerCeiling === NATIVE_SOLO_TIMING_PROFILE.maxWorkers &&
+    runnerEnvironment === "self-hosted" &&
+    frozenTarget === "false" &&
+    hasNativeSoloJobEnvironment(text);
   for (const line of text.split("\n")) {
     const output = /^\d{4}-\d\d-\d\dT[\d:.]+Z\s+\[shard:([^\]]+)\]/u.exec(line);
     if (output) {
@@ -415,6 +460,9 @@ function readCompactLog(
       runtimeModes.delete(key);
       const matches = descriptors.filter((group) => (group.timing_key ?? group.shard_name) === key);
       const descriptor = matches.length === 1 ? matches[0] : undefined;
+      if (descriptor && nativeSoloHost && createNativeSoloTimingKey(descriptor)) {
+        singletonLogs.set(descriptor.shard_name, { key, lines: [] });
+      }
       if (
         descriptor?.shard_name.startsWith("changed-extensions-config") &&
         descriptor.configs.length === 1 &&
@@ -503,10 +551,46 @@ function readCompactLog(
           selectedKey.slice(selectedKey.lastIndexOf("#include-")),
         );
       }
+      const singletonLog = group && singletonLogs.get(group.shard_name);
+      const parallelReceipts = (singletonLog?.lines ?? []).flatMap((outputLine) => {
+        const receipt = /\[shard:[^\]]+\] \[test\] inner parallelism ([1-9]\d*)$/u.exec(outputLine);
+        return receipt ? [Number(receipt[1])] : [];
+      });
+      const requestedParallel = group?.env?.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      const innerParallelism =
+        extensionGroup && (requestedParallel === "2" || parallelReceipts.length > 0)
+          ? parallelReceipts.length === 1 &&
+            (parallelReceipts[0] === 1 || parallelReceipts[0] === 2)
+            ? parallelReceipts[0]
+            : undefined
+          : 1;
+      const parallelQualified =
+        innerParallelism !== 2 ||
+        (workerCeiling === 2 &&
+          group?.configs.length === 1 &&
+          !runtimeModes.has(key) &&
+          canOverlapTelegramSingletonProcesses(group.configs[0]!, selectedFiles));
+      const sampledEnv: Record<string, string> = {
+        ...group?.env,
+        ...(typeof workerCeiling === "number"
+          ? { OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) }
+          : {}),
+      };
+      if (extensionGroup) {
+        delete sampledEnv.OPENCLAW_TEST_PROJECTS_PARALLEL;
+        if (innerParallelism === 2) {
+          sampledEnv.OPENCLAW_TEST_PROJECTS_PARALLEL = "2";
+        }
+      }
       let exactKey: string | undefined;
       if (group && !splitTiming && typeof workerCeiling === "number" && hasExactSelection) {
-        const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
-        if (extensionGroup && group.configs.length === 1) {
+        const env = sampledEnv;
+        if (
+          extensionGroup &&
+          group.configs.length === 1 &&
+          innerParallelism !== undefined &&
+          parallelQualified
+        ) {
           exactKey = createExtensionTestTimingKey(group.configs[0]!, selectedFiles, env);
         } else if (workerCeiling === 2 && key.endsWith("#file-parallel-2")) {
           // PR descriptors prove this selected inventory, never an unsplit family total.
@@ -519,15 +603,15 @@ function readCompactLog(
           }).timingKeys[0];
         }
       }
-      const singletonLog = group && singletonLogs.get(group.shard_name);
       if (
         extensionGroup &&
         exactKey &&
         group &&
         singletonLog?.key === key &&
+        innerParallelism === 1 &&
         !runtimeModes.has(key)
       ) {
-        const invocations = readSingletonExtensionInvocations(
+        const invocations = readSingletonVitestInvocations(
           singletonLog.lines,
           group.configs[0]!,
           group.includePatterns!,
@@ -536,7 +620,7 @@ function readCompactLog(
           const total = [...invocations.values()].reduce((sum, value) => sum + value, 0);
           const overhead = (Date.parse(timestamp) - started) / 1000 - total;
           if (overhead >= 0) {
-            const env = { ...group.env, OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) };
+            const env = sampledEnv;
             for (const [file, duration] of invocations) {
               recordSample(
                 samples[profile],
@@ -557,7 +641,18 @@ function readCompactLog(
           }
         }
       }
+      const nativeSoloKey =
+        nativeSoloHost &&
+        group &&
+        hasExactSelection &&
+        workerCeiling === NATIVE_SOLO_TIMING_PROFILE.maxWorkers &&
+        !runtimeModes.has(key) &&
+        singletonLog?.key === key &&
+        readSingletonVitestInvocations(singletonLog.lines, group.configs[0]!, selectedFiles)
+          ? createNativeSoloTimingKey(group)
+          : undefined;
       const measuredKeys = [
+        ...(nativeSoloKey ? [nativeSoloKey] : []),
         ...(!extensionGroup && (!exactInventoryOnly || matchesSplitSelection) ? [key] : []),
         ...(exactKey ? [exactKey] : []),
       ];
@@ -574,16 +669,15 @@ function readCompactLog(
         // An unsplit PR key does not prove that its full owner inventory ran.
         recordSample(samples[profile], measuredKey, (Date.parse(timestamp) - started) / 1000);
       }
-      if (group && workerCeiling !== null) {
+      if (
+        group &&
+        workerCeiling !== null &&
+        (!extensionGroup || (innerParallelism !== undefined && parallelQualified))
+      ) {
         const observation = {
           configs: group.configs,
           env: Object.fromEntries(
-            Object.entries({
-              ...group.env,
-              ...(workerCeiling === undefined
-                ? {}
-                : { OPENCLAW_VITEST_MAX_WORKERS: String(workerCeiling) }),
-            }).toSorted(([a], [b]) => a.localeCompare(b)),
+            Object.entries(sampledEnv).toSorted(([a], [b]) => a.localeCompare(b)),
           ),
           includePatterns: group.includePatterns?.toSorted(),
           pretestBuildMode: runtimeModes.get(key),

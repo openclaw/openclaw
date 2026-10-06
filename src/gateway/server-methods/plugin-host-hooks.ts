@@ -17,11 +17,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
 import { getPluginRegistryVersion } from "../../plugins/runtime-state.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
-import {
-  validateJsonSchemaValue,
-  type JsonSchemaValidationError,
-  type JsonSchemaValue,
-} from "../../plugins/schema-validator.js";
+import { validateJsonSchemaValue, type JsonSchemaValue } from "../../plugins/schema-validator.js";
 import {
   listControlUiPluginDescriptors,
   listControlUiLinkReaders,
@@ -36,10 +32,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
-
-function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
-  return errors.map((error) => error.text).join("; ");
-}
 
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
 function validatePluginSessionActionJsonFields(
@@ -210,7 +202,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
               undefined,
               errorShape(
                 ErrorCodes.INVALID_REQUEST,
-                `plugin session action payload does not match schema: ${formatSessionActionPayloadSchemaErrors(validation.errors)}`,
+                `plugin session action payload does not match schema: ${validation.errors.map((error) => error.text).join("; ")}`,
               ),
             );
             return;
@@ -256,13 +248,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
         if (!wireResult.ok) {
-          // Plugin-declared action failures are returned as a successful RPC
-          // with `ok: false` per PluginsSessionActionResultSchema. Reserve
-          // transport errorShape for protocol-level failures (validation,
-          // schema mismatch, dispatch error). Distinguishing these in the
-          // wire shape lets callers handle plugin failures (often retryable
-          // or user-facing) differently from transport errors (operator
-          // diagnostics).
+          // Plugin failures are successful RPCs with ok:false; transport errors
+          // are reserved for invalid protocol data or failed dispatch.
           respond(
             true,
             {

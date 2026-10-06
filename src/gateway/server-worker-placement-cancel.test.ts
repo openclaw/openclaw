@@ -25,10 +25,14 @@ import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-pla
 import { admitWorkerStopChat } from "./server-worker-placement.test-harness.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
 import { closeSessionSqliteDatabasesForTest } from "./session-utils.test-support.js";
-const routing = vi.hoisted(() => ({ load: vi.fn() }));
-vi.mock("./session-utils.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./session-utils.js")>()),
-  loadSessionEntry: routing.load,
+const routing = vi.hoisted(() => ({
+  load: vi.fn<
+    typeof import("./session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
+  >(),
+}));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: routing.load,
 }));
 
 it.each(["success", "failed-write", "setup-failed-write"] as const)(
@@ -39,8 +43,8 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       outcome === "success"
         ? undefined
         : vi
-            .spyOn(lifecycleState, "persistGatewaySessionLifecycleEvent")
-            .mockImplementation(() => terminalWrite.promise);
+            .spyOn(lifecycleState, "prepareGatewaySessionLifecycleEvent")
+            .mockReturnValue(() => terminalWrite.promise);
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "worker-stop-terminal-"));
     const target = {
       storePath: path.join(root, "sessions.json"),
@@ -85,13 +89,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       cancelRunBoundApprovals: vi.fn(),
       logGateway: log,
     } as unknown as import("./server-methods/types.js").GatewayRequestContext;
-    routing.load.mockImplementation(() => ({
-      ...target,
-      agentId: "main",
-      canonicalKey: target.sessionKey,
-      cfg: {},
-      entry: loadSessionEntry(target),
-    }));
+    const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
+      typeof import("./session-utils-store-worker.js")
+    >("./session-utils-store-worker.js");
+    routing.load.mockImplementation((params) =>
+      loadGatewaySessionEntryReadOnlyInWorker({
+        ...params,
+        cfg: { ...params.cfg, session: { ...params.cfg.session, store: target.storePath } },
+      }),
+    );
     let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
     let heldWriter: Promise<unknown> | undefined;
     let reclaim: Promise<unknown> | undefined;
@@ -205,7 +211,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         sessionId,
         sessionKey: target.sessionKey,
         agentId: "main",
-        begin: () => ({ ...placement, state: "draining" }) as never,
+        begin: async () => ({ ...placement, state: "draining" }) as never,
         reclaim: async () => {
           reclaimEffectStarted = true;
           expect(loadSessionEntry(target)).toMatchObject({

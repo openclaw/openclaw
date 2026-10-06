@@ -5,7 +5,6 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { insertRegistryWorktree } from "./registry.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -141,16 +140,8 @@ export async function materializeManagedWorktreeFixtures(
       provisionedPaths,
     });
   }
-  const register = () => {
-    for (const record of records) {
-      insertRegistryWorktree(params.env, record, { provisionedPaths });
-    }
-  };
-  if (records.length > 1) {
-    // All asynchronous setup is complete before committing the fixture rows together.
-    runOpenClawStateWriteTransaction(register, { env: params.env });
-  } else {
-    register();
+  for (const record of records) {
+    await insertRegistryWorktree(params.env, record, { provisionedPaths });
   }
   return records;
 }

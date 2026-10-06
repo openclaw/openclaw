@@ -1,7 +1,7 @@
-/**
- * Target id resolution helpers for Browser tab aliases and user-facing ids.
- */
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserTabNotFoundError, BrowserTargetAmbiguousError } from "./errors.js";
 import type { BrowserTab, ProfileRuntimeState } from "./server-context.types.js";
 
@@ -57,10 +57,6 @@ export function assignTabAlias(params: {
 
 type TabAliasEntry = NonNullable<ProfileRuntimeState["tabAliases"]>["byTargetId"][string];
 
-function normalizeReplacementUrl(url: string | undefined): string | undefined {
-  return url?.trim() || undefined;
-}
-
 function findConfidentReplacement(params: {
   staleEntry: TabAliasEntry;
   staleEntries: Array<[targetId: string, entry: TabAliasEntry]>;
@@ -72,14 +68,14 @@ function findConfidentReplacement(params: {
     return newCandidates[0];
   }
 
-  const url = normalizeReplacementUrl(staleEntry.url);
+  const url = normalizeOptionalString(staleEntry.url);
   if (!url) {
     return undefined;
   }
   const staleMatches = staleEntries.filter(
-    ([, entry]) => normalizeReplacementUrl(entry.url) === url,
+    ([, entry]) => normalizeOptionalString(entry.url) === url,
   );
-  const candidates = newCandidates.filter((tab) => normalizeReplacementUrl(tab.url) === url);
+  const candidates = newCandidates.filter((tab) => normalizeOptionalString(tab.url) === url);
   // Duplicate URL buckets have no ordering contract, so only migrate an exact 1:1 bucket.
   return staleMatches.length === 1 && candidates.length === 1 ? candidates[0] : undefined;
 }
@@ -118,7 +114,6 @@ export function assignTabAliases(
   return tabs.map((tab) => assignTabAlias({ profileState, tab }));
 }
 
-/** Result for resolving a user-supplied tab id, label, or target prefix. */
 type TargetIdResolution =
   | { ok: true; targetId: string }
   | { ok: false; reason: "not_found" | "ambiguous"; matches?: string[] };

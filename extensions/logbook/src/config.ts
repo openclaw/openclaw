@@ -1,15 +1,9 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-export type LogbookConfig = {
-  captureEnabled: boolean;
-  captureIntervalSeconds: number;
-  analysisIntervalMinutes: number;
-  nodeId?: string;
-  screenIndex: number;
-  maxWidth: number;
-  visionModel?: string;
-  retentionDays: number;
-};
+type ProducedLogbookConfig = ReturnType<typeof resolveLogbookConfig>;
+type OptionalLogbookFields = "nodeId" | "visionModel";
+export type LogbookConfig = Omit<ProducedLogbookConfig, OptionalLogbookFields> &
+  Partial<Pick<ProducedLogbookConfig, OptionalLogbookFields>>;
 
 const DEFAULTS = {
   captureEnabled: true,
@@ -25,8 +19,8 @@ function clampNumber(value: unknown, fallback: number, min: number, max: number)
   return Math.min(max, Math.max(min, Math.round(num)));
 }
 
-export function resolveLogbookConfig(raw: unknown): LogbookConfig {
-  const value = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+export function resolveLogbookConfig(raw: unknown) {
+  const value = asRecord(raw);
   return {
     captureEnabled: value.captureEnabled !== false,
     captureIntervalSeconds: clampNumber(

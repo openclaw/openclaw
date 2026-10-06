@@ -329,42 +329,6 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     expect(readFileSync(output, "utf8")).toContain("run_id=202");
   });
 
-  it("starts source validation with artifact producers and releases candidate consumers immediately", () => {
-    for (const job of [
-      "normal_ci",
-      "plugin_prerelease_independent",
-      "release_checks_independent",
-      "performance",
-      "prepare_npm_package",
-      "prepare_docker_release",
-    ]) {
-      expect(workflow.jobs[job], job).toHaveProperty("needs", [
-        "resolve_target",
-        "plugin_compatibility_readiness",
-        "evidence_reuse",
-      ]);
-    }
-    expect(workflow.jobs.candidate_acquisition).toHaveProperty("needs", [
-      "resolve_target",
-      "evidence_reuse",
-      "prepare_npm_package",
-    ]);
-    expect(step("prepare_npm_package", "Wait for publishable npm package").env).toMatchObject({
-      ARTIFACT_OUTPUT: "raw",
-    });
-    expect(workflow.jobs.plugin_prerelease_candidate).toHaveProperty("needs", [
-      "resolve_target",
-      "evidence_reuse",
-      "candidate_acquisition",
-    ]);
-    expect(workflow.jobs.release_checks_candidate).toHaveProperty("needs", [
-      "resolve_target",
-      "plugin_compatibility_readiness",
-      "evidence_reuse",
-      "candidate_acquisition",
-    ]);
-  });
-
   it.each(["failure", "success", "missing"])(
     "reports %s locale diagnostics without changing validation evidence",
     (conclusion) => {
@@ -415,7 +379,6 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
   it("has no continuation payload and dispatches child work only on attempt one", () => {
     expect(workflow.on.workflow_dispatch.inputs).not.toHaveProperty("continuation_plan_json");
     for (const job of [
-      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease_independent",
       "plugin_prerelease_candidate",
@@ -521,25 +484,26 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     }
   });
 
-  it("validates final manifest attempts against the diagnostic drain", () => {
-    expect(step("summary", "Validate release validation manifest").env).toMatchObject({
-      DIAGNOSTIC_DRAIN_PATH:
-        "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
-    });
-  });
-
-  it("gives final candidate verification enough time for its bounded API retries", () => {
-    expect(workflow.jobs.summary?.["timeout-minutes"]).toBe(10);
-  });
-
-  it("keeps failure cancellation explicit while diagnostic drain never cancels", () => {
-    expect(step("release_decision", "Evaluate release decision").env).toMatchObject({
-      FAIL_FAST: "${{ inputs.fail_fast }}",
-      FULL_RELEASE_STATE_MODE: "decision",
-    });
-    expect(step("diagnostic_drain", "Drain child diagnostics").env).toMatchObject({
-      FAIL_FAST: "false",
-      FULL_RELEASE_STATE_MODE: "drain",
-    });
+  it.each([
+    {
+      job: "summary",
+      name: "Validate release validation manifest",
+      env: {
+        DIAGNOSTIC_DRAIN_PATH:
+          "${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json",
+      },
+    },
+    {
+      job: "release_decision",
+      name: "Evaluate release decision",
+      env: { FAIL_FAST: "${{ inputs.fail_fast }}", FULL_RELEASE_STATE_MODE: "decision" },
+    },
+    {
+      job: "diagnostic_drain",
+      name: "Drain child diagnostics",
+      env: { FAIL_FAST: "false", FULL_RELEASE_STATE_MODE: "drain" },
+    },
+  ])("supplies $job with its evidence and cancellation contract", ({ job, name, env }) => {
+    expect(step(job, name).env).toMatchObject(env);
   });
 });

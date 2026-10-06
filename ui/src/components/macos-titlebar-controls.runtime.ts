@@ -8,6 +8,7 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { icons } from "./icons.ts";
+import { renderKbd, renderShortcutHint, renderShortcutText } from "./kbd.ts";
 import "./tooltip.ts";
 
 class MacosTitlebarControls extends OpenClawLightDomContentsElement {
@@ -55,6 +56,10 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                 ${this.renderButton({
                   label: t("chat.openCommandPalette"),
                   tooltip: t("chat.commandPaletteTitle"),
+                  tooltipTemplate: renderShortcutText(
+                    t("chat.commandPaletteTitle").replace("⌘K", "{shortcut}"),
+                    renderKbd(["⌘", "K"], { inline: true }),
+                  ),
                   icon: icons.search,
                   onClick: this.onOpenPalette,
                   className: "macos-titlebar-controls__search",
@@ -68,6 +73,13 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
                         tooltip:
                           this.newSessionDisabledReason ??
                           `${t("chat.runControls.newSession")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`,
+                        tooltipTemplate:
+                          this.newSessionDisabledReason == null
+                            ? renderShortcutHint(
+                                t("chat.runControls.newSession"),
+                                KEYBOARD_SHORTCUT_COMBOS.newSession,
+                              )
+                            : undefined,
                         icon: icons.plus,
                         disabled: Boolean(this.newSessionDisabledReason),
                         onClick: this.onOpenNewSession,
@@ -85,6 +97,7 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
   private renderButton(options: {
     label: string;
     tooltip?: string;
+    tooltipTemplate?: TemplateResult;
     icon: TemplateResult;
     disabled?: boolean;
     ariaExpanded?: boolean;
@@ -92,7 +105,10 @@ class MacosTitlebarControls extends OpenClawLightDomContentsElement {
     className: string;
   }) {
     return html`
-      <openclaw-tooltip .content=${options.tooltip ?? options.label}>
+      <openclaw-tooltip
+        .content=${options.tooltip ?? options.label}
+        .contentTemplate=${options.tooltipTemplate}
+      >
         <button
           type="button"
           class="topbar-icon-btn macos-titlebar-controls__button ${options.className}"

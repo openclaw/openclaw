@@ -29,7 +29,6 @@ import {
   resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -50,7 +49,7 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
+type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
   requestedLabel: string;
@@ -164,7 +163,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     (packageName !== undefined &&
       packageName !== params.pluginId &&
       unscopedPackageName(packageName) === params.pluginId) ||
-    officialInstallRecords.hasOfficialNpmIdReplacement(params)
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
   );
 }
 
@@ -337,42 +339,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   return { packageName: parsed.name, registryLine, version };
 }
 
-export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
-  metadata: NpmSpecResolution;
-  spec: string;
-  timeoutMs?: number;
-}): Promise<
-  | {
-      kind: "stable" | "prerelease-only";
-      metadata: NpmSpecResolution;
-    }
-  | undefined
-> {
-  const parsedSpec = parseRegistryNpmSpec(params.spec);
-  if (
-    !parsedSpec ||
-    !parsedSpec.name.startsWith("@openclaw/") ||
-    !params.metadata.version ||
-    isPrereleaseResolutionAllowed({
-      spec: parsedSpec,
-      resolvedVersion: params.metadata.version,
-    })
-  ) {
-    return undefined;
-  }
-  const fallback = await resolveTrustedOfficialPrereleaseResolution({
-    spec: parsedSpec,
-    resolvedPrereleaseVersion: params.metadata.version,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!fallback) {
-    return undefined;
-  }
-  return fallback.kind === "allow-prerelease-only"
-    ? { kind: "prerelease-only", metadata: params.metadata }
-    : { kind: fallback.kind, metadata: fallback.resolution };
-}
-
 export function isNpmMetadataCompatibleWithCurrentHost(
   metadata: NpmSpecResolution,
   options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
@@ -437,7 +403,8 @@ export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

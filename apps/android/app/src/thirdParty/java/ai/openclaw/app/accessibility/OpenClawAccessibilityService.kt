@@ -67,9 +67,6 @@ class OpenClawAccessibilityService : AccessibilityService() {
     val uiEpoch: Long
       get() = uiEpochCounter.get()
 
-    val connectionGeneration: Long
-      get() = connectionState.connection.value.generation
-
     internal fun advanceUiEpoch(): Long = uiEpochCounter.incrementAndGet()
   }
 }

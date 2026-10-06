@@ -2,11 +2,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isSensitiveConfigPath } from "../../../../src/config/sensitive-paths.js";
 import type { ConfigUiHints } from "../../api/types.ts";
-import {
-  countSensitiveConfigValues,
-  hintForPath,
-  redactedPlaceholder,
-} from "../../components/config-form.shared.ts";
+import { hasSensitiveConfigData, hintForPath } from "../../components/config-form.shared.ts";
 import { t } from "../../i18n/index.ts";
 import { isJson5Warm, parseJson5Text } from "../../lib/json5-runtime.ts";
 import type { ConfigDiffEntry, ConfigDiffPath, ConfigViewState } from "./view-types.ts";
@@ -159,7 +155,8 @@ export function computeRawDiff(
   }
 }
 
-function truncateValue(value: unknown, maxLen = 40): string {
+function truncateValue(value: unknown): string {
+  const maxLen = 40;
   if (Array.isArray(value)) {
     return t(value.length === 1 ? "configView.itemCount" : "configView.itemCountPlural", {
       count: String(value.length),
@@ -172,10 +169,7 @@ function truncateValue(value: unknown, maxLen = 40): string {
   } catch {
     str = String(value);
   }
-  if (str.length <= maxLen) {
-    return str;
-  }
-  return truncateUtf16Safe(str, maxLen - 3) + "...";
+  return str.length <= maxLen ? str : truncateUtf16Safe(str, maxLen - 3) + "...";
 }
 
 function hintKeyMatchesPathPrefix(hintKey: string, path: ConfigDiffPath): boolean {
@@ -213,9 +207,9 @@ export function renderRawDiffValue(
   uiHints: ConfigUiHints,
   rawRevealed: boolean,
 ): string {
-  const hasSensitiveValue = countSensitiveConfigValues(value, path, uiHints) > 0;
+  const hasSensitiveValue = hasSensitiveConfigData(value, path, uiHints);
   if (!rawRevealed && value != null && (isSensitiveDiffPath(path, uiHints) || hasSensitiveValue)) {
-    return redactedPlaceholder();
+    return t("configForm.redactedPlaceholder");
   }
   return truncateValue(value);
 }

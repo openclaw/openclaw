@@ -6,7 +6,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -119,7 +119,7 @@ it("models.list retains a failed renewal before shared worker recovery", async (
           model: { primary: `${provider}/original` },
           modelPolicy: { allow: providers.map((id) => `${id}/*`) },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },
@@ -181,9 +181,16 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       const initialRequests = requests;
       expect((await list()).models).toEqual(initial.models);
       expect(requests).toBe(initialRequests);
+      const renewalFailed = createDeferred<Error>();
+      const recoveryFailed = createDeferred<Error>();
       releasePublication = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "published" && !original!.isCurrent()) {
           events.emit("recovered");
+        } else if (event.phase === "failed") {
+          renewalFailed.resolve(event.error);
+          recoveryFailed.resolve(event.error);
+        } else if (event.phase === "catalog-failed") {
+          renewalFailed.resolve(event.error);
         }
       });
       // Arm the held request before making renewal due; a wall-clock TTL can expire
@@ -193,7 +200,16 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       providerFacts.expiresAt = 0;
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
-      await withTestTimeout(renewal, 3_000, "models.list did not start the due renewal");
+      // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.
+      await withinTest(
+        Promise.race([
+          renewal,
+          renewalFailed.promise.then((error) => {
+            throw error;
+          }),
+        ]),
+        signal,
+      );
       const acceptedCatalog = original!.readFullModelCatalog!()!;
       const catalogAuth = getPreparedModelFullCatalogAuth(acceptedCatalog)!;
       const acceptedAuth = {
@@ -219,7 +235,15 @@ it("models.list retains a failed renewal before shared worker recovery", async (
       });
       const recovered = once(events, "recovered");
       await worker!.terminate();
-      await withTestTimeout(recovered, 30_000, "catalog recovery did not publish a replacement");
+      await withinTest(
+        Promise.race([
+          recovered,
+          recoveryFailed.promise.then((error) => {
+            throw error;
+          }),
+        ]),
+        signal,
+      );
       for (let read = 0; read < 3; read++) {
         const saved = await list();
         expect(saved.models).toEqual(initial.models);

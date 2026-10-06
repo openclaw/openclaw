@@ -1,4 +1,3 @@
-// Memory Core plugin module owns shared manager synchronization state.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   createSubsystemLogger,
@@ -8,9 +7,8 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
-  ensureMemoryIndexSchema,
   loadSqliteVecExtension,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   type MemorySessionSyncTarget,
   type MemorySource,
   type MemoryWorkspaceFiles,
@@ -38,7 +36,10 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import { MEMORY_INDEX_META_KEY, readMemoryIndexMetadata } from "./manager-retrieval-read.js";
+import {
+  MEMORY_INDEX_META_KEY as META_KEY,
+  readMemoryIndexMetadata,
+} from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
@@ -48,6 +49,14 @@ export type MemorySyncProgressState = {
   total: number;
   label?: string;
   report: (update: MemorySyncProgressUpdate) => void;
+};
+
+export type MemoryEmbeddingBatchConfig = {
+  enabled: boolean;
+  wait: boolean;
+  concurrency: number;
+  pollIntervalMs: number;
+  timeoutMs: number;
 };
 
 export type MemoryIndexWorkItem = {
@@ -69,8 +78,6 @@ export type MemoryReindexRetryState = {
   sessionsDirtyFiles: Set<string>;
 };
 
-const META_KEY = MEMORY_INDEX_META_KEY;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -92,13 +99,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract providerUnavailableReason?: string;
   protected abstract providerLifecycle: MemoryProviderLifecycleState;
   protected providerRuntime?: EmbeddingProviderRuntime;
-  protected abstract batch: {
-    enabled: boolean;
-    wait: boolean;
-    concurrency: number;
-    pollIntervalMs: number;
-    timeoutMs: number;
-  };
+  protected abstract batch: MemoryEmbeddingBatchConfig;
   protected readonly sources: Set<MemorySource> = new Set();
   protected readonly sourceInspections = new Map<
     MemorySource,
@@ -142,22 +143,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected abstract pruneEmbeddingCacheIfNeeded(): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
-  protected abstract indexFile(
-    entry: MemoryIndexEntry,
-    options: { source: MemorySource; content?: string },
-  ): Promise<void>;
+  protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;
   protected abstract syncMemoryFiles(params: {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
-  }): Promise<MemorySourceSyncPlan>;
+  }): Promise<MemorySourceSyncPlan | undefined>;
   protected abstract syncArchiveFiles(params: {
     needsFullReindex: boolean;
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
-  }): Promise<MemorySourceSyncPlan>;
+  }): Promise<void>;
 
   protected markMemoryWatchDirty(): void {
     this.memoryWatchGeneration += 1;
@@ -188,10 +186,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
 
   protected abstract indexFiles(items: MemoryIndexWorkItem[]): Promise<void>;
 
-  protected emptySourceSyncPlan(): MemorySourceSyncPlan {
-    return { indexItems: [], finalize: () => {} };
-  }
-
   protected snapshotReindexRetryState(): MemoryReindexRetryState {
     return {
       dirty: this.dirty,
@@ -213,10 +207,6 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   adoptReindexRetryState(snapshot: MemoryReindexRetryState): void {
-    this.restoreReindexRetryState(snapshot);
-  }
-
-  protected restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {
     this.dirty = snapshot.dirty || this.dirty;
     this.memoryFullRetryDirty = snapshot.memoryFullRetryDirty || this.memoryFullRetryDirty;
     this.sessionsFullRetryDirty = snapshot.sessionsFullRetryDirty || this.sessionsFullRetryDirty;
@@ -304,19 +294,19 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
           progress: params.progress,
           ...(deferIndex ? { deferIndex: true } : {}),
         })
-      : this.emptySourceSyncPlan();
+      : undefined;
     if (params.shouldSyncSessions) {
       await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
         targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
-        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan.indexItems } : {}),
+        ...(deferIndex ? { deferIndex: true, prefixIndexItems: memoryPlan?.indexItems } : {}),
       });
     } else if (deferIndex) {
-      await this.indexQueuedFiles(memoryPlan.indexItems, params.progress);
+      await this.indexQueuedFiles(memoryPlan?.indexItems ?? [], params.progress);
     }
     if (deferIndex) {
-      await memoryPlan.finalize();
+      await memoryPlan?.finalize();
     }
     if (params.shouldSyncSessions) {
       this.clearSessionRetryState();
@@ -327,11 +317,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
 
   protected hasIndexedChunks(): boolean {
     return (
+      this.database.hasIndex &&
       this.db.prepare(`SELECT 1 as found FROM memory_index_chunks LIMIT 1`).get() !== undefined
     );
   }
 
   protected hasSemanticChunks(): boolean {
+    if (!this.database.hasIndex) {
+      return false;
+    }
     const row = this.db
       .prepare(`SELECT 1 as found FROM memory_index_chunks WHERE model != 'fts-only' LIMIT 1`)
       .get() as { found?: number } | undefined;
@@ -530,6 +524,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   }
 
   private hasVectorRebuildMarker(): boolean {
+    if (!this.database.hasIndex) {
+      return false;
+    }
     return requiresMemoryVectorRebuild({
       db: this.db,
       vectorTable: VECTOR_TABLE,
@@ -599,24 +596,10 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return buildMemorySourceFilter(alias, sources);
   }
 
-  protected ensureSchema() {
-    const result = ensureMemoryIndexSchema({
-      db: this.db,
-      cacheEnabled: this.cache.enabled,
-      ftsEnabled: this.fts.enabled,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-    });
-    this.fts.available = result.ftsAvailable;
-    if (result.ftsError) {
-      this.fts.loadError = result.ftsError;
-      // Only warn when hybrid search is enabled; otherwise this is expected noise.
-      if (this.fts.enabled) {
-        log.warn(`fts unavailable: ${result.ftsError}`);
-      }
-    }
-  }
-
   protected readMeta(): MemoryIndexMeta | null {
+    if (!this.database.hasIndex) {
+      return null;
+    }
     const { meta, serialized } = readMemoryIndexMetadata(this.db);
     this.database.lastMetaSerialized = serialized;
     return meta;

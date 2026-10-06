@@ -78,13 +78,19 @@ function escape(options: KeyboardEventInit = {}) {
 }
 
 describe("transcript search Escape", () => {
-  it.each(["input", "button"])(
+  it.each(["input", "button", "other pane"])(
     "closes from the search %s, resets the query, and restores focus without clearing reply or stopping",
     async (control) => {
       const pane = createPane();
+      const other = control === "other pane" ? createPane("second") : undefined;
       await pane.openSearch();
+      if (other) {
+        await other.openSearch("second query");
+      }
       const target = expectDefined(
-        pane.container.querySelector<HTMLElement>(`.agent-chat__search-bar ${control}`),
+        pane.container.querySelector<HTMLElement>(
+          `.agent-chat__search-bar ${control === "button" ? "button" : "input"}`,
+        ),
         "search control",
       );
       target.focus();
@@ -104,6 +110,10 @@ describe("transcript search Escape", () => {
       expect(document.activeElement).toBe(pane.composer);
       expect(pane.onClearReply).not.toHaveBeenCalled();
       expect(pane.onAbort).not.toHaveBeenCalled();
+      if (other) {
+        expect(other.search().value).toBe("second query");
+        expect(other.onClearReply).not.toHaveBeenCalled();
+      }
       await pane.openSearch(null);
       expect(pane.search().value).toBe("");
     },
@@ -127,20 +137,4 @@ describe("transcript search Escape", () => {
       expect(pane.onAbort).not.toHaveBeenCalled();
     },
   );
-
-  it("closes only the focused pane's search", async () => {
-    const first = createPane("first");
-    const second = createPane("second");
-    await first.openSearch("first query");
-    await second.openSearch("second query");
-    first.search().focus();
-    first.search().dispatchEvent(escape());
-    await Promise.resolve();
-
-    expect(first.container.querySelector(".agent-chat__search-bar")).toBeNull();
-    expect(second.search().value).toBe("second query");
-    expect(document.activeElement).toBe(first.composer);
-    expect(first.onClearReply).not.toHaveBeenCalled();
-    expect(second.onClearReply).not.toHaveBeenCalled();
-  });
 });

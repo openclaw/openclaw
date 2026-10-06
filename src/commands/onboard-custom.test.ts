@@ -128,6 +128,27 @@ describe("promptCustomApiConfig", () => {
     expect(prompter.confirm).not.toHaveBeenCalled();
   });
 
+  it("validates HTTP endpoints before asking for credentials", async () => {
+    const prompter = createTestPrompter({
+      text: [],
+      select: ["plaintext", "openai"],
+    });
+    prompter.text.mockImplementationOnce(({ validate }) => {
+      expect(prompter.select).not.toHaveBeenCalled();
+      for (const baseUrl of ["ftp://localhost/v1", "file:///tmp/model", "not-a-url"]) {
+        expect(validate(baseUrl)).toMatch(/HTTP.*HTTPS/);
+      }
+      expect(validate("http://localhost:11434/v1")).toBeUndefined();
+      expect(validate("https://provider.example/v1")).toBeUndefined();
+      return "http://localhost:11434/v1";
+    });
+    for (const answer of ["", "llama3", "custom", ""]) {
+      prompter.text.mockResolvedValueOnce(answer);
+    }
+
+    await runPromptCustomApi(prompter, {}, undefined, { verification: "deferred" });
+  });
+
   it("prepares deferred setup without a provider request or a selected default", async () => {
     const prompter = createTestPrompter({
       text: ["https://provider.example/v1", "fixture-key", "fixture-model", "custom", ""],
@@ -428,7 +449,7 @@ describe("promptCustomApiConfig", () => {
           init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
         });
       })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      .mockResolvedValueOnce(Response.json({}));
     vi.stubGlobal("fetch", fetchMock);
 
     const promise = runPromptCustomApi(prompter);

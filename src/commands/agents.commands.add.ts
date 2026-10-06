@@ -43,7 +43,8 @@ import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { applyAgentBindings, buildChannelBindings, describeBinding } from "./agents.bindings.js";
+import { describeBinding, describeBindingConflict } from "./agents.binding-format.js";
+import { applyAgentBindings, buildChannelBindings } from "./agents.bindings.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { prepareAuthChoice } from "./auth-choice.apply.js";
@@ -67,14 +68,8 @@ type AgentsAddOptions = {
   json?: boolean;
 };
 
-type AgentBindingResult = ReturnType<typeof applyAgentBindings>;
-
 function failAgentsAdd(message: string): never {
   throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-}
-
-function emptyBindingResult(config: Parameters<typeof applyAgentBindings>[0]): AgentBindingResult {
-  return { config, added: [], updated: [], skipped: [], conflicts: [] };
 }
 
 function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileStore | null {
@@ -83,10 +78,6 @@ function loadReadablePersistedAuthProfileStore(agentDir: string): AuthProfileSto
     throw new AuthProfileStoreUnreadableError(resolveAuthProfileDatabasePath(agentDir));
   }
   return store;
-}
-
-function hasOAuthProfiles(store: AuthProfileStore, profileIds: readonly string[]): boolean {
-  return profileIds.some((profileId) => store.profiles[profileId]?.type === "oauth");
 }
 
 function formatSkippedOAuthProfilesMessage(
@@ -173,7 +164,7 @@ export async function agentsAddCommand(
       );
     }
 
-    const bindingResult = created.bindingResult ?? emptyBindingResult(cfg);
+    const { added = [], updated = [], skipped = [], conflicts = [] } = created.bindingResult ?? {};
     if (!opts.json) {
       logConfigUpdated(runtime);
     }
@@ -185,12 +176,10 @@ export async function agentsAddCommand(
       agentDir: created.agentDir,
       model: created.model,
       bindings: {
-        added: bindingResult.added.map(describeBinding),
-        updated: bindingResult.updated.map(describeBinding),
-        skipped: bindingResult.skipped.map(describeBinding),
-        conflicts: bindingResult.conflicts.map(
-          (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-        ),
+        added: added.map(describeBinding),
+        updated: updated.map(describeBinding),
+        skipped: skipped.map(describeBinding),
+        conflicts: conflicts.map(describeBindingConflict),
       },
     };
     if (opts.json) {
@@ -202,14 +191,11 @@ export async function agentsAddCommand(
       if (created.model) {
         runtime.log(`Model: ${created.model}`);
       }
-      if (bindingResult.conflicts.length > 0) {
+      if (conflicts.length > 0) {
         runtime.error(
           [
             "Skipped bindings already claimed by another agent:",
-            ...bindingResult.conflicts.map(
-              (conflict) =>
-                `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-            ),
+            ...conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
           ].join("\n"),
         );
       }
@@ -336,7 +322,9 @@ export async function agentsAddCommand(
           : undefined;
         const skippedOAuthProfiles =
           sourceStore && portable
-            ? hasOAuthProfiles(sourceStore, portable.skippedProfileIds)
+            ? portable.skippedProfileIds.some(
+                (profileId) => sourceStore.profiles[profileId]?.type === "oauth",
+              )
             : false;
         if (
           sourceStore &&
@@ -474,10 +462,7 @@ export async function agentsAddCommand(
           await prompter.note(
             [
               "Skipped bindings already claimed by another agent:",
-              ...result.conflicts.map(
-                (conflict) =>
-                  `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
-              ),
+              ...result.conflicts.map((conflict) => `- ${describeBindingConflict(conflict)}`),
             ].join("\n"),
             "Routing bindings",
           );

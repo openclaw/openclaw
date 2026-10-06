@@ -199,25 +199,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       (module) => module.createPluginSessionOwnership(state, pluginId, currentRegistry),
     );
     let scopedAgentRuntime: PluginRuntime["agent"] | undefined;
-    const assertTrustedPluginRuntime = (
-      methodName:
-        | "dispatchHookAgentTurn"
-        | "openBlobStore"
-        | "openKeyedStore"
-        | "openSyncKeyedStore"
-        | "openChannelIngressQueue"
-        | "openChannelIngressDrain",
-    ) => {
-      if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
-        throw new PluginTrustRefusalError({
-          methodName,
-          pluginId,
-          source: record.source,
-          origin: record.origin,
-          trust: record.trust,
-        });
-      }
-    };
     const runtime = new Proxy(registryParams.runtime, {
       get(target, prop, receiver) {
         const runWithPluginScope = <T>(run: () => T, requireActive = true): T => {
@@ -248,24 +229,20 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           return {
             ...baseState,
             openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => {
-              assertTrustedPluginRuntime("openBlobStore");
               return createPluginBlobStore<TMetadata>(pluginId, options);
             },
             openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) => {
-              assertTrustedPluginRuntime("openKeyedStore");
               if (options.retention === "retained") {
                 assertRuntimeCurrent();
               }
               return createPluginStateKeyedStore<T>(pluginId, options, assertRuntimeCurrent);
             },
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
-              assertTrustedPluginRuntime("openSyncKeyedStore");
               return createPluginStateSyncKeyedStore<T>(pluginId, options);
             },
             openChannelIngressQueue: <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>(
               options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
             ) => {
-              assertTrustedPluginRuntime("openChannelIngressQueue");
               const stateDir = options?.stateDir ?? baseState.resolveStateDir();
               return createChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>(
                 { ...options, channelId: pluginId, stateDir },
@@ -286,7 +263,6 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 stateDir?: string;
               },
             ) => {
-              assertTrustedPluginRuntime("openChannelIngressDrain");
               const stateDir = options.stateDir ?? baseState.resolveStateDir();
               const queue =
                 options.queue ??
@@ -369,7 +345,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
           } satisfies PluginRuntime["llm"];
         }
         if (prop === "gateway") {
-          const gateway = getRuntimeProperty();
+          const gateway: PluginRuntime["gateway"] = getRuntimeProperty();
+          const withIdentity = gateway.withUserProfileIdentity;
+          const resolveGitHubAccount = gateway.resolveGitHubAccount;
           return {
             isAvailable: () => runWithPluginScope(() => gateway.isAvailable(), false),
             request: async (method, params, options) => {
@@ -379,13 +357,70 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                 return await gateway.request(method, params, options);
               });
             },
+            openPluginPanel: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.openPluginPanel(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
+            readSessionFacts: (params) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.readSessionFacts(params);
+                assertRuntimeCurrent();
+                return result;
+              }),
+            withSessionFacts: (select, run) =>
+              runWithPluginScope(async () => {
+                const result = await gateway.withSessionFacts(select, (snapshot) => {
+                  assertRuntimeCurrent();
+                  return run(snapshot);
+                });
+                assertRuntimeCurrent();
+                return result;
+              }),
+            subscribeSessionChanges: (listener) =>
+              runWithPluginScope(() =>
+                gateway.subscribeSessionChanges((event) =>
+                  runWithPluginScope(() => listener(event)),
+                ),
+              ),
+            withUserProfileIdentity: withIdentity
+              ? async (params, run) =>
+                  await runWithPluginScope(async () => {
+                    const result = await withIdentity(params, async (assertIdentityCurrent) => {
+                      const assertCurrent = () => {
+                        assertRuntimeCurrent();
+                        assertIdentityCurrent();
+                      };
+                      assertCurrent();
+                      return await run(assertCurrent);
+                    });
+                    assertRuntimeCurrent();
+                    return result;
+                  })
+              : undefined,
+            resolveGitHubAccount: resolveGitHubAccount
+              ? (params) =>
+                  runWithPluginScope(async () => {
+                    const result = await resolveGitHubAccount(params);
+                    assertRuntimeCurrent();
+                    return result;
+                  })
+              : undefined,
           } satisfies PluginRuntime["gateway"];
         }
         if (prop === "hooks") {
           const hooks: PluginRuntime["hooks"] = getRuntimeProperty();
           return {
             dispatchHookAgentTurn: async (params) => {
-              assertTrustedPluginRuntime("dispatchHookAgentTurn");
+              if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
+                throw new PluginTrustRefusalError({
+                  pluginId,
+                  source: record.source,
+                  origin: record.origin,
+                  trust: record.trust,
+                });
+              }
               return await runWithPluginScope(() => hooks.dispatchHookAgentTurn(params));
             },
           } satisfies PluginRuntime["hooks"];

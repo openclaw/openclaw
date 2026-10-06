@@ -328,6 +328,10 @@ push_prep_head_to_pr_branch() {
   local lease_sha="$4"
   local result_env_path="${5:-.local/push-result.env}"
   local observation="${6:-}"
+  local publication_snapshot="${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}"
+  if [ -n "$publication_snapshot" ]; then
+    correction_review_snapshot_with_publication "$publication_snapshot" "$result_env_path" absent >/dev/null || return 1
+  fi
   if [ -z "$observation" ]; then
     require_artifact .local/pr-meta.json || return 1
     observation=$(cat .local/pr-meta.json) || return 1
@@ -396,6 +400,9 @@ push_prep_head_to_pr_branch() {
     local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
     read_prep_publication_result "$result_env_path" || return 1
     if [ "$PUSH_PREP_HEAD_SHA" = "$prep_head_sha" ] && [ "$PUSH_LOCAL_PREP_HEAD_SHA" = "$local_prep_head_sha" ]; then
+      if [ -n "$publication_snapshot" ]; then
+        advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+      fi
       return 0
     fi
   fi
@@ -404,11 +411,20 @@ push_prep_head_to_pr_branch() {
   # prepared head to contain main here forces needless rebases, while GraphQL
   # createCommitOnBranch cannot move a rebased branch's commit ancestry.
   # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
+  local result_env result_oid
+  result_env=$(printf '%s=%q\n' \
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \
     PUSH_LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PUSHED_FROM_SHA "$pushed_from_sha" \
     PUSH_REPLACED_HOSTED_ANCESTRY "$replaced_hosted_ancestry" \
-    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
-    > "$result_env_path"
+    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after") || return 1
+  if [ -n "$publication_snapshot" ]; then
+    result_oid=$(printf '%s\n' "$result_env" | pr_git hash-object --stdin) || return 1
+    publication_snapshot=$(correction_review_snapshot_with_publication \
+      "$publication_snapshot" "$result_env_path" "$result_oid") || return 1
+  fi
+  printf '%s\n' "$result_env" > "$result_env_path" || return 1
+  if [ -n "$publication_snapshot" ]; then
+    advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+  fi
 }

@@ -1,10 +1,7 @@
-/**
- * Removes short-window duplicate user turns from compaction summaries.
- */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
 
-const DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
+const DUPLICATE_USER_MESSAGE_WINDOW_MS = 60_000;
 const MIN_DUPLICATE_USER_MESSAGE_CHARS = 24;
 
 type MessageLike = {
@@ -12,10 +9,6 @@ type MessageLike = {
   content?: unknown;
   timestamp?: unknown;
   __openclaw?: unknown;
-};
-
-type DuplicateUserMessageOptions = {
-  windowMs?: number;
 };
 
 function normalizeUserMessageContent(content: unknown): string | undefined {
@@ -27,10 +20,7 @@ function normalizeUserMessageContent(content: unknown): string | undefined {
   }
   const textParts: string[] = [];
   for (const block of content) {
-    if (!isRecord(block)) {
-      return undefined;
-    }
-    if (block.type === "image") {
+    if (!isRecord(block) || block.type === "image") {
       return undefined;
     }
     if (block.type === "text" && typeof block.text === "string") {
@@ -62,9 +52,7 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
 /** Drop later duplicate user messages while preserving the first prompt. */
 export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
   messages: readonly T[],
-  options: DuplicateUserMessageOptions = {},
 ): T[] {
-  const windowMs = options.windowMs ?? DEFAULT_DUPLICATE_USER_MESSAGE_WINDOW_MS;
   const lastSeenAtByKey = new Map<string, number>();
   const result: T[] = [];
   for (const message of messages) {
@@ -83,7 +71,7 @@ export function dedupeDuplicateUserMessagesForCompaction<T extends MessageLike>(
     if (
       typeof lastSeenAt === "number" &&
       signature.timestamp >= lastSeenAt &&
-      signature.timestamp - lastSeenAt <= windowMs
+      signature.timestamp - lastSeenAt <= DUPLICATE_USER_MESSAGE_WINDOW_MS
     ) {
       // Keep the first prompt and drop only later repeats. The first copy anchors the summarized
       // branch while duplicate retries no longer inflate compaction context.

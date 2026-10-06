@@ -427,12 +427,10 @@ describe("lmstudio plugin", () => {
       customBaseUrl: "http://lmstudio.internal:1234/v1",
     });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "LM Studio could not be reached at http://lmstudio.internal:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([401, 408, 425, 429, 503])(
@@ -447,12 +445,10 @@ describe("lmstudio plugin", () => {
         customBaseUrl: "http://lmstudio.internal:1234/v1",
       });
 
-      await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-      expect(ctx.runtime.error).toHaveBeenCalledExactlyOnceWith(
+      await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
         `LM Studio returned HTTP ${httpStatus} while listing models at http://lmstudio.internal:1234/v1.\nCheck the base URL and API key, then re-run setup.`,
       );
-      expect(ctx.runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(ctx.runtime.exit).not.toHaveBeenCalled();
     },
   );
 
@@ -467,12 +463,10 @@ describe("lmstudio plugin", () => {
       customModelId: "qwen/qwen3.5-9b",
     });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "LM Studio model qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: phi-4",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects provider-qualified model IDs that LM Studio setup cannot select", async () => {
@@ -486,12 +480,10 @@ describe("lmstudio plugin", () => {
       customModelId: "lmstudio/qwen/qwen3.5-9b",
     });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "LM Studio model lmstudio/qwen/qwen3.5-9b was not found at http://lmstudio.internal:1234/v1.\nAvailable models: qwen/qwen3.5-9b",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects an LM Studio endpoint without a usable LLM before destructive reset", async () => {
@@ -504,12 +496,10 @@ describe("lmstudio plugin", () => {
       customBaseUrl: "http://lmstudio.internal:1234/v1",
     });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "No loaded LM Studio LLM models were found at http://lmstudio.internal:1234/v1.\nLoad a model in LM Studio (or run lms load <model>), then re-run setup.",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("rejects an installed but unloaded LM Studio model before destructive reset", async () => {
@@ -523,12 +513,10 @@ describe("lmstudio plugin", () => {
       customModelId: "qwen/qwen3.5-9b",
     });
 
-    await expect(requireLmstudioResetValidator()(ctx)).resolves.toBe(false);
-
-    expect(ctx.runtime.error).toHaveBeenCalledWith(
+    await expect(requireLmstudioResetValidator()(ctx)).rejects.toThrow(
       "LM Studio model qwen/qwen3.5-9b is installed but not loaded at http://lmstudio.internal:1234/v1.\nLoad that model in LM Studio, then re-run setup.",
     );
-    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
   it("canonicalizes base URLs during provider normalization", () => {
@@ -641,6 +629,16 @@ describe("lmstudio plugin", () => {
                 compat: { codeMode: "capable" },
               },
               {
+                id: "bad-window",
+                contextWindow: Number.POSITIVE_INFINITY,
+                contextTokens: 4096.5,
+              },
+              {
+                id: "bad-tokens",
+                contextWindow: -1,
+                contextTokens: 0,
+              },
+              {
                 id: " ",
                 name: "ignored",
               },
@@ -684,6 +682,16 @@ describe("lmstudio plugin", () => {
         reasoning: undefined,
         input: undefined,
       },
+      ...["bad-window", "bad-tokens"].map((id) => ({
+        provider: "lmstudio",
+        id,
+        name: id,
+        compat: { supportsUsageInStreaming: true },
+        contextWindow: undefined,
+        contextTokens: undefined,
+        reasoning: undefined,
+        input: undefined,
+      })),
     ]);
   });
 });

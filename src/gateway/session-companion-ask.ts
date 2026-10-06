@@ -15,6 +15,8 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -72,17 +74,15 @@ type SessionCompanionRunParams = {
 export type SessionCompanionAskDeps = {
   getConfig: () => OpenClawConfig;
   sessionObserver: {
-    getCompanionSnapshot: (
+    getCompanionSnapshotAsync: (
       sessionKey: string,
       agentId?: string,
-    ) => SessionObserverCompanionSnapshot;
+    ) => Promise<SessionObserverCompanionSnapshot>;
   };
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
   run?: (params: SessionCompanionRunParams) => Promise<string>;
   now?: () => number;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -211,7 +211,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();
-    await withSessionManagerWrite(sessionManager, () => {
+    const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
       const currentEntry = loadExactSessionEntry(target)?.entry;
@@ -223,10 +223,16 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ) {
         throw new Error("Session companion identity changed before history persistence");
       }
-      for (const message of params.messages.slice(0, -1)) {
-        sessionManager.appendMessage(toRunnerHistoryMessage(message, selectedModel));
-      }
-    });
+    };
+    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertSeedCurrent();
+        for (const message of params.messages.slice(0, -1)) {
+          assertSeedCurrent();
+          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+        }
+      }),
+    );
     abortSignal.throwIfAborted();
     params.assertInputCurrent?.();
     executionStarted = true;
@@ -365,14 +371,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
   const run = params.run ?? defaultRun;
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
-  const resolveTarget = (sessionKey: string, agentId: string) => {
+  const resolveTarget = async (sessionKey: string, agentId: string) => {
     const cfg = params.getConfig();
-    const observerSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
+    const observerSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
+      sessionKey,
+      agentId,
+    );
     return { agentId, cfg, observerSnapshot };
   };
 
@@ -387,7 +394,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   ): Promise<SessionCompanionThread> => {
     const threadKey = sessionObserverScopeKey(sessionKey, agentId);
     const existing = params.threads.get(threadKey);
-    const { observerSnapshot } = resolveTarget(sessionKey, agentId);
+    const { observerSnapshot } = await resolveTarget(sessionKey, agentId);
     if (signal.aborted) {
       throw new Error("session companion preparation was cancelled");
     }
@@ -437,6 +444,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     agentId: string;
     sessionKey: string;
     question: string;
+    selectionContext?: string;
     attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -451,10 +459,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       throw new SessionCompanionAskError("unavailable", "Side chat is unavailable.");
     }
     const assertSourceCurrent = request.operatorAuthority
-      ? () => {
-          request.assertSourceCurrent?.();
-          request.operatorAuthority?.assertCurrent();
-        }
+      ? composeSessionSourceAssertion([
+          request.assertSourceCurrent,
+          request.operatorAuthority.assertCurrent,
+        ])
       : request.assertSourceCurrent;
     assertSourceCurrent?.();
     const requestSignal = request.operatorAuthority?.signal
@@ -519,7 +527,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } else {
       requestSignal?.addEventListener("abort", abortRequest, { once: true });
     }
-    const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
+    const timeout = setTimeout(() => abort("timeout"), ASK_TIMEOUT_MS);
     const aborted = createDeferredCore<never>();
     const onAbort = () =>
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
@@ -548,7 +556,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       }
       thread.busy = true;
       thread.lastUsedAt = admittedAt;
-      const { cfg } = resolveTarget(sessionKey, agentId);
       if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
         params.threads.delete(threadKey);
         throw new SessionCompanionAskError(
@@ -556,6 +563,20 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
           "The selected session changed before Side chat could answer.",
         );
       }
+      const currentSnapshot = await params.sessionObserver.getCompanionSnapshotAsync(
+        sessionKey,
+        agentId,
+      );
+      controller.signal.throwIfAborted();
+      assertSourceCurrent?.();
+      request.assertInputCurrent?.();
+      if (currentSessionId(sessionKey, agentId) !== thread.context.sessionId) {
+        throw new SessionCompanionAskError(
+          "context-unavailable",
+          "The selected session changed before Side chat could answer.",
+        );
+      }
+      const cfg = params.getConfig();
       const utilityModelRef = resolveUtilityModelRef({ cfg, agentId });
       if (!utilityModelRef) {
         throw new SessionCompanionAskError(
@@ -564,7 +585,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         );
       }
       const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const currentSnapshot = params.sessionObserver.getCompanionSnapshot(sessionKey, agentId);
       thread.digestText = formatObserverDigest(currentSnapshot);
       const delta = selectDeltaNotes(currentSnapshot, thread.lastNoteSequence);
       const referenceContext = buildReferenceContext({
@@ -574,6 +594,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const messages = composePromptMessages({
         thread,
         question,
+        selectionContext: request.selectionContext,
         referenceContext,
         now: admittedAt,
       });
@@ -656,7 +677,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
-      clearTimeoutFn(timeout);
+      clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
       if (activeAsks.get(threadKey) === activeAsk) {

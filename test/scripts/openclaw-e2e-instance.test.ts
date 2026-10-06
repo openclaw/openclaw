@@ -1,9 +1,33 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const pendingChildCompletions = new Set<Promise<unknown>>();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    // Timeout cleanup still needs fixture PID files until its native child closes.
+    await Promise.allSettled(pendingChildCompletions);
+    cleanup();
+  }),
+);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 const helperPath = path.resolve("scripts/lib/openclaw-e2e-instance.sh");
 const hostPath = [
@@ -16,6 +40,98 @@ const hostPath = [
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
+function observeChild(child: ChildProcess) {
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.setEncoding("utf8").on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const closed = new Promise<{ status: number | null; stdout: string; stderr: string }>(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (status) => resolve({ status, stdout, stderr }));
+    },
+  ).finally(() => {
+    pendingChildCompletions.delete(closed);
+  });
+  pendingChildCompletions.add(closed);
+  return { child, closed };
+}
+
+function startNodeFixture(script: string, args: string[]) {
+  const fixture = observeChild(
+    spawn(process.execPath, [script, ...args], {
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
+    }),
+  );
+  const ready = new Promise<void>((resolve) => {
+    fixture.child.once("message", () => resolve());
+  });
+  return {
+    ...fixture,
+    ready: awaitGateBeforeSettlement(
+      ready,
+      fixture.closed,
+      "fixture exited before publishing readiness",
+    ),
+  };
+}
+
+function startBash(script: string, env: Record<string, string | undefined> = {}) {
+  return observeChild(
+    spawn("/bin/bash", ["-c", script], {
+      env: shellTestEnv(env),
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    }),
+  );
+}
+
+function killFixturePid(pid: number) {
+  if (pid > 1) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Shell stop/watchdog escalation can return before a foreign PID has been reaped.
+async function waitForProcessGone(
+  pid: number,
+  signal: AbortSignal,
+  message: string,
+): Promise<void> {
+  while (isProcessAlive(pid)) {
+    await delay(5, undefined, { signal }).catch((error: unknown) => {
+      throw new Error(`${message}: ${pid}`, { cause: error });
+    });
+  }
+}
+
+async function fixtureReadyBeforeSettlement(marker: string, operation: PromiseLike<unknown>) {
+  await Promise.race([
+    receipts.waitFor(marker, "ready"),
+    Promise.resolve(operation).then(() => {
+      // Marker publication precedes the fixture receipt; a separate pipe may deliver it late.
+      if (!fs.existsSync(marker)) {
+        throw new Error(`fixture exited before publishing ${marker}`);
+      }
+    }),
+  ]);
 }
 
 function runHelper(payload: string) {
@@ -361,51 +477,56 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     });
   });
 
-  it.each([
+  it.for([
     ["accepts the March listening marker", "listening on", true, "legacy-ready-log-ok", 0],
     ["rejects a closed March listener", "listening on", false, "legacy-ready-log-ok", 1],
     ["accepts a live legacy ready marker", "ready", true, "legacy-ready-log-ok", 0],
     ["rejects a closed legacy ready listener", "ready", false, "legacy-ready-log-ok", 1],
     ["rejects the March marker in strict mode", "listening on", true, "strict", 1],
-  ] as const)("%s", (_label, marker, listening, mode, expectedStatus) => {
-    withTempDir("openclaw-e2e-readyz-legacy-", (tempDir) => {
-      const logPath = path.join(tempDir, "gateway.log");
-      const portPath = path.join(tempDir, "port.txt");
-      const resultPath = path.join(tempDir, "readiness-status.txt");
-      const serverPath = path.join(tempDir, "gateway.cjs");
-      fs.writeFileSync(
-        serverPath,
-        [
-          "const fs = require('node:fs');",
-          "const http = require('node:http');",
-          "const [logPath, portPath, marker, listening, mode] = process.argv.slice(2);",
-          "const server = http.createServer((_request, response) => {",
-          // A working endpoint must not let strict mode accept the historical marker.
-          "  response.writeHead(mode === 'strict' ? 200 : 503);",
-          "  response.end('{}');",
-          "});",
-          "server.listen(0, '127.0.0.1', () => {",
-          "  const port = server.address().port;",
-          "  const publish = () => {",
-          "    fs.writeFileSync(logPath, `[gateway] ${marker} ws://127.0.0.1:${port} (PID ${process.pid})\\n`);",
-          "    fs.writeFileSync(portPath, String(port));",
-          "  };",
-          "  if (listening === 'true') publish(); else server.close(publish);",
-          "});",
-          "setInterval(() => {}, 1000);",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "",
-        ].join("\n"),
-      );
+  ] as const)("%s", async ([_label, marker, listening, mode, expectedStatus], { signal }) => {
+    const tempDir = tempDirs.make("openclaw-e2e-readyz-legacy-");
+    const logPath = path.join(tempDir, "gateway.log");
+    const portPath = path.join(tempDir, "port.txt");
+    const resultPath = path.join(tempDir, "readiness-status.txt");
+    const serverPath = path.join(tempDir, "gateway.cjs");
+    fs.writeFileSync(
+      serverPath,
+      [
+        "const fs = require('node:fs');",
+        "const http = require('node:http');",
+        "const [logPath, portPath, marker, listening, mode] = process.argv.slice(2);",
+        "const server = http.createServer((_request, response) => {",
+        // A working endpoint must not let strict mode accept the historical marker.
+        "  response.writeHead(mode === 'strict' ? 200 : 503);",
+        "  response.end('{}');",
+        "});",
+        "server.listen(0, '127.0.0.1', () => {",
+        "  const port = server.address().port;",
+        "  const publish = () => {",
+        "    fs.writeFileSync(logPath, `[gateway] ${marker} ws://127.0.0.1:${port} (PID ${process.pid})\\n`);",
+        "    fs.writeFileSync(portPath, String(port));",
+        "    process.send('ready');",
+        "  };",
+        "  if (listening === 'true') publish(); else server.close(publish);",
+        "});",
+        "setInterval(() => {}, 1000);",
+        "process.on('SIGTERM', () => process.exit(0));",
+        "",
+      ].join("\n"),
+    );
+    const fixture = startNodeFixture(serverPath, [
+      logPath,
+      portPath,
+      marker,
+      String(listening),
+      mode,
+    ]);
+    try {
+      await withinTest(fixture.ready, signal);
       const result = runBashWithHelper(
         [
-          `${shellQuote(process.execPath)} ${shellQuote(serverPath)} ${shellQuote(logPath)} ${shellQuote(portPath)} ${shellQuote(marker)} ${listening} ${shellQuote(mode)} &`,
-          'gateway_pid="$!"',
-          'trap \'kill "$gateway_pid" >/dev/null 2>&1 || true; wait "$gateway_pid" >/dev/null 2>&1 || true\' EXIT',
-          `for _ in $(seq 1 100); do [ -s ${shellQuote(portPath)} ] && break; sleep 0.02; done`,
-          `[ -s ${shellQuote(portPath)} ]`,
           `port="$(cat ${shellQuote(portPath)})"`,
-          `if openclaw_e2e_wait_gateway_ready "$gateway_pid" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
+          `if openclaw_e2e_wait_gateway_ready "${fixture.child.pid}" ${shellQuote(logPath)} 2 "$port" ${shellQuote(mode)}; then`,
           `  printf '0' >${shellQuote(resultPath)}`,
           "else",
           `  printf '%s' "$?" >${shellQuote(resultPath)}`,
@@ -414,10 +535,12 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
         {},
         5_000,
       );
-
       expectShellSuccess(result);
       expect(fs.readFileSync(resultPath, "utf8")).toBe(String(expectedStatus));
-    });
+    } finally {
+      fixture.child.kill("SIGKILL");
+      await fixture.closed;
+    }
   });
 
   it("wraps package installs with the configured timeout", () => {
@@ -667,57 +790,59 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     ["TERM", "143"],
     ["HUP", "129"],
   ] as const) {
-    it(`escalates Node watchdog children that ignore parent SIG${shellSignal}`, () => {
-      withTempDir("openclaw-e2e-instance-node-watchdog-signal-", (tempDir) => {
-        writeNodeShim(tempDir);
-        const childPath = path.join(tempDir, "ignore-term.cjs");
-        const pidPath = path.join(tempDir, "child.pid");
-        const watchdogPidPath = path.join(tempDir, "watchdog.pid");
-        fs.writeFileSync(
-          childPath,
-          [
-            "const fs = require('node:fs');",
-            "process.on('SIGTERM', () => {});",
-            "process.on('SIGHUP', () => {});",
-            "setInterval(() => {}, 1000);",
-            // PID publication lets the shell signal us; install handlers first.
-            "fs.writeFileSync(process.argv[2], String(process.pid));",
-            "fs.writeFileSync(process.argv[3], String(process.ppid));",
-            "",
-          ].join("\n"),
-        );
-
-        const script = `
+    it(`escalates Node watchdog children that ignore parent SIG${shellSignal}`, async ({
+      signal,
+    }) => {
+      const tempDir = tempDirs.make("openclaw-e2e-instance-node-watchdog-signal-");
+      writeNodeShim(tempDir);
+      const childPath = path.join(tempDir, "ignore-term.mjs");
+      const pidPath = path.join(tempDir, "child.pid");
+      const watchdogPidPath = path.join(tempDir, "watchdog.pid");
+      fs.writeFileSync(
+        childPath,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+process.on("SIGTERM", () => {});
+process.on("SIGHUP", () => {});
+setInterval(() => {}, 1000);
+fs.writeFileSync(process.argv[2], String(process.pid));
+fs.writeFileSync(process.argv[3], String(process.ppid));
+sendReceipt(process.argv[2], "ready");
+`,
+      );
+      const runner = startBash(
+        `
 set -euo pipefail
 source ${shellQuote(helperPath)}
 export OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS=100
-openclaw_e2e_maybe_timeout 30s node ${shellQuote(childPath)} ${shellQuote(pidPath)} ${shellQuote(watchdogPidPath)} &
-wrapper_pid="$!"
-for ((i = 0; i < 100; i += 1)); do
-  [ -s ${shellQuote(pidPath)} ] && [ -s ${shellQuote(watchdogPidPath)} ] && break
-  /bin/sleep 0.02
-done
-[ -s ${shellQuote(pidPath)} ]
-[ -s ${shellQuote(watchdogPidPath)} ]
-kill -${shellSignal} "$(/bin/cat ${shellQuote(watchdogPidPath)})"
-set +e
-wait "$wrapper_pid"
-status="$?"
-set -e
-[ "$status" = "${expectedStatus}" ]
-child_pid="$(/bin/cat ${shellQuote(pidPath)})"
-for ((i = 0; i < 100; i += 1)); do
-  kill -0 "$child_pid" 2>/dev/null || exit 0
-  /bin/sleep 0.02
-done
-echo "child still alive after watchdog termination" >&2
-exit 1
-`;
-
-        const result = runBash(script, { PATH: tempDir }, 5_000);
-
-        expectShellSuccess(result);
-      });
+openclaw_e2e_maybe_timeout 30s node ${shellQuote(childPath)} ${shellQuote(pidPath)} ${shellQuote(watchdogPidPath)}
+`,
+        { PATH: tempDir },
+      );
+      try {
+        await withinTest(fixtureReadyBeforeSettlement(pidPath, runner.closed), signal);
+        const childPid = Number(fs.readFileSync(pidPath, "utf8"));
+        process.kill(Number(fs.readFileSync(watchdogPidPath, "utf8")), `SIG${shellSignal}`);
+        const result = await withinTest(runner.closed, signal);
+        expect(result.status, result.stderr).toBe(Number(expectedStatus));
+        await waitForProcessGone(childPid, signal, "child still alive after watchdog termination");
+      } finally {
+        for (const marker of [pidPath, watchdogPidPath]) {
+          if (fs.existsSync(marker)) {
+            killFixturePid(Number(fs.readFileSync(marker, "utf8")));
+          }
+        }
+        if (
+          runner.child.exitCode === null &&
+          runner.child.signalCode === null &&
+          runner.child.pid
+        ) {
+          try {
+            process.kill(-runner.child.pid, "SIGKILL");
+          } catch {}
+        }
+        await runner.closed;
+      }
     });
   }
 
@@ -761,117 +886,143 @@ fi
     });
   });
 
-  it("terminates descendants in the tracked process group", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-process-group-"));
+  it("terminates descendants in the tracked process group", async ({ signal }) => {
+    const tempDir = tempDirs.make("openclaw-e2e-process-group-");
     const parentPidPath = path.join(tempDir, "parent.pid");
     const childPidPath = path.join(tempDir, "child.pid");
     const childTermPath = path.join(tempDir, "child.term");
+    const parentPath = path.join(tempDir, "parent.mjs");
+    const childPath = path.join(tempDir, "child.mjs");
+    const logPath = path.join(tempDir, "tracked.log");
+    fs.writeFileSync(
+      childPath,
+      `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.argv[3], "terminated");
+  sendReceipt(process.argv[3], "terminated");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+fs.writeFileSync(process.argv[2], String(process.pid));
+process.send("ready");
+`,
+    );
+    fs.writeFileSync(
+      parentPath,
+      `${fixtureReceiptClientSource(receipts.endpoint)}
+import fs from "node:fs";
+import { spawn } from "node:child_process";
+process.on("SIGTERM", () => process.exit(0));
+const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {
+  stdio: ["ignore", "ignore", "ignore", "ipc"],
+});
+child.once("message", () => {
+  fs.writeFileSync(process.argv[3], String(process.pid));
+  sendReceipt(process.argv[3], "ready");
+});
+setInterval(() => {}, 1000);
+`,
+    );
+    const starter = startBash(
+      `source ${shellQuote(helperPath)}
+openclaw_e2e_start_tracked_process ${shellQuote(logPath)} ${shellQuote(process.execPath)} ${shellQuote(parentPath)} ${shellQuote(childPath)} ${shellQuote(parentPidPath)} ${shellQuote(childPidPath)} ${shellQuote(childTermPath)}`,
+      { PATH: hostPath },
+    );
+    let stopper: ReturnType<typeof startBash> | undefined;
+    let trackedPid = 0;
     try {
-      const parentPath = path.join(tempDir, "parent.cjs");
-      const childPath = path.join(tempDir, "child.cjs");
-      const logPath = path.join(tempDir, "tracked.log");
-      fs.writeFileSync(
-        childPath,
-        [
-          "const fs = require('node:fs');",
-          "process.on('SIGTERM', () => {",
-          "  fs.writeFileSync(process.argv[3], 'terminated');",
-          "  process.exit(0);",
-          "});",
-          "setInterval(() => {}, 1000);",
-          // Both PID files announce readiness for immediate group termination.
-          "fs.writeFileSync(process.argv[2], String(process.pid));",
-          "",
-        ].join("\n"),
+      const started = await withinTest(starter.closed, signal);
+      expect(started.status, started.stderr).toBe(0);
+      trackedPid = Number(started.stdout.trim());
+      // The start helper promises spawn only; its detached child reports actual readiness.
+      await withinTest(receipts.waitFor(parentPidPath, "ready"), signal);
+      const childPid = Number(fs.readFileSync(childPidPath, "utf8"));
+      stopper = startBash(
+        `source ${shellQuote(helperPath)}
+openclaw_e2e_stop_process ${trackedPid}`,
+        { PATH: hostPath },
       );
-      fs.writeFileSync(
-        parentPath,
-        [
-          "const fs = require('node:fs');",
-          "const { spawn } = require('node:child_process');",
-          "const child = spawn(process.execPath, [process.argv[2], process.argv[4], process.argv[5]], {",
-          "  stdio: 'ignore',",
-          "});",
-          "child.unref();",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "setInterval(() => {}, 1000);",
-          "fs.writeFileSync(process.argv[3], String(process.pid));",
-          "",
-        ].join("\n"),
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(childTermPath, "terminated"),
+          stopper.closed.then(() => {
+            expect(fs.existsSync(childTermPath), "tracked child did not receive SIGTERM").toBe(
+              true,
+            );
+          }),
+        ]),
+        signal,
       );
-
-      const script = `
-set -euo pipefail
-source ${shellQuote(helperPath)}
-tracked_pid="$(openclaw_e2e_start_tracked_process ${shellQuote(logPath)} ${shellQuote(process.execPath)} ${shellQuote(parentPath)} ${shellQuote(childPath)} ${shellQuote(parentPidPath)} ${shellQuote(childPidPath)} ${shellQuote(childTermPath)})"
-for ((i = 0; i < 100; i += 1)); do
-  [ -s ${shellQuote(parentPidPath)} ] && [ -s ${shellQuote(childPidPath)} ] && break
-  /bin/sleep 0.02
-done
-[ -s ${shellQuote(parentPidPath)} ]
-[ -s ${shellQuote(childPidPath)} ]
-child_pid="$(/bin/cat ${shellQuote(childPidPath)})"
-openclaw_e2e_stop_process "$tracked_pid"
-for ((i = 0; i < 100; i += 1)); do
-  [ -s ${shellQuote(childTermPath)} ] && break
-  /bin/sleep 0.02
-done
-[ -s ${shellQuote(childTermPath)} ] || {
-  echo "tracked child did not receive SIGTERM" >&2
-  exit 1
-}
-for ((i = 0; i < 100; i += 1)); do
-  kill -0 "$child_pid" 2>/dev/null || exit 0
-  /bin/sleep 0.02
-done
-echo "tracked child still alive after group termination" >&2
-exit 1
-`;
-
-      const result = runBash(script, { PATH: hostPath }, 5_000);
-
-      expectShellSuccess(result);
+      const stopped = await withinTest(stopper.closed, signal);
+      expect(stopped.status, stopped.stderr).toBe(0);
+      expect(
+        fs.statSync(childTermPath).size,
+        "tracked child did not receive SIGTERM",
+      ).toBeGreaterThan(0);
+      await waitForProcessGone(
+        childPid,
+        signal,
+        "tracked child still alive after group termination",
+      );
     } finally {
       for (const pidPath of [childPidPath, parentPidPath]) {
-        if (!fs.existsSync(pidPath)) {
-          continue;
-        }
-        const pid = Number(fs.readFileSync(pidPath, "utf8"));
-        if (Number.isInteger(pid) && pid > 1) {
-          try {
-            process.kill(pid, "SIGKILL");
-          } catch {}
+        if (fs.existsSync(pidPath)) {
+          killFixturePid(Number(fs.readFileSync(pidPath, "utf8")));
         }
       }
-      fs.rmSync(tempDir, { force: true, recursive: true });
+      if (trackedPid > 1) {
+        try {
+          process.kill(-trackedPid, "SIGKILL");
+        } catch {}
+      }
+      killFixturePid(trackedPid);
+      for (const command of [starter, stopper]) {
+        if (!command) {
+          continue;
+        }
+        if (
+          command.child.exitCode === null &&
+          command.child.signalCode === null &&
+          command.child.pid
+        ) {
+          try {
+            process.kill(-command.child.pid, "SIGKILL");
+          } catch {}
+        }
+        await command.closed;
+      }
     }
   });
 
-  it("bounds HTTP readiness probes when a server accepts connections but never responds", () => {
-    withTempDir("openclaw-e2e-http-probe-", (tempDir) => {
-      const portPath = path.join(tempDir, "port.txt");
-      const serverPath = path.join(tempDir, "stalling-server.cjs");
-      fs.writeFileSync(
-        serverPath,
-        [
-          "const fs = require('node:fs');",
-          "const net = require('node:net');",
-          "const server = net.createServer((socket) => socket.on('data', () => {}));",
-          "server.listen(0, '127.0.0.1', () => {",
-          "  fs.writeFileSync(process.argv[2], String(server.address().port));",
-          "});",
-          "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
-          "",
-        ].join("\n"),
-      );
+  it("bounds HTTP readiness probes when a server accepts connections but never responds", async ({
+    signal,
+  }) => {
+    const tempDir = tempDirs.make("openclaw-e2e-http-probe-");
+    const portPath = path.join(tempDir, "port.txt");
+    const serverPath = path.join(tempDir, "stalling-server.cjs");
+    fs.writeFileSync(
+      serverPath,
+      [
+        "const fs = require('node:fs');",
+        "const net = require('node:net');",
+        "const server = net.createServer((socket) => socket.on('data', () => {}));",
+        "server.listen(0, '127.0.0.1', () => {",
+        "  fs.writeFileSync(process.argv[2], String(server.address().port));",
+        "  process.send('ready');",
+        "});",
+        "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+        "",
+      ].join("\n"),
+    );
 
-      const startedAt = Date.now();
+    const startedAt = Date.now();
+    const fixture = startNodeFixture(serverPath, [portPath]);
+    try {
+      await withinTest(fixture.ready, signal);
       const result = runBash(
         [
           "set -euo pipefail",
-          `${shellQuote(process.execPath)} ${shellQuote(serverPath)} ${shellQuote(portPath)} & server_pid=$!`,
-          'trap \'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true\' EXIT',
-          `for _ in $(seq 1 50); do [ -s ${shellQuote(portPath)} ] && break; sleep 0.02; done`,
           `port="$(cat ${shellQuote(portPath)})"`,
           `source ${shellQuote(helperPath)}`,
           'openclaw_e2e_probe_http_status "http://127.0.0.1:${port}/health" 200 100',
@@ -881,11 +1032,13 @@ exit 1
         "; ",
       );
       const elapsedMs = Date.now() - startedAt;
-
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(elapsedMs).toBeLessThan(2_500);
-    });
+    } finally {
+      fixture.child.kill("SIGKILL");
+      await fixture.closed;
+    }
   });
 
   it("cancels HTTP readiness probe response bodies", () => {

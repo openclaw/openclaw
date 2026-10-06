@@ -6,14 +6,6 @@ import {
 
 registerCommandPaletteEnglish();
 
-export {
-  formatKeyboardShortcutCombo,
-  formatKeyboardShortcutParts,
-  isApplePlatform,
-  KEYBOARD_SHORTCUT_COMBOS,
-  matchesShortcutCombo,
-} from "./keyboard-shortcut-contract.ts";
-
 type KeyboardShortcutEntry = ReturnType<typeof keyboardShortcutEntry>;
 type KeyboardShortcutSection = ReturnType<typeof keyboardShortcutSection>;
 

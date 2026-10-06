@@ -19,7 +19,6 @@ import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
-import type { SystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentExpectedAgentHarnessRuntimeArtifact,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -43,14 +42,12 @@ export type SystemAgentTurnDirective =
 
 type SystemAgentTurnReply = {
   text: string;
-  modelLabel?: string;
   /** Interactive handoff the tool requested; the host chat executes it. */
   directive?: SystemAgentTurnDirective;
 };
 
 export type SystemAgentTurnRunner = (params: {
   input: string;
-  overview: SystemAgentOverview;
   surface: "cli" | "gateway";
   /** Host-verified: the user's current message is an explicit approval. */
   approvalArmed: boolean;
@@ -98,13 +95,6 @@ type SystemAgentTurnDeps = SystemAgentVerifiedInferenceDeps & {
   runCliAgent?: SystemAgentRunCliAgent;
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
 };
-
-async function ensureSystemAgentDirs(): Promise<{ workspaceDir: string }> {
-  const base = path.join(resolveStateDir(), "openclaw");
-  const workspaceDir = path.join(base, "workspace");
-  await fs.mkdir(workspaceDir, { recursive: true });
-  return { workspaceDir };
-}
 
 export async function cleanupSystemAgentSession(session: SystemAgentSession): Promise<void> {
   delete session.cliSession;
@@ -268,15 +258,12 @@ async function runSystemAgentTurnWithDeps(
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
+  let workspaceDir: string;
   try {
     expectedAgentHarnessRuntimeArtifact =
       resolveSystemAgentExpectedAgentHarnessRuntimeArtifact(binding);
-  } catch (error) {
-    return throwSystemAgentInferenceUnavailable({ session: params.session, failures: [error] });
-  }
-  let workspaceDir: string;
-  try {
-    ({ workspaceDir } = await ensureSystemAgentDirs());
+    workspaceDir = path.join(resolveStateDir(), "openclaw", "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
   } catch (error) {
     return throwSystemAgentInferenceUnavailable({
       session: params.session,
@@ -303,6 +290,7 @@ async function runSystemAgentTurnWithDeps(
       : undefined,
   );
   const shared = {
+    preparedRunAdmission,
     sessionId: params.session.sessionId,
     sessionKey: toAgentStoreSessionKey({
       agentId: SYSTEM_AGENT_ID,
@@ -314,6 +302,11 @@ async function runSystemAgentTurnWithDeps(
     sessionManager,
     workspaceDir,
     config: plan.runConfig,
+    provider: plan.provider,
+    model: plan.model,
+    agentDir: plan.agentDir,
+    extraSystemPrompt: systemPrompt,
+    ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
     prompt: params.input,
     timeoutMs: resolveAgentTimeoutMs({ cfg: plan.runConfig }),
     thinkLevel: "off" as const,
@@ -355,12 +348,6 @@ async function runSystemAgentTurnWithDeps(
       try {
         result = await runCli({
           ...shared,
-          preparedRunAdmission,
-          provider: plan.provider,
-          model: plan.model,
-          agentDir: plan.agentDir,
-          ...(plan.authProfileId ? { authProfileId: plan.authProfileId } : {}),
-          extraSystemPrompt: systemPrompt,
           extraSystemPromptStatic: systemPrompt,
           systemAgentTool,
           ...(cliToolAvailability ? { cliToolAvailability } : {}),
@@ -392,22 +379,15 @@ async function runSystemAgentTurnWithDeps(
       result = await runEmbedded({
         ...shared,
         lane: CommandLane.SystemAgentInference,
-        preparedRunAdmission,
-        extraSystemPrompt: systemPrompt,
         toolsAllow: ["openclaw"],
         // The helper cannot read workspace skills; skip their discovery and environment setup.
         toolExecutionAllow: ["openclaw"],
         systemAgentTool,
         disableMessageTool: true,
-        provider: plan.provider,
-        model: plan.model,
-        agentDir: plan.agentDir,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
         sandboxSessionKey: policySessionKey,
         ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
-        ...(plan.authProfileId
-          ? { authProfileId: plan.authProfileId, authProfileIdSource: "user" as const }
-          : {}),
+        ...(plan.authProfileId ? { authProfileIdSource: "user" as const } : {}),
       });
     }
     // Failed runs can retain partial text; it must not publish a reply or a tool directive.
@@ -424,13 +404,12 @@ async function runSystemAgentTurnWithDeps(
     if (!currentRoute) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       throw new SystemAgentInferenceUnavailableError("agent-turn");
     }
     return {
       text,
-      modelLabel: plan.modelLabel,
       ...(directiveRef.current ? { directive: directiveRef.current } : {}),
     };
   } catch (error) {

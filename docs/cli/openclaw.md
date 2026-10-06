@@ -39,12 +39,12 @@ Interactive OpenClaw opens the same TUI shell as `openclaw tui`, with an OpenCla
 
 - config validity and the default agent
 - the verified model OpenClaw is using
-- Gateway reachability from the first startup probe
+- Gateway reachability from the first startup check
 - the next recommended debug action
 
 It does not dump secrets or load plugin CLI commands just to start.
 
-Use `status` for the detailed inventory: config path, docs/source paths, local CLI probes, key/token presence, agents, model, and Gateway details.
+Use `status` for the detailed inventory: config path, docs/source paths, local CLI checks, key/token presence, agents, model, and Gateway details.
 
 OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
 
@@ -396,6 +396,11 @@ create agent work workspace ~/path/to/work model openai/gpt-6-astra
 
 Agent creation may name only the current live-verified default model. Omit the
 model to inherit that route.
+
+Rescue approval preserves optional agent details such as
+`create agent work purpose "Write release notes" workspace ~/path/to/work`.
+For `set default model <provider/model> for agent work`, approval keeps the
+selected agent rather than applying the change to the global default.
 
 Remote rescue is an admin surface and must be treated like remote config repair, not normal chat.
 

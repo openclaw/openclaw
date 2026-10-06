@@ -39,6 +39,7 @@ import {
   MAX_WAIT_SECONDS,
 } from "./computer-tool-shared.js";
 import { readGatewayCallOptions } from "./gateway.js";
+import { textResult } from "./tool-results.js";
 
 export type { ComputerContextEpoch, ComputerToolTransport } from "./computer-tool-shared.js";
 export { invalidateComputerFrameIfMissing } from "./computer-tool-result.js";
@@ -62,7 +63,6 @@ function prepareComputerArguments(args: unknown): unknown {
 
 export function createComputerTool(options?: {
   config?: OpenClawConfig;
-  modelHasVision?: boolean;
   /** Stable run scope used to deduplicate a replayed model tool call on the node. */
   idempotencyScope?: string;
   /** Tracks whether the current screenshot pixels still reach model context. */
@@ -125,8 +125,6 @@ export function createComputerTool(options?: {
     contextEpoch: options?.contextEpoch,
     transport: options?.transport,
     gatewayStatus: options?.pairedNodeComputerUse?.gateway,
-    availableActions,
-    defaultActions: COMPUTER_TOOL_ACTIONS,
     onCapabilitiesChanged: (capabilities) => {
       replaceParameterSchema(availableActions(capabilities?.actions ?? COMPUTER_TOOL_ACTIONS));
       tool.description = buildComputerToolDescription(capabilities, targetScope);
@@ -149,29 +147,24 @@ export function createComputerTool(options?: {
       target: params.resolved.target,
       action: params.action,
       referenceWidth,
-      modelHasVision: options?.modelHasVision,
     });
     const previousFrame = session.refreshUnchangedFrame({
       target: params.resolved.target,
       capture,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     if (previousFrame) {
       const text = [
         ...params.noteLines,
         `screen unchanged since previous frame (frameId ${previousFrame.id}); screenshot omitted — keep using this frameId for coordinates`,
       ].join("\n");
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          ...computerTargetDetails(params.resolved.target),
-          action: params.action,
-          screenIndex: params.resolved.target.screenIndex,
-          frameId: previousFrame.id,
-          refWidth: referenceWidth,
-        },
-      };
+      return textResult(text, {
+        ...computerTargetDetails(params.resolved.target),
+        action: params.action,
+        screenIndex: params.resolved.target.screenIndex,
+        frameId: previousFrame.id,
+        refWidth: referenceWidth,
+      });
     }
     session.bindDeliveredFrame({
       resolved: params.resolved,
@@ -179,7 +172,6 @@ export function createComputerTool(options?: {
       frameId: projected.frameId,
       toolCallId: params.toolCallId,
       imageIdentity: projected.imageIdentity,
-      modelHasVision: options?.modelHasVision,
     });
     return projected.result;
   };
@@ -220,7 +212,6 @@ export function createComputerTool(options?: {
             target: resolved.target,
             action: observationAction,
             referenceWidth,
-            modelHasVision: options?.modelHasVision,
           });
           session.recordObservation(resolved, result, projected.imageCoordinates);
           return action === "get_window_state"
@@ -228,8 +219,14 @@ export function createComputerTool(options?: {
             : projected.result;
         };
 
-        if (action === "screenshot" || action === "wait") {
+        if (action === "screenshot" || action === "wait" || action === "take_control") {
           const noteLines: string[] = [];
+          if (action === "take_control") {
+            await session.takeControl(resolved, toolCallId, signal);
+            noteLines.push(
+              "Agent took control of this desktop; the operator can take control again.",
+            );
+          }
           if (action === "wait") {
             const seconds =
               readFiniteNumberParam(params, "duration", {
@@ -304,20 +301,15 @@ export function createComputerTool(options?: {
           session.setTarget(resolved.target);
           signal?.throwIfAborted();
           // Input landed; a failed follow-up observation should not fail the action.
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
-              },
-            ],
-            details: {
+          return textResult(
+            `${computerActResultText(action, actResult)}\nfollow-up ${observeWindow ? "observation" : "screenshot"} failed: ${formatErrorMessage(err)}`,
+            {
               ...computerTargetDetails(resolved.target),
               action,
               screenIndex: resolved.target.screenIndex,
               result: actResult,
             },
-          };
+          );
         }
       }),
   };

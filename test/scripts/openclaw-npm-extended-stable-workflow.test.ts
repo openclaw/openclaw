@@ -164,6 +164,50 @@ function runPluginCompatibilityGate(options: { hasScript: boolean; relationship:
 }
 
 describe("minimal npm extended-stable workflow", () => {
+  it.each([
+    { RELEASE_TAG: "v2026.9.1-alpha.1", RELEASE_NPM_DIST_TAG: "alpha" },
+    { RELEASE_NPM_DIST_TAG: "alpha" },
+    { GITHUB_REF: "refs/heads/tideclaw/alpha/2026-09-25-1200Z" },
+  ])("rejects retired alpha at npm publication and preflight boundaries: %j", (overrides) => {
+    for (const [path, job, name] of [
+      [workflowPath, "publish_openclaw_npm", "Validate tag input format"],
+      [preflightWorkflowPath, "check_openclaw_npm", "Validate release ref input format"],
+    ] as const) {
+      const env = {
+        ...process.env,
+        RELEASE_TAG: "v2026.9.1",
+        RELEASE_NPM_DIST_TAG: "latest",
+        PREFLIGHT_ONLY: "true",
+        ...overrides,
+      };
+      const result = spawnSync("bash", ["-c", step(workflow(path).jobs?.[job], name).run ?? ""], {
+        encoding: "utf8",
+        env: { ...env, RELEASE_REF: env.RELEASE_TAG },
+      });
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain("Alpha releases are retired;");
+    }
+  });
+
+  it("rejects a SHA-resolved alpha package before npm source preflight", () => {
+    const root = tempDirs.make("npm-alpha-source-");
+    const scripts = join(root, ".release-harness", "scripts");
+    mkdirSync(scripts, { recursive: true });
+    writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2026.9.1-alpha.1" }));
+    writeFileSync(join(scripts, "package-source-preflight.mjs"), "process.exit(0);\n");
+    const run = step(
+      workflow(preflightWorkflowPath).jobs?.check_openclaw_npm,
+      "Validate npm package source metadata",
+    ).run;
+    const result = spawnSync("bash", ["-c", run ?? ""], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, GITHUB_WORKSPACE: root, RELEASE_REF: "a".repeat(40) },
+    });
+    expect(result.status, result.stderr).toBe(1);
+    expect(result.stderr).toContain("Alpha releases are retired;");
+  });
+
   it("bounds every git fetch operation", () => {
     const source = [workflowPath, preflightWorkflowPath]
       .map((path) => readFileSync(path, "utf8"))
@@ -177,15 +221,11 @@ describe("minimal npm extended-stable workflow", () => {
     ).toBe(true);
   });
 
-  it("routes source and Tideclaw history through the trusted ancestry owner", () => {
+  it("routes source history through the trusted ancestry owner", () => {
     const parsed = workflow(preflightWorkflowPath);
     const sourceAncestry = step(
       parsed.jobs?.check_openclaw_npm,
       "Establish source ancestry with main",
-    );
-    const tideclawAncestry = step(
-      parsed.jobs?.prepare_openclaw_npm,
-      "Establish Tideclaw alpha ancestry",
     );
     const sourceCheck = step(
       parsed.jobs?.check_openclaw_npm,
@@ -210,13 +250,7 @@ describe("minimal npm extended-stable workflow", () => {
         RELEASE_ANCESTRY_TARGET_REF: "refs/heads/main",
       },
     });
-    expect(tideclawAncestry).toMatchObject({
-      env: {
-        RELEASE_ANCESTRY_MODE: "ancestor",
-        RELEASE_ANCESTRY_TARGET_REF: "${{ github.ref }}",
-      },
-    });
-    for (const ancestry of [sourceAncestry, tideclawAncestry]) {
+    for (const ancestry of [sourceAncestry]) {
       expect(ancestry.env).not.toHaveProperty("RELEASE_ANCESTRY_TOTAL_SECONDS");
       expect(ancestry.run).toContain(
         "python3 -I -S .release-harness/.github/actions/git-owner/owner.py",
@@ -237,20 +271,23 @@ describe("minimal npm extended-stable workflow", () => {
     expect(metadata).toContain("--unshallow origin");
     expect(metadata).toContain('"+refs/tags/v*:refs/tags/v*"');
     const sourceSteps = parsed.jobs?.check_openclaw_npm?.steps ?? [];
-    const prepareSteps = parsed.jobs?.prepare_openclaw_npm?.steps ?? [];
     expect(sourceSteps.indexOf(trustedCheckout)).toBeLessThan(sourceSteps.indexOf(sourceAncestry));
     expect(sourceSteps.indexOf(sourceAncestry)).toBeLessThan(sourceSteps.indexOf(sourceCheck));
     expect(sourceSteps.indexOf(sourceCheck)).toBeLessThan(sourceSteps.indexOf(pluginCompatibility));
-    expect(prepareSteps.indexOf(tideclawAncestry)).toBeGreaterThan(
-      prepareSteps.findIndex(
-        (candidate) => candidate.name === "Checkout trusted package source preflight",
-      ),
+  });
+
+  it("checks release-tool locks from the trusted tooling checkout", () => {
+    const parsed = workflow(preflightWorkflowPath);
+    const job = parsed.jobs?.check_dependencies_npm;
+    const checkout = step(job, "Checkout trusted Plugin SDK API tooling");
+    const evidence = step(job, "Generate dependency release evidence");
+
+    expect(checkout.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout.with?.["sparse-checkout"]?.split(/\s+/u)).toContain(".github/release");
+    expect(evidence.run).toContain(
+      '"$tooling_dir/scripts/generate-dependency-release-evidence.mts"',
     );
-    expect(prepareSteps.indexOf(tideclawAncestry)).toBeLessThan(
-      prepareSteps.findIndex(
-        (candidate) => candidate.name === "Validate npm package source metadata",
-      ),
-    );
+    expect(evidence.run).toContain('--root "$GITHUB_WORKSPACE"');
   });
 
   it.each([
@@ -303,7 +340,6 @@ describe("minimal npm extended-stable workflow", () => {
     const raw = readFileSync(workflowPath, "utf8");
     const parsed = workflow();
     expect(parsed.on?.workflow_dispatch?.inputs?.npm_dist_tag?.options).toEqual([
-      "alpha",
       "beta",
       "latest",
       "extended-stable",
@@ -821,6 +857,13 @@ describe("minimal npm extended-stable workflow", () => {
     expect(publishStep.env?.PUBLISH_TARBALL_PATH).toBe(
       "${{ steps.preflight_provenance.outputs.tarball_path }}",
     );
+    expect(publishStep.env).toMatchObject({
+      PREFLIGHT_WORKFLOW_SHA: "${{ steps.preflight_run.outputs.head_sha }}",
+      PREFLIGHT_RUN_ID: "${{ steps.preflight_run.outputs.run_id }}",
+      PREFLIGHT_RUN_ATTEMPT: "${{ steps.preflight_run.outputs.run_attempt }}",
+      FULL_RELEASE_VALIDATION_RUN_ID: "${{ inputs.full_release_validation_run_id }}",
+      FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "${{ inputs.full_release_validation_run_attempt }}",
+    });
     expect(publish?.steps?.map((candidate) => candidate.name)).not.toContain(
       "Resolve publish tarball",
     );
@@ -847,7 +890,7 @@ describe("minimal npm extended-stable workflow", () => {
     ]);
     expect(publish.run).toContain("(.corePackageTarballs // [])[]");
     expect(publish.run).toContain(
-      'bash scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
+      'bash trusted-workflow/scripts/openclaw-npm-publish.sh --publish "${publish_target}"',
     );
   });
 });

@@ -86,10 +86,7 @@ async function installRequestedSkillFromClawHub(
     }
     return await performClawHubSkillInstall({
       ...params,
-      slug: ref.slug,
-      ...(ref.ownerHandle ? { ownerHandle: ref.ownerHandle } : {}),
-      ...(ref.requestedReference ? { requestedReference: ref.requestedReference } : {}),
-      ...(ref.trustState ? { trustState: ref.trustState } : {}),
+      ...ref,
     });
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
@@ -192,21 +189,12 @@ export async function preflightSkillFromClawHub(params: {
   }
 }
 
-export async function installSkillFromClawHub(params: {
-  workspaceDir: string;
-  slug: string;
-  version?: string;
-  expectedIntegrity?: string;
-  baseUrl?: string;
-  force?: boolean;
-  forceInstall?: boolean;
-  confirmInstall?: () => boolean | Promise<boolean>;
-  logger?: Logger;
-  config?: OpenClawConfig;
-  onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
-  /** True when a Claw lifecycle caller already owns package coordination. */
-  clawManaged?: boolean;
-}): Promise<InstallClawHubSkillResult> {
+export async function installSkillFromClawHub(
+  params: Omit<
+    ClawHubInstallParams,
+    "ownerHandle" | "requestedReference" | "trustState" | "expectedClawHubState"
+  >,
+): Promise<InstallClawHubSkillResult> {
   if (params.clawManaged) {
     return await installRequestedSkillFromClawHub(params);
   }
@@ -297,7 +285,6 @@ export async function updateSkillsFromClawHub(params: {
         }
         return installed;
       },
-      { required: true },
     );
     results.push(
       install.ok

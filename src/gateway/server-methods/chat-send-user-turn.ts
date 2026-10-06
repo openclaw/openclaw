@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readPersistedMediaFacts, type MediaFact } from "../../media/media-facts.js";
@@ -6,6 +7,7 @@ import { isProgressCardRefreshInputProvenance } from "../../sessions/input-prove
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import {
   type ChatImageContent,
   type OffloadedRef,
@@ -15,6 +17,7 @@ import {
 } from "../chat-attachments.js";
 import { transferGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { resolveCreatorSandbox } from "../operator-role-policy.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { resolveGatewayInputParticipant } from "../session-input-participant.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { captureGatewayUiCommandTarget } from "../ui-command-target.js";
@@ -24,7 +27,7 @@ import type { PreparedChatSendAttachments } from "./chat-send-attachments.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { resolveChatSendCallerContext } from "./gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
+import { isSyntheticGatewayCaller } from "./gateway-personal-caller.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 type ChatSendUserTurnInputController = {
@@ -203,13 +206,8 @@ export function prepareChatSendUserTurn(params: {
       : undefined;
   const { originatingChannel, originatingTo, accountId, messageThreadId, explicitDeliverRoute } =
     admission.originatingRoute;
-  const creation = request.systemInputProvenance
-    ? resolveOperatorSessionCreation(client)
-    : prepareSkillLibrarySessionCreation(
-        client,
-        params.getConfig ?? session.cfg ?? {},
-        resolveOperatorSessionCreation(client),
-      );
+  const creation = resolveOperatorSessionCreation(client);
+  admission.assertWorkAdmissionCurrent?.();
   const sandbox = session.cfg ? resolveCreatorSandbox(session.cfg, creation) : undefined;
   // Current and historical turns must reach the single LLM timestamp boundary
   // with identical bare text. Stamping this live turn would bust the prompt cache.
@@ -247,6 +245,36 @@ export function prepareChatSendUserTurn(params: {
     GatewayRunToolBindings: request.toolBindings,
     GatewayUiCommandTarget: gatewayUiCommandTarget,
   };
+  const requester = client?.authenticatedUserProfile;
+  if (
+    requester &&
+    (client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+    isBrowserOperatorUiClient(request.clientInfo) &&
+    !isSyntheticGatewayCaller(client) &&
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
+  ) {
+    const authenticatedUserId = client.authenticatedUserId;
+    const { profileId, displayName } = requester;
+    bindRequesterProfile(ctx, {
+      id: profileId,
+      displayName,
+      isCurrent: () => {
+        try {
+          admission.assertWorkAdmissionCurrent?.();
+        } catch {
+          return false;
+        }
+        return (
+          !client.invalidated &&
+          !client.connectionSignal?.aborted &&
+          !isSyntheticGatewayCaller(client) &&
+          Boolean(client.authenticatedUserId || client.internal?.authenticatedOperator) &&
+          client.authenticatedUserId === authenticatedUserId &&
+          client.authenticatedUserProfile?.profileId === profileId
+        );
+      },
+    });
+  }
   if (client) {
     transferGatewayLocalUserIngress(client, ctx);
   }
@@ -263,6 +291,17 @@ export function prepareChatSendUserTurn(params: {
     prepareSessionParticipantInput(ctx, participant, userTurn.baseInput.timestamp);
   }
   return {
+    prepareSessionCreation: async () => {
+      if (!request.systemInputProvenance) {
+        const prepared = await prepareSkillLibrarySessionCreation(
+          client,
+          params.getConfig ?? session.cfg ?? {},
+          creation,
+        );
+        admission.assertWorkAdmissionCurrent?.();
+        ctx.SessionCreation = { ...prepared, ...(sandbox ? { sandbox } : {}) };
+      }
+    },
     applyApprovedText: (text: string) => {
       if (text === request.inboundMessage.trim()) {
         return;

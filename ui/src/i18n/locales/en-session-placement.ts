@@ -67,8 +67,7 @@ const enSessionPlacement = {
 
 export const registerSessionPlacementEnglish = Object.assign(
   () => {
-    // SAFETY: The canonical English catalog defines sessionsView as an object; this only extends it.
-    Object.assign(en.sessionsView as TranslationMap, enSessionPlacement.sessionsView);
+    Object.assign(en.sessionsView, enSessionPlacement.sessionsView);
   },
   { catalog: enSessionPlacement },
 );

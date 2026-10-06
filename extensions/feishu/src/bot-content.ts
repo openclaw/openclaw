@@ -1,9 +1,9 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildFeishuConversationId,
   resolveConfiguredFeishuGroupSessionScope,
-  type FeishuGroupSessionScope as GroupSessionScope,
 } from "./conversation-id.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -12,7 +12,7 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
+import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
 
 type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
 
@@ -20,13 +20,10 @@ type FeishuMessageLike = {
   message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
 };
 
-type ResolvedFeishuGroupSession = {
-  peerId: string;
-  parentPeer: { kind: "group"; id: string } | null;
-  groupSessionScope: GroupSessionScope;
-  replyInThread: boolean;
-  threadReply: boolean;
-};
+type FeishuGroupSessionConfig = Pick<
+  FeishuConfig,
+  "groupSessionScope" | "topicSessionMode" | "replyInThread"
+>;
 
 export function resolveFeishuGroupSession(params: {
   chatId: string;
@@ -35,17 +32,9 @@ export function resolveFeishuGroupSession(params: {
   rootId?: string;
   threadId?: string;
   chatType?: FeishuChatType;
-  groupConfig?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-}): ResolvedFeishuGroupSession {
+  groupConfig?: FeishuGroupSessionConfig;
+  feishuCfg?: FeishuGroupSessionConfig;
+}) {
   const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
     params;
   const normalizedThreadId = threadId?.trim();
@@ -92,7 +81,7 @@ export function resolveFeishuGroupSession(params: {
 
   return {
     peerId,
-    parentPeer: topicScope ? { kind: "group", id: chatId } : null,
+    parentPeer: topicScope ? { kind: "group" as const, id: chatId } : null,
     groupSessionScope,
     replyInThread,
     threadReply,
@@ -118,14 +107,13 @@ export function parseMessageContent(content: string, messageType: string): strin
     if (messageType === "share_chat") {
       if (parsed && typeof parsed === "object") {
         const share = parsed as { body?: unknown; summary?: unknown; share_chat_id?: unknown };
-        if (typeof share.body === "string" && share.body.trim()) {
-          return share.body.trim();
+        const text = normalizeOptionalString(share.body) ?? normalizeOptionalString(share.summary);
+        if (text) {
+          return text;
         }
-        if (typeof share.summary === "string" && share.summary.trim()) {
-          return share.summary.trim();
-        }
-        if (typeof share.share_chat_id === "string" && share.share_chat_id.trim()) {
-          return `[Forwarded message: ${share.share_chat_id.trim()}]`;
+        const sharedChatId = normalizeOptionalString(share.share_chat_id);
+        if (sharedChatId) {
+          return `[Forwarded message: ${sharedChatId}]`;
         }
       }
       return "[Forwarded message]";
@@ -276,7 +264,12 @@ export async function resolveFeishuMediaList(params: {
         key: attachment.key,
         type: attachment.kind,
         fileName: attachment.kind === "file" ? attachment.fileName : undefined,
-        kind: attachment.kind === "image" ? "image" : "video",
+        kind:
+          attachment.kind === "image"
+            ? "image"
+            : attachment.origin === "top-level"
+              ? "document"
+              : "video",
         label: `embedded ${attachment.kind} ${attachment.key}`,
       });
     }

@@ -1,4 +1,3 @@
-// Implements config inspection and mutation commands for reply sessions.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";

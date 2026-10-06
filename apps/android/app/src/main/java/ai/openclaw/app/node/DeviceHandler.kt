@@ -105,14 +105,6 @@ private class AndroidDeviceAppSource(
   }
 }
 
-private data class DeviceAppsRequest(
-  val includeSystem: Boolean,
-  val includeDisabled: Boolean,
-  val includeNonLaunchable: Boolean,
-  val query: String?,
-  val limit: Int,
-)
-
 class DeviceHandler internal constructor(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
@@ -146,27 +138,31 @@ class DeviceHandler internal constructor(
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
   fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
-    val request = parseDeviceAppsRequest(paramsJson)
+    val params = parseJsonParamsObject(paramsJson)
+    val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
+    val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
+    val includeNonLaunchable = parseJsonBooleanFlag(params, "includeNonLaunchable") ?: false
+    val query = parseJsonString(params, "query")?.trim()?.takeIf { it.isNotEmpty() }
+    val limit = (parseJsonInt(params, "limit") ?: DEFAULT_DEVICE_APPS_LIMIT).coerceIn(1, MAX_DEVICE_APPS_LIMIT)
     val matchingApps =
       appSource
-        .listApps(includeNonLaunchable = request.includeNonLaunchable)
+        .listApps(includeNonLaunchable = includeNonLaunchable)
         .asSequence()
-        .filter { request.includeSystem || !it.system }
-        .filter { request.includeDisabled || it.enabled }
+        .filter { includeSystem || !it.system }
+        .filter { includeDisabled || it.enabled }
         .filter { app ->
-          val query = request.query ?: return@filter true
-          app.label.contains(query, ignoreCase = true) || app.packageName.contains(query, ignoreCase = true)
+          query == null || app.label.contains(query, ignoreCase = true) || app.packageName.contains(query, ignoreCase = true)
         }.toList()
-    val limitedApps = matchingApps.take(request.limit)
+    val limitedApps = matchingApps.take(limit)
 
     return GatewaySession.InvokeResult.ok(
       buildJsonObject {
         put("count", JsonPrimitive(limitedApps.size))
         put("totalMatched", JsonPrimitive(matchingApps.size))
         put("truncated", JsonPrimitive(matchingApps.size > limitedApps.size))
-        put("visibility", JsonPrimitive(if (request.includeNonLaunchable) "android-visible" else "launcher"))
-        put("includeSystem", JsonPrimitive(request.includeSystem))
-        put("includeDisabled", JsonPrimitive(request.includeDisabled))
+        put("visibility", JsonPrimitive(if (includeNonLaunchable) "android-visible" else "launcher"))
+        put("includeSystem", JsonPrimitive(includeSystem))
+        put("includeDisabled", JsonPrimitive(includeDisabled))
         put("apps", Json.encodeToJsonElement(limitedApps))
       }.toString(),
     )
@@ -223,7 +219,6 @@ class DeviceHandler internal constructor(
         .orEmpty()
     val locale = Locale.getDefault().toLanguageTag().trim()
     val appVersion = BuildConfig.VERSION_NAME.trim()
-    val appBuild = BuildConfig.VERSION_CODE.toString()
 
     return buildJsonObject {
       put("deviceName", JsonPrimitive(model.ifEmpty { "Android" }))
@@ -234,7 +229,7 @@ class DeviceHandler internal constructor(
       put("systemName", JsonPrimitive("Android"))
       put("systemVersion", JsonPrimitive(systemVersion.ifEmpty { Build.VERSION.SDK_INT.toString() }))
       put("appVersion", JsonPrimitive(appVersion.ifEmpty { "dev" }))
-      put("appBuild", JsonPrimitive(appBuild.ifEmpty { "0" }))
+      put("appBuild", JsonPrimitive(BuildConfig.VERSION_CODE.toString()))
       put("locale", JsonPrimitive(locale.ifEmpty { Locale.getDefault().toString() }))
     }.toString()
   }
@@ -317,24 +312,6 @@ class DeviceHandler internal constructor(
           ?.let { put("securityPatchLevel", it) }
       }
     }.toString()
-  }
-
-  private fun parseDeviceAppsRequest(paramsJson: String?): DeviceAppsRequest {
-    val params = parseJsonParamsObject(paramsJson)
-    val includeSystem = parseJsonBooleanFlag(params, "includeSystem") ?: false
-    val includeDisabled = parseJsonBooleanFlag(params, "includeDisabled") ?: false
-    val includeNonLaunchable = parseJsonBooleanFlag(params, "includeNonLaunchable") ?: false
-    val query = parseJsonString(params, "query")?.trim()?.takeIf { it.isNotEmpty() }
-    val limit =
-      (parseJsonInt(params, "limit") ?: DEFAULT_DEVICE_APPS_LIMIT)
-        .coerceIn(1, MAX_DEVICE_APPS_LIMIT)
-    return DeviceAppsRequest(
-      includeSystem = includeSystem,
-      includeDisabled = includeDisabled,
-      includeNonLaunchable = includeNonLaunchable,
-      query = query,
-      limit = limit,
-    )
   }
 
   private fun readBatterySnapshot(): BatterySnapshot {

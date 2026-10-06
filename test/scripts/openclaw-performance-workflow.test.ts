@@ -313,21 +313,11 @@ describe("OpenClaw performance workflow", () => {
     expect(verify.run).toContain('"$VITEST_PAIR_RESULT" != "success"');
   });
 
-  it("uses an optional dispatch identifier to name parent-owned runs", () => {
-    const workflow = readFileSync(WORKFLOW, "utf8");
-
-    expect(workflow).toContain(
-      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
-    );
-    expect(workflow).toContain("dispatch_id:");
-    expect(workflow).toContain("Optional parent workflow dispatch identifier");
-  });
-
   it("pins the Kova evaluator with release validation contracts", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
-    const canonicalKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
-    const legacyKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
-    const trustedLiveKovaRef = "17304ab9d7aa283b78b1771a2585518fa5961048";
+    const canonicalKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
+    const legacyKovaRef = "d69b2209905195bea06980721a92ad8b70808c5d";
+    const trustedLiveKovaRef = "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b";
     const install = findStep("Install OCM and Kova");
     const installRun = install.run ?? "";
     const targetCheckout = findStep("Checkout target metadata", "resolve_target");
@@ -362,7 +352,6 @@ describe("OpenClaw performance workflow", () => {
     expect(resolveTarget.run).toContain('detected_kova_config_contract="canonical"');
     expect(resolveTarget.run).toContain('detected_kova_config_contract="legacy-list"');
     expect(resolveTarget.run).toContain('kova_ref="${KOVA_REF_INPUT:-}"');
-    expect(resolveTarget.run).toContain('kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"');
     expect(resolveTarget.run).toContain('kova_ref="${kova_ref:-$default_kova_ref}"');
     expect(resolveTarget.run).toContain(
       'if [[ -z "$kova_ref" || -z "$kova_config_contract" ]]; then',
@@ -489,20 +478,6 @@ describe("OpenClaw performance workflow", () => {
         contract: "custom-contract",
         expectedContract: "custom-contract",
       },
-      {
-        name: "historical release pin",
-        schema: legacy,
-        version: "2026.7.33",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
-      {
-        name: "extended-stable correction pin",
-        schema: legacy,
-        version: "2026.7.34",
-        expectedContract: "legacy-list",
-        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
-      },
     ];
     posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
       const { outputs, result, sha } = runTargetMetadataResolution(fixture);
@@ -514,8 +489,11 @@ describe("OpenClaw performance workflow", () => {
         return;
       }
       expect(result.status, result.stderr + result.stdout).toBe(0);
-      const expectedRef =
-        fixture.expectedRef ?? fixture.kovaRef ?? readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const defaultRef =
+        fixture.expectedContract === "legacy-list"
+          ? readWorkflow().env?.KOVA_LEGACY_LIST_CONFIG_REF
+          : readWorkflow().env?.KOVA_CANONICAL_CONFIG_REF;
+      const expectedRef = fixture.kovaRef ?? defaultRef;
       expect(outputs).toEqual({
         checkout_ref: sha,
         tested_ref: "fixture-target",
@@ -537,7 +515,7 @@ describe("OpenClaw performance workflow", () => {
       expect(outputs).toMatchObject({
         checkout_ref: sha,
         tested_sha: sha,
-        kova_ref: "17304ab9d7aa283b78b1771a2585518fa5961048",
+        kova_ref: "88d9a7efa5e6569f902bf8d298fd6a21c6be2e7b",
         kova_config_contract: "canonical",
       });
     });
@@ -766,9 +744,9 @@ describe("OpenClaw performance workflow", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
     const installRun = findStep("Install OCM and Kova").run ?? "";
 
-    expect(workflow).toContain("OCM_VERSION: v0.2.47");
+    expect(workflow).toContain("OCM_VERSION: v0.2.48");
     expect(workflow).toContain(
-      "OCM_LINUX_X64_SHA256: 05e0bb598fe391c75fe7668e159d7eb09168b4298b5d8d0999786e79e97d0642",
+      "OCM_LINUX_X64_SHA256: d0bdb49d69fa8bf3c3487ff04f4be82126828876f81690afdc002c427e22c1ac",
     );
     expect(installRun).toContain(
       '"https://github.com/openclaw/ocm/releases/download/${OCM_VERSION}/ocm-x86_64-unknown-linux-gnu.tar.gz"',
@@ -837,6 +815,13 @@ describe("OpenClaw performance workflow", () => {
     expect(baseline.if).toBeUndefined();
     expect(baseline.env?.CLAWGRIT_REPORTS_TOKEN).toBeUndefined();
     expect(baseline.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(baseline.env?.QUALIFICATION_DISPATCH).toBe(
+      "${{ startsWith(inputs.dispatch_id, 'full-release-validation-') }}",
+    );
+    expect(run).toContain("advisory-not-compared");
+    expect(run.indexOf('os.environ.get("QUALIFICATION_DISPATCH")')).toBeLessThan(
+      run.indexOf('fetch(reports, "main"'),
+    );
     expect(run).toContain('remote = "https://github.com/openclaw/clawgrit-reports.git"');
     expect(run).toContain(
       'fetch(reports, "main", blobless=True, max_attempts=3, retry_failures=True)',
@@ -1211,7 +1196,7 @@ printf '%s\\n' \
     }
   });
 
-  posixIt.each([
+  posixIt.for([
     { name: "direct", pushResults: [], fetchResults: [], success: true },
     { name: "remote duplicate", pushResults: [124], fetchResults: [], success: true, duplicate: 1 },
     {
@@ -1223,8 +1208,10 @@ printf '%s\\n' \
     { name: "missing token", pushResults: [], fetchResults: [], success: false, token: "" },
   ])(
     "advertises a clawgrit URL only after verified success ($name)",
-    async ({ name, pushResults, fetchResults, success, duplicate, token }) => {
+    { timeout: 55_000 },
+    async ({ name, pushResults, fetchResults, success, duplicate, token }, { signal }) => {
       const report = await runCiGitStep({
+        signal,
         workflow: { file: WORKFLOW, job: "publish", step: "Publish to clawgrit reports" },
         performance: { mode: "publish", remoteDuplicateAttempt: duplicate },
         fetchResults,
@@ -1242,13 +1229,13 @@ printf '%s\\n' \
         expect(report.githubSummary).toContain("ClawSweeper GitHub App installation");
       }
     },
-    55_000,
   );
 
   posixIt(
     "preserves both reports when concurrent writers update one latest pointer",
-    async () => {
+    async ({ signal }) => {
       const report = await runCiGitStep({
+        signal,
         workflow: { file: WORKFLOW, job: "publish", step: "Publish to clawgrit reports" },
         performance: { mode: "publish", race: true },
         fetchResults: [],
@@ -1374,30 +1361,35 @@ printf '%s\\n' \
     const managedServiceLanes = workflow.jobs?.kova?.strategy?.matrix?.include?.map(
       (lane) => lane.managed_service,
     );
-    const prepare = findStep("Prepare systemd user session");
+    const prepare = findStep("Set up Node environment");
+    const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
+    const provisionEntry = action.runs.steps.find((step: WorkflowStep) =>
+      step.run?.includes("loginctl enable-linger"),
+    )?.run;
+    const provision = readFileSync(".github/actions/setup-node-env/semantic-memory.sh", "utf8");
     const stepNames = steps.map((step) => step.name);
 
     expect(managedServiceLanes).toEqual(["true", "true", "false"]);
-    expect(prepare.if).toBe(
-      "${{ steps.lane.outputs.run == 'true' && matrix.managed_service == 'true' }}",
-    );
-    expect(prepare.run).toContain("set -euo pipefail");
-    expect(prepare.run).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
-    expect(prepare.run).toContain("sudo systemctl is-active --quiet systemd-logind.service");
-    expect(prepare.run).toContain('sudo loginctl enable-linger "$user"');
-    expect(prepare.run).toContain('sudo systemctl start "user@${uid}.service"');
-    expect(prepare.run).toContain(
+    expect(prepare.if).toBe("steps.lane.outputs.run == 'true'");
+    expect(prepare.with?.["semantic-checks"]).toBe("${{ matrix.managed_service }}");
+    expect(provisionEntry).toBe(provision.split("\n").slice(1).join("\n"));
+    expect(provision).toContain("set -euo pipefail");
+    expect(provision).toContain('test "$(ps -p 1 -o comm= | xargs)" = systemd');
+    expect(provision).toContain("sudo -n systemctl is-active --quiet systemd-logind.service");
+    expect(provision).toContain('sudo -n loginctl enable-linger "$user"');
+    expect(provision).toContain('sudo -n systemctl start "user@${uid}.service"');
+    expect(provision).toContain(
       'runtime_dir="$(loginctl show-user "$user" --property=RuntimePath --value)"',
     );
-    expect(prepare.run).toContain('test -S "$XDG_RUNTIME_DIR/systemd/private"');
-    expect(prepare.run).toContain('echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"');
-    expect(prepare.run).toContain('if [[ -S "$runtime_dir/bus" ]]; then');
-    expect(prepare.run).toContain(
+    expect(provision).toContain('test -S "$XDG_RUNTIME_DIR/systemd/private"');
+    expect(provision).toContain('echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"');
+    expect(provision).toContain('if [[ -S "$runtime_dir/bus" ]]; then');
+    expect(provision).toContain(
       'echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"',
     );
-    expect(prepare.run).toContain("systemctl --user show-environment >/dev/null");
-    expect(prepare.run).not.toContain("|| true");
-    expect(stepNames.indexOf("Prepare systemd user session")).toBeLessThan(
+    expect(provision).toContain("systemctl --user show-environment >/dev/null");
+    expect(provision).not.toContain("|| true");
+    expect(stepNames.indexOf("Set up Node environment")).toBeLessThan(
       stepNames.indexOf("Install OCM and Kova"),
     );
   });

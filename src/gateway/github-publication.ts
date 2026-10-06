@@ -17,9 +17,11 @@ import {
 import { createPersonalGitHubPublicationCoordinator } from "./github-personal-publication.js";
 import {
   assertExpectedSharedGitHubPublisher,
+  matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
   resolveGitHubPublicationWorktreeOwner,
-  resolveGitHubPublicationWorkspaceOwner,
+  readGitHubPublicationWorktreeOwner,
+  prepareGitHubPublicationWorkspaceOwner,
 } from "./github-publication-availability.js";
 import {
   createGitHubPublicationCoordinatorMethods,
@@ -158,7 +160,7 @@ export function createGitHubPublicationCoordinator(params: {
     ) {
       throw new Error("GitHub publication session identity changed.");
     }
-    const admitted = resolveGitHubPublicationWorktreeOwner({
+    const admitted = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
@@ -180,15 +182,19 @@ export function createGitHubPublicationCoordinator(params: {
           ),
       },
     );
-    if (!params.placements.validateTurnClaim(request.claim)) {
-      throw new Error("GitHub publication lost the live session turn claim after verification.");
-    }
-    const { worktree } = resolveGitHubPublicationWorktreeOwner({
+    const { worktree } = await readGitHubPublicationWorktreeOwner({
       sessionId: request.claim.sessionId,
       sessionKey: request.sessionKey,
       agentId: request.agentId,
       lifecycleRevision: admitted.loaded.entry?.lifecycleRevision ?? null,
     });
+    assertRequester();
+    if (!params.placements.validateTurnClaim(request.claim)) {
+      throw new Error("GitHub publication lost the live session turn claim after verification.");
+    }
+    if (!matchesCurrentGitHubPublicationIdentity({ agentId: request.agentId, identity })) {
+      throw new Error("GitHub publication identity changed.");
+    }
     const requestDigest = digestRequest({
       sessionId: request.claim.sessionId,
       idempotencyKey: request.idempotencyKey,
@@ -375,7 +381,6 @@ export function createGitHubPublicationCoordinator(params: {
                 assertInvocationCurrent?.();
                 return true;
               },
-              projectResult: publicationResult,
               recordEffect: (kind, observed) => {
                 dispatched ||= observed === undefined;
                 effect = {
@@ -424,7 +429,6 @@ export function createGitHubPublicationCoordinator(params: {
               const observed = await reconcileGitHubPublication({
                 initial: current,
                 validateCustody,
-                projectResult: publicationResult,
                 complete,
                 pushOnly:
                   claimed.head_commit === null && effect?.kind === "push"
@@ -462,16 +466,14 @@ export function createGitHubPublicationCoordinator(params: {
 
   const prepareClaimWorkspace = async (claim: WorkerSessionTurnClaim): Promise<void> => {
     ensureSchema();
-    params.placements.closeWorkerTurnToolAdmission(claim);
+    await params.placements.closeWorkerTurnToolAdmission(claim);
     const rows = listGitHubPublicationsForClaim(claim, { pendingOnly: true });
     if (rows.length === 0) {
       return;
     }
-    if (!params.placements.validateWorkspaceResultClaim(claim)) {
-      throw new Error("GitHub publication lost its workspace result claim before snapshot.");
-    }
+    await params.placements.prepareWorkspaceResultClaim(claim);
     const first = rows[0]!;
-    const { worktree } = resolveGitHubPublicationWorktreeOwner({
+    const { worktree } = await readGitHubPublicationWorktreeOwner({
       sessionId: first.session_id,
       sessionKey: first.session_key,
       agentId: first.agent_id,
@@ -481,6 +483,9 @@ export function createGitHubPublicationCoordinator(params: {
         branch: first.branch,
       },
     });
+    if (!params.placements.validateWorkspaceResultClaim(claim)) {
+      throw new Error("GitHub publication lost its workspace result claim before snapshot.");
+    }
     for (const row of rows) {
       if (!sameWorktree(row, worktree)) {
         throw new Error("GitHub publication worktree changed before accepted snapshot.");
@@ -537,12 +542,14 @@ export function createGitHubPublicationCoordinator(params: {
   return {
     ...methods,
     ...personal,
-    requestForClaim: (request: GitHubPublicationClaimRequest) =>
-      resolveGitHubPublicationWorkspaceOwner({
-        sessionId: request.claim.sessionId,
-        sessionKey: request.sessionKey,
-        agentId: request.agentId,
-      }).kind === "repository"
+    requestForClaim: async (request: GitHubPublicationClaimRequest) =>
+      (
+        await prepareGitHubPublicationWorkspaceOwner({
+          sessionId: request.claim.sessionId,
+          sessionKey: request.sessionKey,
+          agentId: request.agentId,
+        })
+      ).initial.kind === "repository"
         ? repository.requestForClaim(request)
         : requestForClaim(request),
     async prepareClaimWorkspace(claim: WorkerSessionTurnClaim) {
@@ -559,21 +566,24 @@ export function createGitHubPublicationCoordinator(params: {
         ? repository.requestForSession(input)
         : methods.requestForSession(input);
     },
-    requestPersonalForSession(...args: Parameters<typeof personal.requestPersonalForSession>) {
-      return resolveGitHubPublicationWorkspaceOwner(args[1]).kind === "repository"
+    async requestPersonalForSession(
+      ...args: Parameters<typeof personal.requestPersonalForSession>
+    ) {
+      return (await prepareGitHubPublicationWorkspaceOwner(args[1])).initial.kind === "repository"
         ? repository.requestPersonalForSession(...args)
         : personal.requestPersonalForSession(...args);
     },
-    sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
-      return repository.sharedStatus(...args) ?? methods.sharedStatus(...args);
+    async sharedStatus(...args: Parameters<typeof methods.sharedStatus>) {
+      return (await repository.sharedStatus(...args)) ?? (await methods.sharedStatus(...args));
     },
-    latestShared(...args: Parameters<typeof methods.latestShared>) {
-      return repository.latestShared(...args) ?? methods.latestShared(...args);
+    async latestShared(...args: Parameters<typeof methods.latestShared>) {
+      return (await repository.latestShared(...args)) ?? (await methods.latestShared(...args));
     },
-    personalStatus(...args: Parameters<typeof personal.personalStatus>) {
+    preparePersonalStatus: repository.preparePersonalStatus,
+    personalStatus(...args: Parameters<typeof repository.personalStatus>) {
       return repository.hasRequest(args[2])
         ? repository.personalStatus(...args)!
-        : personal.personalStatus(...args);
+        : personal.personalStatus(args[0], args[1], args[2]);
     },
     async personalPending(...args: Parameters<typeof personal.personalPending>) {
       return (await repository.personalPending(...args)) ?? personal.personalPending(...args);
@@ -604,9 +614,14 @@ export function createGitHubPublicationCoordinator(params: {
         );
       }
     },
-    deferOrphanedRequests() {
+    /** @deprecated Await deferOrphanedRequestsAsync; retained for released plugin contexts. */
+    deferOrphanedRequests(): void {
       methods.deferOrphanedRequests();
       repository.deferOrphanedRequests();
+    },
+    async deferOrphanedRequestsAsync(): Promise<void> {
+      await methods.deferOrphanedRequestsAsync();
+      await repository.deferOrphanedRequestsAsync();
     },
     listUnreportedResults() {
       return [...methods.listUnreportedResults(), ...repository.listUnreportedResults()];
