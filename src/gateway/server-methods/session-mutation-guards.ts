@@ -5,6 +5,7 @@ import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import { isGatewayNativeApprovalMethod } from "../../infra/approval-gateway-runtime-methods.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import { isGatewayAuthPolicyCurrent } from "../auth-policy.js";
@@ -13,6 +14,7 @@ import {
   readGatewayDeviceRevocationGuard,
 } from "../device-revocation.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
+import { isInternalApprovalCommitGuard } from "../internal-approval-authority.js";
 import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
@@ -137,6 +139,39 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
   assertSourceCurrent: (() => void) | undefined,
   assertPreparationCurrent: (() => void) | undefined,
 ): T {
+  if (
+    isGatewayNativeApprovalMethod(options.req.method) &&
+    isInternalApprovalCommitGuard(options.sessionMutationCommitGuard)
+  ) {
+    const { req, client, context, signal, hasCurrentClientAuthority, sessionMutationCommitGuard } =
+      options;
+    const assertWorkerCurrent = () => {
+      if (
+        options.req !== req ||
+        options.client !== client ||
+        options.context !== context ||
+        options.signal !== signal ||
+        options.hasCurrentClientAuthority !== hasCurrentClientAuthority ||
+        options.sessionMutationCommitGuard !== sessionMutationCommitGuard
+      ) {
+        throw new Error("Gateway requester authority changed");
+      }
+      assertRequestAuthorityCurrent({
+        req,
+        client,
+        signal,
+        hasCurrentClientAuthority,
+        sessionMutationCommitGuard,
+      });
+    };
+    bindRequestMutationAuthority(options, {
+      family: "worker",
+      assertPreparationCurrent: assertWorkerCurrent,
+      assertCurrent: assertWorkerCurrent,
+      assertLifetimeCurrent: assertWorkerCurrent,
+      assertWorkerCurrent,
+    });
+  }
   if (!assertSourceCurrent && !assertPreparationCurrent) {
     return options;
   }

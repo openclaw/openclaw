@@ -84,6 +84,18 @@ compatibility operations retain their existing tiers. Offline full-store reset i
 archive-reset operations are T3 CLI one-shots, including dev bootstrap; Gateway
 session reset and other archive lifecycle operations are classified separately.
 
+First-party channel and in-process approval requests carry their original live
+authority into the existing approval writer. Lookup, malformed-verdict denial,
+resolution, and cron standing-grant minting keep their synchronous worker
+transactions, physical-store admission, FIFO, and acknowledged publication.
+The carrier identifies an internal assertion; it never replaces current Gateway,
+caller, or channel authority with a captured permission. Released opaque
+`GatewayRequestHandlerOptions.sessionMutationCommitGuard` callbacks retain their
+native transaction boundary until the next Plugin SDK major, so shared SQL kernels
+remain in the T1 inventory. Existing other-owner session authority reads remain
+separate migration debt. Schemas, stored bytes, retention, and update behavior are
+unchanged.
+
 Workspace alias registration and snapshot operations retain T2 for their native
 Doctor/migration and relocation-retirement callers alongside worker dispatch.
 Plugin catalog repair, legacy import, and migration-receipt retirement are also
