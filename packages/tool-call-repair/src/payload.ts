@@ -548,9 +548,6 @@ export function stripPlainTextToolCallBlocks(
       continue;
     }
     const scan = scanPlainTextToolCall(text, blockStart);
-    if (scan.kind === "prefix" && scan.completeEnd === undefined) {
-      return result + text.slice(cursor);
-    }
     if (scan.kind === "invalid") {
       // The scanner owns everything before `at` as one malformed candidate. Honor that
       // progress so nested line starts inside its payload are not rescanned quadratically.
