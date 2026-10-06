@@ -147,7 +147,7 @@ export function assertSkillPatchRunUsage(params: {
     })
   ) {
     throw new ToolInputError(
-      `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously`,
+      `skill "${params.skill.skillName}" was not used in this run and cannot be repaired autonomously. Workshop read and prepare_patch do not establish repair eligibility. Stage a full update and apply it for planned authoring, or edit the skill directly when the user owns it`,
     );
   }
 }
