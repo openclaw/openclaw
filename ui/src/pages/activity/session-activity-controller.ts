@@ -1,3 +1,4 @@
+import { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model";
 import type { RouteLocation } from "@openclaw/uirouter";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
@@ -5,7 +6,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath, activityPersonLocation } from "../../app-route-paths.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
-import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   createSessionRowProvenance,

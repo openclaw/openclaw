@@ -1,7 +1,7 @@
+import type { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { sessionMatchesArchivedFilter } from "./navigation.ts";
 import type {
   SessionGateway,

@@ -588,6 +588,47 @@ it("keeps authoritative write booleans and strips unrelated details", () => {
   ]);
 });
 
+it("projects bounded canonical UI artifacts into sanitized history", () => {
+  const artifacts = Array.from({ length: 8 }, (_, index) => ({
+    version: 1,
+    id: `artifact-${index}`,
+    revision: 1,
+    structuredContent: { value: "x".repeat(400) },
+    views: [
+      {
+        id: `view-${index}`,
+        templateUri: "clawpilot://widgets/calendar",
+        dataVersion: 1,
+        availability: "inline",
+        data: { events: [] },
+        module: "https://attacker.invalid/component.js",
+      },
+    ],
+    state: "ready",
+    source: { sessionKey: "agent:main:one", toolCallId: `tool-${index}` },
+  }));
+  const [projected] = sanitizeChatHistoryMessages(
+    [
+      {
+        role: "toolResult",
+        toolName: "show_widget",
+        content: "Rendered widget",
+        details: { uiArtifacts: artifacts, secret: "drop" },
+      },
+    ],
+    1_000,
+  ) as Array<Record<string, unknown>>;
+  const details = projected?.details as { uiArtifacts?: Array<Record<string, unknown>> };
+  const retained = details.uiArtifacts ?? [];
+
+  expect(retained.length).toBeGreaterThan(0);
+  expect(retained.length).toBeLessThan(artifacts.length);
+  expect(new TextEncoder().encode(JSON.stringify(retained)).byteLength).toBeLessThanOrEqual(1_000);
+  expect((retained[0]?.views as Array<Record<string, unknown>>)[0]).not.toHaveProperty("module");
+  expect(details).not.toHaveProperty("secret");
+  expect(projected?.__openclaw).toEqual({ truncated: true, reason: "display-cap" });
+});
+
 it.each([
   { toolName: "exec", details: { exitCode: 0, durationMs: 0, cwd: "/workspace", ok: true } },
   { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },

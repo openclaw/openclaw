@@ -79,7 +79,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
   records; an authoritative list clears uncertainty and covered retirements before
   pending events replay, preserving later retirements. Saturation blocks
   unseen admission until an authoritative read restores the bounded state.
-- `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
+- `@openclaw/gateway-client/model` owns automatic refresh pacing:
   collect events in a four-to-five-second window sampled once when armed so
   browsers spread their reads and subsequent events cannot postpone them.
   After each automatic refresh, wait three times its duration

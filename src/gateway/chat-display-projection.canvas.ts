@@ -1,3 +1,4 @@
+import { normalizeUiArtifact } from "@openclaw/gateway-protocol";
 import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
@@ -11,6 +12,8 @@ import {
 } from "../shared/tool-approval-reviews.js";
 import { truncateChatHistoryText } from "./chat-display-projection.helpers.js";
 
+const MAX_PROJECTED_UI_ARTIFACTS = 100;
+
 function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is string {
   return (
     typeof value === "string" &&
@@ -18,6 +21,52 @@ function isBrowserRouteIdentifier(value: unknown, maxChars: number): value is st
     value.length <= maxChars &&
     value.trim() === value
   );
+}
+
+function projectUiArtifact(value: unknown) {
+  const normalized = normalizeUiArtifact(value);
+  if (normalized.ok) {
+    return normalized.value;
+  }
+  const artifact = readRecord(value);
+  const source = readRecord(artifact?.source);
+  const failure = normalizeUiArtifact({
+    version: 1,
+    id: normalized.error.artifactId,
+    revision: normalized.error.revision,
+    views: [],
+    state: "failed",
+    source,
+    error: {
+      code: normalized.error.code,
+      message: normalized.error.message,
+    },
+  });
+  return failure.ok ? failure.value : undefined;
+}
+
+function projectUiArtifacts(
+  values: unknown[],
+  maxBytes: number,
+): { artifacts: NonNullable<ReturnType<typeof projectUiArtifact>>[]; truncated: boolean } {
+  const artifacts: NonNullable<ReturnType<typeof projectUiArtifact>>[] = [];
+  let retainedBytes = 2;
+  let truncated = values.length > MAX_PROJECTED_UI_ARTIFACTS;
+  for (const value of values.slice(0, MAX_PROJECTED_UI_ARTIFACTS)) {
+    const artifact = projectUiArtifact(value);
+    if (!artifact) {
+      continue;
+    }
+    const artifactBytes = new TextEncoder().encode(JSON.stringify(artifact)).byteLength;
+    const separatorBytes = artifacts.length > 0 ? 1 : 0;
+    if (retainedBytes + separatorBytes + artifactBytes > maxBytes) {
+      truncated = true;
+      break;
+    }
+    artifacts.push(artifact);
+    retainedBytes += separatorBytes + artifactBytes;
+  }
+  return { artifacts, truncated };
 }
 
 /** Return true for known tool-call/tool-result block type spellings in transcripts. */
@@ -102,6 +151,13 @@ export function projectToolResultDetails(
     if (reviews.length > 0) {
       projected.approvalReviews = reviews;
     }
+  }
+  if (Array.isArray(record.uiArtifacts)) {
+    const uiArtifacts = projectUiArtifacts(record.uiArtifacts, maxChars);
+    if (uiArtifacts.artifacts.length > 0) {
+      projected.uiArtifacts = uiArtifacts.artifacts;
+    }
+    truncated ||= uiArtifacts.truncated;
   }
   const reviewOutcome = record.approvalReviewOutcome;
   if (reviewOutcome === "approved" || reviewOutcome === "denied" || reviewOutcome === "reviewing") {

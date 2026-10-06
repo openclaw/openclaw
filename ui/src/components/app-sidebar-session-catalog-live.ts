@@ -1,3 +1,4 @@
+import { createSessionEventRefreshCoordinator } from "@openclaw/gateway-client/model";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionCatalog,
@@ -14,7 +15,6 @@ import {
   resolveGatewayReadRetryDelayMs,
 } from "../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
-import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import {

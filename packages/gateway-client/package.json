@@ -59,6 +59,16 @@
       "types": "./dist/websocket-data.d.mts",
       "import": "./dist/websocket-data.mjs",
       "default": "./dist/websocket-data.mjs"
+    },
+    "./model": {
+      "types": "./dist/model/index.d.mts",
+      "import": "./dist/model/index.mjs",
+      "default": "./dist/model/index.mjs"
+    },
+    "./model/session-event-refresh": {
+      "types": "./dist/model/session-event-refresh.d.mts",
+      "import": "./dist/model/session-event-refresh.mjs",
+      "default": "./dist/model/session-event-refresh.mjs"
     }
   },
   "scripts": {
