@@ -11,6 +11,7 @@ import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalProviderCatalogEntries,
   resolveOfficialExternalPluginInstall,
+  type OfficialExternalProviderAuthChoice,
 } from "./official-external-plugin-catalog.js";
 import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -169,6 +170,22 @@ function resolvePreferredInstallsByPluginId(
   return { installedPluginIds, installsByPluginId: preferredByPluginId };
 }
 
+function isProviderFlowScope(
+  value: unknown,
+): value is "text-inference" | "image-generation" | "music-generation" {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
+}
+
+function normalizeProviderAuthChoiceScopes(
+  scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
+): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized = scopes.filter(isProviderFlowScope);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   installedPluginIds: ReadonlySet<string>;
   seenChoiceIds: ReadonlySet<string>;
@@ -207,14 +224,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
         if (!methodId || !choiceId || !choiceLabel || params.seenChoiceIds.has(choiceId)) {
           continue;
         }
-        const onboardingScopes = Array.isArray(choice.onboardingScopes)
-          ? choice.onboardingScopes.filter(
-              (scope): scope is "text-inference" | "image-generation" | "music-generation" =>
-                scope === "text-inference" ||
-                scope === "image-generation" ||
-                scope === "music-generation",
-            )
-          : [];
+        const onboardingScopes = normalizeProviderAuthChoiceScopes(choice.onboardingScopes);
         entries.push({
           pluginId,
           providerId,
@@ -237,7 +247,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
           ...(choice.cliFlag ? { cliFlag: choice.cliFlag } : {}),
           ...(choice.cliOption ? { cliOption: choice.cliOption } : {}),
           ...(choice.cliDescription ? { cliDescription: choice.cliDescription } : {}),
-          ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
+          ...(onboardingScopes ? { onboardingScopes } : {}),
           ...(choice.deprecatedChoiceIds?.length
             ? { deprecatedChoiceIds: [...choice.deprecatedChoiceIds] }
             : {}),

@@ -129,7 +129,7 @@ export async function buildChannelSummary(
       if (snapshot.dmPolicy) {
         details.push(`dm:${snapshot.dmPolicy}`);
       }
-      for (const [key, label] of [
+      for (const [key, sourceLabel] of [
         ["tokenSource", "token"],
         ["botTokenSource", "bot"],
         ["appTokenSource", "app"],
@@ -137,7 +137,7 @@ export async function buildChannelSummary(
       ] as const) {
         const source = snapshot[key];
         if (source && source !== "none") {
-          details.push(`${label}:${source}`);
+          details.push(`${sourceLabel}:${source}`);
         }
       }
       if (entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account)) {
