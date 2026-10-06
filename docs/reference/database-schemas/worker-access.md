@@ -1678,7 +1678,11 @@ observation from the placement authority owner fences newly created placements,
 pending mutations, uncertain outcomes, and physical-store replacement. Transaction
 and commit grants consume those prepared rows and the environment owner's current
 inventory without SQL or worker requests. Confirmed rollback restores observation
-availability; committed changes require fresh preparation outside the grant.
+availability; committed non-local placement changes require fresh preparation
+outside the grant. Local placement claim acquisition and release do not revoke
+this inventory observation because the preservation scan excludes local placements.
+Per-session observations still fence those publications, and remote-exec placements
+remain inventory-fenced even when their turn claim has a local owner.
 Prepared custody lasts through settlement. Native SDK, process-held incognito,
 and offline maintenance keep their existing synchronous transaction view. Entry
 replacement also carries the prepared subagent basis into the existing worker

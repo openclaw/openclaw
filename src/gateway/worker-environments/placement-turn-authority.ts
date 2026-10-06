@@ -42,6 +42,7 @@ type ClaimChange = {
 } & (
   | {
       kind: "claim";
+      localPlacement?: boolean;
       facts?: WorkerSessionTurnClaimFacts;
       workspaceResult?: WorkspaceResultPostimage;
       workspacePlacement?: WorkerSessionPlacementRecord;
@@ -85,9 +86,15 @@ function notifySettlement(owner: PlacementAuthorityOwner): void {
 }
 
 function hasPendingPublication(owner: PlacementAuthorityOwner, sessionId?: string): boolean {
-  return [...owner.pending].some(
-    (change) =>
-      change.kind !== "tools" && (sessionId === undefined || change.sessionId === sessionId),
+  return [...owner.pending].some((change) => affectsPlacementObservation(change, sessionId));
+}
+
+function affectsPlacementObservation(change: ClaimChange, sessionId?: string): boolean {
+  return (
+    change.kind !== "tools" &&
+    (sessionId === undefined
+      ? change.kind !== "claim" || !change.localPlacement
+      : change.sessionId === sessionId)
   );
 }
 
@@ -205,12 +212,13 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
     prunePublication(owner, change.sessionId);
     return;
   }
-  for (const observation of [
-    ...(owner.observations.get(change.sessionId) ?? []),
-    ...(owner.observations.get(undefined) ?? []),
-  ]) {
-    observation.revoked = true;
-    observation.indeterminate ||= change.indeterminate === true;
+  for (const sessionId of [change.sessionId, undefined]) {
+    if (affectsPlacementObservation(change, sessionId)) {
+      for (const observation of owner.observations.get(sessionId) ?? []) {
+        observation.revoked = true;
+        observation.indeterminate ||= change.indeterminate === true;
+      }
+    }
   }
   if (sequence > (owner.published.get(change.sessionId) ?? -1)) {
     const result =
@@ -270,10 +278,6 @@ function commitChange(owner: PlacementAuthorityOwner, change: ClaimChange, seque
   ) {
     owner.tools.set(change.sessionId, { sequence });
   }
-  owner.published.set(
-    change.sessionId,
-    Math.max(owner.published.get(change.sessionId) ?? 0, sequence),
-  );
   for (const retained of owner.claims.get(change.sessionId) ?? []) {
     if (sequence <= retained.createdSequence) {
       continue;
@@ -333,7 +337,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
   return { authority, observation, owner, assertUsable };
 }
 
-/** Omit the session to observe the inventory, including placements created after an empty read. */
+/** Omit the session to fence non-local placements, including creations after an empty read. */
 export function observePlacementAuthority(pathname: string, sessionId?: string) {
   return capturePlacementObservation(pathname, sessionId).authority;
 }
@@ -419,6 +423,7 @@ export function stagePlacementTurnClaimWorkerPublication(
 ): { commit: () => void; rollback: () => void; invalidate: () => void } {
   return stageWorkerChange(identity, {
     kind: "claim",
+    localPlacement: facts.state === "local",
     sessionId: facts.sessionId,
     facts: freezeJsonSnapshot(facts),
     workspaceResult: captureWorkspaceResultPostimage(facts.sessionId, workspaceResult),
@@ -629,6 +634,7 @@ export function publishPlacementTurnClaimState(
   const snapshot = freezeJsonSnapshot(structuredClone(record));
   stageChange(db, {
     kind: "claim",
+    localPlacement: snapshot.state === "local",
     sessionId: snapshot.sessionId,
     workspacePlacement: snapshot,
     facts: snapshot,
@@ -703,20 +709,14 @@ export async function preparePlacementTurnClaimAuthority(
       return false;
     }
   };
-  const assertCurrent = () => {
-    if (!isCurrent()) {
-      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
-    }
-  };
   try {
     const projection = await read([claim.sessionId]);
     context.admission.assertCurrent();
     // Committed publications received during the read supersede its older snapshot.
     retained.facts ??= projection.placements.get(claim.sessionId);
-    assertCurrent();
     const facts = retained.facts;
-    if (!facts) {
-      throw new Error(`Session ${claim.sessionId} turn claim is unavailable`);
+    if (!facts || !isCurrent()) {
+      throw new Error(`Session ${claim.sessionId} turn claim authority changed`);
     }
     return {
       claim,
