@@ -346,6 +346,20 @@ explicit breaking-release approval. The compatibility registry records the
 migration without runtime warnings. Schemas, retained data, and update behavior
 are unchanged.
 
+### Agent execution preparation compatibility
+
+The execution object accepted by
+`openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore` retains the
+`prepare(source, signal?) => Promise<void>` contract published in
+`v2026.10.1-beta.1`. Existing callers and two-argument implementations remain
+supported. Ordinary preparation reuses a completed native generation; host
+admission can request current schema proof through an optional third argument.
+
+The `agent-execution-preparation-released-signature` compatibility record is
+active, with no deprecation warning or required migration. Breaking the released
+contract requires an explicitly approved Plugin SDK major release. Schemas,
+stored data, and update behavior are unchanged.
+
 ### ACP metadata binding compatibility
 
 `openclaw/plugin-sdk/acp-runtime` retains the one-argument
