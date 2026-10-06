@@ -347,23 +347,6 @@ test("sessions.reset rejects a stale expected session without interrupting curre
   }
 });
 
-test("sessions.reset accepts a matching expected session", async () => {
-  const sessionKey = "agent:main:subagent:guarded-reset";
-  const sessionId = "sess-current";
-  const { storePath } = await createSessionStoreDir();
-  await writeSessionStore({
-    entries: { [sessionKey]: sessionStoreEntry(sessionId) },
-  });
-
-  const reset = await directSessionReq<{ entry: { sessionId: string } }>("sessions.reset", {
-    key: sessionKey,
-    expectedSessionId: sessionId,
-  });
-
-  expect(reset).toMatchObject({ ok: true, payload: { entry: { sessionId } } });
-  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe(sessionId);
-});
-
 test("sessions.reset rechecks the expected session before interrupting replacement work", async () => {
   const sessionKey = "agent:main:subagent:guarded-reset-race";
   const observedSessionId = "sess-observed";

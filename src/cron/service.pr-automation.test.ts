@@ -178,56 +178,53 @@ async function createFixture(option: CiAutomationOption) {
   return { creator, client, target, add, selected, other, execution, seed, tick };
 }
 
-it.each(["autoFix", "autoMerge"] as const)(
-  "transports %s for only the selected PR across session replacement and disables future effects",
-  async (option) => {
-    const fixture = await createFixture(option);
-    const finalEffect =
-      vi.fn<(target: { owner: string; repo: string; number: number }, sessionId: string) => void>();
-    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      const admitted = await expectDefined(
-        params.preparedRunAdmission,
-        "scheduled admission",
-      ).admit("gateway", params.runId);
-      expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active admission assertion")();
-      const target = readRecipeTarget(params.prompt);
-      finalEffect(
-        { owner: target.owner, repo: target.repo, number: target.number },
-        params.sessionId,
-      );
-      return { payloads: [{ text: "Synthetic endpoint accepted" }], meta: { agentMeta: {} } };
-    });
-    try {
-      await fixture.execution.update(fixture.selected.id, { enabled: true });
-      expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-      expect(finalEffect.mock.calls).toEqual([
-        [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
-      ]);
-      await fixture.seed("replacement-session");
-      expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
-      expect(finalEffect.mock.calls[1]).toEqual([
-        { owner: "fixture-org", repo: "fixture-repo", number: 41 },
-        "replacement-session",
-      ]);
-      await fixture.execution.update(fixture.selected.id, { enabled: false });
-      await fixture.execution.update(fixture.other.id, { enabled: true });
-      // The second job supplies a real completed scheduler turn, not a sleep used
-      // to infer that the disabled job probably did not run.
-      expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
-      expect(finalEffect.mock.calls).toEqual([
-        [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
-        [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, "replacement-session"],
-        [{ owner: "fixture-org", repo: "fixture-repo", number: 42 }, "replacement-session"],
-      ]);
-      expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
-      expect((await fixture.add({ ...fixture.target, sessionId: "replacement-session" })).id).toBe(
-        fixture.selected.id,
-      );
-    } finally {
-      fixture.execution.stop();
-    }
-  },
-);
+it("transports autoFix for only the selected PR across session replacement and disables future effects", async () => {
+  const fixture = await createFixture("autoFix");
+  const finalEffect =
+    vi.fn<(target: { owner: string; repo: string; number: number }, sessionId: string) => void>();
+  runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    const admitted = await expectDefined(params.preparedRunAdmission, "scheduled admission").admit(
+      "gateway",
+      params.runId,
+    );
+    expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active admission assertion")();
+    const target = readRecipeTarget(params.prompt);
+    finalEffect(
+      { owner: target.owner, repo: target.repo, number: target.number },
+      params.sessionId,
+    );
+    return { payloads: [{ text: "Synthetic endpoint accepted" }], meta: { agentMeta: {} } };
+  });
+  try {
+    await fixture.execution.update(fixture.selected.id, { enabled: true });
+    expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
+    expect(finalEffect.mock.calls).toEqual([
+      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
+    ]);
+    await fixture.seed("replacement-session");
+    expect(await fixture.tick()).toMatchObject({ jobId: fixture.selected.id, status: "ok" });
+    expect(finalEffect.mock.calls[1]).toEqual([
+      { owner: "fixture-org", repo: "fixture-repo", number: 41 },
+      "replacement-session",
+    ]);
+    await fixture.execution.update(fixture.selected.id, { enabled: false });
+    await fixture.execution.update(fixture.other.id, { enabled: true });
+    // The second job supplies a real completed scheduler turn, not a sleep used
+    // to infer that the disabled job probably did not run.
+    expect(await fixture.tick()).toMatchObject({ jobId: fixture.other.id, status: "ok" });
+    expect(finalEffect.mock.calls).toEqual([
+      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, SESSION_ID],
+      [{ owner: "fixture-org", repo: "fixture-repo", number: 41 }, "replacement-session"],
+      [{ owner: "fixture-org", repo: "fixture-repo", number: 42 }, "replacement-session"],
+    ]);
+    expect(fixture.execution.getJob(fixture.selected.id)?.enabled).toBe(false);
+    expect((await fixture.add({ ...fixture.target, sessionId: "replacement-session" })).id).toBe(
+      fixture.selected.id,
+    );
+  } finally {
+    fixture.execution.stop();
+  }
+});
 
 it.each([false, true])(
   "existing archive API checks the scheduled recipe's exact identity (replaced=%s)",

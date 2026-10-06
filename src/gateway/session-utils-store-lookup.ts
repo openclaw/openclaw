@@ -45,6 +45,8 @@ import {
 } from "./session-utils-store-retained.js";
 import {
   resolveGatewaySessionStoreReadResults,
+  prepareGatewaySessionStoreReadPlan,
+  type GatewaySessionStorePlan,
   type GatewaySessionStoreLookup,
 } from "./session-utils-store-selection.js";
 import type {
@@ -69,11 +71,6 @@ type GatewaySessionStoreLookupParams = {
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   readStore?: typeof readGatewaySessionStore;
-};
-
-type GatewaySessionStorePlan<T> = {
-  reads: GatewaySessionStoreRead[];
-  resolve: () => T;
 };
 
 function storeReadOptions(
@@ -544,6 +541,20 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
   },
   prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
 ): Promise<GatewaySessionStoreTargetWithStore> {
+  return (await prepareGatewaySessionStoreTargetReadPlan(params, prepareReads)).target;
+}
+
+/** Keep every scanned stage so final admission can repeat selection without discovery. */
+export async function prepareGatewaySessionStoreTargetReadPlan(
+  params: GatewaySessionStoreLookupParams & {
+    agentId: string;
+    targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+  },
+  prepareReads: <T>(reads: readonly GatewaySessionStoreRead[], select: () => T) => Promise<T>,
+): Promise<{
+  target: GatewaySessionStoreTargetWithStore;
+  plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
+}> {
   const normalized = {
     ...params,
     key: normalizeOptionalString(params.key) ?? "",
@@ -551,22 +562,11 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
     readOnly: true,
     projection: params.projection ?? ("list" as const),
   };
-  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    return await prepareReads(plan.reads, () => {
-      if (plan.reads.some((read) => read.result === undefined)) {
-        throw new Error("Session lookup facts were not prepared");
-      }
-      return plan.resolve();
-    });
-  };
-  const deletedMain = prepareExplicitDeletedLegacyMainStoreTarget(normalized);
-  if (deletedMain) {
-    const target = await resolve(deletedMain);
-    if (target) {
-      return target;
-    }
-  }
-  return await resolve(prepareGatewaySessionStoreTarget(normalized));
+  return prepareGatewaySessionStoreReadPlan({
+    legacy: prepareExplicitDeletedLegacyMainStoreTarget(normalized),
+    prepareCurrent: () => prepareGatewaySessionStoreTarget(normalized),
+    prepareReads,
+  });
 }
 
 /** Read an already-stored lineage address without applying request aliases. */

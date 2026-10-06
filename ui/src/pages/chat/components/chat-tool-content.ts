@@ -22,6 +22,7 @@ import {
   TOOL_OUTPUT_PREVIEW_CHARS,
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
+import type { SubagentRowContext } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { renderHighlightedCommand } from "./chat-command-highlight.ts";
 import { renderDiffBlock } from "./chat-diff-render.ts";
@@ -272,6 +273,8 @@ export type ToolRenderOptions = {
   runActive?: boolean;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+  /** Lets a subagent's launch row show its session's state and open it. */
+  subagents?: SubagentRowContext;
 };
 
 export function renderExpandedToolCardContent(

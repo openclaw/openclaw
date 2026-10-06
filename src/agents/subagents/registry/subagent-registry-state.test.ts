@@ -74,6 +74,8 @@ function createRun(runId: string): SubagentRunRecord {
     cleanup: "keep",
     createdAt: 1,
     execution: { status: "running", startedAt: 1 },
+    completion: { required: false },
+    delivery: { status: "pending" },
   };
 }
 
@@ -100,12 +102,8 @@ describe("subagent registry state read cache", () => {
     });
     mocks.saveSubagentRegistryChangesToSqlite.mockReset();
     mocks.saveSubagentRegistryToSqlite.mockReset();
-    // This fixture supplies worker rows; it does not own a physical source to snapshot.
-    vi.spyOn(stateReads, "withOpenClawStateDatabaseReadSnapshot").mockImplementation(
-      async <T>(operation: () => Promise<T>) => await operation(),
-    );
     vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
-      async (_options, command) => {
+      async (_options, command, options) => {
         if (command.type === "subagents.sessionList") {
           return {
             ok: true,
@@ -122,19 +120,16 @@ describe("subagent registry state read cache", () => {
             runs: new Map(mocks.readRunsByIds(command.scope.runIds).map((run) => [run.runId, run])),
           };
         }
-        if (command.type === "subagents.runs" && command.scope.kind === "page") {
+        if (command.type === "subagents.restore") {
           const runs = mocks.loadSubagentRegistryFromSqlite();
-          return {
-            ok: true,
-            type: command.type,
-            sourceAdmitted: true,
-            runs,
-            versions: new Map([...runs.keys()].map((runId) => [runId, "fixture-version"])),
-            page: {
-              order: [...runs].map(([runId, entry]) => [runId, entry.createdAt] as const),
-              nextRunId: null,
-            },
-          };
+          options?.onChunk?.(
+            [...runs.values()].map((entry) => ({
+              entry,
+              version: "fixture-version",
+              createdAt: entry.createdAt,
+            })),
+          );
+          return { ok: true, type: command.type, sourceAdmitted: true, count: runs.size };
         }
         throw new Error(`Unexpected registry read: ${command.type}`);
       },
@@ -309,6 +304,17 @@ describe("subagent registry state read cache", () => {
       projected!.delivery!.status = "delivered";
     }).toThrow(TypeError);
     expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get(savedRun.runId)).toMatchObject({
+      execution: { outcome: { status: "ok" } },
+      delivery: { status: "pending" },
+    });
+    savedRun.execution.outcome = { status: "error", error: "replacement result" };
+    savedRun.delivery.status = "delivered";
+    persistRegistryFixture(new Map([[savedRun.runId, savedRun]]), [savedRun.runId]);
+    expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get(savedRun.runId)).toMatchObject({
+      execution: { outcome: { status: "error" } },
+      delivery: { status: "delivered" },
+    });
+    expect(projected).toMatchObject({
       execution: { outcome: { status: "ok" } },
       delivery: { status: "pending" },
     });

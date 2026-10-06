@@ -44,6 +44,7 @@ export async function captureManagedWorktreeSnapshot(params: {
   assertCurrent?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
   requireDiskSpace: WorktreeAllocationGuard["requireDiskSpace"];
+  onInventory?: (counts: { tracked: number; untracked: number }) => void;
 }) {
   return withWorktreeRunEnd(params.env, async () => {
     const { record, env, provisionedPaths } = params;
@@ -88,6 +89,9 @@ export async function captureManagedWorktreeSnapshot(params: {
           };
           assertCurrent();
           switch (effect.type) {
+            case "worktree.snapshot-inventory":
+              params.onInventory?.(effect.input);
+              return undefined;
             case "worktree.assert-current":
               return undefined;
             case "worktree.snapshot-capacity":

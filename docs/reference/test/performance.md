@@ -268,6 +268,26 @@ Gateway startup, restart, and agent concurrency benchmark fixtures use temporary
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 
+Startup, restart, and concurrency accept `--gateway-runtime <executable>` to
+select only the Gateway executable, leaving the benchmark controller and mock
+provider on the runtime that launched the script. The default is that same
+executable. Use an absolute path to select a specific staged runtime. JSON
+reports record this selection as `gatewayRuntime`; it is not a measured child
+version or binary hash. Failed activity-summary diagnostics omit this
+caller-supplied path, like the entry path; that mode is not performance proof.
+The existing restart report's `node` field describes the controller.
+
+On Linux, all three accept `--gateway-cpus 0,1,2,3`, applied through `taskset`
+only to the Gateway. Pin the controller separately when comparing runtimes:
+
+```bash
+taskset --cpu-list 4-31 node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --case default --gateway-runtime /path/to/bun --gateway-cpus 0,1,2,3 --runs 1 --warmup 0 --output .artifacts/gateway-startup-bun.json
+```
+
+The installed-package `--installed-cohort` mode rejects both selectors; its
+input owns the attested runtime. Profiler options remain runtime-specific and
+require the selected runtime to support their profiling APIs.
+
 ```bash
 pnpm test:startup:gateway -- --runs 5 --warmup 1
 pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5

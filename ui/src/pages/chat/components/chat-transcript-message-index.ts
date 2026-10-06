@@ -237,6 +237,10 @@ export function projectTranscriptChain(
   const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
+    // A handoff boundary only shapes the grouping above; it has no row of its own.
+    if (item.kind === "notice" && item.handoffBoundary) {
+      return false;
+    }
     const previous = collapsedItems[index - 1];
     const activeStatusParts =
       item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")

@@ -199,8 +199,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
 
   it("refuses a live managed consumer before touching the partial checkout", async () => {
     await fs.writeFile(path.join(record.path, ".git"), `gitdir: ${admin}\n`);
+    // Model a pre-existing consumer; new admission correctly refuses a pending removal.
+    await git(repo, "update-ref", "-d", `refs/openclaw/removals/${record.id}`, snapshot);
     const lease = await acquireWorktreeRunLease(record.id, { env });
     try {
+      await pinSnapshot();
       await expect(recover()).rejects.toThrow(/busy|in use/);
       await pinsPreserved();
     } finally {

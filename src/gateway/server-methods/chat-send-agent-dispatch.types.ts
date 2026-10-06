@@ -33,7 +33,7 @@ export type StartChatDispatchParams = {
   assertDashboardReadCurrent?: () => void;
   externalAuthorityAdmission: ChatSendExternalAuthorityAdmission | undefined;
   injection: {
-    beginCapturedMessageInjection: () => ReplyMessageInjectionAttempt | undefined;
+    beginCapturedMessageInjection: () => Promise<ReplyMessageInjectionAttempt | undefined>;
     messageInjectionAttempt: ReplyMessageInjectionAttempt | undefined;
     preAckReplyContextPromise: Promise<ChatSendReplyContextFields> | undefined;
     replyContextFieldsPromise: Promise<ChatSendReplyContextFields> | undefined;

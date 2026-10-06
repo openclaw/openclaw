@@ -535,7 +535,7 @@ async function handleChatSendWithOptions(
     }
     assertInputAdmissionCurrent();
     let messageInjectionAttempt =
-      !p.replyToId || preAckReplyContextPromise ? beginCapturedMessageInjection() : undefined;
+      !p.replyToId || preAckReplyContextPromise ? await beginCapturedMessageInjection() : undefined;
     phase?.mark("runAdmission");
     const preAckInjection = await settleChatSendPreAckMessageInjection({
       attempt: messageInjectionAttempt,

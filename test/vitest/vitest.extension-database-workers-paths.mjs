@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/litellm/index.test.ts",
   "extensions/qa-lab/src/codex-plugin-lifecycle.test.ts",
   "extensions/qa-lab/src/gateway-child-artifacts.test.ts",
   "extensions/qa-lab/src/gateway-child-auth-handoff.test.ts",
@@ -18,6 +19,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
   "extensions/codex/src/migration/provider.auth.test.ts",
   "extensions/codex/src/migration/provider.test.ts",
+  "extensions/github-copilot/index.test.ts",
   "extensions/migrate-hermes/secrets.test.ts",
   "extensions/migrate-hermes/files-and-skills.test.ts",
   "extensions/openai/binary-transport.test.ts",

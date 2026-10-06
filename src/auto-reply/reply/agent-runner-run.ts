@@ -589,7 +589,6 @@ export async function runReplyAgent(
       }
     }
   }
-  replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
   bindReplyOperationTyping(replyOperation, typing);
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
@@ -633,6 +632,7 @@ export async function runReplyAgent(
     storePath,
   });
   try {
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
     return await executePreparedReplyAgentRun({
       ...params,
       activeSessionStore,

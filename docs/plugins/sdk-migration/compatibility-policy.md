@@ -183,6 +183,41 @@ its `string | undefined` result and behavior until the next Plugin SDK major and
 explicit breaking-release approval. JSDoc and the compatibility registry record
 the deprecation; no runtime warning, schema migration, or update change is needed.
 
+### Reply tool authority preparation
+
+The October 4, 2026 `reply-tool-authority-sync-preparation` record retains the
+synchronous fingerprint, projection, and binding methods reachable through
+`EmbeddedRunAttemptParams.replyOperation` and `AgentHarnessAttemptParams.replyOperation`,
+including their V2 types. These contracts shipped in OpenClaw 2026.9.8.
+Existing snapshot literals containing only `fingerprint` and `project` remain
+valid; their awaited companions are optional.
+
+The record also retains the original V2 queue method. External implementations can add
+the optional awaited queue companion described in
+[awaited reply tool authority](/plugins/sdk-migration/how-to-migrate#await-reply-tool-authority).
+Legacy external V2 injection backends retain fresh native policy checks; an earlier
+prepared fingerprint never replaces current authority.
+Supplied Talk control adapters retain fully rendered steering and follow-up input,
+including prepared context and the transcript recorder, even when they ignore
+optional preparation callbacks. The built-in runtime prepares that input inside
+its queue reservation to preserve ordering across awaited policy reads.
+Legacy V1 backends retain unbound run-owned input; caller-bound input still
+requires V2. Worker preparation does not change that distinction.
+Legacy ordinary queue preparation stays inside its FIFO reservation, with
+synchronous final checks outside worker grants. Complete worker preparations
+bind their final policy and target reads to enqueue; cleanup or notification
+failure after enqueue preserves input custody and cannot authorize replay.
+Question claims and cancellation retain their existing synchronous contracts.
+Native session binding authorities retain their original `withCurrent` contract.
+The optional `withPreparedCurrent` companion composes fresh tool policy with native
+lineage admission; older authority implementations remain valid and use the full
+synchronous compatibility check.
+
+Removal requires the next Plugin SDK major and explicit breaking-release
+approval. TypeScript annotations and migration documentation provide diagnostics;
+there is no runtime warning. Stored data, schema, retention, and update behavior
+are unchanged.
+
 ### Harness attempt result migration
 
 In OpenClaw 2026.8.1, `EmbeddedRunAttemptResult` from
