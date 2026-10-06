@@ -170,7 +170,7 @@ async function runCliAgentInternal(
     // before_model_resolve must run before preparation normalizes the model for the
     // child process; the embedded runner emits it in model setup, the CLI path
     // returns before that setup, so it is emitted here (see model-resolve-hook).
-    await applyCliModelResolveHookForRun(params);
+    await applyCliModelResolveHookForRun(params, generation?.assertCurrent);
     modelExecution = bindOperatorModelExecution(
       readRunOperatorAuthority(params),
       params.requesterModel,

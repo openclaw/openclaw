@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import type { PluginHookBeforeModelResolveAttachment } from "../../plugins/hook-before-agent-start.types.js";
+import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
@@ -57,6 +58,8 @@ type CliModelResolveHookInput = {
   sessionId: string;
   workspaceDir: string;
   trigger?: string;
+  /** Live session-generation assertion guarding the hook's network I/O. */
+  assertCurrent?: () => void;
   channelId?: string;
   accountId?: string;
   messageProvider?: string;
@@ -93,22 +96,25 @@ async function resolveCliModelOverrideForTurn(
     // The logical provider is reported, not the execution backend: routers compare
     // the current logical selection against e.g. `anthropic/<model>`, and would
     // otherwise treat `claude-cli/<model>` as an existing manual override.
-    hookContext: {
-      ...(params.runId ? { runId: params.runId } : {}),
-      ...(params.jobId ? { jobId: params.jobId } : {}),
-      ...(params.agentId ? { agentId: params.agentId } : {}),
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      sessionId: params.sessionId,
-      workspaceDir: params.workspaceDir,
-      modelProviderId: params.logicalProvider,
-      // Same caller-selected model the embedded before_model_resolve context
-      // reports, so routers can compare the current selection on CLI turns too.
-      modelId: params.modelId,
-      trigger: params.trigger,
-      messageProvider: params.messageProvider,
-      ...(params.channelId ? { channelId: params.channelId } : {}),
-      ...(params.accountId ? { accountId: params.accountId } : {}),
-    },
+    hookContext: withClaimingHookAdmission(
+      {
+        ...(params.runId ? { runId: params.runId } : {}),
+        ...(params.jobId ? { jobId: params.jobId } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        modelProviderId: params.logicalProvider,
+        // Same caller-selected model the embedded before_model_resolve context
+        // reports, so routers can compare the current selection on CLI turns too.
+        modelId: params.modelId,
+        trigger: params.trigger,
+        messageProvider: params.messageProvider,
+        ...(params.channelId ? { channelId: params.channelId } : {}),
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+      },
+      params.assertCurrent ? { assertCurrent: params.assertCurrent } : undefined,
+    ),
   });
   // Unchanged selections (same logical provider and model) leave the caller's turn
   // untouched. A provider-only override is still an override attempt: it must fall
@@ -241,7 +247,10 @@ function resolveRoutedModelVisionCapability(params: {
  * Synthetic turns (isolated completions, backend control operations) never enter
  * agent hooks and keep the caller's selection.
  */
-export async function applyCliModelResolveHookForRun(params: RunCliAgentParams): Promise<void> {
+export async function applyCliModelResolveHookForRun(
+  params: RunCliAgentParams,
+  assertCurrent?: () => void,
+): Promise<void> {
   if (params.isolatedCompletion || params.controlOperation) {
     return;
   }
@@ -258,6 +267,7 @@ export async function applyCliModelResolveHookForRun(params: RunCliAgentParams):
     sessionEntry: params.sessionEntry,
     config: params.config,
     authProfileId: params.authProfileId,
+    assertCurrent,
     agentId: params.agentId,
     runId: params.runId,
     jobId: params.jobId,

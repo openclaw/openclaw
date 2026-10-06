@@ -3,6 +3,7 @@
 // rejected with the caller selection kept, and locked selections skip hooks.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { applyCliModelResolveHookForRun } from "./model-resolve-hook.js";
 
 const hookRunnerStub = vi.hoisted(() => ({
@@ -227,6 +228,34 @@ describe("applyCliModelResolveHookForRun", () => {
     expect(call[1].modelId).toBe("claude-opus-5-5");
     expect(call[1].channelId).toBe("chan-1");
     expect(call[1].accountId).toBe("acct-1");
+  });
+
+  it("carries the live generation assertion into the hook admission", async () => {
+    stubHookRunner({ hasBeforeModelResolve: true });
+    const assertCurrent = vi.fn();
+    await applyCliModelResolveHookForRun(
+      { ...BASE_PARAMS } as Parameters<typeof applyCliModelResolveHookForRun>[0],
+      assertCurrent,
+    );
+    const call = hookRunnerStub.runBeforeModelResolve.mock.calls[0]!;
+    // The shared selection seam guards hook network I/O through the admission
+    // assertion; without it a revoked generation could still reach transport.
+    expect(readClaimingHookAdmission(call[1] as object)?.assertCurrent).toBe(assertCurrent);
+    expect(assertCurrent).toHaveBeenCalled();
+  });
+
+  it("refuses the hook after the session generation is revoked", async () => {
+    stubHookRunner({ hasBeforeModelResolve: true });
+    const assertCurrent = vi.fn(() => {
+      throw new Error("session generation revoked");
+    });
+    await expect(
+      applyCliModelResolveHookForRun(
+        { ...BASE_PARAMS } as Parameters<typeof applyCliModelResolveHookForRun>[0],
+        assertCurrent,
+      ),
+    ).rejects.toThrow("session generation revoked");
+    expect(hookRunnerStub.runBeforeModelResolve).not.toHaveBeenCalled();
   });
 
   it("passes image-derived attachment metadata on image-bearing turns", async () => {
