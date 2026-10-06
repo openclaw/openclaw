@@ -38,7 +38,11 @@ describe("session discussion panel", () => {
     expect(openDiscussion).toHaveBeenCalledWith("agent:main:first");
     expect(onStateChange).toHaveBeenLastCalledWith(
       "agent:main:first",
-      "open",
+      {
+        state: "open",
+        embedUrl: "https://discussion.example/embed/thread",
+        openUrl: "https://discussion.example/thread",
+      },
       "https://discussion.example/thread",
     );
     expect(panel.querySelector(".session-discussion__header")).toBeNull();

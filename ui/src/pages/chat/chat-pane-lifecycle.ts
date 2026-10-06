@@ -207,7 +207,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
     const shortcut = Object.values(SIDEBAR_PANEL_SHORTCUTS).find(
       (entry) => entry && matchesShortcutCombo(entry.combo, event),
     );
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionInfos.get(state.sessionKey.trim())?.state;
     if (
       shortcut?.available({
         state,
@@ -527,7 +527,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (nextSessionKey) {
         // Availability belongs to one activation. The replacement probe starts
         // after its transcript commit in deferSessionHydrationUntilTranscript.
-        this.sessionDiscussionStates.delete(nextSessionKey);
+        this.sessionDiscussionInfos.delete(nextSessionKey);
       }
       if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
         this.catalogLoadGeneration += 1;

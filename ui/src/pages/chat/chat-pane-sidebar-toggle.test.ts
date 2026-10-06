@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiscussionState } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionDiscussionInfo } from "../../../../packages/gateway-protocol/src/index.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -154,10 +154,10 @@ describe("chat pane sidebar toggles", () => {
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["desktop.observe", "board.get"]);
     // The provider has resolved Discussion availability for this session.
     const discussionPane = pane as TestChatPane & {
-      sessionDiscussionStates: Map<string, SessionDiscussionState>;
+      sessionDiscussionInfos: Map<string, SessionDiscussionInfo>;
       compact: boolean;
     };
-    discussionPane.sessionDiscussionStates.set(state.sessionKey.trim(), "available");
+    discussionPane.sessionDiscussionInfos.set(state.sessionKey.trim(), { state: "available" });
     state.sidebarLayout = openSlot(openSlot({ columns: [] }, slot), "terminal");
 
     expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);
@@ -220,7 +220,7 @@ describe("chat pane sidebar toggles", () => {
 
     state.browserPanelAvailable = false;
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods([], ["operator.read"]);
-    discussionPane.sessionDiscussionStates.set(state.sessionKey.trim(), "none");
+    discussionPane.sessionDiscussionInfos.set(state.sessionKey.trim(), { state: "none" });
     if (["browser", "desktop", "discussion", "dashboard"].some((gated) => gated === slot)) {
       expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
       expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);

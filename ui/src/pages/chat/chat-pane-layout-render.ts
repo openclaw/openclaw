@@ -188,7 +188,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         </header>`
       : nothing;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
-    const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
+    const discussionState = this.sessionDiscussionInfos.get(state.sessionKey.trim())?.state;
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;

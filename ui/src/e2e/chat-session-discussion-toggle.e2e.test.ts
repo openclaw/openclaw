@@ -53,6 +53,7 @@ describeControlUiE2e("session discussion toggle", () => {
 
   it("keeps an existing discussion closed until the header action opens it", async () => {
     const context = await browser.newContext({
+      colorScheme: "dark",
       ...(captureUiProof
         ? { recordVideo: { dir: proofDir, size: { height: 720, width: 1280 } } }
         : {}),
@@ -61,6 +62,22 @@ describeControlUiE2e("session discussion toggle", () => {
     openContexts.add(context);
     const page = await context.newPage();
     const sessionKey = "agent:main:discussion-proof";
+    await page.route("https://discussion.example/embed/channel/**", (route) =>
+      route.fulfill({
+        contentType: "text/html; charset=utf-8",
+        body: `<!doctype html><html><head><style>
+          html,body{margin:0;height:100%;background:#0e1015;color:#e6e8ed;font:14px system-ui}
+          main{height:100%;display:flex;flex-direction:column}
+          header,footer{padding:15px;border-bottom:1px solid #292d36}
+          footer{border-top:1px solid #292d36;border-bottom:0;color:#858b9b}
+          section{flex:1;padding:20px;display:grid;align-content:start;gap:14px}
+          article{padding:12px;border:1px solid #303541;border-radius:9px}
+          </style></head><body><main><header>Discussion is ready</header>
+          <section><article>Discussion toggle proof.</article>
+          <article>Replies appear here when the room is open.</article></section>
+          <footer>Message #discussion</footer></main></body></html>`,
+      }),
+    );
     const gateway = await installMockGateway(page, {
       featureMethods: ["session.discussion.info", "session.discussion.open"],
       historyMessages: [
@@ -72,6 +89,7 @@ describeControlUiE2e("session discussion toggle", () => {
       ],
       methodResponses: {
         "session.discussion.info": {
+          embedUrl: "https://discussion.example/embed/channel/T1/C1?openclawHostTheme=1",
           openUrl: "https://discussion.example/session",
           state: "open",
         },
@@ -95,18 +113,33 @@ describeControlUiE2e("session discussion toggle", () => {
       await page.screenshot({ path: path.join(proofDir, "discussion-initial-closed.png") });
     }
 
+    // The availability probe already resolved this room. A second provider
+    // read may stall; opening a known room must not wait on that read again.
+    await gateway.deferNext("session.discussion.info", { sessionKey });
+    await page.evaluate(() => {
+      const started = performance.now();
+      const observer = new MutationObserver(() => {
+        if (document.querySelector("iframe.session-discussion__frame")) {
+          (window as Window & { discussionMountMs?: number }).discussionMountMs =
+            performance.now() - started;
+          observer.disconnect();
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
     await activateChatHeaderPanelAction(page, "Show discussion");
 
     await expect.poll(() => discussionPanel.count()).toBe(1);
     await expect.poll(() => closeDiscussion.isVisible()).toBe(true);
-    // The tab must carry the upgraded panel, not an empty box: the element is
-    // defined lazily per slot, so a missing runtime registration renders as a
-    // silently blank tab.
-    await expect
-      .poll(() =>
-        page.locator("openclaw-session-discussion").evaluate((node) => node.childElementCount),
-      )
-      .toBeGreaterThan(0);
+    const frame = page.frameLocator("iframe.session-discussion__frame");
+    await expect.poll(() => frame.getByText("Discussion is ready").isVisible()).toBe(true);
+    const mountMs = await page.evaluate(
+      () => (window as Window & { discussionMountMs?: number }).discussionMountMs,
+    );
+    expect(mountMs).toBeDefined();
+    expect(mountMs!).toBeLessThan(1_000);
+    console.info("Discussion frame mounted in", mountMs, "ms");
+    expect(await gateway.getRequests("session.discussion.info")).toHaveLength(1);
     expect(await gateway.getRequests("session.discussion.open")).toHaveLength(0);
     if (captureUiProof) {
       await page.screenshot({ path: path.join(proofDir, "discussion-open.png") });

@@ -101,7 +101,7 @@ describe("session discussion panel", () => {
 
     await vi.waitFor(() => {
       expect(loadInfo).toHaveBeenNthCalledWith(2, "agent:main:second");
-      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", "none", null);
+      expect(onStateChange).toHaveBeenLastCalledWith("agent:main:second", { state: "none" }, null);
     });
     expect(panel.querySelector("button")).toBeNull();
     expect(panel.querySelector("iframe")).toBeNull();
