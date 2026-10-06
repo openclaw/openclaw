@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import OpenClawIPC
 import OpenClawKit
 import OpenClawProtocol
 import OSLog
