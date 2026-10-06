@@ -513,8 +513,7 @@ final class TalkModeManager {
 
     @discardableResult
     func updateMainSessionKey(_ sessionKey: String?) -> Bool {
-        let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return false }
+        guard let trimmed = sessionKey?.trimmedNonEmpty else { return false }
         if trimmed == self.mainSessionKey {
             return false
         }
@@ -544,8 +543,7 @@ final class TalkModeManager {
     }
 
     func isUsingMainSessionKey(_ sessionKey: String?) -> Bool {
-        let trimmed = (sessionKey ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return !trimmed.isEmpty && trimmed == self.mainSessionKey
+        sessionKey?.trimmedNonEmpty == self.mainSessionKey
     }
 
     func isActivePushToTalkCapture(_ captureId: String) -> Bool {
@@ -1459,7 +1457,7 @@ final class TalkModeManager {
         guard self.noiseFloorSamples.count >= 22 else { return }
 
         let sorted = self.noiseFloorSamples.sorted()
-        let slice = sorted.prefix(max(6, sorted.count / 2))
+        let slice = sorted.prefix(sorted.count / 2)
         let average = slice.reduce(0.0, +) / Double(slice.count)
         self.noiseFloor = average
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
@@ -2937,8 +2935,7 @@ final class TalkModeManager {
             }
             guard let content = msg["content"] as? [[String: Any]] else { continue }
             let text = content.compactMap { $0["text"] as? String }.joined(separator: "\n")
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !trimmed.isEmpty {
+            if let trimmed = text.trimmedNonEmpty {
                 return trimmed
             }
         }
@@ -2952,8 +2949,7 @@ final class TalkModeManager {
     {
         let parsed = TalkDirectiveParser.parse(text)
         let directive = parsed.directive
-        let cleaned = parsed.stripped.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
+        guard let cleaned = parsed.stripped.trimmedNonEmpty else { return }
         self.applyDirective(directive)
         self.speechGeneration += 1
         let speechGeneration = self.speechGeneration
@@ -3078,10 +3074,7 @@ final class TalkModeManager {
             ])
         }
 
-        let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let voiceId = requestedVoice?.isEmpty == false
-            ? requestedVoice
-            : (self.currentVoiceId ?? self.defaultVoiceId)
+        let voiceId = directive?.voiceId?.trimmedNonEmpty ?? self.currentVoiceId ?? self.defaultVoiceId
         let modelId = directive?.modelId ?? self.modelOverride ?? self.configuredProviderModelId
         let outputFormat = directive?.outputFormat ?? self.defaultOutputFormat
         let audio = try await synthesizer.synthesize(TalkGatewaySpeechRequest(
@@ -3163,9 +3156,7 @@ final class TalkModeManager {
     }
 
     private func resolvedElevenLabsAPIKey() -> String? {
-        let configuredKey = self.apiKey?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .isEmpty == false ? self.apiKey : nil
+        let configuredKey = self.apiKey?.trimmedNonEmpty
         #if DEBUG
         let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
         #else
@@ -3177,16 +3168,14 @@ final class TalkModeManager {
     private func resolveElevenLabsVoiceAlias(_ voice: String?) -> String? {
         let requestedVoice = voice?.trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedVoice = TalkVoiceAliases.resolve(requestedVoice, aliases: self.voiceAliases)
-        if requestedVoice?.isEmpty == false, resolvedVoice == nil {
-            self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
+        if let requestedVoice, !requestedVoice.isEmpty, resolvedVoice == nil {
+            self.logger.warning("unknown voice alias \(requestedVoice, privacy: .public)")
         }
         return resolvedVoice
     }
 
     private func resolvedElevenLabsOutputFormat(_ directiveFormat: String?) -> String? {
-        let desiredOutputFormat = (directiveFormat ?? self.defaultOutputFormat)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
+        let requestedOutputFormat = (directiveFormat ?? self.defaultOutputFormat)?.trimmedNonEmpty
         let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
             requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
         if outputFormat == nil, let requestedOutputFormat {
@@ -3297,8 +3286,7 @@ final class TalkModeManager {
     }
 
     private func enqueueIncrementalSpeech(_ text: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard let trimmed = text.trimmedNonEmpty else { return }
         self.incrementalSpeechQueue.append(trimmed)
         self.incrementalSpeechUsed = true
         if self.incrementalSpeechTask == nil {
@@ -3883,8 +3871,7 @@ extension TalkModeManager {
     }
 
     private static func normalizedTalkApiKey(_ raw: String?) -> String? {
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = raw?.trimmedNonEmpty else { return nil }
         guard trimmed != Self.redactedConfigSentinel else { return nil }
         // Config values may be env placeholders (for example `${ELEVENLABS_API_KEY}`).
         if trimmed.hasPrefix("${"), trimmed.hasSuffix("}") {
@@ -4424,8 +4411,7 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
 
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveUserTranscript text: String) {
         guard session === self.realtimeSession else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard let trimmed = text.trimmedNonEmpty else { return }
         GatewayDiagnostics.log("talk.timeline realtime user transcript chars=\(trimmed.count)")
         self.lastTranscript = trimmed
         self.lastHeard = Date()
@@ -4433,8 +4419,7 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
 
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didReceiveAssistantTranscript text: String) {
         guard session === self.realtimeSession else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        guard let trimmed = text.trimmedNonEmpty else { return }
         GatewayDiagnostics.log("talk.timeline realtime assistant transcript chars=\(trimmed.count)")
         self.lastSpokenText = trimmed
     }

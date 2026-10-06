@@ -99,7 +99,7 @@ enum DeviceIdentitySQLiteStore {
         afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
     {
         try self.requireConsistentClaims(claims)
-        let generatedMaterial = claims.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
+        let candidate = claims.first?.material ?? DeviceIdentityStore.generateMaterial()
         let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         let database = try OpenClawNativeStateSQLite(
@@ -129,9 +129,6 @@ enum DeviceIdentitySQLiteStore {
                 }) {
                     throw DeviceIdentityStore.storageError(
                         "Legacy device identity appeared during creation; retry without replacing its keys")
-                }
-                guard let candidate = claims.first?.material ?? generatedMaterial else {
-                    throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
                 }
                 selected = candidate
                 try self.insertIdentity(

@@ -942,8 +942,7 @@ extension MacNodeClaudeSessionCatalog {
 extension MacNodeClaudeSessionCatalog {
     private static func decodeObject(_ paramsJSON: String?) throws -> [String: Any] {
         guard let paramsJSON, !paramsJSON.isEmpty else { return [:] }
-        guard let data = paramsJSON.data(using: .utf8),
-              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard let value = try? JSONSerialization.jsonObject(with: Data(paramsJSON.utf8)) as? [String: Any]
         else { throw CatalogError.invalidParams("parameters must be valid JSON objects") }
         return value
     }

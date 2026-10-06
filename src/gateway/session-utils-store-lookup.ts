@@ -323,7 +323,6 @@ export async function withGatewaySessionStoreTarget<T>(
     relatedTargets: readonly GatewaySessionStoreTargetWithStore[],
   ) => T,
 ): Promise<T> {
-  const ordered = params.ordered || params.includeMembership;
   const normalized = {
     ...params,
     key: normalizeOptionalString(params.key) ?? "",
@@ -425,6 +424,7 @@ export async function withGatewaySessionStoreTarget<T>(
     let consumed = false;
     try {
       for (let attempt = 0; ; attempt += 1) {
+        const ordered = params.ordered || params.includeMembership || attempt > 0;
         changed = false;
         assertDiscoveryCurrent();
         try {
@@ -518,8 +518,8 @@ export async function withGatewaySessionStoreTarget<T>(
             },
           );
         } catch (error) {
-          // Sharing admission may refresh its snapshot; explicit ordered reads retain their owner.
-          // The inventory still pins the original stores. Never repeat a consumer's effects.
+          // Re-read a raced speculative snapshot inside the writer FIFO; retain discovery.
+          // Never repeat a consumer's effects.
           if (
             consumed ||
             attempt >= 1 ||

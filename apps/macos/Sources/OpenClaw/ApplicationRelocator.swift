@@ -338,10 +338,6 @@ extension ApplicationRelocator {
         homeDirectory: URL) -> KeepAliveSupervisor?
     {
         guard let serviceName = xpcServiceName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !serviceName.isEmpty,
-              serviceName != "0",
-              !serviceName.hasPrefix("application."),
-              URL(fileURLWithPath: serviceName).lastPathComponent == serviceName,
               let executableURL
         else {
             return nil

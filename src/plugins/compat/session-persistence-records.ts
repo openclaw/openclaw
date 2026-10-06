@@ -4,6 +4,32 @@ import type { PluginCompatRecord } from "./types.js";
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
   REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
   {
+    code: "transcript-lock-sync-message-preparation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use prepareMessageAfterIdempotencyCheckAsync in locked transcript appends. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep current authority assertions in beforeFreshMessageCommit.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation",
+    surfaces: [
+      "SessionTranscriptWriteLockContext.appendMessage.prepareMessageAfterIdempotencyCheck",
+      "CodexSessionTranscriptMirrorWriteLockContext.appendMessageWithMessageSequence.prepareMessageAfterIdempotencyCheck",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-transcript-lock.native.test.ts",
+      "src/plugin-sdk/session-transcript-preparation-compat.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Locked transcript appends can await message preparation and settle accepted operations before releasing the writer. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
+  },
+  {
     code: "session-upstream-links-sync-persistence",
     status: "deprecated",
     owner: "sdk",

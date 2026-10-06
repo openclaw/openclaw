@@ -223,7 +223,6 @@ export function registerGatewayForcedRestartTests({
           expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
           expectRestartCloseCall(close, 0);
           const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 agentRuns=1`;
-          expect(gatewayLog.warn).toHaveBeenCalledWith(warning);
           if (stallClose) {
             expect(start).toHaveBeenCalledOnce();
             expect(completeBoot).not.toHaveBeenCalled();

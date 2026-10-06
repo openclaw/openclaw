@@ -9699,7 +9699,6 @@
 ["src/plugins/runtime/runtime-registry-loader.test.ts","../loader.js","ccf74e8adf8ff24e8011d98b73ec10fb31adc135823e6ae37edbadccad1aeaff",1]
 ["src/plugins/services.return-contract.test.ts","../logging/subsystem.js","6a75b1a6321bfc2c2342e3276767fe1f94b44ba8277a756557571fc0b904a967",1]
 ["src/plugins/services.test.ts","../logging/subsystem.js","24ec656a4b362a93ac3b8cbfdbf9ec3dcd5ab2a539a46275397b2569cfa08207",1]
-["src/plugins/session-catalog.test.ts","../plugin-sdk/session-transcript-runtime.js","fe10aa695618350938165b5137c47f26e12e492526936b6f5f975a4b7ad77afe",1]
 ["src/plugins/session-discussion-registry.test.ts","../logging/subsystem.js","2d8bf8313db9f41d687cc7b5e21aded242e9039be54eb9fa972e9e771444beb5",1]
 ["src/plugins/status-snapshot.cold-imports.test.ts","./registry.js","3c8e430dca472fe7bf8d8a87e0c73945c400025ac84f0f941de45be8e4ed9b20",1]
 ["src/plugins/status.test.ts","../agents/agent-scope.js","b43529cb05eb8f38ea231e1d6526412f8f0b1891265f2a9038bff82123810180",1]
