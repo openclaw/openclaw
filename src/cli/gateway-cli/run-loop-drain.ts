@@ -98,6 +98,7 @@ export async function drainGatewayActiveWork({
         }),
       );
       if (!activeWorkDrain.drained) {
+        drainTimedOut = true;
         logger.warn(
           `gateway active-work drain timeout reached; proceeding with shutdown: ${formatGatewayDrainCounts(activeWorkDrain.snapshot)}`,
         );

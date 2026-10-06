@@ -9,6 +9,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { gatewayWorkAdmissionActual } from "./run-loop-mocks.test-support.js";
+import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
 import {
   createActiveWorkSnapshot,
   expectRestartCloseCall,
@@ -33,6 +34,12 @@ export function registerGracefulGatewayShutdownTests({
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,
 }: UpdateRespawnFixtures): void {
+  registerTimedOutGatewayStopTests({
+    createSignaledLoopHarness,
+    waitForGatewayActiveWork,
+    gatewayLog,
+  });
+
   it("exits 0 on SIGTERM after graceful close", async () => {
     vi.clearAllMocks();
     const gatewayStateOwner = { release: vi.fn(async () => {}) };

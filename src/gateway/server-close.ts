@@ -80,16 +80,14 @@ function createCloseSteps(reason: string, warnings: string[]) {
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
   skillsChangeUnsub?: () => void | Promise<void>;
-  disposeAuthRateLimiter?: () => void;
-  disposeBrowserAuthRateLimiter: () => void;
+  disposeNodeReapproval: () => void;
   stopChannelHealthMonitor?: () => Promise<void>;
   stopReadinessEventLoopHealth?: () => void;
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
   await measureGatewayCloseStep("restart.close.skills-watcher", () => params.skillsChangeUnsub?.());
-  params.disposeAuthRateLimiter?.();
-  params.disposeBrowserAuthRateLimiter();
+  params.disposeNodeReapproval();
   await measureGatewayCloseStep("restart.close.channel-health-monitor", () =>
     params.stopChannelHealthMonitor?.(),
   );
@@ -201,7 +199,7 @@ export type GatewayCloseParams = {
 
 export type GatewayClosePrepareParams = GatewayRunShutdownParams & {
   preparePluginRegistryClose: ReturnType<typeof createPluginRegistryOwner>["prepareClose"];
-  agentUnsub?: GatewayCloseParams["agentUnsub"];
+  drainPersistence: () => Promise<void>;
   updateCheckStop?: (() => Promise<void> | void) | null;
   configReloader: { stop: () => Promise<void> };
   getPendingReplyCount: () => number;
@@ -288,7 +286,7 @@ export async function prepareGatewayClose(
       recordShutdownWarning(warnings, "memory-managers");
     });
     if (opts?.onProcessExitReady) {
-      await measureCloseStep("terminal-persistence", () => params.agentUnsub?.());
+      await measureCloseStep("terminal-persistence", params.drainPersistence);
       await memoryPreparation;
       // Keep every path fenced through host lock release and exit: a per-path
       // idle receipt alone does not prevent accepted cleanup from reopening it.
