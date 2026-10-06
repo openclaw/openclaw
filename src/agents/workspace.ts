@@ -918,7 +918,8 @@ export async function loadWorkspaceBootstrapFiles(
     if (
       !access &&
       (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
+      // Lookup failures still need a guarded read for content or an unreadable diagnostic.
+      !(await exactWorkspaceEntryExists(resolvedDir, entry.name).catch(() => true))
     ) {
       continue;
     }
