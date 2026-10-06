@@ -59,7 +59,12 @@ function zip(name: string, bytes: Buffer) {
   return Buffer.concat([local, fileName, bytes, central, fileName, end]);
 }
 
-function fixture(parentOnMain = false, verifierSha = sha, packageId = "example") {
+function fixture(
+  parentOnMain = false,
+  verifierSha = sha,
+  packageId = "example",
+  parentRunAttempt = 1,
+) {
   const parentRef = parentOnMain ? "main" : ref;
   const parentFullRef = parentOnMain ? "refs/heads/main" : `refs/tags/${ref}`;
   const directory = mkdtempSync(join(tmpdir(), "clawhub-postpublish-"));
@@ -110,13 +115,13 @@ function fixture(parentOnMain = false, verifierSha = sha, packageId = "example")
     parentRepository: repository,
     parentWorkflow,
     parentRunId: "10",
-    parentRunAttempt: "1",
+    parentRunAttempt: String(parentRunAttempt),
   };
   const transactions = { schemaVersion: 1, identity, packages: [entry] };
   const receipt = createClawHubParentAuthorization(transactions, "automated-awaited");
   const run = (id: number, path: string) => ({
     id,
-    run_attempt: 1,
+    run_attempt: id === 10 ? parentRunAttempt : 1,
     path: `${path}@${id === 10 ? parentFullRef : `refs/tags/${ref}`}`,
     head_sha: sha,
     head_branch: id === 10 ? parentRef : ref,
@@ -144,7 +149,7 @@ function fixture(parentOnMain = false, verifierSha = sha, packageId = "example")
   };
   const receiptArtifact = artifact(
     1,
-    "openclaw-clawhub-parent-authorization-v2-10-1-20-1",
+    `openclaw-clawhub-parent-authorization-v2-10-${parentRunAttempt}-20-1`,
     10,
     "authorization.json",
     Buffer.from(JSON.stringify(receipt)),
@@ -161,7 +166,7 @@ function fixture(parentOnMain = false, verifierSha = sha, packageId = "example")
     schemaVersion: 1,
     repository,
     parentRunId: "10",
-    parentRunAttempt: "1",
+    parentRunAttempt: String(parentRunAttempt),
     parentWorkflow,
     toolingRef: parentRef,
     toolingFullRef: parentFullRef,
@@ -172,13 +177,13 @@ function fixture(parentOnMain = false, verifierSha = sha, packageId = "example")
   };
   const dispatchArtifact = artifact(
     4,
-    "openclaw-release-children-10-1",
+    `openclaw-release-children-10-${parentRunAttempt}`,
     10,
     "dispatch.json",
     Buffer.from(JSON.stringify(dispatch)),
   );
   const metadata = new Map<string, unknown>([
-    ["actions/runs/10/attempts/1", parent],
+    [`actions/runs/10/attempts/${parentRunAttempt}`, parent],
     ["actions/runs/20/attempts/1", child],
     ["actions/runs/20", child],
     [
@@ -307,6 +312,56 @@ function fixture(parentOnMain = false, verifierSha = sha, packageId = "example")
     dispatchArtifact,
     receipt,
   };
+}
+
+function retryFixture({
+  parentOnMain = false,
+  producerAttempt = 1,
+  terminalAttempt = producerAttempt + 1,
+  jobName = "Publish plugins, then OpenClaw",
+}: {
+  parentOnMain?: boolean;
+  producerAttempt?: number;
+  terminalAttempt?: number;
+  jobName?: string;
+} = {}) {
+  const f = fixture(parentOnMain, sha, "example", producerAttempt);
+  f.metadata.set(`actions/runs/10/attempts/${producerAttempt}`, {
+    ...f.parent,
+    conclusion: "failure",
+  });
+  f.parent.run_attempt = terminalAttempt;
+  f.metadata.set(`actions/runs/10/attempts/${terminalAttempt}`, f.parent);
+  const uploadStep = {
+    name: "Upload exact release child dispatch record",
+    status: "completed",
+    conclusion: "success",
+    number: 23,
+    started_at: "2026-10-05T18:48:31Z",
+    completed_at: "2026-10-05T18:48:32Z",
+  };
+  const producer = {
+    run_id: 10,
+    run_attempt: producerAttempt,
+    head_sha: sha,
+    name: jobName,
+    status: "completed",
+    conclusion: "success",
+    runner_id: 42,
+    started_at: "2026-10-05T18:43:49Z",
+    completed_at: "2026-10-05T19:10:19Z",
+    steps: [uploadStep],
+  };
+  const originalProducer = { ...producer, steps: [{ ...uploadStep }] };
+  const terminalUpload = { ...uploadStep };
+  const terminalProducer = { ...producer, run_attempt: terminalAttempt, steps: [terminalUpload] };
+  for (const job of [originalProducer, terminalProducer]) {
+    f.metadata.set(`actions/runs/10/attempts/${job.run_attempt}/jobs?per_page=100&page=1`, {
+      total_count: 1,
+      jobs: [job],
+    });
+  }
+  return { ...f, originalProducer, terminalProducer, terminalUpload };
 }
 
 function preparedFixture(selectionMode = "selected", packageId = "example", runAttempt = 1) {
@@ -538,6 +593,12 @@ describe("ClawHub prepared publication", () => {
     },
   );
 
+  it("restores established package families in prepared promotion matrices", async () => {
+    const f = preparedFixture("selected", "cloudflare");
+    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
+    expect(entry.family).toBe("bundle-plugin");
+  });
+
   it.each([
     { publication: { state: "published" } },
     { publication: { state: "absent" } },
@@ -747,6 +808,143 @@ describe("ClawHub prepared publication", () => {
 });
 
 describe("ClawHub detached postpublish verification", () => {
+  it.each([
+    { label: "protected-tag publication", noChild: false },
+    { label: "main publication", noChild: false, parentOnMain: true },
+    { label: "no normal ClawHub child", noChild: true },
+    { label: "Docker-only recovery", noChild: true, jobName: "record_docker_only_scope" },
+  ])(
+    "reuses the retained dispatch producer after a terminal retry: $label",
+    async ({ noChild, ...options }) => {
+      const f = retryFixture(options);
+      if (noChild) {
+        const archive = zip(
+          "dispatch.json",
+          Buffer.from(
+            JSON.stringify({
+              ...f.dispatch,
+              normalClawHubRunId: null,
+              normalClawHubRunAttempt: null,
+            }),
+          ),
+        );
+        f.archives.set(4, archive);
+        Object.assign(f.dispatchArtifact, {
+          size_in_bytes: archive.length,
+          digest: `sha256:${digest(archive)}`,
+        });
+      }
+      const result = await verifyClawHubPostpublish(f.options);
+      expect(result).toMatchObject({ complete: true, parentRunAttempt: 2, dispatchRunAttempt: 1 });
+      expect(result.packages).toHaveLength(noChild ? 0 : 1);
+      expect(f.registryReads.length > 0).toBe(!noChild);
+    },
+  );
+
+  it("selects the retained producer among distinct historical dispatches", async () => {
+    const f = retryFixture({ producerAttempt: 2 });
+    const oldRun = { ...f.parent, run_attempt: 1, conclusion: "failure" };
+    const oldJob = { ...structuredClone(f.originalProducer), run_attempt: 1, runner_id: 7 };
+    f.metadata.set("actions/runs/10/attempts/1", oldRun);
+    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 1,
+      jobs: [oldJob],
+    });
+    const oldArchive = zip(
+      "dispatch.json",
+      Buffer.from(
+        JSON.stringify({ ...f.dispatch, parentRunAttempt: "1", normalClawHubRunId: "19" }),
+      ),
+    );
+    const oldArtifact = {
+      ...f.dispatchArtifact,
+      id: 5,
+      name: "openclaw-release-children-10-1",
+      size_in_bytes: oldArchive.length,
+      digest: `sha256:${digest(oldArchive)}`,
+    };
+    f.archives.set(5, oldArchive);
+    f.metadata.set("actions/artifacts/5", oldArtifact);
+    f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
+      total_count: 3,
+      artifacts: [oldArtifact, f.receiptArtifact, f.dispatchArtifact],
+    });
+    expect(await verifyClawHubPostpublish(f.options)).toMatchObject({
+      complete: true,
+      parentRunAttempt: 3,
+      dispatchRunAttempt: 2,
+      dispatchArtifactId: 4,
+    });
+    expect(f.registryReads.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    { change: "rerun producer", error: /retained ClawHub dispatch record/u },
+    { change: "different runner", error: /retained ClawHub dispatch record/u },
+    { change: "failed producer", error: /successful ClawHub dispatch producer/u },
+    { change: "future record", error: /retained ClawHub dispatch record/u },
+    { change: "ambiguous records", error: /ambiguous retained/u },
+    { change: "changed digest", error: /digest/u },
+    { change: "changed source", error: /headSha mismatch/u },
+    { change: "changed ref", error: /producer workflow ref mismatch/u },
+    { change: "parallel producer", error: /ambiguous successful ClawHub dispatch producer/u },
+    { change: "excessive history", error: /historical record limit/u },
+  ])(
+    "rejects $change during retained dispatch recovery before registry reads",
+    async ({ change, error }) => {
+      const f = retryFixture();
+      if (change === "rerun producer") {
+        f.terminalProducer.started_at = "2026-10-05T20:00:00Z";
+        f.terminalProducer.completed_at = "2026-10-05T20:10:00Z";
+        f.terminalUpload.started_at = "2026-10-05T20:05:00Z";
+        f.terminalUpload.completed_at = "2026-10-05T20:05:01Z";
+      } else if (change === "different runner") {
+        f.originalProducer.runner_id = 43;
+      } else if (change === "failed producer") {
+        f.originalProducer.conclusion = "failure";
+      } else if (change === "future record") {
+        f.dispatchArtifact.name = "openclaw-release-children-10-3";
+      } else if (change === "ambiguous records") {
+        f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
+          total_count: 3,
+          artifacts: [f.receiptArtifact, f.dispatchArtifact, { ...f.dispatchArtifact, id: 5 }],
+        });
+      } else if (change === "changed digest") {
+        const changed = Buffer.from(f.archives.get(4)!);
+        changed.writeUInt32LE(0, 0);
+        f.archives.set(4, changed);
+      } else if (change === "changed ref") {
+        f.metadata.set("actions/runs/10/attempts/1", {
+          ...f.parent,
+          run_attempt: 1,
+          path: `${parentWorkflow}@refs/heads/main`,
+        });
+      } else if (change === "parallel producer") {
+        f.metadata.set("actions/runs/10/attempts/2/jobs?per_page=100&page=1", {
+          total_count: 2,
+          jobs: [f.terminalProducer, { ...f.terminalProducer, runner_id: 7 }],
+        });
+      } else if (change === "excessive history") {
+        f.metadata.set("actions/runs/10/artifacts?per_page=100&page=1", {
+          total_count: 33,
+          artifacts: Array.from({ length: 33 }, (_, index) => ({
+            ...f.dispatchArtifact,
+            id: index + 4,
+          })),
+        });
+      } else {
+        f.metadata.set("actions/runs/10/attempts/1", {
+          ...f.parent,
+          run_attempt: 1,
+          head_sha: "c".repeat(40),
+        });
+      }
+      await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
+      expect(f.registryReads).toEqual([]);
+      expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
+    },
+  );
+
   it.each([
     { label: "protected-tag parent", parentOnMain: false, status: "identical" },
     { label: "main parent and protected-tag child", parentOnMain: true, status: "ahead" },

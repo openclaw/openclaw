@@ -33,30 +33,20 @@ export async function getMemoryManagerContextWithPurpose(params: {
 }): Promise<
   | {
       manager: NonNullable<MemorySearchManagerResult["manager"]>;
-      debug?: NonNullable<MemorySearchManagerResult["debug"]>;
+      debug: MemorySearchManagerResult["debug"];
     }
   | {
       error: string | undefined;
     }
 > {
   const { getMemorySearchManager } = await loadMemoryToolRuntime();
-  const startedAt = Date.now();
   const { manager, debug, error } = await getMemorySearchManager({
     cfg: params.cfg,
     agentId: params.agentId,
     purpose: params.purpose,
     ...(params.acquireLocalService ? { acquireLocalService: params.acquireLocalService } : {}),
   });
-  return manager
-    ? {
-        manager,
-        debug: {
-          backend: debug?.backend ?? "builtin",
-          purpose: debug?.purpose ?? params.purpose ?? "default",
-          managerMs: debug?.managerMs ?? Math.max(0, Date.now() - startedAt),
-        },
-      }
-    : { error };
+  return manager ? { manager, debug } : { error };
 }
 
 export function createMemoryTool(params: {

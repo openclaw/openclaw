@@ -50,7 +50,7 @@ import type { WorkerSessionPlacementRecord } from "../worker-environments/placem
 import {
   identifiedClient,
   initializeSessionReadContext,
-  listSessions,
+  listSessions as readList,
   requestContext,
   sessionReadHandlers,
   seedSessions,
@@ -59,6 +59,8 @@ import {
 import type { GatewayRequestContext } from "./types.js";
 
 const { emitSessionsChanged } = await import("./session-change-event.js");
+const listSessions = (params: Parameters<typeof readList>[0]) =>
+  readList({ ...params, acceptsSerializedJson: true });
 
 function rowFacts(rows: readonly GatewaySessionRow[]) {
   return rows.map(({ snapshotAt: _snapshotAt, ...row }) => row);
@@ -776,6 +778,7 @@ describe("resident sessions.list", () => {
       await sessionReadHandlers["sessions.list"]?.({
         req: { type: "req", id: "session-list-test", method: "sessions.list" },
         params: { activeMinutes: 0 },
+        acceptsSerializedJson: true,
         client: identifiedClient("owner@example.com"),
         context: requestContext(config),
         respond,

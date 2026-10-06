@@ -82,26 +82,6 @@ import type {
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 const loadModelAuth = createLazyRuntimeModule(async () => await import("../agents/model-auth.js"));
 
-function sanitizeProviderHeaders(
-  headers: Record<string, unknown> | undefined,
-): Record<string, string> | undefined {
-  if (!headers) {
-    return undefined;
-  }
-  const next: Record<string, string> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    // Intentionally preserve marker-shaped values here. This path handles
-    // explicit config/runtime provider headers, where literal values may
-    // legitimately match marker patterns; discovered models.json entries are
-    // sanitized separately in the model registry path.
-    next[key] = value;
-  }
-  return Object.keys(next).length > 0 ? next : undefined;
-}
-
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
   if (!maxChars || trimmed.length <= maxChars) {
@@ -151,11 +131,6 @@ function commandBase(command: string): string {
   return path.parse(command).name;
 }
 
-function isAntigravityCliCommand(command: string): boolean {
-  const commandId = commandBase(command);
-  return commandId === "agy" || commandId === "antigravity";
-}
-
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (const [index, arg] of args.entries()) {
     if (keys.includes(arg)) {
@@ -177,10 +152,6 @@ function findArgValue(args: string[], keys: string[]): string | undefined {
   return undefined;
 }
 
-function hasArg(args: string[], keys: string[]): boolean {
-  return args.some((arg) => keys.includes(arg));
-}
-
 function resolveWhisperOutputPath(args: string[], mediaPath: string): string | null {
   const outputDir = findArgValue(args, ["--output_dir", "-o"]);
   if (!outputDir) {
@@ -194,7 +165,7 @@ function resolveWhisperOutputPath(args: string[], mediaPath: string): string | n
 }
 
 function resolveWhisperCppOutputPath(args: string[]): string | null {
-  if (!hasArg(args, ["-otxt", "--output-txt"])) {
+  if (!args.some((arg) => arg === "-otxt" || arg === "--output-txt")) {
     return null;
   }
   const outputBase = findArgValue(args, ["-of", "--output-file"]);
@@ -496,11 +467,15 @@ function resolveProviderRequestContext(params: {
     params.providerId,
   );
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
-  const mergedHeaders = {
-    ...sanitizeProviderHeaders(providerConfig?.headers as Record<string, unknown> | undefined),
-    ...sanitizeProviderHeaders(params.config?.headers as Record<string, unknown> | undefined),
-    ...sanitizeProviderHeaders(params.entry.headers as Record<string, unknown> | undefined),
-  };
+  const mergedHeaders: Record<string, string> = {};
+  for (const headers of [providerConfig?.headers, params.config?.headers, params.entry.headers]) {
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      // Literal marker-shaped headers are valid here; discovery sanitizes its own headers.
+      if (typeof value === "string") {
+        mergedHeaders[key] = value;
+      }
+    }
+  }
   const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   const request = mergeModelProviderRequestOverrides(
     sanitizeConfiguredModelProviderRequest(providerConfig?.request),
@@ -929,7 +904,9 @@ export async function runCliEntry(params: {
     const { stdout, stderr } = await runExec(command, argv, {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
-      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
+      cwd: ["agy", "antigravity"].includes(commandBase(command))
+        ? path.dirname(mediaPath)
+        : undefined,
     });
     const requestedBackend =
       capability === "audio"

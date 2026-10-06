@@ -18,7 +18,7 @@ import {
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
-import { listUserProfilesSync } from "./user-profile-identity.read.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
 import {
   linkEmail,
   setAvatar,
@@ -141,7 +141,7 @@ describe("user profiles", () => {
     );
     expect(ensure()).toEqual(competing);
     expect(competing).toBeDefined();
-    expect(listUserProfilesSync(options)).toHaveLength(2);
+    expect(readUserProfileSnapshotSync(options).profiles).toHaveLength(2);
   });
 
   it("preserves a custom name saved while waiting to adopt a provider name", () => {
@@ -187,7 +187,7 @@ describe("user profiles", () => {
     });
     expect(readUserProfileVersion()).toBe(version + 1);
     expect(getUserProfileRole(source.id, options)).toBe("maintainer");
-    expect(listUserProfilesSync(options)).toContainEqual(
+    expect(readUserProfileSnapshotSync(options).profiles).toContainEqual(
       expect.objectContaining({ id: target.id, role: "maintainer" }),
     );
     const cleared = setUserProfileRole(source.id, null, options);
@@ -431,7 +431,7 @@ describe("user profiles", () => {
       updatedAt: 400,
       emails: ["source@example.com", "target@example.com"],
     });
-    expect(listUserProfilesSync(options)).toContainEqual(
+    expect(readUserProfileSnapshotSync(options).profiles).toContainEqual(
       expect.objectContaining({
         id: source.id,
         updatedAt: 400,

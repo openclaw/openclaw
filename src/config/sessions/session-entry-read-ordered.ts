@@ -27,7 +27,7 @@ type ReadSessionStore = <T>(
 export async function withOrderedSessionEntriesInWorker<T>(
   inputs: readonly SessionEntryWorkerRead[],
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
-  readStore: ReadSessionStore,
+  { readStore, onReadAdmitted }: { readStore: ReadSessionStore; onReadAdmitted?: () => void },
 ): Promise<T> {
   const selected: Array<{
     input: SessionEntryWorkerRead;
@@ -123,6 +123,8 @@ export async function withOrderedSessionEntriesInWorker<T>(
           }
         };
         try {
+          assertCurrent();
+          onReadAdmitted?.();
           const reads: PreparedSessionEntryWorkerRead[] = [];
           for (const { input: selectedInput, owner, database, continuation } of selected) {
             assertCurrent();

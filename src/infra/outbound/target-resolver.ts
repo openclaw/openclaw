@@ -92,7 +92,7 @@ export function formatTargetDisplay(params: {
   }
 
   const trimmedTarget = params.target.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmedTarget);
+  const lowered = trimmedTarget.toLowerCase();
   const display = params.display?.trim();
   const kind =
     params.kind ??
@@ -141,10 +141,6 @@ function detectTargetKind(
   if (preferred) {
     return preferred;
   }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return "group";
-  }
   const inferredChatType = (
     plugin ?? getRuntimeVisibleChannelPlugin(channel)
   )?.messaging?.inferTargetChatType?.({
@@ -160,10 +156,10 @@ function detectTargetKind(
     return "group";
   }
 
-  if (trimmed.startsWith("@") || /^<@!?/.test(trimmed) || /^user:/i.test(trimmed)) {
+  if (raw.startsWith("@") || /^<@!?/.test(raw) || /^user:/i.test(raw)) {
     return "user";
   }
-  if (trimmed.startsWith("#") || /^channel:/i.test(trimmed)) {
+  if (raw.startsWith("#") || /^channel:/i.test(raw)) {
     return "group";
   }
 
@@ -182,30 +178,6 @@ function normalizeDirectoryEntryId(
 ): string {
   const normalized = normalizeTargetForProvider(channel, entry.id, plugin);
   return normalized ?? entry.id.trim();
-}
-
-function matchesDirectoryEntry(params: {
-  channel: ChannelId;
-  entry: ChannelDirectoryEntry;
-  query: string;
-  plugin?: ChannelPlugin;
-  exactOnly?: boolean;
-}): boolean {
-  const query = normalizeLowercaseStringOrEmpty(params.query);
-  if (!query) {
-    return false;
-  }
-  const candidates = [
-    normalizeDirectoryEntryId(params.channel, params.entry, params.plugin),
-    params.entry.name,
-    params.entry.handle,
-  ]
-    .map((value) => (value ? stripTargetPrefixes(value, params.channel, params.plugin) : ""))
-    .map(normalizeLowercaseStringOrEmpty)
-    .filter(Boolean);
-  return candidates.some((value) =>
-    params.exactOnly ? value === query : value === query || value.includes(query),
-  );
 }
 
 async function listDirectoryEntries(params: {
@@ -366,15 +338,21 @@ export async function resolveChannelTarget(params: {
     preferLiveOnMiss: true,
     plugin,
   });
-  const matches = entries.filter((entry) =>
-    matchesDirectoryEntry({
-      channel: params.channel,
-      entry,
-      query,
-      plugin,
-      exactOnly: Boolean(reservedLiteral),
-    }),
-  );
+  const normalizedQuery = query.toLowerCase();
+  const matches = normalizedQuery
+    ? entries.filter((entry) => {
+        const candidates = [
+          normalizeDirectoryEntryId(params.channel, entry, plugin),
+          entry.name,
+          entry.handle,
+        ].map((value) =>
+          value ? stripTargetPrefixes(value, params.channel, plugin).toLowerCase() : "",
+        );
+        return candidates.some((value) =>
+          reservedLiteral ? value === normalizedQuery : value.includes(normalizedQuery),
+        );
+      })
+    : [];
   const [entry] = matches;
   if (matches.length === 1 && entry) {
     return {

@@ -80,6 +80,53 @@ it("excludes dock conversations before ownership, people counts, and pagination"
   expect(explicit.sessions[0]).toMatchObject({ key: "agent:main:board-agent", isDock: true });
 });
 
+it("reports the age boundary of people outside the selected profile and returned page", async () => {
+  const now = Date.UTC(2026, 8, 27);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  const store = {
+    "agent:main:selected": entry({
+      lastActivityAt: now,
+      createdActor: { type: "human", source: "profile", id: "profile-ada" },
+    }),
+    "agent:main:other-person": entry({
+      lastActivityAt: now - 3_600_000 + 100,
+      createdActor: { type: "human", source: "profile", id: "profile-bob" },
+    }),
+    "agent:main:excluded-dock": entry({
+      lastActivityAt: now - 3_600_000 + 10,
+      createdSurface: "plugin-dock",
+    }),
+    "agent:main:already-expired": entry({ lastActivityAt: now - 3_600_001 }),
+  };
+  const opts: SessionsListParams = {
+    activeMinutes: 60,
+    sortBy: "activity",
+    excludeDock: true,
+    includePeople: true,
+    limit: 1,
+  };
+  const read = (query = opts) => listSessionFixture({ cfg, storePath, store, opts: query });
+  const first = await read();
+  expect(first.sessions.map((row) => row.key)).toEqual(["agent:main:selected"]);
+  expect(first.activityExpiresAt).toBe(now + 100);
+  const selected = { ...opts, involvingProfileId: "profile-ada" };
+  const person = await read(selected);
+  expect(person.activityExpiresAt).toBe(now + 100);
+  expect(person.people?.map(({ identity }) => identity.id).toSorted()).toEqual([
+    "profile-ada",
+    "profile-bob",
+  ]);
+  clock.mockReturnValue(now + 100);
+  expect((await read(selected)).activityExpiresAt).toBe(now + 100);
+  clock.mockReturnValue(now + 101);
+  const expired = await read(selected);
+  expect(expired.activityExpiresAt).toBe(now + 3_600_000);
+  expect(expired.people?.map(({ identity }) => identity.id)).toEqual(["profile-ada"]);
+  clock.mockReturnValue(now + 3_600_001);
+  expect((await read(selected)).activityExpiresAt).toBeUndefined();
+  expect((await read({ ...opts, activeMinutes: undefined })).activityExpiresAt).toBeUndefined();
+});
+
 it("reuses involvement facts until session replacement or profile publication", () => {
   const identityProjection = sessionIdentity.createSessionIdentityProjection();
   const rowContext = { ...buildSessionListRowMetadataContext({ now: 1 }), identityProjection };

@@ -25,6 +25,7 @@ import {
   updateAgentDeletionJournalCleanupPaths,
 } from "./agent-deletion-journal.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
+import { disposeOpenClawAgentDatabaseByPath } from "./openclaw-agent-db-disposal.js";
 import {
   assertNoOpenClawAgentDatabaseLeases,
   claimOpenClawAgentDatabaseLease,
@@ -45,7 +46,6 @@ import {
   clearOpenClawAgentDatabaseOpenFailure,
   closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabasesForTest,
-  disposeOpenClawAgentDatabaseByPath,
   ensureOpenClawAgentDatabaseSchema,
   inspectOpenClawAgentDatabaseOwner,
   isOpenClawAgentDatabaseOpen,
@@ -1464,7 +1464,7 @@ describe("openclaw agent database", () => {
     expect(migrated.db.prepare("PRAGMA foreign_keys").get()).toEqual({ foreign_keys: 1 });
   });
 
-  it("retains a failed-open handle and lease when initialization cleanup also fails", () => {
+  it("retains a failed-open handle and lease when initialization cleanup also fails", async () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const database = openOpenClawAgentDatabase({ agentId: "worker-1", env });
@@ -1518,7 +1518,7 @@ describe("openclaw agent database", () => {
       }),
     ).toThrow("belongs to agent worker-1; requested agent worker-2");
 
-    expect(disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
+    expect(await disposeOpenClawAgentDatabaseByPath(database.path, { env })).toBe(true);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-2", { env })).not.toThrow();
   });
 
@@ -1948,60 +1948,6 @@ describe("openclaw agent database", () => {
     expect(database.db.isOpen).toBe(false);
     expect(() => assertNoOpenClawAgentDatabaseLeases("worker-1", { env })).not.toThrow();
   });
-
-  it("disposes only its exact cached owner and unregisters that registry row", () => {
-    const stateDir = createTempStateDir();
-    const env = { OPENCLAW_STATE_DIR: stateDir };
-    const first = openOpenClawAgentDatabase({ agentId: "worker-1", env });
-    const second = openOpenClawAgentDatabase({ agentId: "worker-2", env });
-
-    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(true);
-    expect(first.db.isOpen).toBe(false);
-    expect(second.db.isOpen).toBe(true);
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-      expect.objectContaining({ agentId: "worker-2", path: second.path }),
-    ]);
-    expect(disposeOpenClawAgentDatabaseByPath(first.path, { env })).toBe(false);
-    expect(second.db.isOpen).toBe(true);
-
-    const reopened = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env,
-      path: first.path,
-    });
-    expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
-      expect.objectContaining({ agentId: "worker-1", path: reopened.path }),
-      expect.objectContaining({ agentId: "worker-2", path: second.path }),
-    ]);
-  });
-
-  it.runIf(process.platform !== "win32").each([true])(
-    "disposes a symlinked database only when its cached owner is unambiguous (duplicate=%s)",
-    (duplicate) => {
-      const stateDir = fs.realpathSync(createTempStateDir());
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      const realDir = path.join(stateDir, "probe-real");
-      const aliasDir = path.join(stateDir, "probe-alias");
-      fs.mkdirSync(realDir, { recursive: true });
-      fs.symlinkSync(realDir, aliasDir, "dir");
-      const realPath = path.join(realDir, "openclaw-agent.sqlite");
-      const aliasPath = path.join(aliasDir, "openclaw-agent.sqlite");
-      const database = openOpenClawAgentDatabase({ agentId: "probe", env, path: realPath });
-      const alias = duplicate
-        ? openOpenClawAgentDatabase({ agentId: "probe", env, path: aliasPath })
-        : undefined;
-
-      expect(disposeOpenClawAgentDatabaseByPath(duplicate ? realPath : aliasPath, { env })).toBe(
-        !duplicate,
-      );
-      expect(database.db.isOpen).toBe(duplicate);
-      if (alias) {
-        expect(alias.db.isOpen).toBe(true);
-      } else {
-        expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([]);
-      }
-    },
-  );
 
   it("keeps the deleted id fenced until its completed tombstone is claimed", () => {
     const stateDir = createTempStateDir();

@@ -31,7 +31,6 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type {
   QualifiedSessionEntryAccessTarget,
   SessionEntryReadScope,
@@ -50,14 +49,16 @@ import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-ag
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { resolveGatewayModelThinkingProfile } from "./session-utils-model.js";
 import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
-import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
   withGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
-import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
+import {
+  findCanonicalStoreMatch,
+  omitInternalSessionEffectsEntries,
+} from "./session-utils-store-selection.js";
 import type { GatewayAgentRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
@@ -163,11 +164,7 @@ function loadSessionEntryWithMode(
   const storePath = target.storePath;
   const store = target.store;
   if (!readOnly) {
-    for (const storeKey of target.storeKeys) {
-      if (isInternalSessionEffectsKey(storeKey)) {
-        delete store[storeKey];
-      }
-    }
+    omitInternalSessionEffectsEntries(store, target.storeKeys);
   }
   const canonicalMatch = findCanonicalStoreMatch(store, target.storeKeys);
   const legacyKey = canonicalMatch?.key !== target.canonicalKey ? canonicalMatch?.key : undefined;
@@ -233,11 +230,7 @@ export async function withGatewaySessionEntry<T>(
   return withGatewaySessionStoreTarget(
     { cfg, key: sessionKey, ...opts },
     (target, membership, assertSourceCurrent) => {
-      for (const key of target.storeKeys) {
-        if (isInternalSessionEffectsKey(key)) {
-          delete target.store[key];
-        }
-      }
+      omitInternalSessionEffectsEntries(target.store, target.storeKeys);
       const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
       const assertCurrent = () => {
         assertSourceCurrent();
@@ -267,46 +260,29 @@ export async function withQualifiedGatewaySessionEntry<T>(params: {
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
   assertConfigCurrent: () => void;
 }): Promise<T> {
-  let consumed = false;
-  const read = () =>
-    withQualifiedGatewaySessionStoreTarget({
-      ...params,
-      consume: (target, membership, assertSourceCurrent) => {
-        const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
-        // Qualification retains the selected store key even before its row exists.
-        const storeKey = canonicalMatch?.key ?? params.target.storeKey;
-        const assertCurrent = () => {
-          assertSourceCurrent();
-          params.assertConfigCurrent();
-        };
-        assertCurrent();
-        consumed = true;
-        return params.consume(
-          {
-            cfg: params.cfg,
-            ...target,
-            entry: canonicalMatch?.entry,
-            legacyKey: storeKey !== target.canonicalKey ? storeKey : undefined,
-          },
-          membership,
-          assertCurrent,
-        );
-      },
-    });
-  // Refresh only before consumption; a callback may already have started effects.
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await read();
-    } catch (error) {
-      if (
-        consumed ||
-        !(error instanceof GatewaySessionFactsChangedDuringReadError) ||
-        attempt >= 2
-      ) {
-        throw error;
-      }
-    }
-  }
+  return withQualifiedGatewaySessionStoreTarget({
+    ...params,
+    consume: (target, membership, assertSourceCurrent) => {
+      const canonicalMatch = findCanonicalStoreMatch(target.store, target.storeKeys);
+      // Qualification retains the selected store key even before its row exists.
+      const storeKey = canonicalMatch?.key ?? params.target.storeKey;
+      const assertCurrent = () => {
+        assertSourceCurrent();
+        params.assertConfigCurrent();
+      };
+      assertCurrent();
+      return params.consume(
+        {
+          cfg: params.cfg,
+          ...target,
+          entry: canonicalMatch?.entry,
+          legacyKey: storeKey !== target.canonicalKey ? storeKey : undefined,
+        },
+        membership,
+        assertCurrent,
+      );
+    },
+  });
 }
 
 export function resolveCanonicalSessionEntryFromStoreKeys(

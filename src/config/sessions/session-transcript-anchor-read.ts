@@ -51,12 +51,14 @@ export async function readSessionTranscriptAnchorsAsync(
       scope,
       signal,
     );
-    return actor.sessions.history(
+    const facts = await actor.sessions.history(
       authority,
       { type: "session.history.anchors", input: { ...selection, ...target } },
       signal,
       onRead,
     );
+    authority.assertCurrent();
+    return facts;
   }
   const captured = {
     agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -68,6 +70,7 @@ export async function readSessionTranscriptAnchorsAsync(
   const request = {
     entryIds: [...selection.entryIds],
     afterSeq: selection.afterSeq,
+    includeSession: selection.includeSession,
     includeHeader: selection.includeHeader,
     contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
     contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
@@ -126,7 +129,7 @@ export async function readSessionTranscriptAnchorsAsync(
       return empty;
     }
     return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPath: storePath },
+      { ...options, requestedPaths: [storePath] },
       async (owner) => {
         const read = async () => {
           const native = onRead ? getOpenClawAgentDatabaseIfOpen(options) : undefined;

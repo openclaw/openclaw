@@ -16,13 +16,9 @@ import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.j
 import { resolveReplyExpectation } from "../../reply-completion.js";
 import { buildAgentRuntimePlan } from "../../runtime-plan/build.js";
 import { resolveSessionPermissionExecMode } from "../../session-permission-exec-mode.js";
-import { resolveSessionPlacementSandbox } from "../../session-placement-admission.js";
 import { resolveSessionSkillResourceSnapshot } from "../../session-placement-skill-resources.js";
 import { createToolTerminalObserver } from "../../tool-terminal-outcome.js";
-import {
-  resolveAttemptWorkspaceSandbox,
-  resolveHarnessWorkspace,
-} from "../../workspace-sandbox.js";
+import { preparePluginHarnessWorkspace, resolveHarnessWorkspace } from "../../workspace-sandbox.js";
 import { remapExplicitSkillSelectionPath, remapSkillReferencePaths } from "../sandbox-skills.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 import { mapThinkingLevelForProvider } from "../utils.js";
@@ -268,27 +264,18 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     throw new Error("embedded attempt reached dispatch without an active admitted run");
   }
   assertActiveRun();
-  const placementSandbox = runtime.pluginHarnessOwnsTransport
-    ? await resolveSessionPlacementSandbox({
-        agentId: workspaceResolution.agentId,
-        config: params.config,
-        sessionId,
-        sessionKey: resolvedSessionKey,
-        workspaceDir,
-      })
-    : null;
-  assertActiveRun();
-  const pluginWorkspace = runtime.pluginHarnessOwnsTransport
-    ? await resolveAttemptWorkspaceSandbox({
+  using placement = runtime.pluginHarnessOwnsTransport
+    ? await preparePluginHarnessWorkspace({
         ...params,
         agentId: workspaceResolution.agentId,
         cwd: undefined,
         sessionId,
         sessionKey: resolvedSessionKey,
         workspaceDir,
-        placementSandbox,
       })
-    : undefined;
+    : null;
+  assertActiveRun();
+  const pluginWorkspace = placement?.workspace;
   const promptMedia = pluginWorkspace
     ? await prepareEmbeddedAttemptPromptExecution({
         attempt: { ...params, model: effectiveModel },
@@ -311,7 +298,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
           finalize: params.finalizePromptForResolvedTools,
         })
       : undefined;
-  const pluginSandbox = placementSandbox ?? pluginWorkspace?.sandbox;
+  const pluginSandbox = placement?.sandbox ?? pluginWorkspace?.sandbox;
   if (params.permissionMode) {
     // Attempts narrow this shared run-owned policy before recovery can reuse it.
     params.execOverrides ??= {};
@@ -691,7 +678,11 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   const rawAttempt = await withPreparedEmbeddedGatewayTools(
     attemptParams,
     attemptControls.isCurrent,
-    () => runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media),
+    () => {
+      assertActiveRun();
+      placement?.assertCurrent();
+      return runEmbeddedAttemptWithBackend(attemptParams, nativeSessionRuntime, params.media);
+    },
   )
     .catch((err: unknown): never => {
       throw input.getPostCompactionAbortError() ?? err;

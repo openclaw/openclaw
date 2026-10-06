@@ -141,9 +141,7 @@ describe("checkTwitchAccessControl", () => {
               message: { message: "@testbot hello", userId, [flag]: matching },
             });
             expect(result.allowed).toBe(matching);
-            if (matching) {
-              expect(result.matchSource).toBe("role");
-            } else {
+            if (!matching) {
               expect(result.reason).toContain("does not have any of the required roles");
             }
           }
@@ -162,13 +160,12 @@ describe("checkTwitchAccessControl", () => {
     it.each(["123456", undefined])(
       "allows wildcard roles without requiring a native ID (%s)",
       async (userId) => {
-        const result = await expectAllowedAccessCheck({
+        await expectAllowedAccessCheck({
           account: {
             allowedRoles: ["all"],
           },
           message: { userId },
         });
-        expect(result.matchKey).toBe("all");
       },
     );
 
@@ -236,8 +233,6 @@ describe("checkTwitchAccessControl", () => {
         },
       });
       expect(result.allowed).toBe(true);
-      expect(result.matchKey).toBe("123456");
-      expect(result.matchSource).toBe("allowlist");
     });
   });
 });

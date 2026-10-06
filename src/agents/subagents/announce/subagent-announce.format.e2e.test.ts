@@ -3,7 +3,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
@@ -32,7 +31,6 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.types.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -44,15 +42,16 @@ import {
   projectRuntimeContextFragments,
   RUNTIME_EVENT_USER_PROMPT,
 } from "../../internal-runtime-context.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
-import { immutableSubagentRun, subagentRuns } from "../registry/subagent-registry-memory.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.test-support.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.test-support.js";
 import { announceTesting as subagentAnnounceTesting } from "./subagent-announce-overrides.test-support.js";
 import {
   visibleAgentResponse,
+  publishAnnounceRunFixture,
+  type MockSubagentRun,
   expectInputProvenance,
   expectAgentCallFields,
   type AgentCallRequest,
@@ -70,29 +69,7 @@ type SubagentDeliveryTargetResult = {
     threadId?: string | number;
   };
 };
-type MockSubagentRun = {
-  runId: string;
-  childSessionKey: string;
-  requesterSessionKey: string;
-  requesterDisplayKey: string;
-  task: string;
-  cleanup: "keep" | "delete";
-  createdAt: number;
-  execution: {
-    endedAt?: number;
-    outcome?: {
-      status: "ok" | "timeout" | "error" | "unknown";
-      error?: string;
-    };
-  };
-  cleanupCompletedAt?: number;
-  label?: string;
-  completion?: {
-    required: boolean;
-    resultText?: string | null;
-    terminalReply?: AgentRunTerminalReplySnapshot;
-  };
-};
+
 type SessionEntryFixture = Partial<Omit<SessionEntry, "updatedAt">> & {
   updatedAt?: number;
   lastChannel?: string;
@@ -162,18 +139,20 @@ const embeddedRunMock = {
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
     isSubagentSessionRunActive: vi.fn(() => true),
-    shouldIgnorePostCompletionAnnounceForSession: vi.fn((_sessionKey: string) => false),
-    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
-    getLatestSubagentRunByChildSessionKey: vi.fn(
-      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+    shouldIgnorePostCompletionAnnounceForSession: vi.fn(
+      (_sessionKey: string, _childAgentId?: string) => false,
     ),
+    countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
+    latestRunForChild: vi.fn((_childSessionKey: string): MockSubagentRun | undefined => undefined),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
     ),
     replaceSubagentRunAfterSteerCore: vi.fn(
       (_params: { previousRunId: string; nextRunId: string; lifecycleGeneration?: string }) => true,
     ),
-    resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
+    resolveRequesterForChildSession: vi.fn(
+      (_sessionKey: string, _childAgentId?: string): RequesterResolution => null,
+    ),
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
@@ -233,7 +212,7 @@ function completedAnnounceRun(
       terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
     },
   });
-  subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation((key) =>
+  subagentRegistryMock.latestRunForChild.mockImplementation((key) =>
     key === childSessionKey ? child : undefined,
   );
   transcriptEvents = [assistantEvent(runId, text)];
@@ -365,29 +344,28 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-function publishAnnounceRunFixture(fixture: MockSubagentRun): SubagentRunRecord {
-  const canonical = createSubagentRunRecord({
-    ...fixture,
-    execution:
-      typeof fixture.execution.endedAt === "number"
-        ? { status: "terminal", ...fixture.execution }
-        : { status: "running" },
-  });
-  const current = subagentRuns.get(canonical.runId);
-  if (current && isDeepStrictEqual(current, canonical)) {
-    return current;
-  }
-  const published = immutableSubagentRun(structuredClone(canonical));
-  subagentRuns.set(published.runId, published);
-  return published;
-}
-
 function createRegistryDiscoveryFixture() {
   return {
     ...subagentRegistryMock,
-    getLatestSubagentRunByChildSessionKey(childSessionKey: string) {
-      const fixture = subagentRegistryMock.getLatestSubagentRunByChildSessionKey(childSessionKey);
-      return fixture ? publishAnnounceRunFixture(fixture) : undefined;
+    buildLatestSubagentSessionListReadIndex() {
+      return {
+        getLatestSubagentRun(childSessionKey: string) {
+          const fixture = subagentRegistryMock.latestRunForChild(childSessionKey);
+          return fixture ? publishAnnounceRunFixture(fixture) : null;
+        },
+      };
+    },
+    async shouldIgnorePostCompletionAnnounceForSession(
+      childSessionKey: string,
+      childAgentId?: string,
+    ) {
+      return subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession(
+        childSessionKey,
+        childAgentId,
+      );
+    },
+    async resolveRequesterForChildSession(childSessionKey: string, childAgentId?: string) {
+      return subagentRegistryMock.resolveRequesterForChildSession(childSessionKey, childAgentId);
     },
     listSubagentRunsForRequester(sessionKey: string, scope?: { requesterRunId?: string }) {
       return subagentRegistryMock
@@ -544,9 +522,7 @@ describe("subagent announce formatting", () => {
       .mockClear()
       .mockReturnValue(false);
     subagentRegistryMock.countPendingDescendantRuns.mockReset().mockReturnValue(0);
-    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
-      .mockClear()
-      .mockReturnValue(undefined);
+    subagentRegistryMock.latestRunForChild.mockClear().mockReturnValue(undefined);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteerCore.mockClear().mockReturnValue(true);
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);

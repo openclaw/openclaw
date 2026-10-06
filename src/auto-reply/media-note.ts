@@ -131,18 +131,7 @@ type InboundMediaNoteProjection = {
 /** Formats prompt-visible attachment text and retains facts that still need native hydration. */
 export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNoteProjection {
   const facts = normalizeMediaFacts(ctx.media);
-  const entries = facts.flatMap((fact, index) => {
-    const mediaPath = fact.path?.trim() ?? "";
-    return mediaPath || fact.url?.trim()
-      ? [
-          {
-            fact,
-            path: mediaPath,
-            index,
-          },
-        ]
-      : [];
-  });
+  const entries = facts.flatMap((fact, index) => (fact.path || fact.url ? [{ fact, index }] : []));
   if (entries.length === 0) {
     return { media: [], mediaIndexes: [] };
   }
@@ -160,7 +149,8 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
       entry.fact.contentType ?? entry.fact.kind,
     );
     const isAudioByMime = normalizedType === "audio" || normalizedType.startsWith("audio/");
-    const isAudioEntry = entry.fact.kind === "audio" || isAudioPath(entry.path) || isAudioByMime;
+    const isAudioEntry =
+      entry.fact.kind === "audio" || isAudioPath(entry.fact.path) || isAudioByMime;
     return (
       !isAudioEntry ||
       !(

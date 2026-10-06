@@ -6,7 +6,14 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { runUpdatedInstallGatewayCommand } from "./update-command-service-command.js";
 import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
-it.each(["installed", "load-failed", "compensated", "invalid-receipt", "compensation-failed"])(
+it.each([
+  "installed",
+  "load-failed",
+  "compensated",
+  "start-refused",
+  "invalid-receipt",
+  "compensation-failed",
+])(
   "retains installer warnings and rollback evidence after child settlement: %s",
   async (outcome) => {
     await withTestDir({ prefix: "openclaw-definition-response-" }, async (root) => {
@@ -19,15 +26,19 @@ it.each(["installed", "load-failed", "compensated", "invalid-receipt", "compensa
       const warning =
         outcome === "compensated"
           ? "previous definition was restored"
-          : "Service.KillMode repaired";
-      const preserved = outcome === "compensated";
+          : outcome === "start-refused"
+            ? "Service definition was left unchanged"
+            : "Service.KillMode repaired";
+      const preserved = outcome === "compensated" || outcome === "start-refused";
       const compensationFailed = outcome === "compensation-failed";
       const failed = preserved || compensationFailed || outcome === "load-failed";
       const error = compensationFailed
         ? "UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: Error: SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed"
-        : preserved
-          ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
-          : "load failed";
+        : outcome === "start-refused"
+          ? "SERVICE_DEFINITION_UNKNOWN: Service is masked. Run `systemctl --user unmask openclaw-gateway.service`."
+          : preserved
+            ? "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: ENOSPC"
+            : "load failed";
       await fs.writeFile(
         path.join(root, "dist", "index.mjs"),
         `process.stdout.write(${JSON.stringify(

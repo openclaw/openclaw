@@ -49,6 +49,7 @@ import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.j
 import type {
   SessionEntryWorkerRead,
   PreparedSessionEntryWorkerRead,
+  SessionStoreWorkerReadInput,
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
@@ -64,6 +65,7 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   maintenanceLane,
+  projectionLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -369,6 +371,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   consume: (reads: readonly PreparedSessionEntryWorkerRead[]) => T,
   options?: {
     ordered?: boolean;
+    onReadAdmitted?: () => void;
     prepareSource?: (
       input: SessionEntryWorkerRead,
       ...source: Parameters<SessionEntryReadSourcePreparation>
@@ -376,12 +379,13 @@ export async function withSessionEntriesFromStoresInWorker<T>(
   },
 ): Promise<T> {
   if (options?.ordered) {
-    return withOrderedSessionEntriesInWorker(inputs, consume, (input, read) =>
-      withSessionStoreReaderInWorker(input, read, {
-        prepareSource:
-          options.prepareSource && ((...source) => options.prepareSource!(input, ...source)),
-      }),
-    );
+    return withOrderedSessionEntriesInWorker(inputs, consume, {
+      readStore: (input, read) =>
+        withSessionStoreReaderInWorker(input, read, {
+          prepareSource: options.prepareSource?.bind(options, input),
+        }),
+      onReadAdmitted: options.onReadAdmitted,
+    });
   }
   const reads: PreparedSessionEntryWorkerRead[] = [];
   const enter = (index: number): Promise<T> => {
@@ -535,10 +539,7 @@ type SessionStoreWorkerReader = Pick<
 };
 
 export async function withSessionStoreReaderInWorker<T>(
-  input: Omit<SessionStoreWorkerReadScope, "agentId"> & {
-    agentId?: string;
-    defaultAgentId?: string;
-  },
+  input: SessionStoreWorkerReadInput,
   read: (source: SessionStoreWorkerReader) => Promise<T>,
   {
     backing = false,
@@ -633,7 +634,7 @@ export async function withSessionStoreReaderInWorker<T>(
           (!logical || item.owner.receipt.agentId === database.agentId),
       )?.owner;
       return withSessionHistoryWorkerDatabase(
-        { ...database, env },
+        { ...database, requestedPaths: [storePath, sourcePath], env },
         async (reader) => {
           const sourceIdentity = prepareSource
             ? readDatabasePathIdentitySync(database.path)
@@ -713,7 +714,7 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane },
+        { lane: lane ?? (input.projection === "sharing" ? projectionLane : undefined) },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

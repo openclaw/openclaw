@@ -1,28 +1,17 @@
 /** Browser actions wrap page-controlled text as untrusted content before returning it to agents. */
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
 import {
   readNonNegativeIntegerParam,
   readPositiveIntegerParam,
 } from "openclaw/plugin-sdk/param-readers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import type { BrowserProxyRequest } from "./browser-node-proxy.js";
-import {
-  browserAct,
-  browserConsoleMessages,
-  browserRequests,
-  browserErrors,
-  browserPageText,
-  browserEmulateSetting,
-  browserDownload,
-  browserTabs,
-  browserWaitForDownload,
-  jsonResult,
-  normalizeOptionalString,
-  readStringParam,
-  readStringValue,
-  type BrowserTabsResult,
-} from "./browser-tool.runtime.js";
 import {
   appendNavigatedPageState,
   formatBrowserDebugLogResult,
@@ -34,6 +23,17 @@ import type {
   BrowserBatchAbort,
   BrowserBatchActionResult,
 } from "./browser/client-actions-types.js";
+import {
+  browserAct,
+  browserConsoleMessages,
+  browserRequests,
+  browserErrors,
+  browserPageText,
+  browserEmulateSetting,
+  browserDownload,
+  browserWaitForDownload,
+} from "./browser/client-actions.js";
+import { browserTabs, type BrowserTabsResult } from "./browser/client.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,

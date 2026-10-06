@@ -5,11 +5,7 @@ import { AUTH_STORE_VERSION } from "./constants.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import {
-  loadPersistedAuthProfileStore,
-  loadPersistedAuthProfileStoreAtDatabasePath,
-  loadPersistedSharedAuthProfileStore,
-} from "./persisted.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
 import {
   deletePersistedAuthProfileStoreRaw,
   inspectPersistedAuthProfileStateRaw,
@@ -369,14 +365,11 @@ export async function upsertAuthProfileWithLock(
         filterExternalAuthProfiles: false,
         syncExternalCli: false,
       },
-      updater: (store, owner) => {
+      updater: (store, owner, sharedStore) => {
         const currentAuthority =
           store.profiles[params.profileId] ??
           (owner && owner.databasePath !== owner.sharedDatabasePath
-            ? loadPersistedAuthProfileStoreAtDatabasePath(
-                owner.sharedDatabasePath,
-                owner.location === "state-db" ? "shared-state" : "agent",
-              )?.profiles[params.profileId]
+            ? sharedStore?.profiles[params.profileId]
             : undefined);
         // Consumers can reject a changed profile kind under the same lock as the write.
         params.validateCurrentCredential?.(store.profiles[params.profileId]);

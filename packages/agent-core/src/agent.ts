@@ -7,7 +7,7 @@ import type {
   ThinkingBudgets,
   Transport,
 } from "@openclaw/llm-core";
-import { runAgentLoop, runAgentLoopContinue } from "./agent-loop.js";
+import { runAgentLoop } from "./agent-loop.js";
 import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
@@ -511,7 +511,7 @@ export class Agent {
       throw new TranscriptNotContinuableError(lastMessage.role);
     }
 
-    await this.runContinuation();
+    await this.runPromptMessages([]);
   }
 
   private normalizePromptInput(
@@ -542,18 +542,6 @@ export class Agent {
         messages,
         this.createContextSnapshot(),
         this.createLoopConfig(options),
-        (event) => this.processEvents(event),
-        signal,
-        this.streamFn,
-      );
-    });
-  }
-
-  private async runContinuation(): Promise<void> {
-    await this.runWithLifecycle(async (signal) => {
-      await runAgentLoopContinue(
-        this.createContextSnapshot(),
-        this.createLoopConfig(),
         (event) => this.processEvents(event),
         signal,
         this.streamFn,

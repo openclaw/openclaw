@@ -155,8 +155,7 @@ export function appendSkillUploadChunkInDatabase(
     if (!row) {
       throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
     }
-    const validNow = asDateTimestampMs(Date.now());
-    if (validNow === undefined || !isFutureDateTimestampMs(row.expires_at, { nowMs: validNow })) {
+    if (!isFutureDateTimestampMs(row.expires_at)) {
       throw new SkillUploadRequestError("upload has expired");
     }
     if (row.committed === 1) {
@@ -212,11 +211,7 @@ export function claimSkillUploadInDatabase(
       throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
     }
     const currentTime = Date.now();
-    const validNow = asDateTimestampMs(currentTime);
-    if (
-      validNow === undefined ||
-      !isFutureDateTimestampMs(current.expires_at, { nowMs: validNow })
-    ) {
+    if (!isFutureDateTimestampMs(current.expires_at, { nowMs: currentTime })) {
       throw new SkillUploadRequestError("upload has expired");
     }
     if (current.committed !== 1) {

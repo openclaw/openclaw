@@ -19,7 +19,7 @@ type BrowserOpenEnvironment = {
 };
 
 /** Resolve the platform command used to open an HTTP(S) URL in a browser. */
-export async function resolveBrowserOpenCommand(
+async function resolveBrowserOpenCommand(
   environment: BrowserOpenEnvironment = {},
 ): Promise<BrowserOpenCommand> {
   const platform = environment.platform ?? process.platform;

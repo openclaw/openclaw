@@ -4064,7 +4064,56 @@ wa-dropdown-item.sidebar-agent-menu__agent-switch:focus-visible {
   flex: none;
   align-items: center;
   justify-content: center;
-  width: 6px;
+  gap: 6px;
+}
+
+.sidebar-agent-menu__pin {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-agent-menu__pin[aria-pressed="true"] {
+  opacity: 0.75;
+  pointer-events: auto;
+}
+
+.sidebar-agent-menu__agent-switch:hover .sidebar-agent-menu__pin,
+.sidebar-agent-menu__agent-switch:focus-visible .sidebar-agent-menu__pin,
+.sidebar-agent-menu__pin:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.sidebar-agent-menu__pin:hover,
+.sidebar-agent-menu__pin:focus-visible {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.sidebar-agent-menu__pin:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.sidebar-agent-menu__pin svg {
+  width: 16px;
+  height: 16px;
+}
+
+@media (hover: none) {
+  .sidebar-agent-menu__pin {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 /* Only the switcher list shrinks and scrolls; the action rows stay visible. */

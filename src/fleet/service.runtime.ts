@@ -46,7 +46,6 @@ import {
   cleanupFailedCreateNetwork,
   detectHostSelinux,
   inspectionHasFleetOwner,
-  inspectionState,
   prepareCellConfig,
   prepareCellDirectories,
   probeCellHealth,
@@ -408,10 +407,11 @@ export function createFleetService(options: FleetServiceOptions = {}) {
               localityChecks.set(record.runtime, locality);
             }
             await locality;
-            state = inspectionState(
-              record,
-              await containers.inspect(record.runtime, record.containerName),
-            );
+            const inspection = await containers.inspect(record.runtime, record.containerName);
+            state =
+              inspection.kind === "ok" && !inspectionHasFleetOwner(record, inspection)
+                ? "unknown"
+                : inspection.state;
           } catch {
             // Listing retains cells whose container runtime is unavailable.
           }

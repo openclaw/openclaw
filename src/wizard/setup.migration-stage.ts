@@ -16,14 +16,12 @@ import type {
   MigrationItem,
   MigrationPlan,
 } from "../plugins/types.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -212,7 +210,7 @@ export async function createSetupMigrationStage(params: {
     path.basename(params.reportDir),
   );
   const stageEnv = { ...process.env, OPENCLAW_STATE_DIR: stagedStateDir };
-  const stagedConfig: OpenClawConfig = {
+  let currentStagedConfig: OpenClawConfig = {
     ...structuredClone(params.targetConfig),
     agents: {
       ...structuredClone(params.targetConfig.agents),
@@ -244,7 +242,6 @@ export async function createSetupMigrationStage(params: {
   const projectConfigToFinal = (config: OpenClawConfig) =>
     projectValue(config, toFinal) as OpenClawConfig;
   let finalConfig = structuredClone(params.targetConfig);
-  let currentStagedConfig = structuredClone(stagedConfig);
   const getStagedConfig = () => structuredClone(currentStagedConfig);
   const replaceStagedConfig = (config: OpenClawConfig) => {
     finalConfig = structuredClone(projectConfigToFinal(config));
@@ -314,7 +311,7 @@ export async function createSetupMigrationStage(params: {
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
-    disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
+    await disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };

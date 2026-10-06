@@ -52,6 +52,7 @@ import {
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import {
   assertSupportedTurn,
+  captureWorkerTurnInputAuthority,
   finalizeWorkerTurnResult,
   emitProviderReplayRejected,
   fitLaunchDescriptorWithRuntimeIdentity,
@@ -126,24 +127,16 @@ export async function executeWorkerTurn(
   const transcriptTarget = resolveWorkerTurnTranscriptTarget(turn);
   const recorder = turn.userTurnTranscriptRecorder;
   let blocked = false;
-  const assertTurnInputCurrent = () => {
-    params.assertRunCurrent?.();
-    turn.abortSignal?.throwIfAborted();
-    if (recorder?.isBlocked() && !blocked) {
-      throw new Error("Cloud worker turn input is blocked");
-    }
-  };
-  const assertSourceCurrent = () => {
-    assertTurnInputCurrent();
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
-  };
-  const assertContextCurrent = () => {
-    assertTurnInputCurrent();
-    if (!params.placements.validateTurnClaim(params.turnClaim)) {
-      throw new Error("Worker turn claim changed during context preparation");
-    }
-    resolveWorkerTurnTranscriptTarget({ ...transcriptTarget, sessionTarget: transcriptTarget });
-  };
+  const { assertTurnInputCurrent, assertSourceCurrent, assertContextCurrent } =
+    captureWorkerTurnInputAuthority({
+      transcriptTarget,
+      recorder,
+      signal: turn.abortSignal,
+      assertRunCurrent: params.assertRunCurrent,
+      isBlocked: () => blocked,
+      placements: params.placements,
+      turnClaim: params.turnClaim,
+    });
   assertContextCurrent();
   if (recorder?.hasRuntimePersistencePending()) {
     await recorder.waitForRuntimePersistence();

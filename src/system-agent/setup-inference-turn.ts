@@ -29,7 +29,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import {
   projectInferenceRoute,
   resolveSystemAgentConfiguredRouteFromConfig,
-  sameDefaultInferenceRoute,
   type SystemAgentConfigSnapshot,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -200,7 +199,7 @@ export async function runSetupInferenceTurn(params: {
     if (terminalError) {
       throw new Error(terminalError);
     }
-    const text = extractAgentRunText(result)?.trim();
+    const text = extractAgentRunText(result);
     if (!text) {
       return failed(
         "format",
@@ -482,7 +481,7 @@ export async function verifySetupInference(
   const latestRoute = latestConfig
     ? await projectInferenceRoute(latestConfig, params.agentId, routeOptions)
     : undefined;
-  if (!latestRoute || !sameDefaultInferenceRoute(baselineRoute, latestRoute)) {
+  if (!latestRoute || !isDeepStrictEqual(baselineRoute, latestRoute)) {
     return {
       ok: false,
       status: "unknown",
@@ -646,7 +645,7 @@ export async function verifySetupInferenceConfig(
       );
       if (
         !currentRoute ||
-        !sameDefaultInferenceRoute(
+        !isDeepStrictEqual(
           baselineRoute!,
           await projectInferenceRoute(currentConfig, route.agentId, {
             modelTarget: params.modelTarget,

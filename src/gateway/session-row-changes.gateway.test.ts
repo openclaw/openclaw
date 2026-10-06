@@ -1,19 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import type { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { setSessionActivitySummaryState } from "./session-activity-summary-state.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
+import type { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
-const persistence = vi.hoisted(() => ({ patch: vi.fn(), load: vi.fn() }));
-vi.mock("../config/sessions/session-accessor.js", () => ({
+const persistence = vi.hoisted(() => ({
+  patch: vi.fn(),
+  load: vi.fn<typeof loadGatewaySessionEntryReadOnlyInWorker>(),
+}));
+vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-accessor.js")>()),
   patchSessionEntryCore: persistence.patch,
+  patchSessionEntryTarget: persistence.patch,
   loadSessionEntryReadOnly: vi.fn(),
   readSessionTranscriptWatermark: vi.fn(),
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
-vi.mock("./session-utils.js", () => ({ loadSessionEntry: persistence.load }));
+vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-utils-store-worker.js")>()),
+  loadGatewaySessionEntryReadOnlyInWorker: persistence.load,
+}));
 
 const target = {
   sessionKey: "agent:main:owner-publications",
@@ -23,12 +33,17 @@ const target = {
 let entry: InternalSessionEntry;
 let rejectCommit: boolean;
 beforeEach(() => {
+  setRuntimeConfigSnapshot({}, {});
   entry = { sessionId: "owner-publications", updatedAt: 1_000 };
   rejectCommit = false;
-  persistence.load.mockReset().mockImplementation(() => ({
+  persistence.load.mockReset().mockImplementation(async ({ cfg }) => ({
+    cfg,
     ...target,
     canonicalKey: target.sessionKey,
+    storeKeys: [target.sessionKey],
+    store: { [target.sessionKey]: entry },
     entry,
+    legacyKey: undefined,
   }));
   persistence.patch
     .mockReset()

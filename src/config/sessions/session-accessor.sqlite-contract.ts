@@ -45,6 +45,11 @@ export type TranscriptEventAppendResult =
   | { appended: false }
   | { appended: true; effectiveParentId?: string | null };
 
+export type CacheTtlProjectionPrefix = {
+  anchorIds: string[];
+  entries: Record<string, unknown>[];
+};
+
 export type SessionTranscriptBoundedActiveContext = {
   activeLeafEntryId: string | null;
   version: SessionTranscriptContextVersion;
@@ -54,6 +59,7 @@ export type SessionTranscriptBoundedActiveContext = {
   persistedSuffixStartSeq: number;
   boundaryCount: number;
   events: TranscriptEvent[];
+  cacheTtlProjectionPrefixes?: CacheTtlProjectionPrefix[];
   serializedBytes: number;
   totalEvents: number;
   transcriptMutationAt: number | null;

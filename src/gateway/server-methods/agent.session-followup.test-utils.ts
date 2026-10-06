@@ -8,6 +8,7 @@ import { sourceOwnerChangedResult } from "../../agents/subagents/announce/subage
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentRunByRunId,
   initSubagentRegistry,
@@ -15,7 +16,6 @@ import {
   registerSubagentRun,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -214,14 +214,14 @@ describe("gateway agent follow-up activity", () => {
             storePath,
             budget,
           });
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toBeNull();
           await initSubagentRegistry();
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId: previousRunId,
             runTimeoutSeconds: budget,
             pauseReason: "sessions_yield",
           });
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
             "childSessionIdentity",
           );
         }
@@ -257,7 +257,7 @@ describe("gateway agent follow-up activity", () => {
             currentEntry = { ...currentEntry, lifecycleRevision: "new-revision" };
           }
         }
-        const previousRun = structuredClone(getSubagentRunByChildSessionKey(childSessionKey));
+        const previousRun = structuredClone(await getSubagentRunByChildSessionKey(childSessionKey));
         const admissionStarted = createDeferred();
         const releaseAdmission = createDeferred();
         const createController = admissionController.createAgentAdmissionController;
@@ -356,7 +356,7 @@ describe("gateway agent follow-up activity", () => {
           expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, { status: "ok" });
         }
         if (persisted) {
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
             runId,
             taskRunId: previousRunId,
             runTimeoutSeconds: budget,
@@ -364,11 +364,11 @@ describe("gateway agent follow-up activity", () => {
             requesterSessionKey,
             execution: { status: "running" },
           });
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).not.toHaveProperty(
             "childSessionIdentity",
           );
         } else {
-          expect(getSubagentRunByChildSessionKey(childSessionKey)).toEqual(previousRun);
+          expect(await getSubagentRunByChildSessionKey(childSessionKey)).toEqual(previousRun);
         }
       });
     },

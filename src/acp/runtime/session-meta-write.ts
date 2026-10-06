@@ -2,7 +2,6 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
-import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import { captureMaintenanceConfigAsyncReader } from "../../config/sessions/store-maintenance-runtime.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -147,7 +146,7 @@ async function mutateAcpSessionMeta(
         env: captured.env,
       });
       const prepareMaintenance = captureMaintenanceConfigAsyncReader(captured.assertCurrent);
-      const key = normalizeStoreSessionKey(store.storeSessionKey);
+      const key = store.storeSessionKey;
       const metadataRead = {
         keys: [buildAcpDatabaseSessionKey(key, store.agentId)],
       };

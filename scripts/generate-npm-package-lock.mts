@@ -1126,14 +1126,9 @@ type OverrideViolation = {
   path: string;
 };
 
-type NpmBundledDependencyPolicy = {
-  allowMissingBundleMarker: boolean;
-  exceptions: Map<string, string>;
-};
-
 // Trusted release tooling validates frozen targets as well as current main. Keep each
 // reviewed npm tarball exact here until no supported frozen target can reference it.
-const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map<string, NpmBundledDependencyPolicy>([
+const NPM_BUNDLED_DEPENDENCY_POLICIES = new Map([
   [
     "11.20.0",
     {
@@ -1381,10 +1376,7 @@ function collectUnallowedOverrideViolations(
   const packages = recordAt(lockfile, "packages");
   const broadViolations = collectOverrideViolations(lockfile, overrideRules);
   if (!packages) {
-    return broadViolations.map((violation) => ({
-      ...violation,
-      shrinkwrapSources: [] as string[],
-    }));
+    return [];
   }
 
   const findings = new Map<

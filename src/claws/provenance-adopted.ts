@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { assertAgentDeletionAllowsMutation } from "../agents/agent-lifecycle-registry.js";
 import {
   executeSqliteQuerySync,
@@ -15,6 +14,7 @@ import {
   CLAW_INSTALL_RECORD_ADOPTED_SCHEMA_VERSION,
   encodeClawAgentOwnership,
 } from "./provenance-agent-origin.js";
+import { readClawInstallRecordFromDatabase } from "./provenance-read.kernel.js";
 import {
   cacheClawInstallSchemaVersion,
   deleteCachedClawInstallSchemaVersion,
@@ -31,10 +31,9 @@ function agentOwnedPaths(plan: ClawAddPlan): string[] {
 }
 
 /** Atomically records a migration's adopted agent and already-present workspace files. */
-export function persistClawMigrationOwnershipWithInstallRecordReader(
+export function persistClawMigrationOwnership(
   plan: ClawAddPlan,
   workspaceFiles: PersistedClawWorkspaceFile[],
-  readInstallRecord: (db: DatabaseSync, agentId: string) => PersistedClawInstall | undefined,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawInstall {
   const nowMs = options.nowMs ?? Date.now();
@@ -44,7 +43,7 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
   const record = runOpenClawStateWriteTransaction((database) => {
     assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
     const { db } = database;
-    if (readInstallRecord(db, plan.agent.finalId)) {
+    if (readClawInstallRecordFromDatabase(db, plan.agent.finalId)) {
       throw new Error(
         `Agent ${JSON.stringify(plan.agent.finalId)} already has Claw ownership; inspect claws status before migrating.`,
       );
@@ -158,16 +157,15 @@ export function persistClawMigrationOwnershipWithInstallRecordReader(
 }
 
 /** Releases adopted ownership metadata without changing the pre-existing agent or files. */
-export function releaseAdoptedClawInstallRecordWithInstallRecordReader(
+export function releaseAdoptedClawInstallRecord(
   agentId: string,
   expectedPlanIntegrity: string,
-  readInstallRecord: (db: DatabaseSync, agentId: string) => PersistedClawInstall | undefined,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
   runOpenClawStateWriteTransaction((database) => {
     assertAgentDeletionAllowsMutation(database, agentId);
     const { db } = database;
-    const record = readInstallRecord(db, agentId);
+    const record = readClawInstallRecordFromDatabase(db, agentId);
     if (!record) {
       throw new Error(`No Claw install record exists for agent ${JSON.stringify(agentId)}.`);
     }

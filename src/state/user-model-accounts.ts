@@ -303,10 +303,18 @@ export function readUserModelAuthProfile(
   authProfileId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAuthProfile | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = credentialOwner(db, authProfileId);
-    return owner ? readProfile(db, owner, authProfileId) : undefined;
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAuthProfileInDatabase(db, authProfileId),
+    options,
+  );
+}
+
+export function readUserModelAuthProfileInDatabase(
+  db: DatabaseSync,
+  authProfileId: string,
+): UserModelAuthProfile | undefined {
+  const owner = credentialOwner(db, authProfileId);
+  return owner ? readProfile(db, owner, authProfileId) : undefined;
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */

@@ -14,7 +14,7 @@ import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js"
 import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import type { SubagentRunReadRecord } from "../registry/subagent-registry-read.types.js";
 import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
@@ -295,7 +295,10 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
+    getLatestSubagentRunByChildSessionKey: (
+      childSessionKey: string,
+      childAgentId?: string,
+    ) => SubagentRunReadRecord | null;
   },
 ): T[] {
   return children.filter((child) => {

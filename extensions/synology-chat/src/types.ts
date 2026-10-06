@@ -29,23 +29,13 @@ export interface SynologyChatChannelConfig extends SynologyChatConfigFields {
 export interface SynologyChatAccountRaw extends SynologyChatConfigFields {}
 
 /** Fully resolved account config with defaults applied */
-export interface ResolvedSynologyChatAccount {
+export type ResolvedSynologyChatAccount = Required<
+  Omit<SynologyChatConfigFields, "allowedUserIds">
+> & {
   accountId: string;
-  enabled: boolean;
-  token: string;
-  incomingUrl: string;
-  webhookUrl: string;
-  nasHost: string;
-  webhookPath: string;
   webhookPathSource: SynologyWebhookPathSource;
-  dangerouslyAllowNameMatching: boolean;
-  dangerouslyAllowInheritedWebhookPath: boolean;
-  dmPolicy: "open" | "allowlist" | "disabled";
   allowedUserIds: string[];
-  rateLimitPerMinute: number;
-  botName: string;
-  allowInsecureSsl: boolean;
-}
+};
 
 /** Payload received from Synology Chat outgoing webhook (form-urlencoded) */
 export interface SynologyWebhookPayload {

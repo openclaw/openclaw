@@ -157,7 +157,7 @@ function withForkWorkers<T>(
           captured ?? observed,
         );
         owners.push(owner);
-        return settleForkOwners([owner], () => operation(owner));
+        return settleForkOwner(owner, () => operation(owner));
       },
       guard,
     );
@@ -521,34 +521,28 @@ function withIncognitoForkWorkers<T>(
   );
 }
 
-async function settleForkOwners<T>(
-  owners: Array<ReturnType<typeof captureForkWorker>>,
+async function settleForkOwner<T>(
+  owner: ReturnType<typeof captureForkWorker>,
   run: () => Promise<T>,
 ): Promise<T> {
   const outcome = await run().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-  const failures: unknown[] = outcome.ok ? [] : [outcome.error];
-  for (const owner of owners) {
-    try {
-      await owner.execution.release();
-    } catch (error) {
-      failures.push(error);
+  try {
+    await owner.execution.release();
+  } catch (error) {
+    if (outcome.ok) {
+      throw error;
     }
-  }
-  if (failures.length > 1) {
     throw retainSqliteWorkerErrorCode(
       createSqliteLifecycleAggregateError(
-        failures,
+        [outcome.error, error],
         "Session fork and executor cleanup failed",
-        failures[0],
+        outcome.error,
       ),
-      failures[0],
+      outcome.error,
     );
-  }
-  if (failures.length) {
-    throw failures[0];
   }
   if (!outcome.ok) {
     throw outcome.error;

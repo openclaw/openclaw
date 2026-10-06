@@ -218,29 +218,28 @@ describe("Node Code Mode executor", () => {
   });
 
   it.each(["resume", "inline"] as const)(
-    "interrupts loops after %s without replaying delivered output",
+    "does not replay delivered output when %s times out",
     async (mode) => {
       const input: CodeModeExecutorStartInput = {
         kind: "exec",
-        source: 'text("before"); await yield_control(); text("after"); while (true) {}',
+        source:
+          'text("before"); await yield_control(); text("after"); await yield_control(); while (true) {}',
         config,
         catalog: [],
         namespaces: [],
       };
       const reply = (id: string) => ({ id, ok: true, json: "null" });
+      const delivered: unknown[] = [];
       let result = await nodeCodeModeExecutor.execute(input, {
         timeoutMs: 7_000,
         ...(mode === "inline"
           ? {
               inlineHost: {
-                onBoundary: async (boundary) => {
-                  expect(boundary.output.source).toEqual({
-                    kind: "complete",
-                    json: '[{"type":"text","text":"before"}]',
-                  });
+                onBoundary: async (boundary, context) => {
+                  delivered.push(boundary.output);
                   return {
                     kind: "continue",
-                    timeoutMs: 30,
+                    timeoutMs: delivered.length === 1 ? context.maxTimeoutMs : 30,
                     pendingRequests: [],
                     settledRequests: boundary.pendingRequests.map(({ id }) => reply(id)),
                   };
@@ -250,25 +249,32 @@ describe("Node Code Mode executor", () => {
           : {}),
       });
       if (mode === "resume") {
-        if (result.status !== "waiting") {
-          throw new Error(JSON.stringify(result));
+        for (const timeoutMs of [config.timeoutMs, 30]) {
+          if (result.status !== "waiting") {
+            throw new Error(JSON.stringify(result));
+          }
+          delivered.push(result.output);
+          continuations.add(result.continuation);
+          result = await result.continuation.resume(
+            {
+              kind: "resume",
+              config: { ...config, timeoutMs },
+              settledRequests: result.pendingRequests.map(({ id }) => reply(id)),
+            },
+            { timeoutMs: 7_000 },
+          );
         }
-        continuations.add(result.continuation);
-        result = await result.continuation.resume(
-          {
-            kind: "resume",
-            config: { ...config, timeoutMs: 30 },
-            settledRequests: result.pendingRequests.map(({ id }) => reply(id)),
-          },
-          { timeoutMs: 7_000 },
-        );
       }
+      expect(delivered).toEqual([
+        { count: 1, source: { kind: "complete", json: '[{"type":"text","text":"before"}]' } },
+        { count: 1, source: { kind: "complete", json: '[{"type":"text","text":"after"}]' } },
+      ]);
       expect(result).toMatchObject({
         status: "failed",
         code: "timeout",
         output: {
-          count: 1,
-          source: { kind: "complete", json: '[{"type":"text","text":"after"}]' },
+          count: 0,
+          source: { kind: "complete", json: "[]" },
         },
       });
     },

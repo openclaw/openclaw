@@ -55,7 +55,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
         }
       }
       if (!keyLoadError) {
-        await this.enableTrustedRoomKeyBackupIfPossible(crypto);
+        await crypto.checkKeyBackupAndEnable();
       }
       ({ activeVersion, decryptionKeyCached } = await this.resolveRoomKeyBackupLocalState(crypto));
       ({ serverVersion, trusted, matchesDecryptionKey } = await this.resolveRoomKeyBackupTrustState(
@@ -160,13 +160,6 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     }
   }
 
-  protected async resolveActiveRoomKeyBackupVersion(
-    crypto: MatrixCryptoBootstrapApi,
-  ): Promise<string | null> {
-    const version = await crypto.getActiveSessionBackupVersion().catch(() => null);
-    return normalizeNullableString(version);
-  }
-
   protected async resolveCachedRoomKeyBackupDecryptionKey(
     crypto: MatrixCryptoBootstrapApi,
   ): Promise<boolean | null> {
@@ -178,7 +171,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     crypto: MatrixCryptoBootstrapApi,
   ): Promise<{ activeVersion: string | null; decryptionKeyCached: boolean | null }> {
     const [activeVersion, decryptionKeyCached] = await Promise.all([
-      this.resolveActiveRoomKeyBackupVersion(crypto),
+      crypto.getActiveSessionBackupVersion().then(normalizeNullableString, () => null),
       this.resolveCachedRoomKeyBackupDecryptionKey(crypto),
     ]);
     return { activeVersion, decryptionKeyCached };
@@ -236,12 +229,6 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     } catch {
       return null;
     }
-  }
-
-  protected async enableTrustedRoomKeyBackupIfPossible(
-    crypto: MatrixCryptoBootstrapApi,
-  ): Promise<void> {
-    await crypto.checkKeyBackupAndEnable();
   }
 
   protected async ensureRoomKeyBackupEnabled(crypto: MatrixCryptoBootstrapApi): Promise<void> {

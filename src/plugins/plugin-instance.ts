@@ -12,7 +12,6 @@ import {
 } from "./plugin-instance-error.js";
 import { pluginInstanceInvocation as invocation } from "./plugin-instance-invocation.js";
 import { PluginCallToken } from "./plugin-instance-owned-values.js";
-import { withPluginInstanceRuntimeScope } from "./plugin-instance-runtime-scope.js";
 import {
   pluginInstanceState,
   pluginInvocationContext,
@@ -30,6 +29,8 @@ import type {
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
 
 const { values: valueInstances } = pluginInstanceState;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -82,6 +83,7 @@ export class PluginInstance {
   );
   private disposal?: Promise<PluginInstanceDisposalResult>;
   readonly owner?: PluginInstanceOwner;
+  private readonly runtimeScope: Parameters<typeof withPluginRuntimePluginScope>[0];
 
   constructor(
     readonly pluginId: string,
@@ -97,6 +99,13 @@ export class PluginInstance {
     } else {
       this.setupCache = owner?.cache;
     }
+    const record = this.owner?.record;
+    this.runtimeScope = Object.freeze({
+      pluginId: record?.id ?? pluginId,
+      pluginSource: record?.source,
+      pluginOrigin: record?.origin,
+      pluginTrustedOfficialInstall: record?.trustedOfficialInstall,
+    });
     this.lifecycle = Object.freeze({
       signal: this.controller.signal,
       onDispose: (cleanup: () => void | Promise<void>) => this.addCleanup(cleanup, "plugin"),
@@ -423,12 +432,17 @@ export class PluginInstance {
       // Deferred setup imports use the same SDK resolver facts as their initial load.
       return this.setupCache ? withPluginCache(this.setupCache, enter) : enter();
     }
-    return withPluginInstanceRuntimeScope(
-      this.owner,
-      this.consumers.get(token)?.registry ?? this.calls.get(token)?.registry,
-      call,
-      run,
-    );
+    const { record } = this.owner;
+    const generation = getPluginRuntimeGenerationRegistry();
+    // Prepared calls keep their registry; detached calls follow the adopted owner.
+    const registry =
+      this.consumers.get(token)?.registry ??
+      this.calls.get(token)?.registry ??
+      (generation?.plugins.includes(record) ? generation : this.owner.registry);
+    if (!registry) {
+      throw new PluginInstanceUnavailableError(record.id);
+    }
+    return withPluginRuntimePluginScope(this.runtimeScope, run, registry, call);
   }
 
   private lease(

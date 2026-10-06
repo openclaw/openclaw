@@ -5,7 +5,6 @@ import type {
   ChatHistoryResponsePage,
 } from "../../config/sessions/session-history-types.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
-import { capArrayByJsonBytes } from "../session-transcript-readers.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryActivityProjection,
@@ -14,6 +13,7 @@ import {
 } from "./chat-history-budget.js";
 import {
   capChatHistoryAroundMessage,
+  capChatHistoryTail,
   enrichChatHistoryCompactionMarkers,
   resolveChatHistoryNextOffset,
 } from "./chat-history-page-kernel.js";
@@ -23,40 +23,44 @@ export function prepareChatHistoryResponsePage(
   {
     entry: historyEntry,
     compactionMetrics,
-    maxHistoryBytes: responseHistoryBytes,
+    maxHistoryBytes,
+    responseHistoryBytes = maxHistoryBytes,
     messageId,
-  }: Pick<ChatHistoryPageParams, "entry" | "compactionMetrics" | "maxHistoryBytes" | "messageId">,
+  }: Pick<
+    ChatHistoryPageParams,
+    "entry" | "compactionMetrics" | "maxHistoryBytes" | "responseHistoryBytes" | "messageId"
+  >,
 ): ChatHistoryResponsePage {
   const normalized = enrichChatHistoryCompactionMarkers(
     historyPage.messages,
     historyEntry,
     compactionMetrics,
   );
-  // A smaller page budget must not replace otherwise readable messages. The
-  // tail cap keeps one whole message; the server's single-message cap still applies.
+  // Soft targets must not replace readable messages or split groups that fit the hard ceiling.
+  const hardHistoryBytes = getMaxChatHistoryMessagesBytes();
   const activity = createChatHistoryActivityProjection(normalized, historyPage.activity);
   const byteCounter = createChatHistoryByteCounter(activity);
   const replaced = replaceOversizedChatHistoryMessages({
     byteCounter,
     messages: normalized,
-    maxSingleMessageBytes: Math.min(
-      CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
-      getMaxChatHistoryMessagesBytes(),
-    ),
+    maxSingleMessageBytes: Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, hardHistoryBytes),
   });
+  const framingCost = 1 + byteCounter.framingBytes(replaced.messages);
   const capped = messageId
     ? capChatHistoryAroundMessage({
         messages: replaced.messages,
         messageId,
         // A nonempty JSON array costs one framing byte plus each message and its separator.
-        maxCost: responseHistoryBytes - 1 - byteCounter.framingBytes(replaced.messages),
+        maxCost: responseHistoryBytes - framingCost,
         messageCost: (message) => byteCounter.messageBytes(message) + 1,
       })
-    : capArrayByJsonBytes(
-        replaced.messages,
-        responseHistoryBytes - byteCounter.framingBytes(replaced.messages),
-        byteCounter.messageBytes,
-      ).items;
+    : capChatHistoryTail({
+        messages: replaced.messages,
+        maxCost: responseHistoryBytes - framingCost,
+        maxGroupCost: hardHistoryBytes - framingCost,
+        messageCost: (message) => byteCounter.messageBytes(message) + 1,
+        messageSequences: historyPage.pagination?.messageSequences,
+      });
   const pagination = historyPage.pagination;
   const candidateNextOffset =
     pagination === undefined

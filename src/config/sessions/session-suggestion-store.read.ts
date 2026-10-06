@@ -26,10 +26,13 @@ export async function listSessionSuggestions(
     if (actor.agentId !== agentId || actor.path !== storePath) {
       throw new Error("Suggestion target differs from its captured incognito actor");
     }
-    return actor.sessions.sideData(authority, {
+    const suggestions = await actor.sessions.sideData(authority, {
       type: "session.suggestions.read",
       input: { sessionKey: resolveSqliteSessionKey(scope.sessionKey, agentId), params: filters },
     });
+    authority.assertCurrent();
+    actor.assertReadable();
+    return suggestions;
   }
   if (agentId && isIncognitoOpenClawAgentSqlitePath(storePath, { agentId, env: scope.env })) {
     // Process-held databases retain their native owner until the incognito actor cutover.

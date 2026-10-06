@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   bindDeliveryQueueEntry,
   loadDeliveryQueueEntryInDatabase,
@@ -26,8 +27,10 @@ import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-eve
 import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
+  subagentRunRecordVersion,
 } from "../registry/subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
+import type { SubagentRunSqliteRow } from "../registry/subagent-registry.store.row.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
@@ -40,6 +43,7 @@ import type {
   BlockSubagentCompletionRequest,
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
+  SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 import {
   readSubagentCompletionQueueReceipt,
@@ -58,6 +62,22 @@ const noMutation = (applied: boolean | null): SubagentCompletionMutationResult =
   retiredRunIds: [],
   queueIds: [],
 });
+
+/** Decode on the worker while retaining the exact physical row's CAS version. */
+export function decodeSubagentCompletionRecord(
+  row: SubagentRunSqliteRow,
+  cleanupHandled?: boolean,
+): SubagentCompletionRecord {
+  const subagent = expectDefined(
+    rowToSubagentRunRecord(row),
+    "subagent completion acknowledged native record",
+  );
+  return {
+    subagent,
+    version: expectDefined(subagentRunRecordVersion(subagent), "subagent completion row version"),
+    cleanupHandled,
+  };
+}
 
 export function retiredCancellationEndedAt(
   subagent: SubagentRunRecord,
@@ -244,7 +264,7 @@ function commitCompletionMutations(
         if (!row) {
           throw new Error("Subagent completion mutation lost its native row");
         }
-        return { row, cleanupHandled: subagent.cleanupHandled };
+        return decodeSubagentCompletionRecord(row, subagent.cleanupHandled);
       }),
     retiredRunIds: mutations
       .filter((mutation) => mutation.retire)
@@ -422,9 +442,9 @@ function reconcileRequesterWake(
       continue;
     }
     const acknowledged = committed.result.records.find(
-      ({ row: record }) => record.run_id === expected.runId,
+      ({ subagent }) => subagent.runId === expected.runId,
     );
-    const intended = acknowledged && rowToSubagentRunRecord(acknowledged.row);
+    const intended = acknowledged?.subagent;
     const current = row && rowToSubagentRunRecord(row);
     if (
       !row ||
@@ -456,7 +476,7 @@ function reconcileRequesterWake(
     }
     // The completed write is not replayed. Publish current canonical fields so
     // independent cleanup cannot be overwritten by the older acknowledgement.
-    result.records.push({ row, cleanupHandled: expected.cleanupHandled });
+    result.records.push(decodeSubagentCompletionRecord(row, expected.cleanupHandled));
   }
   if (committed.result.queueIds.length > 0) {
     const receipts = reconcileSubagentCompletionQueueReceipts(
@@ -541,7 +561,7 @@ export function mutateSubagentCompletionInDatabase(
         // the current native row without replaying its write or terminal timestamps.
         return {
           applied: true,
-          records: [{ row, cleanupHandled: mutation.expected.cleanupHandled }],
+          records: [decodeSubagentCompletionRecord(row, mutation.expected.cleanupHandled)],
           retiredRunIds: [],
           queueIds: [],
         };

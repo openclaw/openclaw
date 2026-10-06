@@ -488,7 +488,8 @@ export function captureAgentRunDelegatedSourceAssertion(
       refuse();
     }
   };
-  if (readActiveAgentRunDelegatedAuthority(instance, () => {}) !== authority) {
+  const active = readActiveAgentRunDelegatedAuthority(instance, () => {});
+  if (!active || !isCurrentAgentRunApprovalAuthority(active, context?.approvalLeases, authority)) {
     return undefined;
   }
   return {

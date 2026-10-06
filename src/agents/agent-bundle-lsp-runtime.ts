@@ -20,7 +20,6 @@ import {
   describeStdioMcpServerLaunchConfig,
 } from "./mcp-stdio.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type LspSession = {
@@ -481,7 +480,14 @@ function createLspPositionTool(params: {
         },
         signal,
       );
-      return formatLspResult(params.session.serverName, params.method, result);
+      const text =
+        result !== null && result !== undefined
+          ? JSON.stringify(result, null, 2)
+          : `No ${params.method} result from ${params.session.serverName}`;
+      return {
+        content: [{ type: "text", text }],
+        details: { lspServer: params.session.serverName, lspMethod: params.method },
+      };
     },
   };
 }
@@ -508,21 +514,6 @@ function buildLspTools(session: LspSession): AnyAgentTool[] {
   return definitions
     .filter(({ method }) => session.capabilities[`${method}Provider`])
     .map((definition) => createLspPositionTool({ session, ...definition }));
-}
-
-function formatLspResult(
-  serverName: string,
-  method: string,
-  result: unknown,
-): AgentToolResult<unknown> {
-  const text =
-    result !== null && result !== undefined
-      ? JSON.stringify(result, null, 2)
-      : `No ${method} result from ${serverName}`;
-  return {
-    content: [{ type: "text", text }],
-    details: { lspServer: serverName, lspMethod: method },
-  };
 }
 
 export async function createBundleLspToolRuntime(params: {

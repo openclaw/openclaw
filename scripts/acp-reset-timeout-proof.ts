@@ -39,36 +39,14 @@ type AdapterEvent = {
   [key: string]: unknown;
 };
 
-type RuntimeIdentity = {
-  instanceId: string;
-  sessionId: string;
-};
+type RuntimeIdentity = ReturnType<typeof identityFromTurn>;
 
 type ScenarioName = "close-timeout" | "cancel-timeout" | "late-turn" | "runtime-option-timeout";
 type ResetCommand = "/new" | "/reset";
 type GatewayProcess = ChildProcessByStdio<null, Readable, Readable>;
 type ChatFinalEvent = Extract<ChatEvent, { state: "final" }>;
 
-type ScenarioResult = {
-  scenario: ScenarioName;
-  resetCommand: ResetCommand;
-  gatewayPid: number;
-  gatewayPidAfterReset: number;
-  gatewayPidAfterLateCompletion: number;
-  oldIdentity: RuntimeIdentity;
-  freshIdentity: RuntimeIdentity;
-  followupIdentity: RuntimeIdentity;
-  cleanupStartedAt: string;
-  cleanupDeadlineAt: string;
-  resetCompletedAt: string;
-  resetElapsedMs: number;
-  resetResponse: string;
-  lateCompletionAt: string;
-  lateRuntimeOptionCompletedAt?: string;
-  gatewayStayedAlive: boolean;
-  assertions: string[];
-  keyEvents: AdapterEvent[];
-};
+type ScenarioResult = Awaited<ReturnType<typeof runScenario>>;
 
 export function parseAdapterEvents(raw: string): AdapterEvent[] {
   return raw
@@ -85,7 +63,7 @@ export function parseAdapterEvents(raw: string): AdapterEvent[] {
     });
 }
 
-export function identityFromTurn(event: AdapterEvent): RuntimeIdentity {
+export function identityFromTurn(event: AdapterEvent) {
   if (!event.sessionId) {
     throw new Error(`turn event is missing sessionId: ${JSON.stringify(event)}`);
   }
@@ -571,7 +549,7 @@ async function runScenario(params: {
   runtimeRoot: string;
   outputRoot: string;
   scenario: ScenarioName;
-}): Promise<ScenarioResult> {
+}) {
   const scenarioDir = path.join(params.outputRoot, params.scenario);
   const controlDir = path.join(scenarioDir, "control");
   const acpxStateDir = path.join(scenarioDir, "acpx-state");
@@ -970,7 +948,7 @@ async function runScenario(params: {
         "process_exit",
       ].includes(event.event),
     );
-    const result: ScenarioResult = {
+    const result = {
       scenario: params.scenario,
       resetCommand,
       gatewayPid,

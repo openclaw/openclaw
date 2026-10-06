@@ -27,11 +27,42 @@ A committed finalization returns its session change to the host for notification
 refused or rolled-back finalization publishes no readiness notification. Unknown
 write outcomes are never replayed.
 
-Preflight and readiness polling use the existing read-only transcript worker.
+Global projection preflight and search readiness use the projection maintenance
+owner's connection-local facts. Transactional TEMP triggers queue affected sessions
+for appends, rewrites, projection publication, deletion, cold-storage moves, and raw
+local SQL. A fresh foreign-commit probe or schema change restarts bounded admission;
+indexed seeks skip whole session ranges instead of scanning transcript rows. Each
+maintenance transaction examines at most 128 sessions and deletes at most 512
+orphan rows per projection table. A status request stops after 32 batches;
+incomplete admission remains pending and the existing reconcile cadence resumes it.
+Reconciliation yields between bounded batches until an ordered traversal completes,
+then gives the observed pending backlog to the scheduler and awaits its rebuild.
+It can rebuild that work even when foreign writes prevent clean certification;
+the owner retains traversal completion so another status caller cannot hide that
+progress. Changes discovered afterward continue on the existing cadence, including
+newer revisions of sessions that were already rebuilt.
+Foreign commits invalidate readiness without resetting
+an in-progress cursor. Maintenance reaches later keys before starting another pass,
+and only a full pass at a stable foreign revision can certify a clean store.
+The planner consumes this owner's pending list.
+Search also verifies that its original reader connection and revision remain current
+after readiness returns; a changed hit snapshot keeps the indexing hint. Read-only
+searches also retain their results with that conservative hint when writable
+maintenance is unavailable.
+Clean status reads reuse these facts without entering a write transaction or
+requesting write grants until a mutation invalidates them; connection close
+discards them. No durable tables or migration are added. Shipped synchronous
+SDK callbacks into process-held incognito storage and operator maintenance retain
+their native reconciliation adapter; moving those callbacks to another thread
+requires a separate SDK cutover. Their one-shot orphan cleanup retains ordered,
+indexed owner-set differences
+rather than per-row membership probes.
+
+Per-session readiness polling uses the existing read-only transcript worker.
 Readiness waits retain their original execution owner across lazy reader loading
 and forward cancellation to queued reads. Re-admission after retirement waits for
 the canonical database close, including native cleanup, to finish. A committed
-finalization stays successful if retirement prevents a subsequent orphan sweep
+finalization stays successful if retirement prevents any later orphan-sweep batch
 from starting; the next preflight detects and removes any remaining derived rows.
 Incognito, maintenance, and deletion scopes keep their current native owner.
 Canonical shutdown joins accepted publication and planner lease cleanup; a newer
@@ -41,9 +72,10 @@ permissions, and update behavior are unchanged.
 The transcript reconcile pool admits the smallest pending session backlog first,
 with original operation order breaking ties. At a completed session boundary, a
 planner yields only to a strictly smaller waiting backlog and reserves its place
-before releasing the worker. Each resumed pass refreshes its backlog in preflight;
-startup still awaits the complete rebuild. The pool retains one worker, and lease
-release tasks bypass backlog admission.
+before releasing the worker. Each resumed pass refreshes its backlog in preflight.
+Direct reconciliation awaits its observed backlog; Gateway startup runs that
+maintenance after readiness, with cancellation tied to startup lifetime. The pool
+retains one worker, and lease release tasks bypass backlog admission.
 
 Deferred agent recovery reads deletion status through the shared-state worker.
 Native preparation checks the current journal before transaction and commit
@@ -2287,11 +2319,29 @@ Retention keeps the 14-day age rule, whole-run eviction, current-session exempti
 encoding semantics. Per-session trimming still measures UTF-8 bytes. Appends
 serialize events before writer admission and commit independently of global
 cleanup. First-use and hourly cleanup uses one lifecycle-owned reader and deletion
-transactions bounded to 100 runs and 10 MiB, allowing one oversized complete run.
-Each deletion rechecks the captured native revision; concurrent changes defer
-remaining cleanup until a later append. Cadence advances only after the sweep
-completes. Nested synchronous appends defer cleanup until a later independent
-append. Permissions and durability are unchanged.
+transactions bounded to 16 runs and 10 MiB, allowing one oversized complete run.
+Deletion revalidates only the selected batch under writer admission: run identity,
+newest timestamp, bytes, event count, and the protected session. The read worker
+aggregates run summaries once per sweep. A native-owner cursor drains that snapshot
+in bounded batches; selection and sorting run before the deletion transaction.
+
+The retention owner holds mutation receipts only for the active sweep. Committed
+appends publish their retained session's run summaries, including per-session trims.
+The owner replaces affected snapshot sessions with these receipts, so writes that
+overlap snapshot creation are neither lost nor counted twice. Its byte and expiry
+facts settle each batch without waiting for a write-free read. No receipts are
+published after a rollback. A connection-local mutation count and fresh
+`PRAGMA data_version` probes fence changes outside those receipts, including foreign
+commits. Such a change requires a new read-worker snapshot, never a writer-held
+scan. One refresh is allowed per sweep; another leaves cleanup due on the next
+append. Committed deletions survive refreshes. A shared lease fence invalidates
+receipts on cancellation or owner release; native connection replacement cannot
+reuse them. Nested synchronous appends defer cleanup until an independent append.
+
+This in-memory receipt and conservative-refresh design was accepted by the
+maintainer on 2026-10-05. Permissions, durability, schemas, retained-row policy,
+and update behavior are unchanged. WAL checkpoint scheduling remains with the
+existing maintenance owner.
 
 A synthetic 241,697-event fixture measured the aggregate at 31–40 ms versus
 407–453 ms with the staged query, with all 3,836 groups equal. The replacement

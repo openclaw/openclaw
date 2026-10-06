@@ -76,6 +76,8 @@ type InternalReplySessionOptions = {
   /** Defers the child-completion wake until the visible waiting status is delivered. */
   onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  /** Observes one transcript-start reader preparation; completion cannot control the run. */
+  onTranscriptStartPreparation?: () => (() => void) | undefined;
   onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
   /** Publishes each executing turn's preferences without persisting them to its session. */
   onRunVerbosityResolved?: (settings: ReplyRunVerbosity) => void;

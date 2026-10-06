@@ -20,9 +20,9 @@ import {
   selectStoredProjectRegistry,
 } from "../../projects/project-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
-  disposeOpenClawAgentDatabaseByPath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -289,7 +289,7 @@ export function registerSessionOperatorPreparationTests(fixture: {
             expect(currentDatabase).toBe(physicalDatabase);
           }
         } finally {
-          disposeOpenClawAgentDatabaseByPath(storePath);
+          await disposeOpenClawAgentDatabaseByPath(storePath);
         }
       },
     );

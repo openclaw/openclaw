@@ -14,7 +14,7 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { OpenClawLitElement } from "../../lit/openclaw-element.ts";
 import { DockLayoutController } from "../dock-layout-controller.ts";
-import { FullscreenController } from "../fullscreen-controller.ts";
+import { DesktopFullscreenController } from "../fullscreen-controller.ts";
 import {
   DESKTOP_PANEL_TOGGLE_EVENT,
   type DesktopPanelToggleDetail,
@@ -35,7 +35,7 @@ import { desktopPanelLayout } from "./desktop-panel-layout.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopPanelElementStyles } from "./desktop-panel-styles.ts";
 import { DesktopPictureInPicture } from "./desktop-picture-in-picture.ts";
-import { desktopFullscreenOptions, renderDesktopPresentation } from "./desktop-presentation.ts";
+import { renderDesktopPresentation } from "./desktop-presentation.ts";
 import { DesktopSessionController } from "./desktop-session-controller.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
@@ -155,11 +155,9 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
     isAvailable: () => this.available,
     isFullscreen: () => this.fullscreenMode.active,
   });
-  private readonly fullscreenMode = new FullscreenController(this, {
-    ...desktopFullscreenOptions,
-    section: () => this.renderRoot.querySelector<HTMLElement>("section.bp"),
-    onChange: () => this.dockLayout.syncReservation(),
-  });
+  private readonly fullscreenMode = new DesktopFullscreenController(this, () =>
+    this.dockLayout.syncReservation(),
+  );
 
   static override styles = desktopPanelElementStyles;
 

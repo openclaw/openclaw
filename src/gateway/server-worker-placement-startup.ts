@@ -13,7 +13,7 @@ import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import {
   createGatewayWorkerPlacementChangePublisher,
-  subscribeGatewayWorkerMachineShapeChanges,
+  subscribeGatewayWorkerPlacementMetadataChanges,
 } from "./server-worker-placement-change-events.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementLocalDispatchBarrier } from "./server-worker-placement-local-dispatch.js";
@@ -134,6 +134,9 @@ export function createGatewayWorkerPlacementRuntime(
     hasCurrentDeviceRunner: (deviceId) =>
       nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
   });
+  let metadataChanges:
+    | ReturnType<typeof subscribeGatewayWorkerPlacementMetadataChanges>
+    | undefined;
   const diskSpace = createWorkerPlacementDiskSpaceMonitor({
     placements: params.placements,
     environments: params.environments,
@@ -360,7 +363,11 @@ export function createGatewayWorkerPlacementRuntime(
       return null;
     }
     const uninstallPlacementAdmission = installSessionPlacementAdmissionProvider(admissionProvider);
-    const unsubscribeMachineShape = subscribeGatewayWorkerMachineShapeChanges(params);
+    const changes = subscribeGatewayWorkerPlacementMetadataChanges({
+      ...params,
+      runnerAvailability,
+    });
+    metadataChanges = changes;
     const scope = scheduler.scope();
     const operations = new Map<"reconcile" | "disk-space" | "auto-suspend", Promise<void>>();
     const uninstallEnvironmentReconcileGuard = installWorkerPlacementReconcileGuard({
@@ -381,7 +388,6 @@ export function createGatewayWorkerPlacementRuntime(
           : [placement.sessionKey],
       );
     const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
-      () => preservationKeys(params.placements.listForReconcile()),
       async () => {
         const prepared = await params.placements.prepareMaintenancePlacements();
         return {
@@ -488,7 +494,7 @@ export function createGatewayWorkerPlacementRuntime(
           uninstallPlacementAdmission();
         }
         const currentStop = (async () => {
-          await Promise.allSettled([unsubscribeMachineShape(), ...operations.values()]);
+          await Promise.allSettled([changes.stop(), ...operations.values()]);
           await nodeWorkspaceRetention.stop();
           await scope.stop();
           await params.environments.stop();
@@ -580,7 +586,13 @@ export function createGatewayWorkerPlacementRuntime(
     dispatchService,
     admissionProvider,
     diskSpace,
-    runnerAvailability,
+    runnerAvailability: {
+      ...runnerAvailability,
+      markChanged(nodeId: string) {
+        runnerAvailability.markChanged();
+        metadataChanges?.runnerChanged(nodeId);
+      },
+    },
     placements: params.placements,
     githubPublication,
     repositoryWorkspaceMutationService: createRepositoryWorkspaceMutationService({

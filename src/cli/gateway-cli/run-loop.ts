@@ -2,12 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { MessageChannel } from "node:worker_threads";
-import {
-  captureGatewayRestartTraceHandoff,
-  createGatewayRestartTraceHandoffEnv,
-  markGatewayRestartTrace,
-  startGatewayRestartTrace,
-} from "../../gateway/restart-trace.js";
+import * as restartTrace from "../../gateway/restart-trace.js";
 import { GatewayStartupCleanupError } from "../../gateway/server-shutdown.js";
 import type { startGatewayServer } from "../../gateway/server.js";
 import type { GatewayInstallationReplacement } from "../../gateway/stale-install.js";
@@ -449,7 +444,9 @@ export async function runGatewayLoop(params: {
 
     const respawnOptions = {
       decision: restartDecision,
-      env: createGatewayRestartTraceHandoffEnv(captureGatewayRestartTraceHandoff()),
+      env: restartTrace.createGatewayRestartTraceHandoffEnv(
+        restartTrace.captureGatewayRestartTraceHandoff(),
+      ),
     };
     const isStandaloneUpdate = Boolean(foregroundHandoff) || (isUpdateRestart && !supervisorMode);
     const respawn = isStandaloneUpdate
@@ -491,7 +488,7 @@ export async function runGatewayLoop(params: {
     }
     if (respawn.mode === "supervised") {
       const restartKind = isUpdateRestart ? "update-process" : "full-process";
-      markGatewayRestartTrace("restart.full-process-handoff", [
+      restartTrace.markGatewayRestartTrace("restart.full-process-handoff", [
         ["kind", restartKind],
         ["mode", respawn.mode],
         ["pid", "none"],
@@ -502,7 +499,7 @@ export async function runGatewayLoop(params: {
         reason: restartReason,
         processInstanceId,
         supervisorMode: supervisorMode ?? "external",
-        restartTrace: captureGatewayRestartTraceHandoff(),
+        restartTrace: restartTrace.captureGatewayRestartTraceHandoff(),
       });
       if (supervisorMode === "external" && !handoff) {
         gatewayLog.warn(
@@ -664,7 +661,9 @@ export async function runGatewayLoop(params: {
     if (action === "restart") {
       activeRestartRequest = acceptedRequest;
     } else if (!isRestart) {
-      startGatewayRestartTrace("stop.signal.received", [["signal", acceptedRequest.signal]]);
+      restartTrace.startGatewayRestartTrace("stop.signal.received", [
+        ["signal", acceptedRequest.signal],
+      ]);
     }
     let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
     let shutdownDeadline: number | undefined;
@@ -679,7 +678,7 @@ export async function runGatewayLoop(params: {
       forceExitTimer = setTimeout(() => {
         const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
         gatewayLog.warn(
-          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
+          `shutdown deadline reached; abandoning unfinished cleanup and active work before ${action}; last observed: ${lastDrainCounts}; pending close steps: ${restartTrace.formatGatewayPendingCloseSteps()}; cleanup incomplete; exitCode=${exitOk ? 0 : 1}`,
         );
         void forceExitAfterStabilityBundle(
           isRestart ? "gateway.restart_shutdown_timeout" : "gateway.stop_shutdown_timeout",
@@ -1015,7 +1014,7 @@ export async function runGatewayLoop(params: {
     shuttingDown = true;
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
     if (isRestart) {
-      startGatewayRestartTrace("restart.signal.received", [
+      restartTrace.startGatewayRestartTrace("restart.signal.received", [
         ["signal", signal],
         ["reason", restartReason ?? signal],
         ["force", acceptedRequest.restartIntent?.force === true],
