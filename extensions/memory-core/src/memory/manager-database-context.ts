@@ -52,7 +52,10 @@ import {
   readMemoryShadowIdentity,
   type MemoryShadowConnection,
 } from "./manager-shadow-task.js";
-import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
+import type {
+  MemorySourceIndexHeader,
+  MemorySourceIndexReplacement,
+} from "./manager-source-index-kernel.js";
 import type { loadMemorySourceFileState } from "./manager-source-state.js";
 
 type PublicationScope = Pick<SqliteWorkerStore<MemoryPublicationOperations>, "execute">;
@@ -397,7 +400,7 @@ export class MemoryIndexDatabase {
     return undefined;
   }
 
-  read<Key extends "source.hash" | "cache.read" | "session.current">(
+  read<Key extends "source.hash" | "source.chunks" | "cache.read" | "session.current">(
     command: { type: Key; input: MemoryPublicationOperations[Key]["input"] },
     assertCurrent: () => void,
   ): Promise<MemoryPublicationOperations[Key]["output"]> {
@@ -536,10 +539,19 @@ export class MemoryIndexDatabase {
     const run = () =>
       this.runPublication(async (scope) => {
         const operation = randomUUID();
-        const { chunks, embeddings: _embeddings, ...header } = replacement;
+        const { chunks, embeddings: _embeddings, ...fields } = replacement;
+        let header: MemorySourceIndexHeader = fields;
+        let retained = 0;
+        if (fields.source === "sessions") {
+          // Retained rows travel as staged rows; the header carries only delta mode.
+          const { retained: kept = [], ...session } = fields;
+          retained = kept.length;
+          header = { ...session, delta: retained > 0 };
+        }
+        const rows = chunks.length + retained;
         await scope.execute({
           type: "stage.start",
-          input: { operation, header, rows: chunks.length },
+          input: { operation, header, rows },
         });
         let needsDiscard = true;
         for (const fragments of memoryPublicationBatches(replacement)) {

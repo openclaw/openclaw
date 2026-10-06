@@ -41,7 +41,10 @@ import {
   resolveMemoryIndexProviderIdentities,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
-import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
+import {
+  memoryChunkRowId,
+  type MemorySourceIndexReplacement,
+} from "./manager-source-index-kernel.js";
 import type {
   MemoryIndexWorkItem,
   MemorySemanticProviderGeneration,
@@ -66,7 +69,10 @@ type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 type PreparedMemoryIndexEntry = {
   entry: MemoryIndexEntry;
   source: MemorySource;
+  /** Chunks to embed and write; a session delta leaves out retained chunks. */
   chunks: IndexedMemoryChunk[];
+  /** Indexed session chunks whose rows publication keeps in place. */
+  retained?: IndexedMemoryChunk[];
   structuredInputBytes?: number;
 };
 
@@ -579,12 +585,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     return provider?.id === "ollama" ? 1 : EMBEDDING_INDEX_CONCURRENCY;
   }
 
+  /** Resolves false when retained rows drifted and the source needs a full write. */
   private async writeChunks(
-    { entry, source, chunks }: PreparedMemoryIndexEntry,
+    { entry, source, chunks, retained }: PreparedMemoryIndexEntry,
     generation: MemorySyncProviderGeneration | null,
     embeddings: number[][],
     vectorReady: boolean,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const database = this.database;
     const sourceDatabase = generation?.database ?? this.publishedDatabase;
     const session =
@@ -594,7 +601,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
             sessionId: expectDefined(entry.sessionId, "memory index session identity"),
           }
         : undefined;
-    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+    return await withMemoryWorkspaceLock(this.workspaceDir, async () => {
       const assertCurrent = () => {
         this.memoryFiles?.assertCurrent();
         if (
@@ -633,7 +640,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         model: generation?.provider?.model ?? "fts-only",
         now: Date.now(),
         vectorReady,
-        ...(session ? { source: "sessions", ...session } : { source: "memory" }),
+        ...(session ? { source: "sessions", ...session, retained } : { source: "memory" }),
       });
       const prepare = async (): Promise<boolean> => {
         if (source === "memory") {
@@ -655,7 +662,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       };
       const published = await database.replaceSource(createReplacement(), assertCurrent, prepare);
       if (!published) {
-        return;
+        return true;
       }
       if (generation && database === generation.database) {
         if (published.beforeRevision !== generation.databaseRevision) {
@@ -673,7 +680,66 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         loadError: this.vector.loadError,
         warn: (message) => log.warn(message),
       });
+      if (retained) {
+        log.debug("memory sync: incremental session chunk delta", {
+          path: entry.path,
+          new: chunks.length,
+          kept: retained.length,
+          drift: published.retainedDrift,
+        });
+      }
+      return !published.retainedDrift;
     });
+  }
+
+  /**
+   * Keep indexed session rows whose content-addressed ids are unchanged, so a
+   * growing transcript embeds and writes only its new chunks. The worker
+   * revalidates retained rows under its write lock.
+   */
+  private async retainIndexedSessionChunks(
+    prepared: PreparedMemoryIndexEntry,
+    generation: MemorySyncProviderGeneration | null,
+  ): Promise<PreparedMemoryIndexEntry> {
+    const { entry, source, chunks } = prepared;
+    const database = this.database;
+    // A full reindex fills an empty shadow, which has no rows to retain.
+    if (
+      source !== "sessions" ||
+      entry.kind === "multimodal" ||
+      chunks.length === 0 ||
+      database.isShadow
+    ) {
+      return prepared;
+    }
+    const indexed = await database.read(
+      { type: "source.chunks", input: { source, path: entry.path } },
+      () => {
+        if (this.closed || database.closed || this.database !== database) {
+          throw new Error("Memory source owner changed before session delta planning");
+        }
+      },
+    );
+    // Rows without stored embeddings are rewritten once a provider is available.
+    const semantic = generation?.kind === "semantic";
+    const keep = new Set(indexed.filter((row) => row.embedded || !semantic).map((row) => row.id));
+    if (keep.size === 0) {
+      return prepared;
+    }
+    const model = generation?.provider?.model ?? "fts-only";
+    const written: IndexedMemoryChunk[] = [];
+    const retained: IndexedMemoryChunk[] = [];
+    // Repeated transcript text yields identical rows under one id. Plan each id
+    // once so a duplicate cannot rewrite the row this delta retains.
+    const planned = new Set<string>();
+    for (const chunk of chunks) {
+      const id = memoryChunkRowId(source, entry.path, chunk, model);
+      if (!planned.has(id)) {
+        planned.add(id);
+        (keep.has(id) ? retained : written).push(chunk);
+      }
+    }
+    return retained.length > 0 ? { ...prepared, chunks: written, retained } : prepared;
   }
 
   private async prepareIndexEntry(
@@ -861,7 +927,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       let offset = 0;
       for (const item of current) {
         const fileEmbeddings = embeddings.slice(offset, offset + item.chunks.length);
-        await this.writeChunks(item, generation, fileEmbeddings, vectorReady);
+        if (!(await this.writeChunks(item, generation, fileEmbeddings, vectorReady))) {
+          await this.indexFileWithGeneration(item.entry, item.source, generation, false);
+        }
         // Publication has settled; later files must not retain completed vectors.
         // oxlint-disable-next-line unicorn/no-array-fill-with-reference-type -- Completed slots are never read or mutated.
         embeddings.fill([], offset, offset + item.chunks.length);
@@ -876,10 +944,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         await this.indexFileWithGeneration(item.entry, item.source, generation);
         continue;
       }
-      const preparedEntry = await this.prepareIndexEntry(item.entry, item.source, generation);
-      if (!preparedEntry) {
+      const unplanned = await this.prepareIndexEntry(item.entry, item.source, generation);
+      if (!unplanned) {
         continue;
       }
+      const preparedEntry = await this.retainIndexedSessionChunks(unplanned, generation);
       const nextWouldExceedFiles = prepared.length >= SOURCE_WIDE_BATCH_MAX_FILES;
       const nextWouldExceedRequests =
         preparedRequestCount + preparedEntry.chunks.length > SOURCE_WIDE_BATCH_MAX_REQUESTS;
@@ -913,17 +982,28 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     entry: MemoryIndexEntry,
     source: MemorySource,
     generation: MemorySyncProviderGeneration | null,
+    retain = true,
   ): Promise<void> {
     // Multimodal files require an embedding provider; skip in FTS-only mode.
     if (generation?.kind !== "semantic" && entry.kind === "multimodal") {
       return;
     }
-    const prepared = await this.prepareIndexEntry(entry, source, generation);
-    if (!prepared) {
+    const unplanned = await this.prepareIndexEntry(entry, source, generation);
+    if (!unplanned) {
       return;
     }
-    if (generation?.kind !== "semantic") {
-      await this.writeChunks(prepared, generation, [], false);
+    const prepared = retain
+      ? await this.retainIndexedSessionChunks(unplanned, generation)
+      : unplanned;
+    // A drifted delta wrote nothing; one full write rebuilds the vanished rows.
+    const write = async (embeddings: number[][], vectorReady: boolean) => {
+      if (!(await this.writeChunks(prepared, generation, embeddings, vectorReady))) {
+        await this.indexFileWithGeneration(entry, source, generation, false);
+      }
+    };
+    // An unchanged or truncated session has nothing to embed.
+    if (generation?.kind !== "semantic" || prepared.chunks.length === 0) {
+      await write([], false);
       return;
     }
 
@@ -959,7 +1039,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     }
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
-    await this.writeChunks(prepared, generation, embeddings, vectorReady);
+    await write(embeddings, vectorReady);
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

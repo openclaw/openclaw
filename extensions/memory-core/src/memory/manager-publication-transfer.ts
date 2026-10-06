@@ -96,21 +96,31 @@ export function* memoryPublicationBatches(
   replacement: MemorySourceIndexReplacement,
 ): Generator<MemoryPublicationFragment[]> {
   function* rows(): Generator<MemorySourceIndexRow> {
-    for (const [row, chunk] of replacement.chunks.entries()) {
+    // The kernel validates every retained row before it writes the first new row.
+    const retained = replacement.source === "sessions" ? (replacement.retained ?? []) : [];
+    for (const chunk of retained) {
       yield {
-        chunk: {
-          startLine: chunk.startLine,
-          endLine: chunk.endLine,
-          text: chunk.text,
-          hash: chunk.hash,
-          importance: chunk.importance,
-          triggers: chunk.triggers,
-          projectKey: chunk.projectKey,
-          ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
-        },
-        embedding: replacement.embeddings[row] ?? [],
+        // Retained rows keep their stored text; identity and provenance suffice.
+        chunk: { ...row(chunk), text: "" },
+        embedding: [],
+        retained: true,
       };
     }
+    for (const [index, chunk] of replacement.chunks.entries()) {
+      yield { chunk: row(chunk), embedding: replacement.embeddings[index] ?? [] };
+    }
+  }
+  function row(chunk: MemorySourceIndexReplacement["chunks"][number]) {
+    return {
+      startLine: chunk.startLine,
+      endLine: chunk.endLine,
+      text: chunk.text,
+      hash: chunk.hash,
+      importance: chunk.importance,
+      triggers: chunk.triggers,
+      projectKey: chunk.projectKey,
+      ...(chunk.provenance ? { provenance: { ...chunk.provenance } } : {}),
+    };
   }
   yield* publicationBatches(rows());
 }
