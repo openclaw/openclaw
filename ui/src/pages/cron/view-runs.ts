@@ -13,6 +13,7 @@ import {
   createMsFormatter,
   formatCompactTokenCount,
 } from "../../lib/format.ts";
+import { cronRepairRunKey, isCronRunRepairable } from "./repair-prompt.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
 import type { CronProps } from "./view-types.ts";
 
@@ -29,10 +30,13 @@ type CronRunsSectionProps = Pick<
   | "runsDeliveryStatuses"
   | "runsQuery"
   | "runsSortDir"
+  | "repairCopyStatus"
   | "onLoadMoreRuns"
   | "onRefresh"
   | "onRunsFiltersChange"
   | "onViewRunTranscript"
+  | "onFixRunError"
+  | "onCopyRunRepairPrompt"
 > & {
   conditionActivity?: {
     checkCount: number;
@@ -321,14 +325,7 @@ export function renderRunsSection(props: CronRunsSectionProps) {
                   `
           : html`
               <div class="cron-runs__list">
-                ${runs.map((entry) =>
-                  renderRun(
-                    entry,
-                    formatTimestamp,
-                    props.highlightedRunId,
-                    props.onViewRunTranscript,
-                  ),
-                )}
+                ${runs.map((entry) => renderRun(entry, formatTimestamp, props))}
               </div>
             `
       }
@@ -370,10 +367,12 @@ export function runStatusLabel(
 function renderRun(
   entry: CronRunLogEntry,
   formatTimestamp: ReturnType<typeof createMsFormatter>,
-  highlightedRunId?: string | null,
-  onViewRunTranscript?: CronProps["onViewRunTranscript"],
+  props: CronRunsSectionProps,
 ) {
-  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
+  const executionStatus = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
+  const status = entry.deliveryError
+    ? `${executionStatus} · ${t("cron.runEntry.deliveryError")}`
+    : executionStatus;
   const delivery = t(
     RUN_DELIVERY_LABELS.get(entry.deliveryStatus ?? "not-requested") ?? "cron.runs.deliveryUnknown",
   );
@@ -397,7 +396,14 @@ function renderRun(
     entry.provider,
     usageSummary,
   ].filter(Boolean);
-  const highlighted = Boolean(highlightedRunId && cronRunEntryMatchesLink(highlightedRunId, entry));
+  const highlighted = Boolean(
+    props.highlightedRunId && cronRunEntryMatchesLink(props.highlightedRunId, entry),
+  );
+  const repairable = isCronRunRepairable(entry);
+  const copyStatus =
+    repairable && props.repairCopyStatus && props.repairCopyStatus.key === cronRepairRunKey(entry)
+      ? props.repairCopyStatus.result
+      : null;
   return html`
     <div class="cron-run-entry ${highlighted ? "cron-run-entry--highlighted" : ""}">
       <div class="cron-run-entry__header">
@@ -437,11 +443,42 @@ function renderRun(
                     class="btn btn--sm"
                     @click=${(event: MouseEvent) => {
                       if (event.currentTarget instanceof HTMLButtonElement) {
-                        onViewRunTranscript?.(entry, event.currentTarget);
+                        props.onViewRunTranscript?.(entry, event.currentTarget);
                       }
                     }}
                   >
                     ${t("cron.runEntry.viewTranscript")}
+                  </button>
+                </div>`
+              : nothing
+          }
+          ${
+            repairable
+              ? html`<div class="cron-run-entry__repair-actions">
+                  <button
+                    class="btn btn--sm cron-run-entry__fix-error"
+                    type="button"
+                    @click=${() => props.onFixRunError(entry)}
+                  >
+                    ${t("cron.runEntry.fixError")}
+                  </button>
+                  <button
+                    class="btn btn--sm cron-run-entry__copy-prompt"
+                    type="button"
+                    aria-live="polite"
+                    @click=${(event: MouseEvent) => {
+                      if (event.currentTarget instanceof HTMLButtonElement) {
+                        props.onCopyRunRepairPrompt(entry, event.currentTarget);
+                      }
+                    }}
+                  >
+                    ${t(
+                      copyStatus === "copied"
+                        ? "cron.runEntry.promptCopied"
+                        : copyStatus === "failed"
+                          ? "cron.runEntry.promptCopyFailed"
+                          : "cron.runEntry.copyAgentPrompt",
+                    )}
                   </button>
                 </div>`
               : nothing

@@ -62,6 +62,7 @@ export type CronProps = {
   runsDeliveryStatuses: CronDeliveryStatus[];
   runsQuery: string;
   runsSortDir: CronSortDir;
+  repairCopyStatus: { key: string; result: "copied" | "failed" } | null;
   agentSuggestions: string[];
   modelSuggestions: string[];
   thinkingSuggestions: string[];
@@ -93,4 +94,6 @@ export type CronProps = {
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
+  onFixRunError: (entry: CronRunLogEntry) => void;
+  onCopyRunRepairPrompt: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };

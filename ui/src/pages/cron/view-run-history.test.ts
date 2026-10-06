@@ -128,7 +128,7 @@ describe("cron view run history", () => {
           completionStatus: "succeeded",
           deliveryStatus: "not-delivered",
           deliveryError: "Synthetic best-effort delivery failure.",
-          expected: "OK",
+          expected: "OK · Delivery error",
         },
         {
           status: "ok",
@@ -257,6 +257,46 @@ describe("cron view run history", () => {
     });
     const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
     expect(body.textContent).toContain("boom");
+  });
+
+  it("offers repair and copy actions for failed runs without rerunning the job", () => {
+    const onFixRunError = vi.fn();
+    const onRun = vi.fn();
+    const failed = createRun({
+      ts: 4,
+      status: "error",
+      error: "ReferenceError: exec is not defined",
+    });
+    const container = renderView({
+      listTab: "activity",
+      runs: [
+        failed,
+        createRun({ ts: 3, status: "ok", completionStatus: "failed" }),
+        createRun({ ts: 2, status: "ok", deliveryError: "Delivery refused" }),
+        createRun({ ts: 1, status: "ok", summary: "Completed" }),
+      ],
+      onFixRunError,
+      onRun,
+    });
+    const entries = Array.from(container.querySelectorAll(".cron-run-entry"));
+    expect(
+      entries
+        .slice(0, 3)
+        .map((entry) => entry.querySelectorAll(".cron-run-entry__repair-actions button").length),
+    ).toEqual([2, 2, 2]);
+    expect(entries[3]?.querySelector(".cron-run-entry__repair-actions")).toBeNull();
+    expect(entries[2]?.querySelector(".cron-run-entry__title")?.textContent).toContain(
+      "OK · Delivery error",
+    );
+    expect(entries[2]?.querySelector(".cron-run-entry__meta")?.textContent).toContain(
+      "Delivery refused",
+    );
+
+    const fix = entries[0]?.querySelector<HTMLButtonElement>(".cron-run-entry__fix-error");
+    expect(fix?.textContent).toContain("Fix error");
+    fix?.click();
+    expect(onFixRunError).toHaveBeenCalledExactlyOnceWith(failed);
+    expect(onRun).not.toHaveBeenCalled();
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", () => {

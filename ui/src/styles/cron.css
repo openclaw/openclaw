@@ -1044,6 +1044,19 @@
   font-size: var(--control-ui-text-sm);
 }
 
+.cron-run-entry__repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+@media (min-width: 1400px) {
+  .cron-run-entry__repair-actions {
+    justify-content: flex-end;
+  }
+}
+
 .cron-run-entry__body {
   padding-top: var(--space-2);
   line-height: 1.45;

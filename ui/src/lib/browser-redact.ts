@@ -43,7 +43,7 @@ function redactToken(value: string): string {
   return `${sliceUtf16Safe(value, 0, 6)}...${sliceUtf16Safe(value, -4)}`;
 }
 
-function redactMatch({ match, groups, input, offset }: RedactMatch): string {
+function redactMatch({ match, groups, input, offset }: RedactMatch, fullMask = false): string {
   const followingText = offset < 0 ? "" : input.slice(offset + match.length);
   if (match.includes("PRIVATE KEY-----")) {
     return redactPemBlock(match, "...redacted...");
@@ -54,7 +54,7 @@ function redactMatch({ match, groups, input, offset }: RedactMatch): string {
   if (token === "$" && followingText.startsWith("`")) {
     return match;
   }
-  const masked = redactToken(token);
+  const masked = fullMask ? "[redacted]" : redactToken(token);
   if (token === match) {
     return masked;
   }
@@ -65,21 +65,32 @@ function redactMatch({ match, groups, input, offset }: RedactMatch): string {
   return `${match.slice(0, tokenOffset)}${masked}${match.slice(tokenOffset + token.length)}`;
 }
 
-function redactUrlQueryPairs(detail: string): string {
+function redactUrlQueryPairs(detail: string, fullMask = false): string {
   return detail.replace(URL_QUERY_PAIR_RE, (match, boundary: string, key: string, value: string) =>
-    isSensitiveUrlQueryParamName(key) ? `${boundary}${key}=${redactToken(value)}` : match,
+    isSensitiveUrlQueryParamName(key)
+      ? `${boundary}${key}=${fullMask ? "[redacted]" : redactToken(value)}`
+      : match,
   );
 }
 
-export function redactToolDetail(detail: string): string {
-  let redacted = redactUrlQueryPairs(detail);
+function redactToolDetailWithMask(detail: string, fullMask: boolean): string {
+  let redacted = redactUrlQueryPairs(detail, fullMask);
   for (const pattern of SECRET_DETAIL_PATTERNS) {
-    redacted = replaceRedactPattern(redacted, pattern, redactMatch);
+    redacted = replaceRedactPattern(redacted, pattern, (found) => redactMatch(found, fullMask));
   }
   return SENSITIVE_TEXT_PATTERNS.reduce(
     (text, [pattern, replacement]) => text.replace(pattern, replacement),
     redacted,
   );
+}
+
+export function redactToolDetail(detail: string): string {
+  return redactToolDetailWithMask(detail, false);
+}
+
+/** Exported diagnostics omit the token hints useful in an on-screen log. */
+export function redactToolDetailFully(detail: string): string {
+  return redactToolDetailWithMask(detail, true);
 }
 
 export const redactToolPayloadText = redactToolDetail;
