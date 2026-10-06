@@ -370,22 +370,40 @@ it("refuses entries that changed after the inventory and never links a replaceme
 });
 
 it.each(["next-entry", "copy-publication"] as const)(
-  "refuses unexpected ctime changes after a prior hard link (%s)",
+  "refuses same-size rewrites with restored mtime after a prior hard link (%s)",
   async (stage) => {
-    const f = await fixture();
+    const f = await fixture(async (source) => {
+      await fs.utimes(
+        path.join(source, "dist", "state", "worker.js"),
+        1_700_000_000,
+        1_700_000_000,
+      );
+    });
     const before = await fs.stat(f.worker, { bigint: true });
     const sharedEntries = f.plan.entries.filter(
       (entry) => entry.kind === "file" && entry.ino === before.ino.toString(),
     );
     const later = sharedEntries[1]!.path;
+    let mutated = false;
+    const mutate = () => {
+      if (mutated) {
+        return;
+      }
+      mutated = true;
+      const content = fsSync.readFileSync(later);
+      content[0] = content[0]! ^ 1;
+      fsSync.chmodSync(later, 0o600);
+      fsSync.writeFileSync(later, content);
+      fsSync.chmodSync(later, 0o444);
+      fsSync.utimesSync(later, before.atime, before.mtime);
+    };
     if (stage === "next-entry") {
       const lstat = fs.lstat;
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-        const stat = await lstat(...args);
-        if (args[0] === later && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
+        if (args[0] === later) {
+          mutate();
         }
-        return stat;
+        return await lstat(...args);
       });
     } else {
       const link = fs.link;
@@ -397,14 +415,14 @@ it.each(["next-entry", "copy-publication"] as const)(
       });
       const lstatSync = fsSync.lstatSync;
       vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
-        const stat = lstatSync(...args);
-        if (args[0] === later && stat && "ctimeNs" in stat && typeof stat.ctimeNs === "bigint") {
-          stat.ctimeNs += 1n;
+        if (args[0] === later) {
+          mutate();
         }
-        return stat;
+        return lstatSync(...args);
       });
     }
     await expect(f.link()).rejects.toThrow("changed after snapshot inventory");
+    expect(mutated).toBe(true);
     expect(fsSync.existsSync(path.join(f.destination, path.relative(f.source, later)))).toBe(false);
   },
 );
