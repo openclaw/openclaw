@@ -73,7 +73,7 @@ function createSubject(params?: {
     messages: { inbound: { byChannel: { matrix: params?.debounceMs ?? DEBOUNCE_MS } } },
   } as CoreConfig;
   const enqueue = createMatrixInboundDebouncer({
-    cfg,
+    readConfig: () => cfg,
     selfUserId: BOT,
     handleRoomMessage: async (roomId, event, options) => {
       dispatched.push({ roomId, event, options });

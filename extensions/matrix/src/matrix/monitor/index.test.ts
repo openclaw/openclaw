@@ -344,6 +344,42 @@ describe("monitorMatrixProvider", () => {
     }
   });
 
+  it("applies a debounce delay committed after startup without reconnecting", async () => {
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 1000 } } };
+    const handler = vi.fn(async () => {});
+    hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
+    const abortController = new AbortController();
+    const monitorPromise = monitorMatrixProvider({ abortSignal: abortController.signal });
+    await waitForCallOrderEntry("start-client");
+    const onRoomMessage = registeredRoomMessageHandler();
+    hoisted.messagesConfig = { inbound: { byChannel: { matrix: 5000 } } };
+    vi.useFakeTimers();
+    try {
+      for (const [eventId, body] of [
+        ["$1", "one"],
+        ["$2", "two"],
+      ]) {
+        await onRoomMessage("!room:example.org", {
+          type: "m.room.message",
+          event_id: eventId,
+          sender: "@alice:example.org",
+          content: { msgtype: "m.text", body },
+        });
+      }
+
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(handler).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(handler).toHaveBeenCalledOnce();
+      expect(mockCallArg(handler, 0, 1)).toMatchObject({ content: { body: "one\ntwo" } });
+    } finally {
+      vi.useRealTimers();
+      abortController.abort();
+      await monitorPromise;
+    }
+  });
+
   it("fails the channel task when Matrix sync emits an unexpected fatal error", async () => {
     const abortController = new AbortController();
     const monitorPromise = monitorMatrixProvider({

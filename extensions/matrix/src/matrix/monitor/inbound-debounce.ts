@@ -7,7 +7,6 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNullableObjectRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CoreConfig } from "../../types.js";
@@ -125,7 +124,8 @@ function buildBatchKey(roomId: string, event: MatrixRawEvent): string | null {
 }
 
 export function createMatrixInboundDebouncer(params: {
-  cfg: CoreConfig;
+  /** Live runtime config; read at use time so debounce changes apply without reconnecting. */
+  readConfig: () => CoreConfig;
   selfUserId: string;
   handleRoomMessage: MatrixRoomMessageHandler;
   inboundDeduper: Pick<MatrixInboundEventDeduper, "claim">;
@@ -140,9 +140,7 @@ export function createMatrixInboundDebouncer(params: {
   ) => Promise<MatrixCommandPrefixInputs>;
   onError: (err: unknown) => void;
 }) {
-  const { cfg, handleRoomMessage, inboundDeduper, logVerboseMessage } = params;
-  // Live config so debounce changes apply without reconnecting, like other channels.
-  const readConfig = createRuntimeConfigReader(cfg);
+  const { readConfig, handleRoomMessage, inboundDeduper, logVerboseMessage } = params;
 
   const shouldDebounce = ({ event, commandCheckText }: MatrixInboundDebounceEntry): boolean => {
     if (
@@ -227,7 +225,7 @@ export function createMatrixInboundDebouncer(params: {
   };
 
   const { debouncer } = createChannelInboundDebouncer<MatrixInboundDebounceEntry>({
-    cfg,
+    cfg: readConfig(),
     channel: "matrix",
     resolveDebounceMs: () => resolveInboundDebounceMs({ cfg: readConfig(), channel: "matrix" }),
     buildKey: ({ roomId, event }) => buildBatchKey(roomId, event),

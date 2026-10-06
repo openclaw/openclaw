@@ -472,7 +472,9 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
       onRoomMessage: createMatrixInboundDebouncer({
-        cfg,
+        // Not the monitor's resolved cfg copy: that one is pinned to startup values.
+        // SAFETY: same runtime config the monitor narrows to CoreConfig at startup.
+        readConfig: () => core.config.current() as CoreConfig,
         selfUserId: auth.userId,
         handleRoomMessage,
         inboundDeduper,
