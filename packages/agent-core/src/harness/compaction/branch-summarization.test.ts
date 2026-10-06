@@ -157,7 +157,7 @@ describe("branch summarization", () => {
         customType: "openclaw.runtime-context",
         content: "PRIVATE_RUNTIME_CONTEXT",
         display: false,
-        details: { runtimeContextCarrier: true },
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
       },
       createMessageEntry(
         createResponse(model, [

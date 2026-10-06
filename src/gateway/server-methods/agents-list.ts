@@ -40,7 +40,7 @@ export const agentListHandler: GatewayRequestHandler = async ({
           ),
         ),
       );
-  const result = await listAgentsForGateway(cfg, undefined, {
+  const result = await listAgentsForGateway(cfg, {
     modelCatalogByAgentId,
     includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
     httpAvatarBasePath:

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { SpawnResult } from "../process/exec.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -100,11 +101,11 @@ async function rejection(run: () => Promise<unknown>): Promise<Error> {
 
 describe("runGcloud interpreter resolution", () => {
   itUnix(
-    "resolves a working python path and caches the result",
+    "preserves spaces in the resolved python path and caches the result",
     async () => {
       const { runGcloud } = await loadGmailSetupUtils();
       await withTestDir({ prefix: "openclaw-python-" }, async (tmp) => {
-        const realPython = await writeExecutable(path.join(tmp, "python-real"));
+        const realPython = await writeExecutable(path.join(tmp, "Python Runtime", "python-real"));
         const shimDir = path.join(tmp, "shims");
         await writeExecutable(path.join(shimDir, "python3"));
 

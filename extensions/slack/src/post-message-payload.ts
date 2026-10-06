@@ -13,11 +13,7 @@ type SlackPostThreadPayload =
       reply_broadcast: true;
     }
   | {
-      thread_ts: string;
-      reply_broadcast?: never;
-    }
-  | {
-      thread_ts?: never;
+      thread_ts?: string;
       reply_broadcast?: never;
     };
 

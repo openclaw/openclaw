@@ -146,38 +146,6 @@ export class MeetingSessionCleanupTracker {
     return { browserLeft: state.browserLeft, complete, unpublished };
   }
 
-  async retryBrowserAfterFailedJoin(params: {
-    sessionId: string;
-    browserLeft?: boolean;
-    hasBrowserTab: () => boolean;
-    releaseBrowser: () => Promise<boolean | undefined>;
-  }): Promise<{ browserLeft?: boolean; complete: boolean; error?: unknown; incomplete: boolean }> {
-    const state = this.#states.get(params.sessionId)?.cleanup;
-    if (!state) {
-      return { browserLeft: params.browserLeft, complete: true, incomplete: false };
-    }
-    if (!params.hasBrowserTab()) {
-      state.browserSettled = true;
-    } else if (!state.browserSettled) {
-      try {
-        state.browserLeft = await params.releaseBrowser();
-        state.browserSettled = state.browserLeft !== false;
-      } catch (error) {
-        return {
-          browserLeft: state.browserLeft,
-          complete: false,
-          error,
-          incomplete: params.hasBrowserTab(),
-        };
-      }
-    }
-    return {
-      browserLeft: state.browserLeft,
-      complete: this.#completeIfSettled(params.sessionId, state),
-      incomplete: params.hasBrowserTab(),
-    };
-  }
-
   async rollbackFailedJoin(params: {
     sessionId: string;
     browserLeft?: boolean;
@@ -200,15 +168,35 @@ export class MeetingSessionCleanupTracker {
         params.warn(`replacement cleanup retry failed: ${params.formatError(retryError)}`);
       }
     }
-    const retry = await this.retryBrowserAfterFailedJoin(params);
-    params.onBrowserResult(retry.browserLeft);
-    if (retry.error) {
-      params.warn(`replacement browser cleanup retry failed: ${params.formatError(retry.error)}`);
+    const state = this.#states.get(params.sessionId)?.cleanup;
+    if (!state) {
+      params.onBrowserResult(params.browserLeft);
+      params.onComplete();
+      return;
     }
-    if (retry.complete) {
+    let failed = false;
+    let retryError: unknown;
+    if (!params.hasBrowserTab()) {
+      state.browserSettled = true;
+    } else if (!state.browserSettled) {
+      try {
+        state.browserLeft = await params.releaseBrowser();
+        state.browserSettled = state.browserLeft !== false;
+      } catch (error) {
+        failed = true;
+        retryError = error;
+      }
+    }
+    const complete = !failed && this.#completeIfSettled(params.sessionId, state);
+    const incomplete = params.hasBrowserTab();
+    params.onBrowserResult(state.browserLeft);
+    if (retryError) {
+      params.warn(`replacement browser cleanup retry failed: ${params.formatError(retryError)}`);
+    }
+    if (complete) {
       params.onComplete();
     }
-    if (retry.incomplete) {
+    if (incomplete) {
       params.warn("replacement browser cleanup incomplete after failed join");
     }
   }

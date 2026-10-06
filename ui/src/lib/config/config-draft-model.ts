@@ -8,7 +8,7 @@ import { coerceConfigFormNumberString } from "../../components/config-form.numer
 import { t } from "../../i18n/index.ts";
 import {
   removePathValue,
-  sanitizeRedactedFormForSubmit,
+  pruneEmptyConfigForm,
   schemaMayAcceptString,
   schemaType,
   serializeConfigForm,
@@ -312,12 +312,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return sanitizeRedactedFormForSubmit(
-    form,
-    state.configFormOriginal,
-    // The draft original is include-resolved source; raw only describes the root file.
-    state.configFormOriginal,
-  );
+  // The draft original is include-resolved source; raw only describes the root file.
+  return pruneEmptyConfigForm(form, state.configFormOriginal);
 }
 
 export type ConfigSubmittedDraft = {
@@ -697,7 +693,7 @@ export function discardConfigFormValue(state: RuntimeConfigState, path: Array<st
   }
   // Restore absence with the submission owner's existing empty-container rules;
   // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
-  current = sanitizeRedactedFormForSubmit(current, original, original);
+  current = pruneEmptyConfigForm(current, original);
   if (configFormContentConflicts(original, current, canonical)) {
     state.configAutoSaveStatus = "conflict";
     state.lastError = "config changed since last load; re-run config.get and retry";
@@ -728,11 +724,6 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
     const entries = asConfigRecord(agents?.entries);
     if (!entries) {
       return;
-    }
-    for (const entry of Object.values(entries)) {
-      if (isRecord(entry)) {
-        delete entry.default;
-      }
     }
     if (Object.keys(entries).length > 1) {
       setPathValue(draft, ["agents", "ownership"], "explicit");

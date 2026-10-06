@@ -87,9 +87,9 @@ export function resolveChatDefaultAvatarPlacement(
  * stale configured URL); swap to initials instead of a broken image. Lit
  * reuses DOM parts, so a load must clear a prior identity's error state.
  */
-export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, role = "user") {
+export function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
   const initialsAvatar = html`<div
-    class="chat-avatar ${role} chat-avatar--sender-initials"
+    class="chat-avatar user chat-avatar--sender-initials"
     style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
     role="img"
     aria-label="${label}"
@@ -103,7 +103,7 @@ export function renderUserAvatarSlot(view: IdentityAvatarView, label: string, ro
     ${renderIdentityAvatarImage({
       view,
       fallbackSelector: ".chat-avatar-slot",
-      className: `chat-avatar ${role}`,
+      className: "chat-avatar user",
       alt: label,
     })}${initialsAvatar}
   </span>`;

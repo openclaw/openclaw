@@ -61,8 +61,6 @@ type XaiOAuthIdentity = {
 };
 
 type XaiOAuthFetchOptions = {
-  fetchImpl?: typeof fetch;
-  now?: () => number;
   signal?: AbortSignal;
   assertCurrent?: () => void;
 };
@@ -86,7 +84,6 @@ function fetchXaiOAuth(url: string, options: XaiOAuthFetchOptions, body?: Record
   // redirects internally and cannot fence the next request after owner retirement.
   return fetchWithSsrFGuard({
     url,
-    fetchImpl: options.fetchImpl,
     beforeRequest: options.assertCurrent,
     mode: "trusted_explicit_proxy",
     resolveDispatcherPolicy: (target) => {
@@ -184,7 +181,6 @@ async function fetchXaiDeviceCodeDiscovery(
 
 function parseXaiOAuthTokenResponse(
   value: unknown,
-  now: () => number,
   options: { requireRefreshToken?: boolean } = {},
 ): XaiOAuthTokenResponse {
   const json = asOptionalRecord(value) ?? {};
@@ -203,7 +199,7 @@ function parseXaiOAuthTokenResponse(
   // fallback for an access-token expiry — id_token exp reflects the OIDC
   // session, not the access token, and may extend it past actual expiry.
   const expires =
-    resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: now() }) ??
+    resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: Date.now() }) ??
     resolveExpiresAtMsFromEpochSeconds(decodeJwtPayload(accessToken).exp);
   return {
     accessToken,
@@ -266,7 +262,6 @@ function describeXaiOAuthTokenFailure(params: {
 async function requestXaiOAuthRefresh(
   tokenEndpoint: string,
   refreshToken: string,
-  options: XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
   const endpoint = requireTrustedXaiOAuthEndpoint(tokenEndpoint, "token endpoint");
   const context = "xAI OAuth refresh";
@@ -275,11 +270,15 @@ async function requestXaiOAuthRefresh(
     let response: Response;
     let body: XaiOAuthResponseBody;
     try {
-      const result = await fetchXaiOAuth(endpoint, options, {
-        grant_type: "refresh_token",
-        client_id: XAI_OAUTH_CLIENT_ID,
-        refresh_token: refreshToken,
-      });
+      const result = await fetchXaiOAuth(
+        endpoint,
+        {},
+        {
+          grant_type: "refresh_token",
+          client_id: XAI_OAUTH_CLIENT_ID,
+          refresh_token: refreshToken,
+        },
+      );
       response = result.response;
       // Successful refresh responses rotate stored credentials. Reject corrupted
       // UTF-8 rather than persisting replacement characters as token bytes.
@@ -290,7 +289,7 @@ async function requestXaiOAuthRefresh(
       throw new Error(`${context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
     if (response.ok) {
-      return parseXaiOAuthTokenResponse(body.json, options.now ?? Date.now);
+      return parseXaiOAuthTokenResponse(body.json);
     }
 
     const failure = describeXaiOAuthTokenFailure({ context, response, body });
@@ -378,7 +377,7 @@ async function pollXaiDeviceCodeToken(
       body = null;
     }
     if (response.ok) {
-      return parseXaiOAuthTokenResponse(body, params.now ?? Date.now, {
+      return parseXaiOAuthTokenResponse(body, {
         requireRefreshToken: true,
       });
     }
@@ -468,16 +467,13 @@ function isLegacyXaiOAuthTokenEndpoint(endpoint: string): boolean {
   return url !== null && `${url.origin}${url.pathname}` === XAI_LEGACY_OAUTH_TOKEN_ENDPOINT;
 }
 
-async function resolveXaiOAuthRefreshTokenEndpoint(
-  credential: OAuthCredential,
-  options: XaiOAuthFetchOptions,
-): Promise<string> {
+async function resolveXaiOAuthRefreshTokenEndpoint(credential: OAuthCredential): Promise<string> {
   const cachedEndpoint = normalizeOptionalString(credential.tokenEndpoint);
   // Rediscover when there is no cached endpoint, or when an older persisted
   // credential still points at the retired endpoint, so refresh writes back the
   // current OAuth token endpoint.
   if (!cachedEndpoint || isLegacyXaiOAuthTokenEndpoint(cachedEndpoint)) {
-    const discovery = await fetchXaiOAuthDiscoveryDocument(options);
+    const discovery = await fetchXaiOAuthDiscoveryDocument();
     if (typeof discovery.token_endpoint !== "string") {
       throw new Error("xAI OAuth discovery response is missing the token endpoint");
     }
@@ -588,14 +584,13 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
 
 export async function refreshXaiOAuthCredential(
   credential: OAuthCredential,
-  options: XaiOAuthFetchOptions = {},
 ): Promise<OAuthCredential> {
   const refreshToken = credential.refresh;
   if (!refreshToken) {
     throw new Error("xAI OAuth credential is missing refresh token");
   }
-  const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential, options);
-  const tokens = await requestXaiOAuthRefresh(tokenEndpoint, refreshToken, options);
+  const tokenEndpoint = await resolveXaiOAuthRefreshTokenEndpoint(credential);
+  const tokens = await requestXaiOAuthRefresh(tokenEndpoint, refreshToken);
   return {
     ...credential,
     type: "oauth",

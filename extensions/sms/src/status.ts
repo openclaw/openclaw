@@ -75,13 +75,8 @@ async function runRemoteProbe<T>(params: {
 }
 
 function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
-  let host;
-  try {
-    host = new URL(account.publicWebhookUrl).hostname;
-  } catch {
-    return;
-  }
-  if (!host.endsWith(".ts.net")) {
+  const host = URL.parse(account.publicWebhookUrl)?.hostname;
+  if (!host?.endsWith(".ts.net")) {
     return;
   }
   hints.push(

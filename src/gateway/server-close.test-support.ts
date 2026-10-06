@@ -38,6 +38,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
       resolveGatewayContext: () => undefined,
+      preparePluginRegistryClose: async () => [],
       closePluginRegistry: async (onRetirement) => {
         let retirement: ReturnType<GatewayCloseParams["pluginMetadata"]["close"]> | undefined;
         const retire = () =>
@@ -65,6 +66,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       tailscaleCleanup: null,
       stopChannel: vi.fn(async () => undefined),
       pluginServices: null,
+      stopScheduler: vi.fn(async () => {}),
       disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
       drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
       stopGmailWatcher: mocks.stopGmailWatcher,

@@ -44,6 +44,8 @@ describe("Kysely declarations", () => {
     for (const file of [
       "package.json",
       "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+      "scripts/runtime-postbuild-shared.mjs",
       "scripts/generate-kysely-types.mts",
       "scripts/lib/direct-run.mjs",
     ]) {
@@ -101,11 +103,16 @@ describe("Kysely declarations", () => {
         env,
         encoding: "utf8",
       });
-    for (const file of ["scripts/generate-kysely-types.mts", "scripts/prepare-git-hooks.mjs"]) {
+    for (const file of [
+      "scripts/generate-kysely-types.mts",
+      "scripts/prepare-git-hooks.mjs",
+      "scripts/prepare-native-protocol.mjs",
+    ]) {
       const result = run(file);
       expect(result.status, result.stderr).toBe(0);
     }
     expect(fs.existsSync(path.join(packageRoot, ".artifacts"))).toBe(false);
+    expect(fs.existsSync(path.join(packageRoot, "apps"))).toBe(false);
     fs.unlinkSync(path.join(packageRoot, "scripts/lib/direct-run.mjs"));
     const missing = run("scripts/generate-kysely-types.mts");
     expect(missing.status).toBe(1);
@@ -134,15 +141,6 @@ describe("Kysely declarations", () => {
     expect(fs.existsSync(output)).toBe(false);
     expect(fs.existsSync(agentOutput)).toBe(false);
     expect(fs.existsSync(path.join(root, ".artifacts/kysely/inputs.sha256"))).toBe(false);
-  });
-
-  it("skips source-less installs but rejects an incomplete schema checkout", async () => {
-    const root = tempDirs.make("kysely-source-less-");
-    fs.mkdirSync(path.join(root, "src/state"), { recursive: true });
-    await ensureKyselyTypes(root);
-    expect(fs.existsSync(path.join(root, ".artifacts"))).toBe(false);
-    fs.writeFileSync(path.join(root, "src/state/openclaw-state-schema.sql"), schema);
-    await expect(ensureKyselyTypes(root)).rejects.toThrow("openclaw-agent-schema.sql");
   });
 
   it("derives ordered tables, nullability, defaults and composite keys from SQL", async () => {

@@ -24,7 +24,6 @@ import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gatew
 import { showToast } from "../../lib/toast.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { renderSnapshotBuildDialog } from "./cloud-worker-snapshot-build-dialog.ts";
 import {
   renderSnapshotBuildRow,
   renderSnapshotImage,
@@ -330,24 +329,76 @@ class CloudWorkerSnapshots extends OpenClawLightDomElement {
     if (!this.buildDialog) {
       return nothing;
     }
-    return renderSnapshotBuildDialog({
-      profiles: this.result?.profiles ?? [],
-      repositories: this.repositories,
-      repositoriesLoading: this.repositoriesLoading,
-      profileId: this.buildProfile,
-      projectPath: this.buildProject,
-      preparing: this.preparing,
-      canPrepare: this.canCall("environments.prepare"),
-      error: this.buildError,
-      onProfileChange: (value) => {
-        this.buildProfile = value;
-      },
-      onProjectChange: (value) => {
-        this.buildProject = value;
-      },
-      onSubmit: () => void this.prepare(this.buildProfile, this.buildProject, true),
-      onClose: () => this.closeBuildDialog(),
-    });
+    const profiles = this.result?.profiles ?? [];
+    const preparing = this.preparing;
+    const valid =
+      profiles.some((profile) => profile.id === this.buildProfile && profile.warmImages === "on") &&
+      this.repositories.some((repository) => repository.root === this.buildProject);
+    return html`<openclaw-modal-dialog
+      label=${t("cloudWorkersPage.snapshots.buildSnapshot")}
+      @modal-cancel=${(event: Event) => {
+        if (preparing) {
+          event.preventDefault();
+        } else {
+          this.closeBuildDialog();
+        }
+      }}
+    >
+      <div class="exec-approval-card">
+        <h2>${t("cloudWorkersPage.snapshots.buildSnapshot")}</h2>
+        <p>${t("cloudWorkersPage.snapshots.buildHelp")}</p>
+        <label class="field"
+          ><span>${t("cloudWorkersPage.snapshots.profile")}</span>
+          <select
+            class="settings-select"
+            .value=${this.buildProfile}
+            ?disabled=${preparing}
+            @change=${(event: Event & { currentTarget: HTMLSelectElement }) => {
+              this.buildProfile = event.currentTarget.value;
+            }}
+          >
+            <option value="">${t("cloudWorkersPage.snapshots.chooseProfile")}</option>
+            ${profiles.map((profile) => html`<option value=${profile.id} ?disabled=${profile.warmImages !== "on"}>${profile.id}${profile.warmImages === "on" ? "" : ` — ${profile.reason}`}</option>`)}
+          </select>
+        </label>
+        <label class="field"
+          ><span>${t("cloudWorkersPage.snapshots.repository")}</span>
+          <select
+            class="settings-select"
+            .value=${this.buildProject}
+            ?disabled=${preparing || this.repositoriesLoading}
+            @change=${(event: Event & { currentTarget: HTMLSelectElement }) => {
+              this.buildProject = event.currentTarget.value;
+            }}
+          >
+            <option value="">
+              ${t(this.repositoriesLoading ? "common.loading" : "cloudWorkersPage.snapshots.chooseRepository")}
+            </option>
+            ${this.repositories.map((repository) => html`<option value=${repository.root}>${repository.label === repository.root ? repository.root : `${repository.label} · ${repository.root}`}</option>`)}
+          </select>
+        </label>
+        ${!this.repositoriesLoading && !this.repositories.length && !this.buildError ? html`<p>${t("cloudWorkersPage.snapshots.noRepositories")}</p>` : nothing}
+        ${this.buildError ? html`<div class="callout warning" role="alert">${this.buildError}</div>` : nothing}
+        <div class="exec-approval-actions">
+          <button
+            class="btn primary"
+            type="button"
+            ?disabled=${!valid || preparing || !this.canCall("environments.prepare")}
+            @click=${() => void this.prepare(this.buildProfile, this.buildProject, true)}
+          >
+            ${t("cloudWorkersPage.snapshots.buildSnapshot")}
+          </button>
+          <button
+            class="btn"
+            type="button"
+            ?disabled=${preparing}
+            @click=${() => this.closeBuildDialog()}
+          >
+            ${t("common.cancel")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>`;
   }
 
   private async recoverCapture(image: SnapshotImage) {

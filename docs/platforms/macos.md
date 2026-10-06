@@ -35,8 +35,10 @@ require macOS 26 or later.
 
 The Node-based CLI and Gateway need a [supported Node version](/install/node)
 on an operating system supported by that runtime. Official Node 24 and Node 26
-macOS binaries require macOS 13.5 or later. Running the CLI on an older Mac
-does not make the native app compatible with that macOS version.
+macOS binaries are built for macOS 13.5 or later, the oldest release Node
+supports. Older macOS releases may still run them but are not supported. Running
+the CLI on an older Mac does not make the native app compatible with that macOS
+version.
 
 Building from source also requires the toolchain listed in
 [macOS developer setup](/platforms/mac/dev-setup#prerequisites).

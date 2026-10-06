@@ -31,13 +31,6 @@ export function wrapToolDefinition<
   return copyInternalToolExecutionPreparer(definition, tool);
 }
 
-export function wrapToolDefinitions(
-  definitions: ToolDefinition[],
-  ctxFactory?: () => ExtensionContext,
-): AgentTool[] {
-  return definitions.map((definition) => wrapToolDefinition(definition, ctxFactory));
-}
-
 /**
  * Synthesize a minimal ToolDefinition from an AgentTool.
  *

@@ -1,16 +1,22 @@
 import type { KeyId } from "@earendil-works/pi-tui";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ImageContent, Model } from "../../../llm/types.js";
+import { registerListener } from "../../../shared/listeners.js";
+import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
 import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { isToolResultError } from "../../tool-result-error.js";
 import type { ResourceDiagnostic } from "../diagnostics.js";
 import type { KeybindingsConfig } from "../keybindings.js";
 import type { ModelRegistry } from "../model-registry.js";
+import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { SessionManager } from "../session-manager.js";
-import type { BuildSystemPromptOptions } from "../system-prompt.js";
-import { reportExtensionHandlerError } from "./handler-error.js";
-import { bindExtensionMetadataActions } from "./metadata-actions.js";
+import type { BuildSystemPromptOptions } from "../system-prompt-metadata.js";
+import {
+  bindExtensionMetadataActions,
+  bindExtensionPersistenceActions,
+} from "./metadata-actions.js";
+import { bindExtensionProviderActions } from "./provider-actions.js";
 import type {
   BeforeAgentStartEvent,
   BeforeAgentStartEventResult,
@@ -21,6 +27,7 @@ import type {
   ContextUsage,
   Extension,
   ExtensionActions,
+  ExtensionActionsV2,
   ExtensionCommandContext,
   ExtensionCommandContextActions,
   ExtensionContext,
@@ -135,17 +142,6 @@ type RunnerEmitEvent = Exclude<
   | InputEvent
 >;
 
-type SessionBeforeEvent = Extract<
-  RunnerEmitEvent,
-  {
-    type:
-      | "session_before_switch"
-      | "session_before_fork"
-      | "session_before_compact"
-      | "session_before_tree";
-  }
->;
-
 type SessionBeforeEventResult =
   | SessionBeforeSwitchResult
   | SessionBeforeForkResult
@@ -254,6 +250,16 @@ export class ExtensionRunner {
     this.uiContext = noOpUIContext;
   }
 
+  /** Bind host actions with worker-backed persistence; legacy bindCore remains source-compatible. */
+  bindCoreAsync(
+    actions: ExtensionActionsV2,
+    contextActions: ExtensionContextActions,
+    providerActions?: Parameters<ExtensionRunner["bindCore"]>[2],
+  ): void {
+    this.bindCore(actions, contextActions, providerActions);
+    bindExtensionPersistenceActions(this.sessionManager, this.runtime, actions);
+  }
+
   bindCore(
     actions: ExtensionActions,
     contextActions: ExtensionContextActions,
@@ -287,41 +293,12 @@ export class ExtensionRunner {
     this.compactFn = contextActions.compact;
     this.getSystemPromptFn = contextActions.getSystemPrompt;
 
-    // Flush provider registrations queued during extension loading
-    for (const { name, config, extensionPath } of this.runtime.pendingProviderRegistrations) {
-      try {
-        if (providerActions?.registerProvider) {
-          providerActions.registerProvider(name, config);
-        } else {
-          this.modelRegistry.registerProvider(name, config);
-        }
-      } catch (err) {
-        this.emitError({
-          extensionPath,
-          event: "register_provider",
-          error: coerceErrorMessage(err),
-          stack: err instanceof Error ? err.stack : undefined,
-        });
-      }
-    }
-    this.runtime.pendingProviderRegistrations = [];
-
-    // From this point on, provider registration/unregistration takes effect immediately
-    // without requiring a /reload.
-    this.runtime.registerProvider = (name, config) => {
-      if (providerActions?.registerProvider) {
-        providerActions.registerProvider(name, config);
-        return;
-      }
-      this.modelRegistry.registerProvider(name, config);
-    };
-    this.runtime.unregisterProvider = (name) => {
-      if (providerActions?.unregisterProvider) {
-        providerActions.unregisterProvider(name);
-        return;
-      }
-      this.modelRegistry.unregisterProvider(name);
-    };
+    bindExtensionProviderActions(
+      this.runtime,
+      this.modelRegistry,
+      (error) => this.emitError(error),
+      providerActions,
+    );
   }
 
   bindCommandContext(actions?: ExtensionCommandContextActions): void {
@@ -470,8 +447,7 @@ export class ExtensionRunner {
   }
 
   onError(listener: ExtensionErrorListener): () => void {
-    this.errorListeners.add(listener);
-    return () => this.errorListeners.delete(listener);
+    return registerListener(this.errorListeners, listener);
   }
 
   emitError(error: ExtensionError): void {
@@ -604,15 +580,6 @@ export class ExtensionRunner {
     } satisfies ExtensionCommandContextActions);
   }
 
-  private isSessionBeforeEvent(event: RunnerEmitEvent): event is SessionBeforeEvent {
-    return (
-      event.type === "session_before_switch" ||
-      event.type === "session_before_fork" ||
-      event.type === "session_before_compact" ||
-      event.type === "session_before_tree"
-    );
-  }
-
   private async dispatchHandlers<TResult>(
     eventType: Exclude<ExtensionEvent["type"], "tool_call">,
     invoke: (
@@ -633,7 +600,17 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
-          reportExtensionHandlerError(err, ext.path, eventType, (error) => this.emitError(error));
+          // Runtime faults must escape before another handler can run.
+          rethrowIncognitoSessionError(err);
+          if (err instanceof SessionMetadataCommittedError) {
+            throw err;
+          }
+          this.emitError({
+            extensionPath: ext.path,
+            event: eventType,
+            error: coerceErrorMessage(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
         }
       }
     }
@@ -645,7 +622,13 @@ export class ExtensionRunner {
 
     const cancelled = await this.dispatchHandlers(event.type, async (handler, ctx) => {
       const handlerResult = await handler(event, ctx);
-      if (this.isSessionBeforeEvent(event) && handlerResult) {
+      if (
+        (event.type === "session_before_switch" ||
+          event.type === "session_before_fork" ||
+          event.type === "session_before_compact" ||
+          event.type === "session_before_tree") &&
+        handlerResult
+      ) {
         result = handlerResult as SessionBeforeEventResult;
         if (result.cancel) {
           return result;

@@ -110,8 +110,6 @@ export async function runFleetDoctor(params: {
   containers: FleetContainerRuntime;
   fetchImpl: typeof fetch;
   tenant?: string;
-  getuid?: () => number | undefined;
-  getgid?: () => number | undefined;
 }): Promise<FleetDoctorCellReport[]> {
   const records = params.tenant
     ? [await requireCell(params.env, params.tenant)]

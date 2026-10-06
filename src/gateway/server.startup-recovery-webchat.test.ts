@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -7,11 +8,17 @@ import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../agents/main-sessi
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import { settleRequesterCompletionBatch } from "../agents/subagents/completion/subagent-completion-admission.store.js";
+import {
+  mutateRequesterSettleWakeBatch,
+  settleRequesterCompletionBatch,
+} from "../agents/subagents/completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "../agents/subagents/registry/subagent-registry-state.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import { isSameSubagentRun } from "../agents/subagents/registry/subagent-run-generation.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import {
   appendTranscriptMessage,
@@ -27,6 +34,7 @@ import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
 } from "../sessions/session-lifecycle-admission.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { countPendingQueueItems } from "../utils/queue-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
@@ -176,7 +184,7 @@ it(
               [provider.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         messages: { queue: { mode: "followup", debounceMsByChannel: { webchat: 0 } } },
         models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
@@ -228,7 +236,10 @@ it(
         },
       );
       clearSessionStoreCacheForTest();
-      const addRecoveryChild = (marker: string) => {
+      const addRecoveryChild = async (
+        marker: string,
+        overrides: Partial<SubagentRunRecord> = {},
+      ) => {
         const parent = loadSessionEntryReadOnly({ storePath, sessionKey });
         if (!parent) {
           throw new Error("Recovery parent is missing");
@@ -257,12 +268,15 @@ it(
             outcome: { status: "error", error: "Interrupted by restart" },
             interruptionReason: "gateway-restart",
           },
+          ...overrides,
         });
-        subagentRuns.set(child.runId, child);
-        persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
+        await mutateSubagentRuns([child.runId], () => ({
+          value: undefined,
+          postimages: new Map([[child.runId, child]]),
+        }));
         return child;
       };
-      addRecoveryChild(originalChildMarker);
+      await addRecoveryChild(originalChildMarker);
       const recoveryRuntime = getGatewayRecoveryRuntime();
       if (!recoveryRuntime) {
         throw new Error("Gateway recovery runtime is unavailable");
@@ -302,27 +316,31 @@ it(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
+        // The started ACK precedes dispatch inserting the turn into the followup
+        // queue; agent.wait reports the queued registration once insertion commits.
+        await expect(
+          client.request("agent.wait", { runId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ runId, status: "pending", timeoutPhase: "queue" });
       };
+      const readInFlightRunIds = () =>
+        [...(getExistingFollowupQueue(sessionKey)?.inFlight ?? [])].map((item) => item.messageId);
       // Hold the cancellation target in flight before queueing the survivor.
-      // A started ACK precedes insertion into the followup queue.
+      // Insertion starts the drain, which reserves the queue head before yielding to I/O.
       await sendQueuedTurn(canceledRunId, canceledMessage);
-      await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        expect([...(queue?.inFlight ?? [])].map((item) => item.messageId)).toEqual([canceledRunId]);
-      });
+      expect(readInFlightRunIds()).toEqual([canceledRunId]);
       await sendQueuedTurn(survivorRunId, survivorMessage);
-      await vi.waitFor(() => {
-        const queue = getExistingFollowupQueue(sessionKey);
-        // Active sources remain in items; started ACKs can precede queue admission.
-        expect(queue?.items).toHaveLength(expectedQueuedMessages.size);
-        expect(new Map(queue?.items.map(({ messageId, prompt }) => [messageId, prompt]))).toEqual(
-          expectedQueuedMessages,
-        );
-        expect(queue?.inFlight).toHaveLength(1);
-        expect(queue?.items.map((item) => item.messageId)).toEqual([canceledRunId, survivorRunId]);
-        expect(countPendingQueueItems(queue?.items ?? [], queue?.inFlight)).toBe(1);
-        expect(targetRequests).toHaveLength(1);
-      });
+      const followupQueue = getExistingFollowupQueue(sessionKey);
+      // Active sources remain in items while the drain holds them in flight.
+      expect(
+        new Map(followupQueue?.items.map(({ messageId, prompt }) => [messageId, prompt])),
+      ).toEqual(expectedQueuedMessages);
+      expect(followupQueue?.items.map((item) => item.messageId)).toEqual([
+        canceledRunId,
+        survivorRunId,
+      ]);
+      expect(readInFlightRunIds()).toEqual([canceledRunId]);
+      expect(countPendingQueueItems(followupQueue?.items ?? [], followupQueue?.inFlight)).toBe(1);
+      expect(targetRequests).toHaveLength(1);
       replacementOwner = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, sessionId],
@@ -371,7 +389,7 @@ it(
         abortedLastRun: true,
         updatedAt: Date.now() - 10_000,
       }));
-      addRecoveryChild(currentChildMarker);
+      await addRecoveryChild(currentChildMarker);
       const resetRecovery = recoverRestartAbortedMainSessions({
         cfg,
         stateDir: state.stateDir,
@@ -401,73 +419,102 @@ it(
       };
       await registry.resetSubagentRegistryForTests({ persist: false });
       const resolver = () => gatewayContext;
-      const reloadSavedBatch = (entry: SubagentRunRecord) => {
-        subagentRuns.set(entry.runId, entry);
-        persistSubagentRunsToDiskOrThrow(subagentRuns, [entry.runId]);
-        subagentRuns.delete(entry.runId);
-        const [saved] = loadSubagentRunsByRunIdsFromSqlite([entry.runId]);
+      const reloadSavedBatch = async (entry: SubagentRunRecord) => {
+        await mutateSubagentRuns([entry.runId], () => ({
+          value: undefined,
+          postimages: new Map([[entry.runId, entry]]),
+        }));
+        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        const saved = subagentRuns.get(entry.runId);
         if (!saved) {
           throw new Error("Saved completion batch did not survive its SQLite round trip");
         }
-        subagentRuns.set(saved.runId, saved);
         bindGatewayContextResolver(saved, resolver);
         return saved;
       };
+      const currentBatch = (batch: readonly SubagentRunRecord[]) =>
+        batch.map((member) => {
+          const current = subagentRuns.get(member.runId);
+          if (
+            !current ||
+            !isSameSubagentRun(current, member) ||
+            current.requesterSettleWake?.rearmGeneration !==
+              member.requesterSettleWake?.rearmGeneration
+          ) {
+            throw new Error("Saved batch owner changed");
+          }
+          return current;
+        });
       const wakeSavedBatch = (entry: SubagentRunRecord) =>
         maybeWakeRequesterAfterAllChildrenSettled({
           isSourceCurrent: () => true,
           requesterSessionKey: sessionKey,
           settledEntry: entry,
-          transitionBatch: (batch, next) => {
-            for (const member of batch) {
-              member.requesterSettleWake = next;
-            }
-            persistSubagentRunsToDiskOrThrow(
-              subagentRuns,
-              batch.map((member) => member.runId),
-            );
+          transitionBatch: async (batch, next, onPublished) => {
+            const result = await mutateRequesterSettleWakeBatch({
+              entries: batch,
+              operation: { kind: "transition", state: next },
+              context: captureOpenClawStateWorkerContext(),
+              assertCurrent: () => {
+                currentBatch(batch);
+              },
+              onCommitted: () => {},
+              onPublished: () => onPublished(currentBatch(batch)),
+            });
+            expect(result.publication).toBe("published");
           },
-          completeBatch: async (batch, _generation, outcome, onCommitted) => {
+          completeBatch: async (batch, rearmGeneration, outcome, onCommitted) => {
             if (!outcome) {
               throw new Error("Saved batch did not produce a delivery outcome");
             }
-            await settleRequesterCompletionBatch({
+            const result = await settleRequesterCompletionBatch({
               entries: batch.map((subagent) => ({ subagent })),
               outcome,
-              isCurrent: () => batch.every((member) => subagentRuns.get(member.runId) === member),
+              isCurrent: () =>
+                batch.every((member) => {
+                  const current = subagentRuns.get(member.runId);
+                  return (
+                    isSameSubagentRun(current, member) &&
+                    current?.requesterSettleWake?.rearmGeneration === rearmGeneration
+                  );
+                }),
             });
+            expect(result.publication).toBe("published");
             onCommitted?.();
           },
         });
-      let batchChild = addRecoveryChild(batchChildMarker);
-      batchChild.expectsCompletionMessage = true;
-      batchChild.completion = { required: true, resultText: "saved interrupted batch result" };
-      batchChild.delivery = { status: "delivered" };
-      batchChild.requesterSettleWake = {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: [batchChild.runId],
-        requesterYieldBatch: true,
-        afterRequesterYield: true,
-        rearmGeneration: 1,
-      };
-      batchChild = reloadSavedBatch(batchChild);
+      let batchChild = await addRecoveryChild(batchChildMarker, {
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "saved interrupted batch result" },
+        delivery: { status: "delivered" },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: [batchChildMarker],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 1,
+        },
+      });
+      batchChild = await reloadSavedBatch(batchChild);
       expect(await wakeSavedBatch(batchChild)).toBe(true);
       expect(batchRequests).toHaveLength(1);
       const ownedBatchPrompt = readBatchPrompt(batchRequests[0] ?? "");
       expect(ownedBatchPrompt).toContain("Unfinished child sessions to reconcile:");
       expect(ownedBatchPrompt).toContain(`"sessionKey": "${batchChild.childSessionKey}"`);
-      expect(batchChild.requesterSettleWake).toBeUndefined();
+      expect(subagentRuns.get(batchChild.runId)?.requesterSettleWake).toBeUndefined();
 
-      batchChild.requesterSettleWake = {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds: [batchChild.runId],
-        requesterYieldBatch: true,
-        afterRequesterYield: true,
-        rearmGeneration: 2,
-      };
-      batchChild = reloadSavedBatch(batchChild);
+      batchChild = await reloadSavedBatch({
+        ...expectDefined(subagentRuns.get(batchChild.runId), "settled batch child"),
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: [batchChild.runId],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 2,
+        },
+      });
       const fixtureHistory = structuredClone(batchChild);
       await client.request("sessions.reset", { key: sessionKey });
       const revokedTransition = vi.fn();
@@ -489,7 +536,7 @@ it(
       );
       // Current reset revoked the live wake above. This explicitly restored older
       // fixture history exercises compatibility, not a wake left behind by reset.
-      batchChild = reloadSavedBatch(fixtureHistory);
+      batchChild = await reloadSavedBatch(fixtureHistory);
       expect(await wakeSavedBatch(batchChild)).toBe(true);
       expect(batchRequests).toHaveLength(2);
       const staleBatchPrompt = readBatchPrompt(batchRequests[1] ?? "");

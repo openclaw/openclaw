@@ -3,6 +3,7 @@ import {
   GATEWAY_SERVER_CAPS,
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { sha256Base64Url } from "../../../infra/crypto-digest.js";
 import {
@@ -173,6 +174,7 @@ export async function sendGatewayHello(
         : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
       capabilities: [
+        SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY,
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
         GATEWAY_SERVER_CAPS.CHAT_SEND_ROUTING_CONTRACT,
         // Configured UI roots may serve an older route contract than this Gateway.
@@ -181,6 +183,16 @@ export async function sendGatewayHello(
           ? [GATEWAY_SERVER_CAPS.CONTROL_UI_BROWSER_FOCUS]
           : []),
         GATEWAY_SERVER_CAPS.GATEWAY_RESTART_TARGET_SAFE,
+        GATEWAY_SERVER_CAPS.LOCAL_STATE_OWNER_ROUTING,
+        GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER,
+        GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_APPROVE_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_GET_OWNER,
+        GATEWAY_SERVER_CAPS.EXEC_APPROVALS_SET_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_REMOVE_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RESTORE_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_GC_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RECOVER_REMOVAL_OWNER,
+        GATEWAY_SERVER_CAPS.WORKTREES_RETIRE_SNAPSHOT_OWNER,
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
@@ -201,6 +213,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.SESSION_GOAL_START,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CONTRACT,
         GATEWAY_SERVER_CAPS.SESSION_SETTINGS_CAS,
+        GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
         GATEWAY_SERVER_CAPS.SYSTEM_AGENT_SETUP_MODEL_REF,
         GATEWAY_SERVER_CAPS.TASK_SUGGESTIONS_ACCEPT_MODES,

@@ -1,8 +1,3 @@
-/**
- * Active subagent prompt context builder.
- *
- * Renders sanitized runtime-owned subagent facts for the current-turn carrier.
- */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";

@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
-import type { WorkerTaskOptions } from "../../infra/worker-task-pool.types.js";
+import type {
+  WorkerTaskOptions,
+  WorkerTaskPoolOptions,
+} from "../../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   historyLane,
@@ -30,10 +33,13 @@ const observed = vi.hoisted(() => ({
   closeResources: vi.fn<(key?: string) => Promise<void>>().mockResolvedValue(undefined),
   unregister: vi.fn<() => void>(),
   resources: [] as Resource[],
+  replaceWorkers: [] as Array<() => () => Promise<void>>,
 }));
 
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
+  ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
+  captureSqliteWorkerClosePolicy: () => observed.explicitSqliteCloseReleasesNativeResources,
   getSqliteRuntimeCapabilities: () => ({
     explicitSqliteCloseReleasesNativeResources: observed.explicitSqliteCloseReleasesNativeResources,
     reason: "test policy",
@@ -52,12 +58,33 @@ vi.mock("node:diagnostics_channel", async (importOriginal) => {
 
 vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: () => ({
-    run: (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
-      observed.run(prepare(), options),
-    rotate: observed.rotate,
-    closeResources: observed.closeResources,
-  }),
+  createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
+    let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+    observed.replaceWorkers.push(() => {
+      const previous = worker;
+      worker = poolOptions.prepareWorker?.();
+      return async () => previous?.releaseResources?.();
+    });
+    return {
+      async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+        const preparedInput = prepare();
+        worker ??= poolOptions.prepareWorker?.();
+        return await observed.run(preparedInput, options);
+      },
+      async rotate() {
+        const previous = worker;
+        worker = undefined;
+        try {
+          await observed.rotate();
+          await previous?.releaseResources?.();
+        } catch (error) {
+          void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+          throw error;
+        }
+      },
+      closeResources: observed.closeResources,
+    };
+  },
 }));
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
@@ -107,6 +134,9 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
+  await Promise.all(
+    [historyLane, projectionLane, maintenanceLane].map((lane) => rotateDatabaseWorkers(lane)),
+  );
 });
 afterAll(() => {
   vi.useRealTimers();
@@ -114,55 +144,96 @@ afterAll(() => {
   observed.clearTimeout.mockRestore();
 });
 
-it("dedupes prewarm through history custody without extending idle retirement", async () => {
-  await rotateDatabaseWorkers(historyLane);
-  observed.rotate.mockClear();
+it.each([historyLane, maintenanceLane])(
+  "dedupes $name prewarm custody without extending idle retirement",
+  async (lane) => {
+    await rotateDatabaseWorkers(lane);
+    observed.rotate.mockClear();
+    const request = input();
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+    const first = prewarmSessionHistoryWorker(request.database, lane);
+    const second = prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    expect(lane.pending).toBe(1);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(false);
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([first, second]);
+    expect(lane.pending).toBe(0);
+    expect(observed.unregister).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(observed.unregister).toHaveBeenCalledOnce();
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([historyLane, maintenanceLane])(
+  "settles failed and revoked $name prewarms without rejecting callers",
+  async (lane) => {
+    const request = input();
+    observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
+    await expect(prewarmSessionHistoryWorker(request.database, lane)).resolves.toBeUndefined();
+    expect(lane.pending).toBe(0);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    const pending = prewarmSessionHistoryWorker(request.database, lane);
+    const resource = observed.resources.at(-1)!;
+    resource.revoke();
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await expect(pending).resolves.toBeUndefined();
+    await resource.close();
+    expect(lane.pending).toBe(0);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+  },
+);
+
+it("joins only the matching lane prewarm and prepares its replacement after retirement", async () => {
   const request = input();
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  expect(isSessionHistoryWorkerCold()).toBe(true);
-  const first = prewarmSessionHistoryWorker(request.database);
-  const second = prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  expect(historyLane.pending).toBe(1);
-  expect(isSessionHistoryWorkerCold()).toBe(false);
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await Promise.all([first, second]);
-  expect(historyLane.pending).toBe(0);
-  expect(observed.unregister).not.toHaveBeenCalled();
+  const history = createDeferredCore<unknown>();
+  const maintenance = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(history.promise).mockReturnValueOnce(maintenance.promise);
+  const preparingHistory = prewarmSessionHistoryWorker(request.database);
+  const preparingMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  const joiningMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  try {
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(historyLane.pending).toBe(1);
+    expect(maintenanceLane.pending).toBe(1);
 
-  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-  expect(observed.unregister).toHaveBeenCalledOnce();
-  expect(isSessionHistoryWorkerCold()).toBe(true);
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    await preparingHistory;
+    expect(historyLane.pending).toBe(0);
+    expect(maintenanceLane.pending).toBe(1);
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingMaintenance, joiningMaintenance]);
 
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(2);
-});
-
-it("settles failed and revoked prewarms without rejecting callers", async () => {
-  const request = input();
-  observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
-  await expect(prewarmSessionHistoryWorker(request.database)).resolves.toBeUndefined();
-  expect(historyLane.pending).toBe(0);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  const pending = prewarmSessionHistoryWorker(request.database);
-  const resource = observed.resources.at(-1)!;
-  resource.revoke();
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await expect(pending).resolves.toBeUndefined();
-  await resource.close();
-  expect(historyLane.pending).toBe(0);
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(3);
+    await rotateDatabaseWorkers(maintenanceLane);
+    await prewarmSessionHistoryWorker(request.database);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(true);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, maintenanceLane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(false);
+  } finally {
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingHistory, preparingMaintenance, joiningMaintenance]);
+  }
 });
 
 it("maintenance cleanup preserves foreground custody with an older sequence", async () => {
@@ -264,6 +335,41 @@ it.each([
     expect(observed.unregister).toHaveBeenCalledTimes(1);
   },
 );
+
+it("binds native-close policy to each worker generation before replies", async () => {
+  const read = async (lane: typeof historyLane) => {
+    const request = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(
+      request.database,
+      (owner) => owner.readEntryPresence(request.scope),
+      lane,
+    );
+    const resource = observed.resources.at(-1);
+    assert(resource?.agentId);
+    return resource;
+  };
+  observed.explicitSqliteCloseReleasesNativeResources = false;
+  const early = await read(historyLane);
+  observed.explicitSqliteCloseReleasesNativeResources = true;
+  const otherLane = await read(maintenanceLane);
+  // A completed host decision cannot upgrade a worker born before admission.
+  await early.close();
+  expect(observed.rotate).toHaveBeenCalledOnce();
+  await otherLane.close();
+  expect(observed.closeResources).toHaveBeenCalledOnce();
+
+  const predecessor = await read(historyLane);
+  const releasePredecessor = observed.replaceWorkers[0]!();
+  // Replacement captures its own policy without waiting for a task result.
+  await predecessor.close();
+  expect(observed.closeResources).toHaveBeenCalledTimes(2);
+  const successor = await read(historyLane);
+  await releasePredecessor();
+  await successor.close();
+  expect(observed.closeResources).toHaveBeenCalledTimes(3);
+  expect(observed.rotate).toHaveBeenCalledOnce();
+});
 
 it.each([false, true])("retains reads dispatched after cleanup (capable=%s)", async (capable) => {
   observed.explicitSqliteCloseReleasesNativeResources = capable;

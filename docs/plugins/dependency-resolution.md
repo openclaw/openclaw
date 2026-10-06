@@ -40,6 +40,11 @@ OpenClaw uses stable per-source roots:
 - Local/path/archive installs are copied or referenced without dependency
   repair.
 
+These roots are durable install state, not caches. Deleting `~/.openclaw/npm` or
+`~/.openclaw/git` removes every installed external plugin; deployment cleanup
+scripts must leave them in place. Superseded plugin generations are retired by
+the Gateway itself.
+
 npm installs run in that per-plugin project root with:
 
 ```bash

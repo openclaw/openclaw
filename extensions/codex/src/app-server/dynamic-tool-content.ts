@@ -86,7 +86,7 @@ export function convertToolContents(
     0,
   );
   if (totalTextBudget <= maxChars) {
-    return content.flatMap(convertToolContent);
+    return content.map(convertToolContent);
   }
   const noticeText = `...(OpenClaw truncated dynamic tool result: original ${totalTextChars} chars, weighted budget ${maxChars}; rerun with narrower args.)`;
   const notice = `\n${noticeText}`;
@@ -97,7 +97,7 @@ export function convertToolContents(
   const output: CodexDynamicToolCallOutputContentItem[] = [];
   for (const item of content) {
     if (item.type !== "text") {
-      output.push(...convertToolContent(item));
+      output.push(convertToolContent(item));
       continue;
     }
     if (appendedNotice) {
@@ -127,18 +127,12 @@ export function convertToolContents(
 }
 function convertToolContent(
   content: TextContent | ImageContent,
-): CodexDynamicToolCallOutputContentItem[] {
+): CodexDynamicToolCallOutputContentItem {
   if (content.type === "text") {
-    return [{ type: "inputText", text: content.text }];
+    return { type: "inputText", text: content.text };
   }
   const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
-  if (!imageUrl) {
-    return [{ type: "inputText", text: invalidInlineImageText("codex dynamic tool") }];
-  }
-  return [
-    {
-      type: "inputImage",
-      imageUrl,
-    },
-  ];
+  return imageUrl
+    ? { type: "inputImage", imageUrl }
+    : { type: "inputText", text: invalidInlineImageText("codex dynamic tool") };
 }

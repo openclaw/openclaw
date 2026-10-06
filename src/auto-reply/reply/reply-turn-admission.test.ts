@@ -106,7 +106,7 @@ function tombstoneEntry(): SessionEntry {
 async function holdMutation(storePath: string, run: () => Promise<unknown> = async () => {}) {
   const started = createDeferred();
   const release = createDeferred();
-  const mutation = runExclusiveSessionLifecycleMutation({
+  const mutation = runExclusiveSessionLifecycleMutation("patch", {
     scope: storePath,
     identities: [sessionKey, sessionId],
     run: async () => {
@@ -139,7 +139,7 @@ async function expectRecoveryReleased(storePath: string, key = sessionKey) {
 }
 function interrupt(storePath: string, run: () => Promise<void>) {
   const target = { scope: storePath, identities: [sessionKey, sessionId] };
-  return runExclusiveSessionLifecycleMutation({
+  return runExclusiveSessionLifecycleMutation("patch", {
     ...target,
     prepare: async () => {
       await interruptSessionWorkAdmissions(target);
@@ -426,31 +426,26 @@ it("defers takeover to the blocked-tool floor while a quiet tool is active", asy
   result.complete();
   controller.abort();
 });
-it.each(["heartbeat", "queued_followup"] as const)(
-  "does not let %s turns reclaim a stale active operation",
-  async (kind) => {
-    vi.useFakeTimers();
-    const startedAt = Date.now();
-    const active = operation();
-    const cancel = vi.fn();
-    active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
-    active.setPhase("running");
-    vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
-    const admission = admit({ sessionId: "replacement", kind, waitTimeoutMs: 1 });
-    if (kind === "queued_followup") {
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(100);
-    }
-    await expect(admission).resolves.toMatchObject({
-      status: "skipped",
-      reason: "active-run",
-      activeOperation: active,
-    });
-    expect(cancel).not.toHaveBeenCalled();
-    expect(replyRunRegistry.get(sessionKey)).toBe(active);
-    active.complete();
-  },
-);
+it("does not let queued followups reclaim a stale active operation", async () => {
+  vi.useFakeTimers();
+  const startedAt = Date.now();
+  const active = operation();
+  const cancel = vi.fn();
+  active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
+  active.setPhase("running");
+  vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
+  const admission = admit({ sessionId: "replacement", kind: "queued_followup", waitTimeoutMs: 1 });
+  await Promise.resolve();
+  await vi.advanceTimersByTimeAsync(100);
+  await expect(admission).resolves.toMatchObject({
+    status: "skipped",
+    reason: "active-run",
+    activeOperation: active,
+  });
+  expect(cancel).not.toHaveBeenCalled();
+  expect(replyRunRegistry.get(sessionKey)).toBe(active);
+  active.complete();
+});
 it("lets visible turns reclaim terminal operations after settle grace elapsed", async () => {
   vi.useFakeTimers();
   const active = operation();

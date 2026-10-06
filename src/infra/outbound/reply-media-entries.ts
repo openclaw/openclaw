@@ -4,6 +4,7 @@ import {
   setReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import type { ReplyMediaAttachment, ReplyPayload } from "../../shared/reply-payload.types.js";
 
 function mediaReferenceKeys(urls: readonly string[]): string[] {
@@ -33,29 +34,22 @@ export function preserveReplyPayloadMediaSelectionCore(
   if (!selectionChanged && current.length === 0) {
     return recovered;
   }
-  const aliases = new Set<string>();
-  const seen = new Set<string>();
-  const entries: ReturnType<typeof collectReplyMediaEntries> = [];
-  const append = (entry: (typeof entries)[number]) => {
-    const key = normalizeMediaReferenceForComparison(entry.url);
-    if (key && !seen.has(key)) {
-      seen.add(key);
-      entries.push(entry);
-    }
-  };
-  for (const entry of current) {
-    append(entry);
-    for (const alias of entry.sourceUrls ?? []) {
-      aliases.add(normalizeMediaReferenceForComparison(alias));
-    }
-  }
-  if (!selectionChanged) {
-    for (const entry of collectReplyMediaEntries(recovered)) {
-      if (!aliases.has(normalizeMediaReferenceForComparison(entry.url))) {
-        append(entry);
-      }
-    }
-  }
+  const aliases = new Set(
+    current.flatMap((entry) => entry.sourceUrls ?? []).map(normalizeMediaReferenceForComparison),
+  );
+  const byReference = indexFirstByKey(
+    selectionChanged
+      ? current
+      : [
+          ...current,
+          ...collectReplyMediaEntries(recovered).filter(
+            ({ url }) => !aliases.has(normalizeMediaReferenceForComparison(url)),
+          ),
+        ],
+    ({ url }) => normalizeMediaReferenceForComparison(url),
+  );
+  byReference.delete("");
+  const entries = [...byReference.values()];
   const mediaUrls = entries.map(({ url }) => url);
   const payload = copyReplyPayloadMetadata(recovered, {
     ...recovered,

@@ -163,7 +163,7 @@ it("recovers an identical wrong-owner copy despite unequal short reads", async (
 
 it("continues independent Doctor repairs while preserving a divergent wrong-owner database", async () => {
   await withOpenClawTestState({ prefix: "openclaw divergent owner " }, async (state) => {
-    const cfg = { agents: { entries: { main: { default: true }, cleaner: {} } } };
+    const cfg = { agents: { entries: { main: {}, cleaner: {} } } };
     await state.writeConfig(cfg);
     const source = createLegacyDatabaseFixture({
       env: state.env,

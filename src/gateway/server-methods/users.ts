@@ -24,6 +24,7 @@ import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../../state/user-profile-list.js";
+import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -37,7 +38,10 @@ import {
   listProfiles,
   UserProfileNotFoundError,
 } from "../../state/user-profiles.js";
-import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
+import {
+  invalidateOperatorRolePolicy,
+  resolveOperatorRoleSelection,
+} from "../operator-role-policy.js";
 import { broadcastChatMetadataChanged } from "../server-chat-metadata-lifecycle.js";
 import { holdGatewayPolicyResponse } from "../server/ws-policy-close.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
@@ -107,11 +111,32 @@ export const usersHandlers: GatewayRequestHandlers = {
   ...usersChannelIdentityHandlers,
   ...usersGitHubHandlers,
   ...usersPersonalFileHandlers,
-  "users.list": async ({ params, respond }) => {
+  "users.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
     }
-    respond(true, { profiles: await listProfiles() });
+    const { githubAccountIds } = params;
+    const result =
+      githubAccountIds === undefined
+        ? { profiles: await listProfiles() }
+        : await readUserProfileSnapshot(githubAccountIds);
+    const cfg = context.getRuntimeConfig();
+    const profilesById = new Map(result.profiles.map((profile) => [profile.id, profile]));
+    respond(true, {
+      ...result,
+      profiles: result.profiles.map((profile) => {
+        const canonical = profilesById.get(profile.mergedInto ?? profile.id) ?? profile;
+        return Object.assign(
+          profile,
+          resolveOperatorRoleSelection(
+            canonical.id,
+            canonical.role ?? null,
+            cfg,
+            canonical.githubIdentity?.login ?? null,
+          ),
+        );
+      }),
+    });
   },
   "users.self": async (options) => {
     const { client, params, respond } = options;

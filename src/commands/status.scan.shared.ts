@@ -12,8 +12,10 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../gateway/connectio
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
-import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
+import type { GatewayProbeAuth, GatewayProbeResult } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
+import type { ActiveMemoryProviderResult, MemoryHealth } from "../plugins/memory-provider-types.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -27,12 +29,6 @@ import {
   type StatusGatewayProbeBudget,
 } from "./status.gateway-probe-budget.js";
 
-const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
-const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
-const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const gatewayReadinessModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/diagnostic-readiness.js"),
-);
 const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
   const { loadBundledPluginPublicArtifactModuleSync } =
     await import("../plugins/public-surface-loader.js");
@@ -49,35 +45,28 @@ async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
   return await inspectMemoryIndexPresence(databasePath);
 }
 
-export type MemoryStatusSnapshot = MemoryProviderStatus & {
-  agentId: string;
-};
+export type MemoryStatusSnapshot =
+  | (MemoryProviderStatus & { agentId: string })
+  | { agentId: string; provider: string; health: MemoryHealth };
 
 export type GatewayProbeSnapshot = {
   gatewayConnection: ReturnType<typeof buildGatewayConnectionDetailsWithResolvers>;
   remoteUrlMissing: boolean;
   gatewayMode: "local" | "remote";
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  };
+  gatewayProbeAuth: GatewayProbeAuth;
   gatewayProbeAuthWarning?: string;
-  gatewayProbe: Awaited<ReturnType<typeof probeGatewayFn>> | null;
+  gatewayProbe: GatewayProbeResult | null;
   gatewayReachable: boolean;
+  /** Fresh local readiness, separate from a successful connection or a remote target. */
+  localGatewayHealthy?: boolean;
   gatewaySelf: ReturnType<typeof pickGatewaySelfPresence>;
-  gatewayCallOverrides?: {
-    url: string;
-    token?: string;
-    password?: string;
-  };
+  gatewayCallOverrides?: GatewayProbeAuth & { url: string };
 };
 
-type StatusMemorySearchManager = {
-  probeVectorStoreAvailability?(): Promise<boolean>;
-  probeVectorAvailability(): Promise<boolean>;
-  status(): MemoryProviderStatus;
-  close?(): Promise<void>;
-};
+type StatusMemorySearchManager = Pick<
+  MemorySearchManager,
+  "probeVectorStoreAvailability" | "probeVectorAvailability" | "status" | "close"
+>;
 
 type StatusMemorySearchManagerResolver = (params: {
   cfg: OpenClawConfig;
@@ -116,10 +105,7 @@ async function applyLocalStatusRpcFallback(params: {
   gatewayMode: "local" | "remote";
   gatewayUrl: string;
   gatewayProbe: GatewayProbeResult | null;
-  gatewayProbeAuth: {
-    token?: string;
-    password?: string;
-  };
+  gatewayProbeAuth: GatewayProbeAuth;
   timeoutMs: number;
   gatewayProbeDeadlineMs: number;
   enabled?: boolean;
@@ -131,8 +117,7 @@ async function applyLocalStatusRpcFallback(params: {
     return params.gatewayProbe;
   }
   // The fallback uses the gateway status RPC because it can succeed after probe handshake ambiguity.
-  const status = await gatewayCallModuleLoader
-    .load()
+  const status = await import("../gateway/call.js")
     .then(({ callGateway }) => {
       const timeoutMs = Math.min(2000, resolveStatusGatewayProbeTimeoutMs(params));
       if (timeoutMs === 0) {
@@ -193,9 +178,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     all?: boolean;
     skipProbe?: boolean;
     detailLevel?: "none" | "presence" | "full";
-    probeWhenRemoteUrlMissing?: boolean;
-    resolveAuthWhenRemoteUrlMissing?: boolean;
-    mergeAuthWarningIntoProbeError?: boolean;
     localStatusRpcFallback?: boolean;
     onProgress?: (phase: string) => void;
   };
@@ -207,31 +189,25 @@ export async function resolveGatewayProbeSnapshot(params: {
   const { gatewayMode, mode, remoteUrlMissing } = resolveGatewayProbeTarget(params.cfg);
   const originScopedDeviceAuth =
     mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim());
-  const shouldResolveAuth =
-    params.opts.skipProbe !== true &&
-    (!remoteUrlMissing || params.opts.resolveAuthWhenRemoteUrlMissing === true);
-  const shouldProbe =
-    params.opts.skipProbe !== true &&
-    (!remoteUrlMissing || params.opts.probeWhenRemoteUrlMissing === true);
-  const gatewayProbeAuthResolution = shouldResolveAuth
-    ? await gatewayProbeModuleLoader
-        .load()
-        .then(({ resolveGatewayProbeAuthResolution }) =>
-          resolveGatewayProbeAuthResolution(params.cfg, params.env),
-        )
+  const shouldProbe = params.opts.skipProbe !== true && !remoteUrlMissing;
+  const gatewayProbeAuthResolution = shouldProbe
+    ? await import("./status.gateway-probe.js").then(({ resolveGatewayProbeAuthResolution }) =>
+        resolveGatewayProbeAuthResolution(params.cfg, params.env),
+      )
     : { auth: {}, warning: undefined };
   let gatewayProbeAuthWarning = gatewayProbeAuthResolution.warning;
   const remainingTimeoutMs = () => resolveStatusGatewayProbeTimeoutMs(params.opts);
   const readiness =
     shouldProbe && remainingTimeoutMs() > 0
-      ? await gatewayReadinessModuleLoader.load().then(({ waitForGatewayDiagnosticReadiness }) =>
-          waitForGatewayDiagnosticReadiness({
-            config: params.cfg,
-            timeoutMs: remainingTimeoutMs(),
-            deadlineMs: params.opts.gatewayProbeDeadlineMs,
-            onProgress: params.opts.onProgress,
-            ...gatewayProbeAuthResolution.auth,
-          }),
+      ? await import("../cli/daemon-cli/diagnostic-readiness.js").then(
+          ({ waitForGatewayDiagnosticReadiness }) =>
+            waitForGatewayDiagnosticReadiness({
+              config: params.cfg,
+              timeoutMs: remainingTimeoutMs(),
+              deadlineMs: params.opts.gatewayProbeDeadlineMs,
+              onProgress: params.opts.onProgress,
+              ...gatewayProbeAuthResolution.auth,
+            }),
         )
       : undefined;
   const canDiagnose =
@@ -263,8 +239,7 @@ export async function resolveGatewayProbeSnapshot(params: {
     (readiness && !canDiagnose) || (shouldProbe && remainingTimeoutMs() === 0)
       ? unavailableProbe()
       : shouldProbe
-        ? await probeGatewayModuleLoader
-            .load()
+        ? await import("../gateway/probe.js")
             .then(({ probeGateway }) => {
               const timeoutMs = remainingTimeoutMs();
               return timeoutMs === 0
@@ -297,12 +272,7 @@ export async function resolveGatewayProbeSnapshot(params: {
       remainingTimeoutMs() > 0 &&
       (!readiness || canDiagnose),
   });
-  if (
-    (params.opts.mergeAuthWarningIntoProbeError ?? true) &&
-    gatewayProbeAuthWarning &&
-    gatewayProbe?.ok === false &&
-    !gatewayProbe.startupPhase
-  ) {
+  if (gatewayProbeAuthWarning && gatewayProbe?.ok === false && !gatewayProbe.startupPhase) {
     gatewayProbe.error = gatewayProbe.error
       ? `${gatewayProbe.error}; ${gatewayProbeAuthWarning}`
       : gatewayProbeAuthWarning;
@@ -320,6 +290,11 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayProbeAuthWarning,
     gatewayProbe,
     gatewayReachable,
+    localGatewayHealthy:
+      readiness?.healthy === true &&
+      !readiness.activatedPluginErrors?.length &&
+      !readiness.channelProbeErrors?.length &&
+      gatewayProbe?.ok === true,
     gatewaySelf,
     ...(remoteUrlMissing
       ? {
@@ -359,6 +334,17 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     agentId: string,
   ) => { store: { databasePath: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
+  /** Whether the selected slot owner registers the provider-neutral runtime. */
+  isMemoryProviderNative?: (params: { cfg: OpenClawConfig; agentId: string }) => boolean;
+  getMemoryProvider?: (params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    purpose: "status";
+    context: {
+      authority: { kind: "host"; operation: "status" };
+      assertCurrent(): void;
+    };
+  }) => Promise<ActiveMemoryProviderResult>;
   requireDefaultDatabasePath?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
   const { cfg, agentStatus, memoryPlugin } = params;
@@ -373,7 +359,11 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   }
 
   if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
-    // Non-default memory slots are plugin-owned; ask the manager directly instead of checking built-in files.
+    // Non-default memory slots are plugin-owned; a native provider reports its health,
+    // and a legacy runtime's manager reports status instead of checking built-in files.
+    if (params.isMemoryProviderNative?.({ cfg, agentId })) {
+      return await resolveProviderStatusSnapshot(params, agentId, memoryPlugin.slot);
+    }
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 
@@ -397,6 +387,44 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   return await resolveMemoryManagerStatusSnapshot(params, agentId);
+}
+
+async function resolveProviderStatusSnapshot(
+  params: {
+    cfg: OpenClawConfig;
+    getMemoryProvider?: Parameters<
+      typeof resolveSharedMemoryStatusSnapshot
+    >[0]["getMemoryProvider"];
+  },
+  agentId: string,
+  slot: string,
+): Promise<MemoryStatusSnapshot> {
+  let provider: ActiveMemoryProviderResult["provider"] = null;
+  try {
+    const acquired = await params.getMemoryProvider?.({
+      cfg: params.cfg,
+      agentId,
+      purpose: "status",
+      context: {
+        authority: { kind: "host", operation: "status" },
+        assertCurrent() {},
+      },
+    });
+    provider = acquired?.provider ?? null;
+    const providerId = acquired?.providerId ?? slot;
+    const health = provider
+      ? await provider.health()
+      : { status: "unavailable" as const, message: acquired?.error ?? "provider unavailable" };
+    return { agentId, provider: providerId, health };
+  } catch (error) {
+    return {
+      agentId,
+      provider: slot,
+      health: { status: "unavailable", message: String(error) },
+    };
+  } finally {
+    await provider?.close().catch(() => {});
+  }
 }
 
 async function resolveMemoryManagerStatusSnapshot(

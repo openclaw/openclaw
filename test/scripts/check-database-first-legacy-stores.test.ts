@@ -433,10 +433,9 @@ describe("check-database-first-legacy-stores", () => {
       `("src/node-host/config-file-store.ts", filesystemWriteViolations(4)),
       "flags runtime writes to retired workspace setup and attestation sidecars": fsPathCase`
         await fs.writeFile(path.join(workspaceDir, "openclaw-workspace-state.json"), "{}\\n");
-        await fs.writeFile(path.join(workspaceDir, ".openclaw", "workspace-state.json"), "{}\\n");
         await fs.writeFile(path.join(stateDir, "workspace-attestations", \`\${workspaceKey}.attested\`), "ok\\n");
         await fs.writeFile(\`\${workspaceDir}.attested\`, "ok\\n");
-      `("src/agents/workspace-sidecar-store.ts", filesystemWriteViolations(4, 5, 6, 7)),
+      `("src/agents/workspace-sidecar-store.ts", filesystemWriteViolations(4, 5, 6)),
       "flags runtime writes to the retired native hook relay JSON registry": fsPathCase`
         await fs.writeFile(path.join("/tmp", "openclaw-native-hook-relays-501", "relay.json"), "{}\n");
       `("src/agents/harness/native-hook-relay-file-store.ts", filesystemWriteViolations(4)),
@@ -4650,9 +4649,9 @@ describe("check-database-first-legacy-stores", () => {
   it.each(
     namedCases({
       "allows doctor and migration owners to import or archive legacy files": fsCase`
-        await fs.rename("cron/jobs.json", "cron/jobs.json.migrated");
+        await fs.rename("cron/jobs-quarantine.json", "cron/jobs-quarantine.json.migrated");
         await fs.writeFile("sessions.json", "{}\\n", "utf8");
-      `("src/commands/doctor/cron/legacy-store-migration.ts", []),
+      `("src/commands/doctor/cron/quarantine-archive.ts", []),
       "blocks runtime writes to the retired device identity file": sourceCase`
         import fs from "node:fs";
         fs.writeFileSync(path.join(stateDir, "identity/device.json"), "{}\\n");

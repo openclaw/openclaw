@@ -36,17 +36,15 @@ export function resolveModelWorkspaceDir(
 export function resolveModelPluginMetadataSnapshot(params: {
   allowWorkspaceScopedCurrent?: boolean;
   config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
-  useRuntimeConfig?: boolean;
   workspaceDir?: string;
 }): PluginModelCatalogMetadataSnapshot | undefined {
   if (params.pluginMetadataSnapshot) {
     return params.pluginMetadataSnapshot;
   }
-  const env = params.env ?? process.env;
+  const env = process.env;
   try {
-    if (!params.config && params.useRuntimeConfig) {
+    if (!params.config) {
       const current = getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
         allowSynchronousPolicyRead: false,
@@ -58,18 +56,18 @@ export function resolveModelPluginMetadataSnapshot(params: {
         return current;
       }
     }
-    const config = params.config ?? (params.useRuntimeConfig ? getRuntimeConfig() : undefined);
+    const config = params.config ?? getRuntimeConfig();
     return (
       // Current snapshots are already lifecycle-owned; discovery should reuse
       // them before doing config/env-based resolution.
       getCurrentPluginMetadataSnapshot({
         allowWorkspaceScopedSnapshot: true,
         env,
-        ...(config ? { config } : {}),
+        config,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       }) ??
       resolvePluginMetadataSnapshot({
-        config: config ?? {},
+        config,
         env,
         ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         ...(params.allowWorkspaceScopedCurrent !== undefined

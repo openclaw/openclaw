@@ -1,8 +1,8 @@
 import type { TSchema } from "typebox";
+import type { AgentToolSurfacePresentation } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { CodeModeSkill } from "./code-mode-skills.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -75,12 +75,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
 }) => Promise<AgentToolResult<unknown>>;
 
 /** Resolved Tool Search config after defaults and limits. */
-export type ToolSearchConfig = {
-  enabled: boolean;
-  mode: ToolSearchMode;
-  searchDefaultLimit: number;
-  maxSearchLimit: number;
-};
+export type ToolSearchConfig = AgentToolSurfacePresentation["toolSearch"];
 
 /** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
@@ -96,7 +91,7 @@ export type ToolSearchToolContext = {
   forceRestartSafeTools?: boolean;
   /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
   toolExecutionAllow?: readonly string[];
-  codeModeSkills?: readonly CodeModeSkill[];
+  codeModeSkills?: Readonly<AgentToolSurfacePresentation["skills"]>;
 };
 
 /** Catalog entry retained behind compacted Tool Search control tools. */
@@ -149,10 +144,6 @@ export type ToolSearchCatalogApplyResult = {
 export type ToolSearchCatalogCompactionParams = {
   tools: AnyAgentTool[];
   enabled: boolean;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   toolExecutionAllow?: readonly string[];

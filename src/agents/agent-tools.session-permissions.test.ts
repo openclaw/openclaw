@@ -95,27 +95,30 @@ describe("session permission filesystem tools", () => {
   });
 
   describe.runIf(process.platform !== "win32")("trusted workspace aliases", () => {
-    it.each(fileTools)("allows %s within the canonical root", async (name) => {
-      await aliasedWorkspace(async ({ root, alias }) => {
-        const target = path.join(root, "proof.txt");
-        await fs.writeFile(target, "original\n");
-        const operation = tool(name, {
-          workspaceDir: alias,
-          cwd: path.join(alias, "packages/app"),
-          sessionPermissionPolicy: { root, mode: "guarded" },
+    it.each(["write", "read", "edit"] as const)(
+      "allows %s within the canonical root",
+      async (name) => {
+        await aliasedWorkspace(async ({ root, alias }) => {
+          const target = path.join(root, "proof.txt");
+          await fs.writeFile(target, "original\n");
+          const operation = tool(name, {
+            workspaceDir: alias,
+            cwd: path.join(alias, "packages/app"),
+            sessionPermissionPolicy: { root, mode: "guarded" },
+          });
+          const result = await operation.execute(
+            "alias",
+            args(name, name === "read" ? path.join(alias, "proof.txt") : "../../proof.txt"),
+          );
+          if (name === "read") {
+            expect(getTextContent(result)).toBe("original\n");
+          }
+          await expect(fs.readFile(target, "utf8")).resolves.toBe(
+            name === "read" ? "original\n" : "changed\n",
+          );
         });
-        const result = await operation.execute(
-          "alias",
-          args(name, name === "read" ? path.join(alias, "proof.txt") : "../../proof.txt"),
-        );
-        if (name === "read") {
-          expect(getTextContent(result)).toBe("original\n");
-        }
-        await expect(fs.readFile(target, "utf8")).resolves.toBe(
-          name === "read" ? "original\n" : "changed\n",
-        );
-      });
-    });
+      },
+    );
 
     it("allows read-only alias reads while excluding mutations and outside files", async () => {
       await aliasedWorkspace(async ({ root, alias, outside }) => {

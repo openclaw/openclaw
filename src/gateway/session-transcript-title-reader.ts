@@ -16,9 +16,13 @@ import {
 import { prepareSessionTranscriptReadTargetCore } from "../config/sessions/session-accessor.transcript-read-target.js";
 import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.transcript-target.js";
 import { SessionTranscriptColdError } from "../config/sessions/session-cold-storage-state.js";
+import {
+  readIncognitoSessionHistory,
+  type IncognitoSessionHistoryBinding,
+} from "../config/sessions/session-incognito-history-read.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { startSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
@@ -53,16 +57,12 @@ type SqliteTitleFieldCacheEntry = ReturnType<typeof readSessionTranscriptWaterma
 };
 
 // Found titles survive appends only while the rewrite generation and visible reset window stay fixed.
-const sqliteTitleFieldCache = new Map<string, SqliteTitleFieldCacheEntry>();
+const sqliteTitleFieldCache = new LruCache<SqliteTitleFieldCacheEntry>(
+  SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES,
+);
 
 function sqliteTitleFieldCacheKey(target: SessionTranscriptReadTarget): string {
   return `${target.agentId ?? ""}\0${target.sessionId}\0${target.storePath ?? ""}`;
-}
-
-function setSqliteTitleFieldCache(key: string, entry: SqliteTitleFieldCacheEntry): void {
-  sqliteTitleFieldCache.delete(key);
-  sqliteTitleFieldCache.set(key, entry);
-  pruneMapToMaxSize(sqliteTitleFieldCache, SQLITE_TITLE_FIELD_CACHE_MAX_ENTRIES);
 }
 
 function readSqliteTitleProbeRange(
@@ -160,16 +160,17 @@ function copySessionTitleText(text: string | null): string | null {
 function hydrateSqliteTitleFields(
   target: SessionTranscriptReadTarget,
   opts?: SessionTitleReadOptions,
+  env?: NodeJS.ProcessEnv,
 ): SessionTitleFields {
   try {
-    const scope = toTranscriptReadScope(target);
+    const scope = { ...toTranscriptReadScope(target), ...(env ? { env } : {}) };
     const cacheKey = sqliteTitleFieldCacheKey(target);
     const watermark = readSessionTranscriptWatermark(scope);
     if (watermark.maxSeq === null) {
       return { ...EMPTY_SESSION_TITLE_FIELDS };
     }
     const variant = opts?.includeInterSession === true ? "includeInterSession" : "default";
-    const entry = sqliteTitleFieldCache.get(cacheKey);
+    const entry = sqliteTitleFieldCache.peek(cacheKey);
     const cached = entry?.generation === watermark.generation ? entry : undefined;
     const current = cached?.maxSeq === watermark.maxSeq;
     const cachedTitle = cached?.firstUserMessages[variant];
@@ -181,7 +182,7 @@ function hydrateSqliteTitleFields(
         cachedTitle.scannedMessages >=
           Math.min(cached.totalMessages, SQLITE_TITLE_PROBE_MAX_MESSAGES))
     ) {
-      setSqliteTitleFieldCache(cacheKey, cached);
+      sqliteTitleFieldCache.set(cacheKey, cached);
       return {
         firstUserMessage: cachedTitle.text,
         lastMessagePreview: cached.lastMessagePreview,
@@ -235,7 +236,7 @@ function hydrateSqliteTitleFields(
     };
     firstUserMessages[variant] = { text: fields.firstUserMessage, scannedMessages };
     // Retain only the watermark and bounded strings, never the probe's transcript payloads.
-    setSqliteTitleFieldCache(cacheKey, {
+    sqliteTitleFieldCache.set(cacheKey, {
       generation: tail.generation,
       maxSeq: tail.maxSeq,
       boundarySeq: tail.boundarySeq,
@@ -266,14 +267,22 @@ export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: SessionTitleReadOptions,
 ): SessionTitleFields {
-  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts);
+  return hydrateSqliteTitleFields(resolveSessionTranscriptReadTarget(scope), opts, scope.env);
 }
 
 /** Reuse the bounded title cache in the existing history worker without transporting session metadata. */
 export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
+  incognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionTitleFields> {
+  if (incognito) {
+    const result = await readIncognitoSessionHistory(incognito, scope, (target) => ({
+      type: "session.history.title",
+      input: { ...target, includeInterSession: opts?.includeInterSession },
+    }));
+    return result.fields;
+  }
   const target = prepareSessionTranscriptReadTargetCore(scope);
   const readScope: SessionTranscriptReadScope = {
     agentId: target.agentId,

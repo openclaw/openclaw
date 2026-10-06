@@ -1543,7 +1543,7 @@ describe("gateway run option collisions", () => {
     });
     startGatewayServer.mockRejectedValueOnce(
       new OpenClawStateDatabaseSchemaMigrationRequiredError(
-        "agent-databases-composite-primary-key",
+        "audit-events-v2",
         "/tmp/openclaw.sqlite",
       ),
     );
@@ -1560,7 +1560,7 @@ describe("gateway run option collisions", () => {
     });
     expect(triageAfterFailure).not.toHaveBeenCalled();
     expect(runtimeErrors.join("\n")).toContain(
-      "state database schema migration required (agent-databases-composite-primary-key)",
+      "state database schema migration required (audit-events-v2)",
     );
   });
 

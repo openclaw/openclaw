@@ -29,7 +29,6 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import { resizeExecApprovalContinuationPrompt } from "../bash-tools.exec-approval-output.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
-import { resolveCliBackendConfig } from "../cli-backends.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -40,8 +39,7 @@ import { buildCliMcpDelegationCapabilityBinding } from "../cli-runner/mcp-grant-
 import { resolveCliRuntimeToolsAllow } from "../cli-runner/tool-policy.js";
 import {
   clearCliSessionInStore,
-  consumeCliSessionForkInStore,
-  persistCliSessionForkSuccessorInStore,
+  buildCliSessionForkRunParams,
   restoreCliSessionForkInStore,
 } from "../cli-session-store.js";
 import {
@@ -60,7 +58,7 @@ import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runn
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
-import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -85,6 +83,7 @@ import {
   resolveCompletionToolPolicy,
   isClaudeCliProvider,
   claudeCliSessionTranscriptHasContent,
+  resolveCommandReplyExpectation,
   resolveFallbackRetryPrompt,
   rebaseExecApprovalContinuationPromptRange,
 } from "./attempt-execution.helpers.js";
@@ -170,7 +169,6 @@ export function runAgentAttempt(
           ? { id: sessionAuthProfileId, source: sessionAuthProfileSource }
           : undefined;
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
-  const isSubagentLane = params.opts.lane === AGENT_LANE_SUBAGENT;
   // A completion handoff relays frozen child output, so only a verified private
   // capability plus persisted requester lineage may restore its tool surface.
   const isSubagentAnnounceHandoff = isSubagentAnnounceCompletionHandoff({
@@ -276,7 +274,6 @@ export function runAgentAttempt(
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
-  const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
   const pinnedHarnessId = isRawModelRun
@@ -416,6 +413,7 @@ export function runAgentAttempt(
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
+  const replyExpectation = resolveCommandReplyExpectation(params);
   // Read session fields at invocation time, after admitted CLI binding recovery.
   const buildCommonRunParams = () =>
     ({
@@ -460,13 +458,15 @@ export function runAgentAttempt(
       cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
       oneShotCliRun: params.opts.oneShotCliRun,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
       contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
       onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       disableTools,
-      allowEmptyAssistantReplyAsSilent: isSubagentLane || isSubagentAnnounceHandoff,
+      terminalReplyExpectation: replyExpectation,
+      silentReplyPromptMode: replyExpectation === "required" ? "none" : undefined,
       bootstrapPromptWarningSignaturesSeen,
-      bootstrapPromptWarningSignature,
+      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
@@ -607,20 +607,13 @@ export function runAgentAttempt(
             params.sessionAgentId,
           );
         await prepareCliSessionBinding();
+        const { internalEvents, runtimeContextFragments: supplementalContext } = params.opts;
         // Retain the cleared binding as the preparation candidate so missing-transcript
         // recovery can reseed history without resuming the stale CLI session.
         let result: EmbeddedAgentRunResult;
         try {
-          const forkCliSessionOnResume = cliSessionBinding?.forkNextResume === true;
-          const resolvedCliBackend = resolveCliBackendConfig(cliExecutionProvider, params.cfg, {
-            agentId: params.sessionAgentId,
-          });
-          const supportsCliSessionFork = Boolean(resolvedCliBackend?.config.forkArg);
-          if (forkCliSessionOnResume && !supportsCliSessionFork) {
-            throw new Error(`CLI backend "${cliExecutionProvider}" does not support session forks`);
-          }
           const forkStoreParams =
-            supportsCliSessionFork && cliSessionBinding?.sessionId && mutableCliSessionStore
+            cliSessionBinding?.sessionId && mutableCliSessionStore
               ? {
                   provider: cliExecutionProvider,
                   expectedCliSessionId: cliSessionBinding.sessionId,
@@ -639,6 +632,7 @@ export function runAgentAttempt(
             persistAssistantTranscript:
               params.storePath !== undefined && params.sessionStore !== undefined,
             prompt: cliPrompt,
+            runtimeContextFragments: buildEventContext(internalEvents, supplementalContext),
             transcriptPrompt: cliTranscriptPrompt,
             modelProvider: params.providerOverride,
             requesterModel: { provider: params.providerOverride, model: params.modelOverride },
@@ -654,37 +648,18 @@ export function runAgentAttempt(
             cliSessionBindingFacts: params.opts.cliSessionBindingFacts,
             cliSessionId: cliSessionBinding?.sessionId,
             cliSessionBinding,
-            forkCliSessionOnResume,
+            forkCliSessionOnResume: cliSessionBinding?.forkNextResume === true,
             ...(forkStoreParams
-              ? {
-                  claimCliSessionFork: async () => {
-                    const claimed = await consumeCliSessionForkInStore(forkStoreParams);
-                    if (claimed) {
-                      params.sessionEntry = claimed;
-                    }
-                    return Boolean(claimed);
+              ? buildCliSessionForkRunParams(
+                  {
+                    ...forkStoreParams,
+                    assertCommitAllowed: assertSettlementCurrent,
+                    abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
                   },
-                  restoreCliSessionFork: async () => {
-                    // Restoring the fork is current-owner cleanup, including after cancellation.
-                    const restored = await restoreCliSessionForkInStore({
-                      ...forkStoreParams,
-                      assertCommitAllowed: assertSettlementCurrent,
-                    });
-                    if (restored) {
-                      params.sessionEntry = restored;
-                    }
+                  (entry) => {
+                    params.sessionEntry = entry;
                   },
-                  persistCliSessionForkSuccessor: async (successorCliSessionId: string) => {
-                    const persisted = await persistCliSessionForkSuccessorInStore({
-                      ...forkStoreParams,
-                      successorCliSessionId,
-                    });
-                    if (!persisted) {
-                      throw new Error("CLI session fork successor could not be persisted");
-                    }
-                    params.sessionEntry = persisted;
-                  },
-                }
+                )
               : {}),
             authProfileId: cliAuthProfileId,
             // Image discovery must use the original turn, before retry/history decoration.
@@ -701,10 +676,7 @@ export function runAgentAttempt(
               (completionNeedsMessageDelivery
                 ? (params.opts.replyTo ?? params.opts.to)
                 : undefined),
-            toolsAllow: resolveCliRuntimeToolsAllow(
-              cliRuntimeToolsAllow,
-              params.opts.toolsAllowIsDefault,
-            ),
+            toolsAllow: resolveCliRuntimeToolsAllow(cliRuntimeToolsAllow),
             // This loop is the command-origin sibling of the auto-reply fallback
             // candidate, so its CLI grant needs the same delegation gate; the
             // inputs match the tool state this invocation actually runs with.
@@ -717,7 +689,7 @@ export function runAgentAttempt(
               }),
             ),
             cleanupCliLiveSessionOnRunEnd: params.opts.cleanupCliLiveSessionOnRunEnd,
-            ...(forkStoreParams && !forkCliSessionOnResume
+            ...(forkStoreParams && cliSessionBinding?.forkNextResume !== true
               ? {
                   onBeforeForkedCliSessionRetry: async (retry) => {
                     if (hasNewMediaTask() || retry.sessionId !== cliSessionBinding?.sessionId) {
@@ -729,9 +701,7 @@ export function runAgentAttempt(
                     );
 
                     const armed = await restoreCliSessionForkInStore(forkStoreParams);
-                    if (armed) {
-                      params.sessionEntry = armed;
-                    }
+                    params.sessionEntry = armed ?? params.sessionEntry;
                     return Boolean(armed);
                   },
                 }
@@ -821,8 +791,6 @@ export function runAgentAttempt(
   const embeddedRunParams: RunEmbeddedAgentInternalParams = {
     ...buildCommonRunParams(),
     sandboxSessionKey: params.sessionKey,
-    // Subagent lifecycle owns the stricter explicit visible/silent/empty evidence check.
-    terminalReplyExpectation: isSubagentLane ? "optional" : undefined,
     ...toolContext,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,

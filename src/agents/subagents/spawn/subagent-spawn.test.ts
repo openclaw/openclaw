@@ -10,8 +10,10 @@ import { resolveSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { installAcceptedSubagentGatewayMock } from "../../test-helpers/subagent-gateway.js";
 import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { expectSharedPendingSpawnCapacity } from "./subagent-spawn.pending-capacity.test-support.js";
 import {
   createConfigOverride,
+  createSubagentRegistrationScopeForTest,
   inheritedSpawnCases,
   installSessionStoreCaptureMock,
   loadSubagentSpawnModuleForTest,
@@ -103,15 +105,15 @@ describe("spawnSubagentDirect seam flow", () => {
     ({ closeSwarmScheduler } = await import("../swarm/swarm-scheduler.js"));
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     swarmSchedulerTesting.reset();
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests();
     for (const mock of Object.values(hoisted)) {
       mock.mockReset();
     }
     hoisted.prepareModelChoiceMock.mockImplementation(supportedSpawnModelChoice);
-    hoisted.startQueuedSubagentRunMock.mockReturnValue(true);
-    hoisted.settleFailedQueuedSubagentLaunchMock.mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValue(true);
+    hoisted.settleFailedQueuedSubagentLaunchMock.mockResolvedValue(true);
     hoisted.hasInProcessGatewayContextMock.mockReturnValue(false);
     hoisted.resolveContextEngineMock.mockResolvedValue({});
     hoisted.countActiveRunsForSessionMock.mockReturnValue(0);
@@ -121,8 +123,7 @@ describe("spawnSubagentDirect seam flow", () => {
       sandboxRequired: false,
     });
     hoisted.resolveAgentConfigMock.mockImplementation(
-      (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
-        cfg.agents?.list?.find((agent) => agent.id === agentId),
+      (cfg: OpenClawConfig, agentId: string) => cfg.agents?.entries?.[agentId],
     );
     configOverride = createConfigOverride();
     installAcceptedSubagentGatewayMock(hoisted.callGatewayMock);
@@ -240,7 +241,7 @@ describe("spawnSubagentDirect seam flow", () => {
   it("rejects explicit same-agent targets when allowAgents excludes the requester", async () => {
     configOverride = createConfigOverride({
       agents: {
-        list: [{ id: "task-manager", subagents: { allowAgents: ["planner"] } }, { id: "planner" }],
+        entries: { "task-manager": { subagents: { allowAgents: ["planner"] } }, planner: {} },
       },
     });
 
@@ -423,7 +424,7 @@ describe("spawnSubagentDirect seam flow", () => {
     configOverride = createConfigOverride({
       agents: {
         defaults: { workspace: os.tmpdir(), models: { "openai/gpt-5.4": { alias: "fast" } } },
-        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+        entries: { main: { workspace: "/tmp/workspace-main" } },
       },
     });
     const result = await spawn({ task: "use the selected model", model: "fast" });
@@ -449,7 +450,7 @@ describe("spawnSubagentDirect seam flow", () => {
     configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
     });
-    hoisted.startQueuedSubagentRunMock.mockReturnValueOnce(false).mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValueOnce(false).mockResolvedValue(true);
     let stopAllowed = false;
     let agentCalls = 0;
     let abortCalls = 0;
@@ -503,7 +504,7 @@ describe("spawnSubagentDirect seam flow", () => {
     configOverride = createConfigOverride({
       tools: { swarm: { enabled: true, maxConcurrent: 1 } },
     });
-    hoisted.startQueuedSubagentRunMock.mockReturnValueOnce(false).mockReturnValue(true);
+    hoisted.startQueuedSubagentRunMock.mockResolvedValueOnce(false).mockResolvedValue(true);
     const publication = createDeferred();
     const waitEntered = createDeferred();
     const retryEntered = createDeferred();
@@ -517,23 +518,21 @@ describe("spawnSubagentDirect seam flow", () => {
         if (!options?.retainOwnership) {
           throw new Error("Expected retained collector registration");
         }
-        options.retainOwnership({
-          canLaunch: () => true,
-          canAcceptLaunch: () => true,
-          canCleanupSession: () => !publicationPending,
-          canRetireReservation: () => true,
-          waitForClaim: () => undefined,
-          waitForRetirementPublication: () => {
-            if (!publicationPending) {
-              return undefined;
-            }
-            waitEntered.resolve();
-            return publication.promise;
-          },
-          settleFailedLaunch: async (error) => {
-            hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
-          },
-        });
+        options.retainOwnership(
+          createSubagentRegistrationScopeForTest({
+            canCleanupSession: () => !publicationPending,
+            waitForRetirementPublication: () => {
+              if (!publicationPending) {
+                return undefined;
+              }
+              waitEntered.resolve();
+              return publication.promise;
+            },
+            settleFailedLaunch: async (error) => {
+              await hoisted.settleFailedQueuedSubagentLaunchMock(record.runId, error);
+            },
+          }),
+        );
       },
     );
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
@@ -677,14 +676,10 @@ describe("spawnSubagentDirect seam flow", () => {
       tools: { swarm: { enabled: true, defaultAgentId: "worker" } },
       agents: {
         defaults: { workspace: os.tmpdir() },
-        list: [
-          {
-            id: "main",
-            workspace: "/tmp/workspace-main",
-            subagents: { allowAgents: ["worker"] },
-          },
-          { id: "worker", workspace: "/tmp/workspace-worker" },
-        ],
+        entries: {
+          main: { workspace: "/tmp/workspace-main", subagents: { allowAgents: ["worker"] } },
+          worker: { workspace: "/tmp/workspace-worker" },
+        },
       },
     });
 
@@ -823,62 +818,23 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(hoisted.registerSubagentRunMock).not.toHaveBeenCalled();
   });
 
-  it("shares pending child capacity between native and visible spawn paths", async () => {
-    const { maybeSpawnVisibleSession } = await import("../../tools/sessions-spawn-visible.js");
+  it("shares pending child capacity between native and visible spawn paths", async ({ signal }) => {
     configOverride = createConfigOverride({
       agents: {
         defaults: {
           workspace: os.tmpdir(),
           subagents: { maxChildrenPerAgent: 1 },
         },
-        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+        entries: { main: { workspace: "/tmp/workspace-main" } },
       },
     });
-    let releaseNativeDispatch!: () => void;
-    const pendingNativeDispatch = new Promise<void>((resolve) => {
-      releaseNativeDispatch = resolve;
+    await expectSharedPendingSpawnCapacity({
+      config: configOverride as OpenClawConfig,
+      spawn,
+      callGatewayMock: hoisted.callGatewayMock,
+      countActiveRuns: hoisted.countActiveRunsForSessionMock,
+      signal,
     });
-    let nativeDispatchStarted = false;
-    hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
-      if (request.method === "agent") {
-        nativeDispatchStarted = true;
-        await pendingNativeDispatch;
-        return { runId: "native-run" };
-      }
-      return request.method?.startsWith("sessions.") ? { ok: true } : {};
-    });
-    const controllerSessionKey = "agent:main:telegram:default:direct:456";
-    const native = spawn(
-      { task: "pending native child" },
-      { agentSessionKey: controllerSessionKey, completionOwnerKey: "agent:main:main" },
-    );
-    await vi.waitFor(() => expect(nativeDispatchStarted).toBe(true));
-    const visibleGateway = vi.fn();
-
-    const rejected = await maybeSpawnVisibleSession({
-      raw: { visible: true },
-      task: "visible over-cap child",
-      label: "",
-      runtime: "subagent",
-      sandbox: "inherit",
-      expectsCompletionMessage: true,
-      options: {
-        agentSessionKey: controllerSessionKey,
-        completionOwnerKey: "agent:main:main",
-        config: configOverride as OpenClawConfig,
-        callGateway: visibleGateway,
-        countActiveRuns: hoisted.countActiveRunsForSessionMock,
-      },
-    });
-    releaseNativeDispatch();
-    const accepted = await native;
-
-    expect(rejected).toMatchObject({
-      status: "forbidden",
-      error: expect.stringContaining("max active children for this session (1/1"),
-    });
-    expect(accepted).toMatchObject({ status: "accepted", runId: "native-run" });
-    expect(visibleGateway).not.toHaveBeenCalled();
   });
 
   it("rejects invalid collector output schemas before creating a child session", async () => {
@@ -943,20 +899,16 @@ describe("spawnSubagentDirect seam flow", () => {
           defaults: {
             workspace: os.tmpdir(),
           },
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               sandbox: { mode: sandboxMode },
               workspace: "/tmp/workspace-main",
               subagents: {
                 allowAgents: ["worker"],
               },
             },
-            {
-              id: "worker",
-              workspace: "/tmp/workspace-worker",
-            },
-          ],
+            worker: { workspace: "/tmp/workspace-worker" },
+          },
         },
       });
 
@@ -1152,7 +1104,7 @@ describe("spawnSubagentDirect seam flow", () => {
     });
 
     const preferences = await readRequesterPreferences({
-      cfg: { agents: { list: [{ id: "main", thinkingDefault: "high" }] } },
+      cfg: { agents: { entries: { main: { thinkingDefault: "high" } } } },
       requesterInternalKey: "agent:main:main",
       requesterAgentId: "main",
     });
@@ -1166,7 +1118,7 @@ describe("spawnSubagentDirect seam flow", () => {
           workspace: os.tmpdir(),
           models: { "openai-codex/gpt-5.4": { params: { thinking: "low" } } },
         },
-        list: [{ id: "main", workspace: "/tmp/workspace-main" }],
+        entries: { main: { workspace: "/tmp/workspace-main" } },
       },
     });
     hoisted.loadSessionStoreMock.mockReturnValue({

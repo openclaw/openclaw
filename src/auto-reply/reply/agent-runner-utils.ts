@@ -30,6 +30,7 @@ import {
   mintMessageActionTurnCapability,
   resolveMessageActionTurnCapabilityLifetime,
 } from "../../gateway/message-action-turn-capability.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { TemplateContext } from "../templating.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
@@ -120,9 +121,13 @@ export function buildThreadingToolContext(params: {
   const isRestartSentinelContinuation =
     sessionCtx.InputProvenance?.kind === "internal_system" &&
     sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  // Gateway chat IDs identify admitted runs, not messages on the inherited channel.
+  // Keep that identity in sessionCtx for recovery, but never use it as a reply target.
   const currentMessageId = isRestartSentinelContinuation
     ? sessionCtx.ReplyToId
-    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
+    : isInternalMessageChannel(sessionCtx.Provider ?? sessionCtx.Surface)
+      ? undefined
+      : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const currentSourceTurnId = readChannelSourceTurnId(sessionCtx);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
@@ -187,15 +192,8 @@ export const isBunFetchSocketError = (message?: string) =>
   message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
 
 /** Formats Bun socket-close errors for user-facing reply output. */
-export const formatBunFetchSocketError = (message: string) => {
-  const trimmed = message.trim();
-  return [
-    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
-    "```",
-    trimmed || "Unknown error",
-    "```",
-  ].join("\n");
-};
+export const formatBunFetchSocketError = () =>
+  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(

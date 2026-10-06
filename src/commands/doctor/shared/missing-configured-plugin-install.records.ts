@@ -35,42 +35,29 @@ function collectCandidateOfficialPackageNames(candidate: {
   npmSpec?: string;
   clawhubSpec?: string;
 }): Set<string> {
-  const names = new Set<string>();
-  const npmName = candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined;
-  const clawhubName = candidate.clawhubSpec
-    ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name
-    : undefined;
-  if (npmName) {
-    names.add(npmName);
-  }
-  if (clawhubName) {
-    names.add(clawhubName);
-  }
-  return names;
+  return new Set(
+    [
+      candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined,
+      candidate.clawhubSpec ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name : undefined,
+    ].filter((name): name is string => Boolean(name)),
+  );
 }
 
 function collectInstalledRecordPackageNames(record: PluginInstallRecord): Set<string> {
-  const names = new Set<string>();
-  if (record.source === "npm") {
-    const specName = record.spec ? parseRegistryNpmSpec(record.spec)?.name : undefined;
-    const resolvedSpecName = record.resolvedSpec
-      ? parseRegistryNpmSpec(record.resolvedSpec)?.name
-      : undefined;
-    for (const value of [record.resolvedName, specName, resolvedSpecName]) {
-      if (value) {
-        names.add(value);
-      }
-    }
-  }
-  if (record.source === "clawhub") {
-    const specName = record.spec ? parseClawHubPluginSpec(record.spec)?.name : undefined;
-    for (const value of [record.clawhubPackage, specName]) {
-      if (value) {
-        names.add(value);
-      }
-    }
-  }
-  return names;
+  const names =
+    record.source === "npm"
+      ? [
+          record.resolvedName,
+          record.spec ? parseRegistryNpmSpec(record.spec)?.name : undefined,
+          record.resolvedSpec ? parseRegistryNpmSpec(record.resolvedSpec)?.name : undefined,
+        ]
+      : record.source === "clawhub"
+        ? [
+            record.clawhubPackage,
+            record.spec ? parseClawHubPluginSpec(record.spec)?.name : undefined,
+          ]
+        : [];
+  return new Set(names.filter((name): name is string => Boolean(name)));
 }
 
 export function isTrustedOfficialInstallRecordForCandidate(params: {
@@ -88,15 +75,10 @@ export function isTrustedOfficialInstallRecordForCandidate(params: {
     return false;
   }
   const candidatePackageNames = collectCandidateOfficialPackageNames(params.candidate);
-  if (candidatePackageNames.size === 0) {
-    return false;
-  }
-  for (const installedPackageName of collectInstalledRecordPackageNames(record)) {
-    if (candidatePackageNames.has(installedPackageName)) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    candidatePackageNames.size > 0 &&
+    [...collectInstalledRecordPackageNames(record)].some((name) => candidatePackageNames.has(name))
+  );
 }
 
 export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
@@ -145,8 +127,8 @@ export function resolveSafeBrokenOfficialInstallRemovalPath(params: {
 
 export function recordMatchesBundledPackage(
   record: PluginInstallRecord,
-  bundled: { name?: string; packageName?: string },
+  bundled: { packageName?: string },
 ): boolean {
-  const packageName = bundled.packageName?.trim() || bundled.name?.trim();
+  const packageName = bundled.packageName?.trim();
   return Boolean(packageName && collectInstalledRecordPackageNames(record).has(packageName));
 }

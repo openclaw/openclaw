@@ -11,6 +11,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -275,6 +276,7 @@ describe("direct session model catalogs", () => {
     "selected patch",
     "selected reset",
     "store close",
+    "same-file reopen",
     "profile alias change",
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
@@ -308,8 +310,14 @@ describe("direct session model catalogs", () => {
             sessionId: "replacement",
             lifecycleRevision: "replacement",
           });
-        } else if (change === "store close") {
-          closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
+        } else if (change === "store close" || change === "same-file reopen") {
+          const database = openOpenClawAgentDatabase(scope);
+          if (change === "same-file reopen") {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path);
+            openOpenClawAgentDatabase(scope);
+          } else {
+            closeOpenClawAgentDatabaseByPath(database.path);
+          }
         } else if (change === "profile alias change") {
           publishUserProfileAliasChange();
         } else {
@@ -410,10 +418,12 @@ describe("direct session model catalogs", () => {
       const f = fixture();
       f.config.agents = {
         ...f.config.agents,
-        list: [
-          { id: "main", default: true },
-          { id: "other", default: false },
-        ],
+        ownership: "explicit",
+        defaults: {
+          ...f.config.agents?.defaults,
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: {}, other: {} },
       };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";

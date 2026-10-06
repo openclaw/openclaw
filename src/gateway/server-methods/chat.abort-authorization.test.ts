@@ -169,7 +169,11 @@ describe("chat.abort authorization", () => {
     for (const runId of [undefined, "run-1"]) {
       const cancelInferenceForSession = vi.fn(() => ["run-1"]);
       const context = createSingleAbortContext();
-      context.workerEnvironmentService = { cancelInferenceForSession } as never;
+      context.workerEnvironmentService = createWorkerInferenceCancellationService(
+        "main-session",
+        ["run-1"],
+        cancelInferenceForSession,
+      );
       const respond = await abortAsOwner({
         context,
         ...(runId ? { runId } : {}),

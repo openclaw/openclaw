@@ -49,10 +49,6 @@ impl Bridge {
     }
 }
 
-fn failed(message: String) -> fdo::Error {
-    fdo::Error::Failed(message)
-}
-
 #[zbus::interface(name = "ai.openclaw.Desktop1")]
 impl Bridge {
     fn get_state(&self) -> String {
@@ -72,18 +68,18 @@ impl Bridge {
         let agents = gateway
             .desktop_request(generation, DesktopMethod::Agents, json!({}))
             .await
-            .map_err(failed)?;
+            .map_err(fdo::Error::Failed)?;
         let params = json!({"limit":40,"includeDerivedTitles":true,"includeLastMessage":true,"includeGlobal":true});
         let recent = gateway
             .desktop_request(generation, DesktopMethod::Sessions, params.clone())
             .await
-            .map_err(failed)?;
+            .map_err(fdo::Error::Failed)?;
         let mut active_params = params;
         active_params["activeOnly"] = json!(true);
         let active = gateway
             .desktop_request(generation, DesktopMethod::Sessions, active_params)
             .await
-            .map_err(failed)?;
+            .map_err(fdo::Error::Failed)?;
         self.generation(route_id)?;
         Ok(json!({"agents":agents,"recent":recent,"active":active}).to_string())
     }
@@ -130,7 +126,7 @@ impl Bridge {
             .gateway()
             .desktop_request(generation, method, params)
             .await
-            .map_err(failed)?;
+            .map_err(fdo::Error::Failed)?;
         Ok(result.to_string())
     }
 
@@ -227,11 +223,11 @@ impl Bridge {
                 };
                 let _ = reply.send(outcome);
             })
-            .map_err(|e| failed(e.to_string()))?;
+            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
         result
             .await
-            .map_err(|_| failed("Desktop action interrupted.".into()))?
-            .map_err(failed)
+            .map_err(|_| fdo::Error::Failed("Desktop action interrupted.".into()))?
+            .map_err(fdo::Error::Failed)
     }
 }
 

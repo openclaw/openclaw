@@ -217,13 +217,10 @@ console.log("standalone package boundary verified");
     "starts the checkout compiler when its Windows executable uses an extended-length path",
     ({ command }) =>
       command.lifetime.run(async () => {
-        const root = path.join(
-          fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-")),
-          "nested-checkout-".repeat(5),
-          "nested-install-".repeat(5),
-        );
+        const base = fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-"));
+        const root = path.join(base, "nested-checkout-".repeat(5), "nested-install-".repeat(5));
         fs.mkdirSync(root, { recursive: true });
-        const native = materializeNativeCompiler(root);
+        const native = materializeNativeCompiler(root, { javaScriptApi: false });
         expect(native.length).toBeGreaterThanOrEqual(248);
         const require = createRequire(path.join(root, "package.json"));
         const getExePath: { default: () => string } = require(
@@ -233,7 +230,7 @@ console.log("standalone package boundary verified");
         const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
         expect(compilerCommand?.bin).toBe(getExePath.default());
         const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-          cwd: root,
+          cwd: base,
           encoding: "utf8",
           timeout: 10_000,
         });

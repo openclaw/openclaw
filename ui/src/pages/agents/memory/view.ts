@@ -11,6 +11,7 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import "../../../styles/dreams.css";
 import type {
   DreamingEntry,
@@ -109,7 +110,6 @@ type DreamingProps = {
   };
   shortTermEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
-  dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
   statusError: string | null;
@@ -260,7 +260,7 @@ function renderDreamsCameo(agentId: string) {
 export function renderDreaming(props: DreamingProps) {
   const state = props.viewState;
   const idle = !props.active;
-  const dreamText = props.dreamingOf ?? currentDreamPhrase(state);
+  const dreamText = currentDreamPhrase(state);
 
   return html`
     <div class="dreams-page">
@@ -447,11 +447,6 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
-function basename(value: string): string {
-  const normalized = value.replace(/\\/g, "/");
-  return normalized.split("/").findLast(Boolean) ?? value;
-}
-
 function formatWikiCount(
   kind: "page" | "claimRow" | "openQuestion" | "contradiction",
   count: number,
@@ -534,7 +529,7 @@ async function openWikiPreview(lookup: string, props: DreamingProps): Promise<vo
   const requestId = state.wikiPreviewRequestId;
   state.wikiPreviewOpen = true;
   state.wikiPreviewLoading = true;
-  state.wikiPreviewTitle = basename(lookup);
+  state.wikiPreviewTitle = pathDisplayName(lookup);
   state.wikiPreviewPath = lookup;
   props.onViewStateChange();
   try {
@@ -1068,7 +1063,7 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
       </div>
       <div class="dreams-diary__insight-meta">
         ${
-          item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)
+          item.updatedAt ? formatCompactDateTime(item.updatedAt) : pathDisplayName(item.pagePath)
         }${metadata}
       </div>
       ${renderWikiInsightBody(card, expanded)}

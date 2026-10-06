@@ -105,25 +105,6 @@ export function ackDeliveryInDatabase(
   // delete commits. A crash in between leaves an orphan for the retention sweep;
   // unlinking first could strip media from a row that still has to replay.
   let spoolPaths: string[] = [];
-  const settle = (current: QueuedDelivery | null): void => {
-    spoolPaths = current
-      ? collectEntrySpoolPaths(
-          acceptedPreparedOutboundEntries(current.preparedBatch).map(
-            (prepared) => prepared.payload,
-          ),
-          stateDir,
-        )
-      : [];
-    if (current?.completionRetention && options?.suppressCompletionReceipt !== true) {
-      if (options && "expectedPlatformSendAttemptId" in options) {
-        completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current);
-      } else {
-        completeDeliveryQueueEntryInDatabase(database, queueName, id);
-      }
-    } else {
-      deleteDeliveryQueueEntryInDatabase(database, queueName, id);
-    }
-  };
   // A claimless caller has no owner to assert, so an unclaimed row settles and an
   // already-missing row is a no-op; either way it must never touch a live claim.
   const platformSendAttemptId =
@@ -140,7 +121,20 @@ export function ackDeliveryInDatabase(
     },
     (entry) => {
       // SAFETY: Pending rows in this namespace retain the prepared outbound payload.
-      settle(entry as QueuedDelivery);
+      const current = entry as QueuedDelivery;
+      spoolPaths = collectEntrySpoolPaths(
+        acceptedPreparedOutboundEntries(current.preparedBatch).map((prepared) => prepared.payload),
+        stateDir,
+      );
+      if (current.completionRetention && options?.suppressCompletionReceipt !== true) {
+        if (options && "expectedPlatformSendAttemptId" in options) {
+          completeLoadedDeliveryQueueEntryInDatabase(database, queueName, id, current);
+        } else {
+          completeDeliveryQueueEntryInDatabase(database, queueName, id);
+        }
+      } else {
+        deleteDeliveryQueueEntryInDatabase(database, queueName, id);
+      }
     },
   );
   if (!settled) {

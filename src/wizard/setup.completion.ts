@@ -15,31 +15,15 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import type { WizardFlow } from "./setup.types.js";
 
-type CompletionDeps = {
-  resolveCliName: () => string;
-  checkShellCompletionStatus: (binName: string) => ReturnType<typeof checkShellCompletionStatus>;
-  ensureCompletionCacheExists: typeof ensureCompletionCacheExists;
-  installCompletion: typeof installCompletion;
-};
-
 export async function setupWizardShellCompletion(params: {
   flow: WizardFlow;
   prompter: Pick<WizardPrompter, "confirm" | "note">;
-  deps?: Partial<CompletionDeps>;
 }): Promise<void> {
-  const deps: CompletionDeps = {
-    resolveCliName: () => CLI_NAME,
-    checkShellCompletionStatus,
-    ensureCompletionCacheExists,
-    installCompletion,
-    ...params.deps,
-  };
-
-  const cliName = deps.resolveCliName();
-  const completionStatus = await deps.checkShellCompletionStatus(cliName);
+  const cliName = CLI_NAME;
+  const completionStatus = await checkShellCompletionStatus(cliName);
   const installCompletionForSetup = async (): Promise<boolean> => {
     try {
-      await deps.installCompletion(completionStatus.shell, true, cliName);
+      await installCompletion(completionStatus.shell, true, cliName);
       return true;
     } catch (error) {
       const writeError = findCompletionProfileWriteError(error);
@@ -62,7 +46,7 @@ export async function setupWizardShellCompletion(params: {
   };
   const generationOptions = { generationMode: "full" } as const;
   const ensureCompletionCache = async (): Promise<boolean> => {
-    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName, generationOptions);
+    const cacheGenerated = await ensureCompletionCacheExists(cliName, generationOptions);
     if (!cacheGenerated) {
       await params.prompter.note(
         t("wizard.completion.cacheFailed", {

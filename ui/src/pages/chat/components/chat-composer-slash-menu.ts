@@ -33,7 +33,6 @@ import {
   getSlashCommandOptionId,
   getSlashCommandOptionLabel,
   renderSlashMatchedName,
-  renderSlashIcon,
 } from "./chat-composer-slash-menu-dom.ts";
 
 export type SlashMenuState = {
@@ -102,11 +101,11 @@ function requestSlashCommandRefresh(
     return;
   }
   const refresh = host.refreshCommands();
-  if (!refresh || typeof refresh.then !== "function") {
+  if (!refresh) {
     return;
   }
   state.slashCommandRefreshPending = true;
-  void Promise.resolve(refresh)
+  void refresh
     .catch(() => undefined)
     .finally(() => {
       state.slashCommandRefreshPending = false;
@@ -554,7 +553,7 @@ export function renderSlashMenu(
                 requestUpdate();
               },
               icon: state.slashMenuCommand?.icon
-                ? renderSlashIcon(state.slashMenuCommand.icon)
+                ? icons[state.slashMenuCommand.icon]
                 : icons.terminal,
               name: arg,
               description: html`/${state.slashMenuCommand?.name} ${arg}`,
@@ -580,11 +579,7 @@ export function renderSlashMenu(
         requestUpdate();
       },
       icon:
-        cmd.source === "skill"
-          ? icons.pencilSparkles
-          : cmd.icon
-            ? renderSlashIcon(cmd.icon)
-            : icons.terminal,
+        cmd.source === "skill" ? icons.pencilSparkles : cmd.icon ? icons[cmd.icon] : icons.terminal,
       name: html`/${renderSlashMatchedName(cmd.name, query)}${cmd.args ? html`<span class="slash-menu-args"> ${cmd.args}</span>` : nothing}`,
       description: getSlashCommandDescription(cmd),
     });

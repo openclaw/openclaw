@@ -181,7 +181,7 @@ it("model reads recover a failed shared-worker publication and retain the failed
           model: { primary: `${provider}/original` },
           modelPolicy: { allow: providers.map((id) => `${id}/*`) },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       tools: { profile: "minimal" },
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },

@@ -10,15 +10,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { createBaseToolHandlerState } from "./agent-tool-handler-state.test-helpers.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
-import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  ToolCallSummary,
-  ToolHandlerContext,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 function createContractTool(name: string, execute: AgentTool["execute"]): AgentTool {
   return {
@@ -42,12 +39,7 @@ function createToolHandlerCtx(): ToolHandlerContext {
       sessionId: "session-1",
       sessionKey: "agent:agent-1:session-1",
     },
-    state: {
-      ...createBaseToolHandlerState(),
-      toolMetaById: new Map<string, ToolCallSummary>(),
-      messagingToolSentTargets: [] as MessagingToolSend[],
-      successfulCronAdds: 0,
-    },
+    state: createBaseToolHandlerState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
@@ -151,6 +143,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
         isError: false,
         result,
       }),
+      prepareToolResult(result),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
@@ -218,6 +211,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
         isError: true,
         result,
       }),
+      prepareToolResult(result),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);
@@ -278,6 +272,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
         isError: false,
         result,
       }),
+      prepareToolResult(result),
     );
 
     expect(ctx.state.messagingToolSentTexts).toEqual(["hello from embedded agent"]);
@@ -360,6 +355,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
         isError: true,
         result,
       }),
+      prepareToolResult(result),
     );
 
     expect(hooks.beforeToolCall).toHaveBeenCalledTimes(1);

@@ -43,6 +43,7 @@ export * from "./schema/secrets.js";
 export * from "./schema/session-placement.js";
 export * from "./schema/session-discussion.js";
 export * from "./schema/sessions.js";
+export * from "./schema/session-processes.js";
 export * from "./schema/sessions-resolve.js";
 export * from "./schema/session-github-publication.js";
 export * from "./schema/sessions-viewer-presence.js";
@@ -71,3 +72,5 @@ export * from "./schema/worker-inference.js";
 export * from "./schema/worktrees.js";
 export * from "./schema/tools-catalog.js";
 export * from "./schema/transcripts.js";
+
+export * from "./schema/catalog.js";

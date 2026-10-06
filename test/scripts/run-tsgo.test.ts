@@ -43,6 +43,43 @@ it("runs the installed compiler version through the real tsgo wrapper", () => {
   expect(result.stdout.trim()).toBe(`Version ${nativePackage.version}`);
 }, 30_000);
 
+it("keeps compiler output unchanged with opt-in metrics and emits no metrics by default", () => {
+  const cwd = createTempDir("run-tsgo-metrics-");
+  const {
+    OPENCLAW_TSGO_METRICS_DIR: _unset,
+    OPENCLAW_LOCAL_CHECK_MODE: _mode,
+    ...baseEnv
+  } = process.env;
+  for (const enabled of [false, true]) {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
+      {
+        encoding: "utf8",
+        timeout: 25_000,
+        env: { ...baseEnv, ...(enabled ? { OPENCLAW_TSGO_METRICS_DIR: cwd } : {}) },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toMatch(/^Version /u);
+    expect(result.stderr).toBe("");
+    expect(fs.readdirSync(cwd)).toHaveLength(enabled ? 1 : 0);
+    if (enabled) {
+      const [artifact] = fs.readdirSync(cwd);
+      if (!artifact) {
+        throw new Error("Missing compiler metrics artifact");
+      }
+      const evidence = JSON.parse(fs.readFileSync(path.join(cwd, artifact), "utf8"));
+      expect(`Version ${evidence.compilerVersion}`).toBe(result.stdout.trim());
+      expect(evidence.outcome.exitCode).toBe(0);
+      expect(evidence.command.args).toContain("--version");
+      expect(evidence.cache.hit).toBe("unknown");
+      expect(evidence.resources.policy.OPENCLAW_LOCAL_CHECK_MODE).toBeNull();
+    }
+  }
+}, 30_000);
+
 it.each([false, true])(
   "refuses a shared install without creating dependency links (linked=%s)",
   (linked) => {
@@ -425,9 +462,14 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
     cwd: string,
     timeoutMs: string | undefined,
     onBeforeReap?: (pid: number | undefined) => void,
+    metricsDir?: string,
   ) {
     const { OPENCLAW_TSGO_TIMEOUT_MS: _unset, ...inheritedEnv } = process.env;
-    const baseEnv = { ...inheritedEnv, OPENCLAW_CI_STATIC_EVIDENCE: "1" };
+    const baseEnv = {
+      ...inheritedEnv,
+      OPENCLAW_CI_STATIC_EVIDENCE: "1",
+      OPENCLAW_TSGO_METRICS_DIR: metricsDir,
+    };
     try {
       return spawnSync(
         process.execPath,
@@ -450,6 +492,57 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
       reapFakeTsgo(cwd);
     }
   }
+
+  it.each([0, 2])(
+    "preserves CI diagnostics and completion with metrics enabled (exit %s)",
+    (exitCode) => {
+      const cwd = createTempDir("run-tsgo-ci-metrics-");
+      const metricsDir = path.join(cwd, "metrics");
+      const diagnostic =
+        exitCode === 2 ? "src/fixture.ts(1,1): error TS2322: Invalid fixture value.\n" : "";
+      writeFakeTsgo(
+        cwd,
+        `#!/usr/bin/env node
+process.stdout.write(${JSON.stringify(diagnostic)});
+process.exitCode = ${exitCode};
+`,
+      );
+
+      const result = runFakeTsgo(cwd, undefined, undefined, metricsDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(exitCode);
+      const leafPrefix = "[ci-static:tsgo:leaf] ";
+      const completionPrefix = "[ci-static:tsgo:completion] ";
+      const lines = result.stdout.trim().split("\n");
+      const leaves = lines.filter((line) => line.startsWith(leafPrefix));
+      const completions = lines.filter((line) => line.startsWith(completionPrefix));
+      expect(leaves).toHaveLength(1);
+      expect(completions).toHaveLength(1);
+      const leaf = JSON.parse(leaves[0]!.slice(leafPrefix.length));
+      expect(leaf).toMatchObject({
+        version: 1,
+        config: "tsconfig.extensions.json",
+        exitCode,
+        stdout: diagnostic,
+        stderr: "",
+      });
+      const completion = JSON.parse(completions[0]!.slice(completionPrefix.length));
+      expect(completion).toMatchObject({ planned: 1, completed: 1, leaves: [leaf.id] });
+      expect(result.stdout).toBe(
+        `${diagnostic}${leafPrefix}${JSON.stringify(leaf)}\n${completionPrefix}${JSON.stringify(completion)}\n`,
+      );
+      const artifacts = fs.readdirSync(metricsDir);
+      expect(artifacts).toHaveLength(1);
+      const metrics = JSON.parse(fs.readFileSync(path.join(metricsDir, artifacts[0]!), "utf8"));
+      expect(metrics.outcome).toMatchObject({ exitCode, errorCode: null });
+      expect(metrics.command.args).toEqual(
+        expect.arrayContaining(["-p", "tsconfig.extensions.json"]),
+      );
+      expect(metrics.command.args.slice(-2)).toEqual(["--pretty", "false"]);
+    },
+    30_000,
+  );
 
   it("rejects and drains compiler descendants left after a successful leader exit", async ({
     signal,

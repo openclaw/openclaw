@@ -53,45 +53,25 @@ type SessionUpstreamMissingCounter = {
   linkUpdatedAt: number;
 };
 
-function currentProviders(): SessionCatalogProvider[] {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
-    (registration) => registration.provider,
-  );
-}
-
-function databaseOptions(options: SessionUpstreamMonitorOptions): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
-function normalizeUserText(text: string): string {
-  return text.trim().replace(/\s+/g, " ");
-}
-
 // Stable identity of the physical upstream source (host/thread/ref). A re-Continue
 // can rebase a session onto a new source whose activity ids (e.g. Claude byte
 // offsets) collide with the old source; hashing this into dedupe keys and the CAS
 // keeps those from silently deduping genuine new activity or accepting a stale scan.
-function upstreamSourceKey(probe: {
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamSourceKey(
+  probe: Pick<SessionUpstreamProbe, "hostId" | "threadId" | "upstreamRef">,
+): string {
   return createHash("sha256")
     .update(`${probe.hostId}\u0000${probe.threadId}\u0000${JSON.stringify(probe.upstreamRef)}`)
     .digest("hex")
     .slice(0, 16);
 }
 
-function upstreamMonitorLinkKey(probe: {
-  sessionKey: string;
-  agentId: string;
-  hostId: string;
-  threadId: string;
-  upstreamRef: unknown;
-}): string {
+function upstreamMonitorLinkKey(
+  probe: Pick<
+    SessionUpstreamProbe,
+    "sessionKey" | "agentId" | "hostId" | "threadId" | "upstreamRef"
+  >,
+): string {
   return `${probe.sessionKey}\n${probe.agentId}\n${upstreamSourceKey(probe)}`;
 }
 
@@ -198,7 +178,7 @@ async function loadOwnRecentUserTexts(
     preferUpstreamUserText: true,
     role: "user",
   });
-  return recent.map((item) => normalizeUserText(item.text)).filter(Boolean);
+  return recent.map((item) => item.text.trim().replace(/\s+/g, " ")).filter(Boolean);
 }
 
 async function probeProvenanceUnchanged(
@@ -224,7 +204,10 @@ async function runSessionUpstreamMonitorTick(
   if (options.signal?.aborted) {
     return;
   }
-  const dbOptions = databaseOptions(options);
+  const dbOptions = {
+    ...(options.env ? { env: options.env } : {}),
+    ...(options.path ? { path: options.path } : {}),
+  };
   const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
   if (options.signal?.aborted) {
     return;
@@ -238,7 +221,11 @@ async function runSessionUpstreamMonitorTick(
       missingCounts.delete(key);
     }
   }
-  const providers = options.providers ?? currentProviders();
+  const providers =
+    options.providers ??
+    (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).map(
+      (registration) => registration.provider,
+    );
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   for (const [catalogId, links] of linksByCatalog) {
     const provider = providerById.get(catalogId);

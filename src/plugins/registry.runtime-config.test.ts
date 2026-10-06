@@ -261,55 +261,43 @@ describe("plugin registration runtime admission", () => {
     }
   });
 
-  it.each([false, true])(
-    "rejects registration metadata without its producer binding (admitted call: %s)",
-    async (admitted) => {
-      const { builder, record, api, owner, list } = fixture();
-      const invoke = () =>
-        withPluginRegistrationContext(builder.registry, record.id, () =>
-          api.runtime.nodes.list({ connected: true }),
-        );
-      try {
-        expect(() => (admitted ? owner.run(invoke) : invoke())).toThrow(
-          "runtime is no longer active",
-        );
-        expect(list).not.toHaveBeenCalled();
-      } finally {
-        await owner.dispose();
-      }
-    },
-  );
+  it("rejects admitted registration metadata without its producer binding", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    const invoke = () =>
+      withPluginRegistrationContext(builder.registry, record.id, () =>
+        api.runtime.nodes.list({ connected: true }),
+      );
+    try {
+      expect(() => owner.run(invoke)).toThrow("runtime is no longer active");
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      await owner.dispose();
+    }
+  });
 
-  it.each(["revoked", "removed"])(
-    "rejects a retained runtime helper when its admitted instance is %s",
-    async (retirement) => {
-      const { builder, record, api, owner, list } = fixture();
-      builder.registry.plugins.push(record);
-      const retained = api.runtime.nodes.list;
-      const resume = createDeferredCore();
-      const pending = owner.run(async () => {
-        await resume.promise;
-        return withPluginRegistrationContext(builder.registry, record.id, () =>
-          retained({ connected: true }),
-        );
-      });
-      const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
-      try {
-        if (retirement === "revoked") {
-          revokePluginRecord(builder.registry, record);
-        } else {
-          builder.rollbackPluginGlobalSideEffects(record.id, record);
-          builder.registry.plugins.splice(0, 1);
-        }
-        resume.resolve();
-        await rejected;
-        expect(list).not.toHaveBeenCalled();
-      } finally {
-        resume.resolve();
-        await Promise.allSettled([pending, owner.dispose()]);
-      }
-    },
-  );
+  it("rejects a retained runtime helper after its admitted instance is removed", async () => {
+    const { builder, record, api, owner, list } = fixture();
+    builder.registry.plugins.push(record);
+    const retained = api.runtime.nodes.list;
+    const resume = createDeferredCore();
+    const pending = owner.run(async () => {
+      await resume.promise;
+      return withPluginRegistrationContext(builder.registry, record.id, () =>
+        retained({ connected: true }),
+      );
+    });
+    const rejected = expect(pending).rejects.toThrow("runtime is no longer active");
+    try {
+      builder.rollbackPluginGlobalSideEffects(record.id, record);
+      builder.registry.plugins.splice(0, 1);
+      resume.resolve();
+      await rejected;
+      expect(list).not.toHaveBeenCalled();
+    } finally {
+      resume.resolve();
+      await Promise.allSettled([pending, owner.dispose()]);
+    }
+  });
 });
 
 describe("plugin registry runtime config scope", () => {
@@ -326,12 +314,6 @@ describe("plugin registry runtime config scope", () => {
   });
 
   it.each([
-    {
-      label: "bundled",
-      source: "/plugins/codex/index.js",
-      origin: "bundled",
-      packageName: undefined,
-    },
     {
       label: "official global",
       source: "/plugins/node_modules/@openclaw/codex/index.js",

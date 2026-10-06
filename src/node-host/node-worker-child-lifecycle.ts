@@ -5,6 +5,7 @@ import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessInput } from "../worker/worker-process-observation.js";
 import {
   buildWorkerProcessTurn,
   type WorkerProcessMessage,
@@ -37,6 +38,7 @@ import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
 } from "./node-worker-process-identity.js";
+import { NodeWorkerProcessObservations } from "./node-worker-process-observation.js";
 import {
   NODE_WORKER_STOP_GRACE_MS,
   NODE_WORKER_FORCE_STOP_WAIT_MS,
@@ -55,8 +57,17 @@ import {
   type createNodeWorkerLaunchRecovery,
 } from "./node-worker-supervisor-recovery.js";
 import { stopOwnedNodeWorkerTree } from "./node-worker-tree-control.js";
-import { nodeWorkerDescriptorSecrets } from "./node-worker-turn-lifecycle.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+
+function nodeWorkerDescriptorSecrets(descriptor: WorkerLaunchDescriptor): string[] {
+  const endpoint = descriptor.connectionEndpoint;
+  const access = endpoint.kind === "websocket" ? endpoint.cloudflareAccess : undefined;
+  return [
+    descriptor.admission.credential,
+    ...(access ? [access.clientId, access.clientSecret] : []),
+    ...(descriptor.assignment.github ? [descriptor.assignment.github.token] : []),
+  ];
+}
 
 /** Owns physical children and their observed exit, turn settlement, and retained idle lifetime. */
 export class NodeWorkerChildLifecycle {
@@ -64,6 +75,26 @@ export class NodeWorkerChildLifecycle {
   readonly active: ReadonlyMap<string, NodeWorkerActiveOwnership> = this.owners;
   readonly reconcileActiveTerminal: ReturnType<typeof createNodeWorkerTerminalReconciliation>;
   private generation = 0;
+  private readonly processObservations = new NodeWorkerProcessObservations();
+
+  observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
+    const owner = [...this.owners.values()].find(
+      (entry) =>
+        entry.binding.environmentId === input.environmentId &&
+        entry.binding.gatewayNamespace === input.gatewayNamespace,
+    );
+    if (!owner || owner.state !== "running" || this.options.isClosed()) {
+      throw new Error(
+        "Retained worker process observation unavailable; start a new turn and retry.",
+      );
+    }
+    return this.processObservations.request(
+      owner,
+      input,
+      () => !this.options.isClosed() && this.owners.get(owner.launchId) === owner,
+      signal,
+    );
+  }
 
   constructor(
     private readonly options: {
@@ -496,7 +527,7 @@ export class NodeWorkerChildLifecycle {
       (frame) => this.settleTurn(active, frame),
       () => active.turn?.claim.launchId,
       active.container ? () => this.cleanupChildContainer(active) : undefined,
-    );
+    ).finally(() => this.processObservations.retire(active));
     if (observation.kind === "deferred") {
       active.deferredOutcome = observation.outcome;
       return;
@@ -509,6 +540,10 @@ export class NodeWorkerChildLifecycle {
     active: NodeWorkerRunningChild,
     frame: WorkerProcessMessage,
   ): Promise<void> {
+    if (frame.type === "process-result") {
+      this.processObservations.accept(active, frame);
+      return;
+    }
     if (frame.type === "result") {
       if (active.stopState) {
         return;

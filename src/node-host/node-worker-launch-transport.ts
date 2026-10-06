@@ -3,6 +3,7 @@ import {
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
   WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { resolveRuntimeArgs } from "../infra/runtime-worker-url.js";
 import {
   createChildAdapter,
   type AwaitedStdoutChildAdapter,
@@ -20,7 +21,6 @@ import {
   type WorkerProcessInput,
 } from "../worker/worker-process-protocol.js";
 import {
-  buildNodeWorkerContainerStartArgv,
   createNodeWorkerContainer,
   type NodeWorkerContainerEngine,
 } from "./node-worker-container-engine.js";
@@ -77,7 +77,12 @@ export async function prepareNodeWorkerLaunchTransport(
     gatewayNamespace: options.input.gatewayNamespace,
   });
   if (!options.containerEngine) {
-    const args = [entry, "--internal-worker-ipc", "--internal-worker-session"];
+    const args = [
+      ...resolveRuntimeArgs(),
+      entry,
+      "--internal-worker-ipc",
+      "--internal-worker-session",
+    ];
     const workerOptions = {
       env: options.workerEnv,
       ownedWorker: true,
@@ -172,7 +177,13 @@ export async function prepareNodeWorkerLaunchTransport(
       return { kind: "terminal", receipt: claimed };
     }
     const { adapter, ready } = await createChildAdapter({
-      argv: buildNodeWorkerContainerStartArgv(options.containerEngine, container.containerId),
+      argv: [
+        options.containerEngine.command,
+        "start",
+        "--attach",
+        "--interactive",
+        container.containerId,
+      ],
       env: options.containerEngine.env ?? options.engineEnv,
       exactEnv: true,
       stdinMode: "pipe-open",

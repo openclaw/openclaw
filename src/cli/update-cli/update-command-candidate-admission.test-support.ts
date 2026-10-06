@@ -168,6 +168,9 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   ] as const)(
     "candidate admission: reports $check refusals from $source before mutation",
     async ({ source, check }) => {
+      if (check === "node-runtime") {
+        runtimeRecovery.stubNodeRuntime();
+      }
       const verdict = candidateAdmissionVerdict(check);
       const { pkgRoot, stages, contexts } = await prepareCandidateAdmissionFixture({
         marker: source !== "unsupported",
@@ -258,6 +261,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each([undefined, "17"])(
     "candidate admission: retains work deadline %s and installed Node preflight",
     async (timeout) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.warnings = [
         {
@@ -343,6 +347,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   it.each(["existing", "fresh"] as const)(
     "candidate admit with warn does not bypass runtime recovery (%s profile)",
     async (profile) => {
+      runtimeRecovery.stubNodeRuntime();
       const verdict = candidateAdmissionVerdict();
       verdict.facts.nodeEngines = ">=26.1.0";
       verdict.facts.checks[2] = {
@@ -421,6 +426,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   );
 
   it("candidate admission: retains a check the candidate did not report", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const verdict = candidateAdmissionVerdict();
     verdict.facts.checks = verdict.facts.checks.filter((check) => check.name !== "node-runtime");
     const { stages, contexts } = await prepareCandidateAdmissionFixture({ marker: true, verdict });
@@ -442,6 +448,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: forces installed checks through the option before staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -492,6 +499,7 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("candidate admission: keeps dry-run on installed checks without staging", async () => {
+    runtimeRecovery.stubNodeRuntime();
     const { stages, contexts } = await prepareCandidateAdmissionFixture({
       marker: true,
       verdict: candidateAdmissionVerdict(),
@@ -535,7 +543,10 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledWith({
       // The inspection snapshot retains the scoped marker after the updater
       // restores process.env on refusal.
-      env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+      env: expect.objectContaining({
+        OPENCLAW_STATE_DIR: profileStateDir(),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      }),
       supportedVersions: { state: 3, agent: 9 },
       preserveSourceArtifacts: false,
       configuredAgentDatabaseTargets: [],
@@ -554,21 +565,22 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     ]);
   });
 
-  it("refuses incompatible managed-state schemas before stopping the package service", async () => {
+  it("refuses incompatible shared caller and managed schemas before stopping the package service", async () => {
     const { pkgRoot } = await setupInstalledPackageRoot(createCaseDir("schema-package"), "1.0.0");
     const entrypoint = path.join(pkgRoot, "dist", "index.js");
     const nodeRunner = path.join(fixtureRoot, "managed", "node");
+    const managedState = profileStateDir();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     mockOwnedGitService(pkgRoot);
     primeServiceCommand([nodeRunner, entrypoint, "gateway", "run"], {
-      OPENCLAW_STATE_DIR: profileStateDir(),
+      OPENCLAW_STATE_DIR: managedState,
     });
     serviceLoaded.mockResolvedValue(true);
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({ schemaVersions: { state: 3, agent: 11 } }),
     );
     databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) =>
-      env?.OPENCLAW_STATE_DIR === profileStateDir()
+      env?.OPENCLAW_STATE_DIR === managedState
         ? {
             incompatible: [
               {
@@ -590,16 +602,17 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     });
 
     expect(serviceStop).not.toHaveBeenCalled();
-    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas.mock.calls[1]?.[0].env).toEqual(
-      expect.objectContaining({ OPENCLAW_STATE_DIR: profileStateDir() }),
+    const refusal = lastWriteJsonCall();
+    expect(isRecord(refusal) ? refusal.reason : undefined).toBe("database-schema-preflight");
+    expect(databasePreflightMocks.preflightOpenClawDatabaseSchemas).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        env: expect.objectContaining({ OPENCLAW_STATE_DIR: managedState }),
+      }),
     );
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expect(freshRestartCalls()).toEqual([]);
     expectNoSideEffects(serviceStart, serviceRestart);
-    expect(lastWriteJsonCall()).toMatchObject({
-      status: "error",
-      reason: "database-schema-preflight",
-    });
+    expect(refusal).toMatchObject({ status: "error" });
     expect(getTriageFailures()).toContainEqual(
       expect.objectContaining({
         error: expect.stringContaining("openclaw-agent.sqlite"),
@@ -624,12 +637,13 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
   });
 
   it("blocks package updates when the target requires a newer Node runtime", async () => {
+    runtimeRecovery.stubNodeRuntime();
     // This case specifies system-runtime guidance, independent of the host Node manager.
     vi.spyOn(versionManagerPath, "resolveNodeVersionManager").mockReturnValue("system");
     const root = await mockPackageInstallAtCaseDir();
     primeNpmChannelTag("latest", "2026.3.23-2");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "latest", version: "2026.3.23-2" }),
+      packageTargetStatus({ version: "2026.3.23-2" }),
     );
     nodeVersionSatisfiesEngine.mockReturnValue(false);
 

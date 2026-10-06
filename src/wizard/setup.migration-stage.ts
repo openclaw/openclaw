@@ -16,14 +16,12 @@ import type {
   MigrationItem,
   MigrationPlan,
 } from "../plugins/types.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db-registry.js";
-import {
-  disposeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -70,10 +68,8 @@ type SetupMigrationStagePaths = {
 
 type SetupMigrationStage = {
   staged: SetupMigrationStagePaths;
-  final: SetupMigrationStagePaths;
   configRuntime: MigrationConfigRuntime;
   inferenceConfigTarget: SetupInferenceConfigTarget;
-  getFinalConfig: () => OpenClawConfig;
   getStagedConfig: () => OpenClawConfig;
   replaceStagedConfig: (config: OpenClawConfig) => void;
   projectPlanToStage: (plan: MigrationPlan) => MigrationPlan;
@@ -140,54 +136,6 @@ function projectPlanTargets(
     ...(plan.metadata
       ? { metadata: projectValue(plan.metadata, mappings) as Record<string, unknown> }
       : {}),
-  };
-}
-
-function createInMemoryConfigRuntime(params: {
-  finalConfig: OpenClawConfig;
-  stagedConfig: OpenClawConfig;
-  projectToFinal: (config: OpenClawConfig) => OpenClawConfig;
-}): {
-  runtime: MigrationConfigRuntime;
-  getFinalConfig: () => OpenClawConfig;
-  getStagedConfig: () => OpenClawConfig;
-  replaceConfigs: (next: { finalConfig: OpenClawConfig; stagedConfig: OpenClawConfig }) => void;
-} {
-  let finalConfig = structuredClone(params.finalConfig);
-  let stagedConfig = structuredClone(params.stagedConfig);
-  const mutateConfigFile = async (
-    mutation: Parameters<MigrationConfigRuntime["mutateConfigFile"]>[0],
-  ) => {
-    const stagedDraft = structuredClone(stagedConfig);
-    const context = { snapshot: {} as never, previousHash: null };
-    const result = await mutation.mutate(stagedDraft, context);
-    // Provider mutations may carry state or generate values. Execute them once,
-    // then project the staged result into the publishable config.
-    stagedConfig = stagedDraft;
-    finalConfig = params.projectToFinal(stagedDraft);
-    return {
-      nextConfig: stagedConfig,
-      result,
-      path: "<onboarding-migration-stage>",
-      previousHash: null,
-      snapshot: {} as never,
-      persistedHash: null,
-      afterWrite: mutation.afterWrite,
-      followUp: { mode: "none", reason: "staged migration config", requiresRestart: false },
-    };
-  };
-  const runtime: MigrationConfigRuntime = {
-    current: () => stagedConfig,
-    mutateConfigFile: mutateConfigFile as MigrationConfigRuntime["mutateConfigFile"],
-  };
-  return {
-    runtime,
-    getFinalConfig: () => structuredClone(finalConfig),
-    getStagedConfig: () => structuredClone(stagedConfig),
-    replaceConfigs(next) {
-      finalConfig = structuredClone(next.finalConfig);
-      stagedConfig = structuredClone(next.stagedConfig);
-    },
   };
 }
 
@@ -262,7 +210,7 @@ export async function createSetupMigrationStage(params: {
     path.basename(params.reportDir),
   );
   const stageEnv = { ...process.env, OPENCLAW_STATE_DIR: stagedStateDir };
-  const stagedConfig: OpenClawConfig = {
+  let currentStagedConfig: OpenClawConfig = {
     ...structuredClone(params.targetConfig),
     agents: {
       ...structuredClone(params.targetConfig.agents),
@@ -293,38 +241,62 @@ export async function createSetupMigrationStage(params: {
   const toFinal = toStage.map(([finalPath, stagedPath]) => [stagedPath, finalPath] as const);
   const projectConfigToFinal = (config: OpenClawConfig) =>
     projectValue(config, toFinal) as OpenClawConfig;
-  const configs = createInMemoryConfigRuntime({
-    finalConfig: params.targetConfig,
-    stagedConfig,
-    projectToFinal: projectConfigToFinal,
-  });
-  const replaceStagedConfig = (config: OpenClawConfig) =>
-    configs.replaceConfigs({ stagedConfig: config, finalConfig: projectConfigToFinal(config) });
+  let finalConfig = structuredClone(params.targetConfig);
+  const getStagedConfig = () => structuredClone(currentStagedConfig);
+  const replaceStagedConfig = (config: OpenClawConfig) => {
+    finalConfig = structuredClone(projectConfigToFinal(config));
+    currentStagedConfig = structuredClone(config);
+  };
+  const mutateConfigFile = async (
+    mutation: Parameters<MigrationConfigRuntime["mutateConfigFile"]>[0],
+  ) => {
+    const stagedDraft = getStagedConfig();
+    const context = { snapshot: {} as never, previousHash: null };
+    const result = await mutation.mutate(stagedDraft, context);
+    // Provider mutations may carry state or generate values. Execute them once,
+    // then project the staged result into the publishable config.
+    currentStagedConfig = stagedDraft;
+    finalConfig = projectConfigToFinal(stagedDraft);
+    return {
+      nextConfig: currentStagedConfig,
+      result,
+      path: "<onboarding-migration-stage>",
+      previousHash: null,
+      snapshot: {} as never,
+      persistedHash: null,
+      afterWrite: mutation.afterWrite,
+      followUp: { mode: "none", reason: "staged migration config", requiresRestart: false },
+    };
+  };
+  const configRuntime: MigrationConfigRuntime = {
+    current: () => currentStagedConfig,
+    mutateConfigFile: mutateConfigFile as MigrationConfigRuntime["mutateConfigFile"],
+  };
   const writeInferenceConfig = async (
     config: OpenClawConfig,
     options: SetupInferenceConfigWriteOptions,
     expected?: OpenClawConfig,
   ) => {
-    const before = configs.getStagedConfig();
+    const before = getStagedConfig();
     if (expected && !isDeepStrictEqual(before, expected)) {
       throw new SetupMigrationTargetChangedError(
         "Staged connection settings changed before activation.",
       );
     }
     options.captureUndo(async () => {
-      const restored = restoreSetupInferenceConfig(configs.getStagedConfig(), before, config);
+      const restored = restoreSetupInferenceConfig(getStagedConfig(), before, config);
       if (restored.written) {
         replaceStagedConfig(restored.config);
       }
       return restored;
     });
     replaceStagedConfig(config);
-    return configs.getStagedConfig();
+    return getStagedConfig();
   };
   const inferenceConfigTarget: SetupInferenceConfigTarget = {
     write: writeInferenceConfig,
     read: async () => {
-      const config = configs.getStagedConfig();
+      const config = getStagedConfig();
       return { config, write: (next, options) => writeInferenceConfig(next, options, config) };
     },
   };
@@ -339,18 +311,16 @@ export async function createSetupMigrationStage(params: {
     }
     clearRuntimeAuthProfileStoreSnapshot(stagedAgentDir);
     const stagedAgentDatabasePath = path.join(stagedAgentDir, "openclaw-agent.sqlite");
-    disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
+    await disposeOpenClawAgentDatabaseByPath(stagedAgentDatabasePath, { env: stageEnv });
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(stageEnv));
     databasesDisposed = true;
   };
 
   return {
     staged: stagedPaths,
-    final: finalPaths,
-    configRuntime: configs.runtime,
+    configRuntime,
     inferenceConfigTarget,
-    getFinalConfig: configs.getFinalConfig,
-    getStagedConfig: configs.getStagedConfig,
+    getStagedConfig,
     replaceStagedConfig,
     projectPlanToStage: (plan) => projectPlanTargets(plan, toStage),
     projectResultToFinal: (result) => projectValue(result, toFinal) as MigrationApplyResult,
@@ -372,7 +342,7 @@ export async function createSetupMigrationStage(params: {
           "Migration config changed before promotion. Review it and retry.",
         );
       }
-      const configTarget = configs.getFinalConfig();
+      const configTarget = structuredClone(finalConfig);
       // Shared state is owned by the live runtime. Promote durable import artifacts,
       // then merge the derived agent registry fact instead of replacing its database.
       const components: PromotionComponent[] = [

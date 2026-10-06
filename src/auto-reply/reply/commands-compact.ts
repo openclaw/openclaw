@@ -24,12 +24,9 @@ import { resolveSessionStorePathForScope } from "../../config/sessions/session-s
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -43,7 +40,7 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("/compact")) {
+  if (!trimmed.toLowerCase().startsWith("/compact")) {
     return undefined;
   }
   let rest = trimmed.slice("/compact".length).trimStart();
@@ -144,7 +141,7 @@ function resolveManualCompactContextModelId(params: {
   contextConfigProvider: string;
   model: string;
 }): string {
-  const model = params.model.trim();
+  const model = params.model;
   const slashIndex = model.indexOf("/");
   if (slashIndex <= 0) {
     return model;
@@ -195,7 +192,7 @@ export async function handleCompactCommand(
       "⚙️ Compaction unavailable (missing session id).",
     );
   }
-  const runtime = await compactRuntimeLoader.load();
+  const runtime = await import("./commands-compact.runtime.js");
   const sessionId = targetSessionEntry.sessionId;
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({

@@ -16,19 +16,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
-import { copyRecordEntries } from "../shared/safe-record.js";
 import type { ProviderCatalogContext, ProviderCatalogResult, ProviderPlugin } from "./types.js";
-
-function addApiKeyToProvider(
-  provider: ModelProviderConfig,
-  apiKey: string,
-): (ModelProviderConfig & { apiKey: string }) | undefined {
-  try {
-    return { ...provider, apiKey };
-  } catch {
-    return undefined;
-  }
-}
 
 /** Finds a provider catalog template entry by normalized provider and template id. */
 export function findCatalogTemplate(params: {
@@ -86,30 +74,6 @@ export async function buildSingleProviderApiKeyCatalog(params: {
       ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
       apiKey,
     },
-  };
-}
-
-/** Builds a multi-provider catalog result backed by one provider API key. */
-export async function buildPairedProviderApiKeyCatalog(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProviders: () =>
-    | Record<string, ModelProviderConfig>
-    | Promise<Record<string, ModelProviderConfig>>;
-}): Promise<ProviderCatalogResult> {
-  const apiKey = params.ctx.resolveProviderApiKey(normalizeProviderId(params.providerId)).apiKey;
-  if (!apiKey) {
-    return null;
-  }
-
-  const providers = await params.buildProviders();
-  return {
-    providers: Object.fromEntries(
-      copyRecordEntries<ModelProviderConfig>(providers).flatMap(([id, provider]) => {
-        const providerWithApiKey = addApiKeyToProvider(provider, apiKey);
-        return providerWithApiKey ? [[id, providerWithApiKey]] : [];
-      }),
-    ),
   };
 }
 
@@ -261,7 +225,7 @@ export function buildEffectiveManifestProviderConfig(
   return models.length > 0 ? { baseUrl: firstRow.baseUrl, api: firstRow.api, models } : undefined;
 }
 
-export type ManifestProviderCatalogSurface = {
+type ManifestProviderCatalogSurface = {
   id: string;
   label: string;
   catalog: unknown;

@@ -1,8 +1,8 @@
 #!/usr/bin/env -S node --import tsx
 // Regenerates ui/config/control-ui-boot-modules.json: the modules shared shell and
 // route-specific boot flows need, plus requested dynamic entry points. Builds
-// without the previous boot groups, captures ready routes against the mocked
-// Gateway, and keeps fetched modules reachable from what each route requested.
+// without the previous boot groups, captures ready cold and credential-authorized
+// warm routes, and keeps fetched modules reachable from what each route requested.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -48,7 +48,17 @@ function serveDist(distDir: string): Promise<{ baseUrl: string; close: () => Pro
       filePath = path.join(distDir, "index.html");
     }
     res.setHeader("Content-Type", mime[path.extname(filePath)] ?? "application/octet-stream");
-    res.end(fs.readFileSync(filePath));
+    const source = fs.readFileSync(filePath);
+    // Like the Gateway, anchor the portable entry before a canonical deep route
+    // reloads; otherwise /chat/main asks this fixture for /chat/assets/*.js.
+    res.end(
+      filePath.endsWith("index.html")
+        ? source
+            .toString("utf8")
+            .replaceAll('src="./assets/', 'src="/assets/')
+            .replaceAll('href="./assets/', 'href="/assets/')
+        : source,
+    );
   });
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => {
@@ -85,23 +95,51 @@ async function collectBootChunkPaths(
     executablePath: resolvePlaywrightChromiumExecutablePath(chromium.executablePath()),
   });
   try {
-    const page = await browser.newPage();
     const chunkPaths = new Set<string>();
-    page.on("request", (request) => {
-      const { pathname } = new URL(request.url());
-      if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
-        chunkPaths.add(pathname);
+    for (const warm of [false, true]) {
+      // Neither prior worker precaches nor a prior credential handoff may feed
+      // the next capture. Keep cold sign-in and authorized warm boot distinct.
+      const context = await browser.newContext({ serviceWorkers: "block" });
+      try {
+        const page = await context.newPage();
+        page.on("request", (request) => {
+          const { pathname } = new URL(request.url());
+          if (pathname.startsWith("/assets/") && pathname.endsWith(".js")) {
+            chunkPaths.add(pathname);
+          }
+        });
+        await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
+        const waitForRoute = async () => {
+          await page
+            .locator(
+              route === "chat"
+                ? ".agent-chat__composer-combobox textarea"
+                : ".new-session-page__message",
+            )
+            .waitFor({ timeout: READY_TIMEOUT_MS });
+          await page.waitForTimeout(SETTLE_MS);
+        };
+        await page.goto(`${baseUrl}/${route}${warm ? "#token=synthetic-boot-capture" : ""}`, {
+          waitUntil: "commit",
+        });
+        await waitForRoute();
+        if (warm) {
+          // Warm admission exercises readers absent from the cold ready route.
+          await page.waitForFunction(
+            () =>
+              Object.keys(localStorage).some((key) =>
+                key.startsWith("openclaw.control.bootRecord.v1:"),
+              ),
+            undefined,
+            { timeout: READY_TIMEOUT_MS },
+          );
+          await page.reload();
+          await waitForRoute();
+        }
+      } finally {
+        await context.close();
       }
-    });
-    await installMockGateway(page, { serverBuildId: readDistBuildId(distDir) });
-    await page.goto(`${baseUrl}/${route}`, { waitUntil: "commit" });
-    // Route readiness proves the capture did not stall on an error surface.
-    await page
-      .locator(
-        route === "chat" ? ".agent-chat__composer-combobox textarea" : ".new-session-page__message",
-      )
-      .waitFor({ timeout: READY_TIMEOUT_MS });
-    await page.waitForTimeout(SETTLE_MS);
+    }
     return chunkPaths;
   } finally {
     await browser.close();

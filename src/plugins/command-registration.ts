@@ -189,7 +189,7 @@ function validatePluginCommandDefinition(
       }
     }
   }
-  const nameError = validateCommandName(command.name.trim(), opts);
+  const nameError = validateCommandName(command.name, opts);
   if (nameError) {
     return nameError;
   }
@@ -200,7 +200,7 @@ function validatePluginCommandDefinition(
     if (typeof alias !== "string") {
       continue;
     }
-    const aliasError = validateCommandName(alias.trim());
+    const aliasError = validateCommandName(alias);
     if (aliasError) {
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }

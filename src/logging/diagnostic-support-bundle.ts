@@ -109,7 +109,6 @@ export async function writeSupportBundleDirectory(params: {
 export async function writeSupportBundleZip(params: {
   outputPath: string;
   files: readonly DiagnosticSupportBundleFile[];
-  compressionLevel?: number;
 }): Promise<{ path: string; bytes: number }> {
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
@@ -119,7 +118,7 @@ export async function writeSupportBundleZip(params: {
   const buffer = await zip.generateAsync({
     type: "nodebuffer",
     compression: "DEFLATE",
-    compressionOptions: { level: params.compressionLevel ?? 6 },
+    compressionOptions: { level: 6 },
   });
   const outputPath = path.resolve(params.outputPath);
   await fsp.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });

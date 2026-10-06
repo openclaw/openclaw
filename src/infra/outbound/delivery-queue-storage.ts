@@ -5,7 +5,7 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../state/openclaw-state-worker-error.js";
-import type { InitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.js";
+import type { InitialDeliveryProducerClaim } from "../delivery-queue-sqlite-claim.kernel.js";
 import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
@@ -53,7 +53,6 @@ export type {
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
   QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";
 
 const queuedDeliveryPayloads = (entry: QueuedDelivery) =>

@@ -122,33 +122,20 @@ async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string>
   return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
 }
 
-function collectWorkspaceDirs(cfg: OpenClawConfig | undefined): string[] {
-  const dirs = new Set<string>();
-  if (!cfg) {
-    dirs.add(resolveDefaultAgentWorkspaceDir());
-    return [...dirs];
-  }
-  for (const agentId of listAgentIds(cfg)) {
-    dirs.add(resolveAgentWorkspaceDir(cfg, agentId));
-  }
-  return [...dirs];
-}
-
 /** Determine which config, credential, and workspace paths cleanup should consider. */
 export function buildCleanupPlan(params: {
   cfg: OpenClawConfig | undefined;
   stateDir: string;
   configPath: string;
   oauthDir: string;
-}): {
-  configInsideState: boolean;
-  oauthInsideState: boolean;
-  workspaceDirs: string[];
-} {
+}) {
+  const cfg = params.cfg;
   return {
     configInsideState: isPathInside(params.stateDir, params.configPath),
     oauthInsideState: isPathInside(params.stateDir, params.oauthDir),
-    workspaceDirs: collectWorkspaceDirs(params.cfg),
+    workspaceDirs: cfg
+      ? [...new Set(listAgentIds(cfg).map((agentId) => resolveAgentWorkspaceDir(cfg, agentId)))]
+      : [resolveDefaultAgentWorkspaceDir()],
   };
 }
 
@@ -162,13 +149,10 @@ function isUnsafeRemovalTarget(target: string): boolean {
     return true;
   }
   const home = resolveHomeDir();
-  if (home && resolved === path.resolve(home)) {
-    return true;
-  }
-  if (isPathInside(resolved, path.resolve(process.cwd()))) {
-    return true;
-  }
-  return false;
+  return (
+    Boolean(home && resolved === path.resolve(home)) ||
+    isPathInside(resolved, path.resolve(process.cwd()))
+  );
 }
 
 /** Remove one path after rejecting empty/root/home targets and honoring dry-run mode. */

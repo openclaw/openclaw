@@ -151,7 +151,7 @@ actor TalkModeRuntime {
         if enabled {
             await start()
         } else {
-            await self.stop()
+            await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
         }
     }
 
@@ -251,17 +251,12 @@ actor TalkModeRuntime {
         generation == self.lifecycleGeneration && self.isEnabled
     }
 
-    func stop() async {
-        await self.stop(reconfigurationGeneration: nil, lifecycleGeneration: nil)
-    }
-
     func detachResourcesForRealtimeStop() -> RealtimeTalkRelaySession? {
         let realtimeSession = self.realtimeSession
         self.realtimeSession = nil
         self.audioInputObserver?.stop()
         self.audioInputObserver = nil
-        self.silenceTask?.cancel()
-        self.silenceTask = nil
+        SimpleTaskSupport.stop(task: &self.silenceTask)
         self.lastTranscript = ""
         self.lastHeard = nil
         self.lastSpeechEnergyAt = nil
@@ -385,7 +380,7 @@ actor TalkModeRuntime {
                 }
             })
         guard started else { return false }
-        self.startRMSTicker(meter: self.rmsMeter)
+        self.startRMSTicker()
         return true
     }
 
@@ -418,13 +413,12 @@ actor TalkModeRuntime {
         self.audioEngine?.stop()
         self.audioEngine = nil
         self.activeInputResolution = nil
-        self.rmsTask?.cancel()
-        self.rmsTask = nil
+        SimpleTaskSupport.stop(task: &self.rmsTask)
     }
 
-    private func startRMSTicker(meter: LockIsolated<Double>) {
+    private func startRMSTicker() {
         self.rmsTask?.cancel()
-        self.rmsTask = Task { [weak self, meter] in
+        self.rmsTask = Task { [weak self, meter = self.rmsMeter] in
             while let self {
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 if Task.isCancelled {
@@ -445,7 +439,7 @@ actor TalkModeRuntime {
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.phase == .speaking, self.interruptOnSpeech {
-            if await shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
+            if self.shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
                 await stopSpeaking(reason: .speech)
                 self.lastTranscript = ""
                 self.lastHeard = nil
@@ -624,19 +618,16 @@ extension TalkModeRuntime {
                         "using history fallback")
                 assistantText = await self.waitForAssistantTextFromHistory(
                     sessionKey: sessionKey,
-                    since: nil,
-                    timeoutSeconds: 12)
+                    since: nil)
             } else {
                 assistantText = await self.waitForAssistantEventText(
                     sessionKey: sessionKey,
-                    runId: response.runId,
-                    timeoutSeconds: 45)
+                    runId: response.runId)
                 if assistantText == nil {
                     self.logger.warning("talk assistant event text missing; using history fallback")
                     assistantText = await self.waitForAssistantTextFromHistory(
                         sessionKey: sessionKey,
-                        since: startedAt,
-                        timeoutSeconds: 12)
+                        since: startedAt)
                 }
             }
             guard let assistantText
@@ -685,8 +676,7 @@ extension TalkModeRuntime {
 
     private func waitForAssistantEventText(
         sessionKey: String,
-        runId: String,
-        timeoutSeconds: Int) async -> String?
+        runId: String) async -> String?
     {
         let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
         return await withTaskGroup(of: String?.self) { group in
@@ -725,7 +715,7 @@ extension TalkModeRuntime {
                 return latestText
             }
             group.addTask {
-                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                try? await Task.sleep(for: .seconds(45))
                 return nil
             }
             defer { group.cancelAll() }
@@ -738,10 +728,9 @@ extension TalkModeRuntime {
 
     private func waitForAssistantTextFromHistory(
         sessionKey: String,
-        since: Double?,
-        timeoutSeconds: Int) async -> String?
+        since: Double?) async -> String?
     {
-        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        let deadline = Date().addingTimeInterval(12)
         while Date() < deadline {
             if let text = await latestAssistantText(sessionKey: sessionKey, since: since) {
                 return text
@@ -1434,10 +1423,12 @@ extension TalkModeRuntime {
         }
     }
 
-    private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
+    private func shouldInterrupt(transcript: String, hasConfidence: Bool) -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if self.isLikelyEcho(of: trimmed) {
+        if let spoken = self.lastSpokenText?.lowercased(), !spoken.isEmpty,
+           spoken.contains(trimmed.lowercased())
+        {
             return false
         }
         let now = Date()
@@ -1445,11 +1436,5 @@ extension TalkModeRuntime {
             return false
         }
         return hasConfidence
-    }
-
-    private func isLikelyEcho(of transcript: String) -> Bool {
-        guard let spoken = lastSpokenText?.lowercased(), !spoken.isEmpty else { return false }
-        let probe = transcript.lowercased()
-        return spoken.contains(probe)
     }
 }

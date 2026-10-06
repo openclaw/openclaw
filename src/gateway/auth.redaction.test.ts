@@ -13,6 +13,13 @@ it.each(["token", "password"] as const)(
   async (mode) => {
     const auth = { mode, [mode]: REDACTED_SENTINEL, allowTailscale: true };
     expect(() => assertGatewayAuthConfigured(auth)).toThrow(/redaction sentinel/);
+    if (mode === "password") {
+      const passwordAuth = { ...auth, allowTailscale: false };
+      expect(() => assertGatewayAuthConfigured(passwordAuth)).toThrow(
+        /gateway\.auth\.password.*external secret source/,
+      );
+      expect(() => assertGatewayAuthConfigured(passwordAuth)).not.toThrow(/doctor --fix/);
+    }
     for (const connectAuth of [{ [mode]: REDACTED_SENTINEL }, null]) {
       await expect(
         authorizeWsControlUiGatewayConnect({
@@ -52,15 +59,6 @@ it("rejects a redacted local password fallback without rejecting proxy mode", as
       },
     }),
   ).resolves.toEqual({ ok: false, reason: "password_redacted_config" });
-});
-
-it("directs password recovery to its credential source", () => {
-  const auth = { mode: "password" as const, password: REDACTED_SENTINEL, allowTailscale: false };
-
-  expect(() => assertGatewayAuthConfigured(auth)).toThrow(
-    /gateway\.auth\.password.*external secret source/,
-  );
-  expect(() => assertGatewayAuthConfigured(auth)).not.toThrow(/doctor --fix/);
 });
 
 it("keeps the corrupted store entry and Doctor remedy in the startup refusal", async () => {

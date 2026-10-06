@@ -36,20 +36,8 @@ function classifyBrowserDocumentNavigationRequest(
     frameResolutionFailed = true;
   }
 
-  try {
-    if (request.isNavigationRequest()) {
-      return kind;
-    }
-  } catch {
-    // Fall through to the resource-type check.
-  }
-
-  try {
-    if (request.resourceType() === "document") {
-      return kind;
-    }
-  } catch {
-    // Fall through to the unresolved-frame result below.
+  if (request.isNavigationRequest() || request.resourceType() === "document") {
+    return kind;
   }
   // Match the previous two-step classifier: known non-doc requests fall
   // through, while an unresolved frame remains guarded as a subframe.
@@ -158,12 +146,8 @@ async function removePageNavigationRequestGuard(
   } catch (err) {
     // A closed page owns no remaining route. Preserve close-triggering actions,
     // but surface cleanup failures while the page is still usable.
-    try {
-      if (page.isClosed()) {
-        return undefined;
-      }
-    } catch {
-      // Keep the original cleanup failure when page state is unavailable.
+    if (page.isClosed()) {
+      return undefined;
     }
     return err;
   }

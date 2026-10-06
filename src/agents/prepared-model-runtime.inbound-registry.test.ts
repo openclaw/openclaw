@@ -25,6 +25,7 @@ import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
+  ensureGatewayPreparedModelRuntimeReady,
   getPendingPreparedModelRuntimeReplacement,
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -624,32 +625,47 @@ describe("catalog-worker replacement demand", () => {
     return { input, failure };
   }
 
-  it("shares a demand replacement without activating pure snapshot reads", async () => {
-    const { input, failure } = await failReplacement();
-    mocks.resolveAmbientCredentials.mockClear();
-    await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
-    expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
-    const started = createDeferred();
-    const finish = createDeferred();
-    mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
-      started.resolve();
-      return finish.promise.then(() => ({}));
-    });
-    const foreground = dispatch();
-    let background: ReturnType<typeof dispatch> | undefined;
-    try {
-      expect(await Promise.race([started.promise, foreground])).toBeUndefined();
-      background = dispatch("scheduled");
-      finish.resolve();
-      const recovered = await foreground;
-      expect(recovered).toMatchObject({ agentId: "default", config: input.config });
-      expect(await background).toBe(recovered);
-      expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
-    } finally {
-      finish.resolve();
-      await Promise.allSettled([foreground, background]);
-    }
-  });
+  it.each(["successful", "failed"] as const)(
+    "shares a %s demand replacement without activating pure snapshot reads",
+    async (outcome) => {
+      const { input, failure } = await failReplacement();
+      mocks.resolveAmbientCredentials.mockClear();
+      await expect(prepareModelRuntimeSnapshot(input)).rejects.toBe(failure);
+      expect(mocks.resolveAmbientCredentials).not.toHaveBeenCalled();
+      const started = createDeferred();
+      const finish = createDeferred();
+      mocks.resolveAmbientCredentials.mockImplementationOnce(() => {
+        started.resolve();
+        return finish.promise.then(() => {
+          if (outcome === "failed") {
+            throw failure;
+          }
+          return {};
+        });
+      });
+      const foreground = dispatch();
+      let background: ReturnType<typeof dispatch> | undefined;
+      try {
+        expect(await Promise.race([started.promise, foreground])).toBeUndefined();
+        background = dispatch("scheduled");
+        const shared = Promise.all([foreground, background]);
+        finish.resolve();
+        if (outcome === "failed") {
+          await expect(shared).rejects.toBe(failure);
+          await expect(dispatch("scheduled")).rejects.toThrow("was not published");
+          expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+          return;
+        }
+        const [recovered, joined] = await shared;
+        expect(recovered).toMatchObject({ agentId: "default", config: input.config });
+        expect(joined).toBe(recovered);
+        expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
+      } finally {
+        finish.resolve();
+        await Promise.allSettled([foreground, background]);
+      }
+    },
+  );
 
   it("limits scheduled checks to one per failure, retaining foreground recovery after cooldown", async () => {
     const { input } = await failReplacement();
@@ -677,6 +693,36 @@ describe("catalog-worker replacement demand", () => {
       clock.mockRestore();
     }
   });
+  it("refuses a failed-runtime demand from plugin work its replacement drain is joining", async () => {
+    await failReplacement();
+    const instance = new PluginInstance("demand-recovery-donor");
+    const releaseReplacement = instance.reserveReplacement();
+    const drain = beginPreparedModelRuntimePluginDrain();
+    const abort = new AbortController();
+    const admission = instance
+      .run(() =>
+        ensureGatewayPreparedModelRuntimeReady({
+          agentId: "default",
+          demand: "scheduled",
+          abortSignal: abort.signal,
+        }),
+      )
+      .catch((error: unknown) => error);
+    try {
+      abort.abort(new Error("Demand incorrectly waited on its own replacement drain"));
+      expect(await admission).toMatchObject({ admissionBlocked: true });
+      await instance.waitForRetainedWork(new AbortController().signal, { includeCalls: true });
+    } finally {
+      drain.release();
+      releaseReplacement();
+      await admission;
+      await instance.dispose();
+    }
+    mocks.resolveAmbientCredentials.mockClear();
+    expect(await dispatch("scheduled")).toMatchObject({ agentId: "default" });
+    expect(mocks.resolveAmbientCredentials).toHaveBeenCalled();
+  });
+
   it("does not spend the scheduled check while waiting for an unrelated failed replacement", async () => {
     await failReplacement(undefined, ["default", "other"]);
     const drain = beginPreparedModelRuntimePluginDrain();

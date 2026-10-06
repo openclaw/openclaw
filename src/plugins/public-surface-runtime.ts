@@ -2,20 +2,14 @@
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
-import { isTypeScriptPackageEntry } from "./package-entrypoints.js";
+import {
+  isTypeScriptPackageEntry,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
 import { isPathInside } from "./path-safety.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
-
-export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
-  ".ts",
-  ".mts",
-  ".js",
-  ".mjs",
-  ".cts",
-  ".cjs",
-] as const;
 
 /** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
 function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
@@ -171,7 +165,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
     }
   }
   return (
-    resolveRetainedConfigDoctorPath(params) ??
+    resolveRetainedDoctorPath(params) ??
     resolveBundledPluginSourcePublicSurfacePath({
       sourceRoot: path.join(normalizedRootDir, "extensions"),
       dirName: params.dirName,
@@ -180,23 +174,34 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
-function resolveRetainedConfigDoctorPath(params: {
+export function resolveRetainedDoctorPath(params: {
   rootDir: string;
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  if (params.artifactBasename !== "config-doctor-api.js") {
+  const dirName = normalizeBundledPluginDirName(params.dirName);
+  const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
+  const directory =
+    artifactBasename === "config-doctor-api.js"
+      ? "config-doctor"
+      : artifactBasename === "state-retention-api.js"
+        ? "state-retention"
+        : undefined;
+  if (!directory) {
     return null;
   }
-  // Externalizing a channel removes its runtime entry, but shipped config still needs
-  // its core-version migration before that plugin can be installed or granted capabilities.
+  // Host-retained Doctor contracts remain available after runtime externalization.
   for (const dist of ["dist", "dist-runtime"]) {
-    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    const candidate = path.resolve(params.rootDir, dist, directory, `${dirName}.js`);
     if (pluginCacheExistsSync(candidate)) {
       return candidate;
     }
   }
-  return null;
+  return resolveBundledPluginSourcePublicSurfacePath({
+    sourceRoot: path.join(params.rootDir, "extensions"),
+    dirName,
+    artifactBasename,
+  });
 }
 
 function resolveExplicitEnvBundledPluginsDir(env: NodeJS.ProcessEnv): string | undefined {
@@ -277,5 +282,5 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
-  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
+  return resolveRetainedDoctorPath({ ...params, dirName, artifactBasename });
 }

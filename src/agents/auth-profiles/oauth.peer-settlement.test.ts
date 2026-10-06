@@ -64,6 +64,7 @@ const profileId = "openai:default";
 const provider = "openai";
 function candidate(agentId: string, agentDir: string) {
   return {
+    configured: true,
     agentId,
     agentDir,
     databasePath: resolveAuthProfileDatabasePath(agentDir),

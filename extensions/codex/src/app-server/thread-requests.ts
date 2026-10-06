@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import {
-  isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -59,26 +57,8 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   suppress_unstable_features_warning: true,
 };
 
-const CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG: JsonObject = {
-  "features.goals": false,
-};
-
-const CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG: JsonObject = {
-  // OpenClaw owns the durable progress card; Codex's native checklist would create a second owner.
-  "tools.update_plan.enabled": false,
-};
-
-const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
-  "features.code_mode": false,
-  "features.code_mode_only": false,
-};
-
 const CODEX_NO_PROJECT_DOCS_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
-};
-
-const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
-  "features.multi_agent": false,
 };
 
 const CODEX_DELEGATION_DISABLED_THREAD_CONFIG: JsonObject = {
@@ -159,7 +139,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
-    EmbeddedRunAttemptParams,
+    AgentHarnessSessionRuntimeParamsV1,
     | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
@@ -173,6 +153,10 @@ export function buildCodexThreadConfiguration(
   params: CodexThreadConfigurationContext,
   options: CodexThreadConfigurationOptions,
 ) {
+  const config = buildCodexRuntimeThreadConfigForRun(params, options.config, {
+    ...options,
+    directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
+  });
   return {
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     ...(options.appServer.sessionRoot
@@ -184,23 +168,23 @@ export function buildCodexThreadConfiguration(
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
-    config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
-      ...options,
-      directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
-    }),
+    config,
     // Catalog-owned collaboration messages replace caller collaboration instructions
     // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
     // workspace instructions ride the thread developer carrier after the immutable generic policy.
     developerInstructions: joinPresentSections(
       options.developerInstructions ??
-        buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
+        buildDeveloperInstructions(params, {
+          dynamicTools: options.dynamicTools,
+          nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
+        }),
       options.refreshableInstructions,
     ),
   };
 }
 
 export function buildThreadStartParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
@@ -214,8 +198,7 @@ export function buildThreadStartParams(
     modelProvider: options.modelProvider ?? resolvedModelProvider,
   });
   return {
-    model: modelSelection.model,
-    ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
+    ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
     ...((options.hostSystemAgentActive ?? isHostScopedAgentToolActive("openclaw")) &&
     isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
@@ -238,7 +221,7 @@ export function buildThreadStartParams(
 }
 
 export function buildThreadResumeParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
@@ -270,12 +253,7 @@ export function buildThreadResumeParams(
       sortDirection: "desc",
       itemsView: "notLoaded",
     },
-    ...(modelSelection
-      ? {
-          model: modelSelection.model,
-          ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
-        }
-      : {}),
+    ...modelSelection,
     ...buildCodexThreadConfiguration(params, options),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
@@ -289,40 +267,36 @@ export function buildCodexRuntimeThreadConfig(
     directOnlyToolNamespaces?: readonly string[];
   } = {},
 ): JsonObject {
-  const configured = buildCodexProjectDocThreadConfig(config);
-  // Native goal RPCs remain available through app-server, but the Codex goals
-  // feature also starts autonomous turns. Keep it disabled until a run owner exists.
-  const codeModeConfig: JsonObject = {
-    ...CODEX_CODE_MODE_THREAD_CONFIG,
-    "features.code_mode_only": options.nativeCodeModeOnlyEnabled === true,
-  };
-  if (options.nativeCodeModeEnabled === false) {
-    const disabledConfig = expectDefined(
-      mergeCodexThreadConfigs(
-        configured,
-        CODEX_CODE_MODE_DISABLED_THREAD_CONFIG,
-        CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-        CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      ),
-      "Codex disabled code mode config",
-    );
-    // Native patch streaming is part of native code mode, so do not send it
-    // when runtime policy disables that tool surface.
-    delete disabledConfig["features.apply_patch_streaming_events"];
-    return disabledConfig;
-  }
+  const enabled = options.nativeCodeModeEnabled !== false;
+  const codeModeOnly = options.nativeCodeModeOnlyEnabled === true;
   const merged = expectDefined(
     mergeCodexThreadConfigs(
-      codeModeConfig,
-      configured,
-      CODEX_GOAL_CONTINUATION_DISABLED_THREAD_CONFIG,
-      CODEX_NATIVE_UPDATE_PLAN_DISABLED_THREAD_CONFIG,
-      options.nativeCodeModeOnlyEnabled === true ? { "features.code_mode_only": true } : undefined,
+      enabled
+        ? { ...CODEX_CODE_MODE_THREAD_CONFIG, "features.code_mode_only": codeModeOnly }
+        : undefined,
+      buildCodexProjectDocThreadConfig(config),
+      {
+        // Native goals start autonomous turns; OpenClaw owns both continuation and progress cards.
+        "features.goals": false,
+        "tools.update_plan.enabled": false,
+        ...(!enabled
+          ? { "features.code_mode": false, "features.code_mode_only": false }
+          : codeModeOnly
+            ? { "features.code_mode_only": true }
+            : {}),
+      },
     ),
-    options.nativeCodeModeOnlyEnabled === true
-      ? "Codex code mode only config"
-      : "Codex code mode config",
+    !enabled
+      ? "Codex disabled code mode config"
+      : codeModeOnly
+        ? "Codex code mode only config"
+        : "Codex code mode config",
   );
+  if (!enabled) {
+    // Native patch streaming belongs to the code-mode tool surface.
+    delete merged["features.apply_patch_streaming_events"];
+    return merged;
+  }
   return ensureDirectOnlyToolNamespaces(merged, options.directOnlyToolNamespaces);
 }
 
@@ -451,7 +425,7 @@ export function buildCodexRuntimeThreadConfigForRun(
         ? { "features.image_generation": false }
         : undefined,
       shouldDisableCodexToolSearchForModel(params.modelId)
-        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        ? { "features.multi_agent": false }
         : undefined,
       messageOnlySourceReply ||
         params.pluginHarnessToolPolicyRestricted === true ||
@@ -485,7 +459,7 @@ export function buildCodexRuntimeThreadConfigForRun(
 }
 
 export function buildCodexRingZeroThreadConfigPatch(
-  params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+  params: Pick<AgentHarnessSessionRuntimeParamsV1, "toolsAllow">,
   hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {

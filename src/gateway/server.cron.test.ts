@@ -695,7 +695,7 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       session: { mainKey: "main" },
-      agents: { entries: { ops: { default: true } } },
+      agents: { entries: { ops: {} } },
       channels: { telegram: { botToken: "telegram-token" } },
     });
 
@@ -714,7 +714,7 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       session: { mainKey: "main" },
-      agents: { entries: { main: { default: true }, ops: {} } },
+      agents: { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, ops: {} } },
       channels: { telegram: { botToken: "telegram-token" } },
     });
 
@@ -767,7 +767,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     await writeCronConfig({
-      agents: { entries: { main: { default: true }, writer: {} } },
+      agents: { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, writer: {} } },
     });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });

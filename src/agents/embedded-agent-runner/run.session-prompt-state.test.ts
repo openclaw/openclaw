@@ -107,18 +107,13 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
 
-    const resolved = await resolveEmbeddedRunTerminal(
-      makeTerminalInput({
+    const resolved = await resolveEmbeddedRunTerminal({
+      ...makeTerminalInput({
         attempt,
         attemptAssistant: undefined,
-        activePromptPersisted: state.activePrompt.persisted,
-        activateInternalPrompt: state.activateInternalPrompt,
-        activateCompactionContinuation: state.activateCompactionContinuation,
-        setSuppressNextUserMessagePersistence: (value) => {
-          state.suppressNextUserMessagePersistence = value;
-        },
       }),
-    );
+      sessionPromptState: state,
+    });
 
     expect(resolved).toEqual({ action: "retry" });
     expect(state.activePrompt).toEqual(activePrompt);
@@ -147,25 +142,15 @@ describe("embedded run session prompt state", () => {
       currentAttemptAssistant: compactionAssistant,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
-    const terminalInput = {
-      retryState,
-      activePromptPersisted: state.activePrompt.persisted,
-      activateInternalPrompt: state.activateInternalPrompt,
-      activateCompactionContinuation: state.activateCompactionContinuation,
-      clearCompactionContinuation: state.clearCompactionContinuation,
-      setSuppressNextUserMessagePersistence: (value: boolean) => {
-        state.suppressNextUserMessagePersistence = value;
-      },
-    };
-
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: compactionAttempt,
           attemptAssistant: compactionAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const reasoningAssistant = buildEmbeddedRunnerAssistant({
@@ -184,22 +169,23 @@ describe("embedded run session prompt state", () => {
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: reasoningAttempt,
           attemptAssistant: reasoningAssistant,
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const emptyResponseAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "" }],
     });
     await expect(
-      resolveEmbeddedRunTerminal(
-        makeTerminalInput({
-          ...terminalInput,
+      resolveEmbeddedRunTerminal({
+        ...makeTerminalInput({
+          retryState,
           attempt: makeEmbeddedRunnerAttempt({
             assistantTexts: [],
             lastAssistant: emptyResponseAssistant,
@@ -210,7 +196,8 @@ describe("embedded run session prompt state", () => {
             },
           }),
         }),
-      ),
+        sessionPromptState: state,
+      }),
     ).resolves.toEqual({ action: "retry" });
 
     const prompt = state.activePrompt.override ?? "";
@@ -244,19 +231,15 @@ describe("embedded run session prompt state", () => {
       });
 
       await expect(
-        resolveEmbeddedRunTerminal(
-          makeTerminalInput({
+        resolveEmbeddedRunTerminal({
+          ...makeTerminalInput({
             attempt,
             attemptAssistant: assistant,
             payloadsWithToolMedia: [{ text: "Visible draft." }],
             finalAssistantVisibleText: "Visible draft.",
-            activePromptPersisted: state.activePrompt.persisted,
-            activateInternalPrompt: state.activateInternalPrompt,
-            markOwnedTranscriptRetry: state.markOwnedTranscriptRetry,
-            activateCompactionContinuation: state.activateCompactionContinuation,
-            clearCompactionContinuation: state.clearCompactionContinuation,
           }),
-        ),
+          sessionPromptState: state,
+        }),
       ).resolves.toEqual({ action: "retry" });
 
       expect(state.activePrompt.override).toContain("Tighten the final wording.");

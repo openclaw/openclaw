@@ -7,7 +7,6 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { recordTalkObservabilityEvent } from "../../talk/observability.js";
 import {
@@ -25,9 +24,6 @@ const MAX_TALK_HANDOFF_TTL_MS = 60 * 60 * 1000;
 /** Inputs captured when a gateway caller creates a managed Talk room. */
 type TalkHandoffCreateParams = {
   sessionKey: string;
-  sessionId?: string;
-  channel?: string;
-  target?: string;
   provider?: string;
   model?: string;
   voice?: string;
@@ -37,43 +33,23 @@ type TalkHandoffCreateParams = {
   ttlMs?: number;
 };
 
-/** Private handoff state, including the hashed room token and event controller. */
+/** Private handoff state and its event controller. */
 type TalkHandoffRecord = Omit<TalkHandoffCreateParams, "ttlMs" | "mode" | "transport" | "brain"> & {
   id: string;
   roomId: string;
   roomUrl: string;
-  tokenHash: string;
   mode: TalkMode;
   transport: TalkTransport;
   brain: TalkBrain;
   createdAt: number;
   expiresAt: number;
-  room: TalkHandoffRoomState;
-};
-
-/** Public handoff shape returned to clients; never includes token material. */
-type TalkHandoffPublicRecord = Omit<TalkHandoffRecord, "tokenHash" | "room"> & {
-  room: {
-    activeClientId?: string;
-    activeTurnId?: string;
-    recentTalkEvents: TalkEvent[];
-  };
-};
-
-type TalkHandoffCreateResult = TalkHandoffPublicRecord & {
-  token: string;
+  room: { talk: TalkSessionController };
 };
 
 type TalkHandoffRevokeResult = {
   revoked: boolean;
   roomId?: string;
-  activeClientId?: string;
   events: TalkEvent[];
-};
-
-type TalkHandoffRoomState = {
-  activeClientId?: string;
-  talk: TalkSessionController;
 };
 
 const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
@@ -82,7 +58,7 @@ const handoffs = resolveGlobalMap<string, TalkHandoffRecord>(
 );
 
 /** Creates a short-lived Talk room and returns the only plaintext join token. */
-export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffCreateResult {
+export function createTalkHandoff(params: TalkHandoffCreateParams) {
   pruneExpiredTalkHandoffs();
   const rawCreatedAt = Date.now();
   const createdAt = resolveDateTimestampMs(rawCreatedAt);
@@ -98,11 +74,7 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
     id,
     roomId,
     roomUrl: `/talk/rooms/${roomId}`,
-    tokenHash: sha256Base64Url(token),
     sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    channel: params.channel,
-    target: params.target,
     provider: params.provider,
     model: params.model,
     voice: params.voice,
@@ -123,7 +95,16 @@ export function createTalkHandoff(params: TalkHandoffCreateParams): TalkHandoffC
     payload: { handoffId: id, roomId },
   });
   handoffs.set(id, record);
-  return { ...toPublicTalkHandoffRecord(record), token };
+  const { room, ...publicRecord } = record;
+  return {
+    ...publicRecord,
+    room: {
+      activeClientId: undefined,
+      activeTurnId: room.talk.activeTurnId,
+      recentTalkEvents: [...room.talk.recentEvents],
+    },
+    token,
+  };
 }
 
 /** Returns a non-expired handoff record for gateway-internal callers. */
@@ -148,7 +129,6 @@ export function revokeTalkHandoff(id: string): TalkHandoffRevokeResult {
   return {
     revoked: true,
     roomId: record.roomId,
-    activeClientId: record.room.activeClientId,
     events: [event],
   };
 }
@@ -175,16 +155,4 @@ function pruneExpiredTalkHandoffs(now = Date.now()): void {
       handoffs.delete(id);
     }
   }
-}
-
-function toPublicTalkHandoffRecord(record: TalkHandoffRecord): TalkHandoffPublicRecord {
-  const { tokenHash: _tokenHash, room: _room, ...publicRecord } = record;
-  return {
-    ...publicRecord,
-    room: {
-      activeClientId: record.room.activeClientId,
-      activeTurnId: record.room.talk.activeTurnId,
-      recentTalkEvents: [...record.room.talk.recentEvents],
-    },
-  };
 }

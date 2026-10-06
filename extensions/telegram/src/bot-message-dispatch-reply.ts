@@ -1,11 +1,13 @@
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
+  type ChannelInboundTurnPlan,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
   LivePreviewDeliveryResult,
   OutboundPayloadPlan,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import {
   isFastModeAutoProgressPayload,
@@ -35,7 +37,6 @@ import {
   takeQueuedAnswerBlockRotation,
 } from "./bot-message-dispatch-draft.js";
 import {
-  applyTextToPayload,
   normalizeDeliveryPayload,
   normalizePreparedDeliveryPayload,
   formatTelegramGroupThreadReply,
@@ -58,7 +59,7 @@ import {
   shouldSuppressTelegramError,
 } from "./error-policy.js";
 import { shouldSuppressLocalTelegramExecApprovalPrompt } from "./exec-approvals.js";
-import { markTelegramDroppedControlFallback } from "./interactive-fallback.js";
+import { applyTextToPayload, markTelegramDroppedControlFallback } from "./interactive-fallback.js";
 import { createTelegramReasoningStepState } from "./reasoning-lane-coordinator.js";
 import { resolveTelegramTargetChatType } from "./targets.js";
 
@@ -68,7 +69,7 @@ type BufferedDispatchParams = Parameters<
 type DispatcherOptions = BufferedDispatchParams["dispatcherOptions"];
 type Deliver = DispatcherOptions["deliver"];
 type Skip = NonNullable<DispatcherOptions["onSkip"]>;
-type ErrorCallback = NonNullable<DispatcherOptions["onError"]>;
+type ErrorCallback = NonNullable<ChannelInboundTurnPlan["delivery"]["onError"]>;
 
 function toTelegramReplyDeliveryResult(
   turn: Turn,
@@ -410,12 +411,8 @@ async function deliverReplyWithNormalization(
       info.kind === "final" &&
       turn.reasoningStepState.shouldBufferFinalAnswer()
     ) {
-      let resolveFinalization!: (result: LivePreviewDeliveryResult) => void;
-      let rejectFinalization!: (error: unknown) => void;
-      finalization = new Promise((resolve, reject) => {
-        resolveFinalization = resolve;
-        rejectFinalization = reject;
-      });
+      const settlement = createDeferred<LivePreviewDeliveryResult>();
+      finalization = settlement.promise;
       // The coordinator admits only one buffered answer. Settle defensively before replacing
       // its paired promise so an unexpected rebuffer can never orphan turn finalization.
       settleBufferedFinalAsNotVisible(turn);
@@ -424,8 +421,8 @@ async function deliverReplyWithNormalization(
         onPlatformSendDispatch: info.onPlatformSendDispatch,
         assertPlatformSendAuthorized: info.assertPlatformSendAuthorized,
         bindPendingFinalDelivery: info.bindPendingFinalDelivery,
-        resolve: resolveFinalization,
-        reject: rejectFinalization,
+        resolve: settlement.resolve,
+        reject: settlement.reject,
       };
       turn.reasoningStepState.bufferFinalAnswer(
         applyTextToPayload(effectivePayload, segment.update.text),
@@ -436,7 +433,11 @@ async function deliverReplyWithNormalization(
       turn.reasoningStepState.noteReasoningHint();
     }
     if (segment.lane === "answer" && info.kind === "tool") {
-      if (turn.verboseProgressActive()) {
+      const verbose = await turn.verboseProgressActive();
+      if (turn.isSuperseded()) {
+        return await settleTerminalNoVisibleDelivery(turn, info, { abandonBufferedFinal: true });
+      }
+      if (verbose) {
         const delivery = await sendPayload(
           turn,
           applyTextToPayload(effectivePayload, segment.update.text),

@@ -10,7 +10,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import {
   hasSessionTranscriptEventsSync,
   readTranscriptMutationAtSync,
@@ -24,15 +24,16 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-async function createFixture(state: OpenClawTestState, agentId = "main") {
+function createFixture(state: OpenClawTestState, agentId = "main") {
   const options = { agentId, env: state.env };
   const scope = (sessionId: string) => ({
     ...options,
     sessionId,
     sessionKey: `agent:${agentId}:${sessionId}`,
   });
+  // Native seeding leaves the manually assigned mutation fences free of maintenance writers.
   for (const sessionId of ["hot", "cold", "empty"]) {
-    await replaceSessionEntry(scope(sessionId), { sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(scope(sessionId), { sessionId, updatedAt: 1 });
   }
   const database = openOpenClawAgentDatabase(options);
   database.db.exec(`
@@ -54,7 +55,7 @@ it.each(["presence", "mutation"] as const)(
   "keeps fresh bindings and rows without recompiling warm transcript %s reads",
   async (kind) => {
     await withOpenClawTestState({ label: "prepared-transcript-bindings" }, async (state) => {
-      const { database, options, scope } = await createFixture(state);
+      const { database, options, scope } = createFixture(state);
       const read =
         kind === "presence" ? hasSessionTranscriptEventsSync : readTranscriptMutationStateSync;
       const expected = {
@@ -102,7 +103,7 @@ it.each(["presence", "mutation"] as const)(
 
 it("reads each in-transaction fence advance and restores the prior pair on rollback", async () => {
   await withOpenClawTestState({ label: "prepared-transcript-rollback" }, async (state) => {
-    const { database, options, scope } = await createFixture(state);
+    const { database, options, scope } = createFixture(state);
     const read = () => readTranscriptMutationStateInTransaction(database, "hot");
     expect(read()).toEqual({ observedAt: 10, updatedAt: 20 });
     expect(() =>
@@ -131,7 +132,7 @@ it("reads each in-transaction fence advance and restores the prior pair on rollb
 
 it("keeps prepared metadata reads in the current WAL snapshot until it ends", async () => {
   await withOpenClawTestState({ label: "prepared-transcript-snapshot" }, async (state) => {
-    const { database, scope } = await createFixture(state);
+    const { database, scope } = createFixture(state);
     expect(hasSessionTranscriptEventsSync(scope("hot"))).toBe(true);
     expect(readTranscriptMutationStateSync(scope("hot"))).toEqual({
       observedAt: 10,
@@ -170,8 +171,8 @@ it("keeps prepared metadata reads in the current WAL snapshot until it ends", as
 
 it("isolates identical session IDs by native handle and reopens without using a closed reader", async () => {
   await withOpenClawTestState({ label: "prepared-transcript-handles" }, async (state) => {
-    const first = await createFixture(state);
-    const second = await createFixture(state, "other");
+    const first = createFixture(state);
+    const second = createFixture(state, "other");
     second.database.db.exec(`
       DELETE FROM transcript_events WHERE session_id = 'hot';
       UPDATE session_windows SET transcript_observed_at = 30, transcript_updated_at = 40

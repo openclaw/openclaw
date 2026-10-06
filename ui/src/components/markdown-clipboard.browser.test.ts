@@ -191,10 +191,20 @@ describe("Markdown clipboard operation lifetime", () => {
       } else {
         const frame = document.body.appendChild(document.createElement("iframe"));
         owners.push(frame);
+        vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation((request) => {
+          void snapshot.promise.then((dataUrl) => {
+            window.dispatchEvent(
+              new MessageEvent("message", {
+                source: frame.contentWindow,
+                data: { type: "openclaw:widget-snapshot", id: request.id, dataUrl },
+              }),
+            );
+          });
+        });
         copy = () => {
-          widgetResult = exportWidget("copy", frame, "Synthetic widget", {
-            requestSnapshot: () => snapshot.promise,
-          }).catch((error: unknown) => error);
+          widgetResult = exportWidget("copy", frame, "Synthetic widget").catch(
+            (error: unknown) => error,
+          );
         };
       }
       const code = await mountCopy("code");

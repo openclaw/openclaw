@@ -9,10 +9,8 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import {
-  getSessionColdStorageStatus,
-  runSessionColdStorageMaintenance,
-} from "../config/sessions/session-cold-storage.js";
+import { getSessionColdStorageStatus } from "../config/sessions/session-cold-storage-status.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import {

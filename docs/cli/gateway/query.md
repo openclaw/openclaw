@@ -254,7 +254,7 @@ openclaw gateway status --port 19001
 
 <AccordionGroup>
   <Accordion title="Status semantics">
-    - Stays available for diagnostics even when the local CLI config is missing or invalid.
+    - Stays available for diagnostics even when the local CLI config is missing or invalid. Config problems are warnings with `openclaw doctor --fix` guidance; valid connection settings and the recorded service identity remain usable.
     - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
     - Probes are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
@@ -476,6 +476,13 @@ openclaw gateway suspend --port 18999 --json
 The ready output includes the suspension ID, lease expiry, and the matching
 resume command. Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
+
+Suspension blocker messages name active root requests and include run IDs and
+session keys for chat runs and pending terminal writes. Each category lists up
+to eight holders, with an omitted count for the rest. `gateway.suspend.status`
+returns the same details while draining, and each draining observation writes
+one `DRAINING` line to the Gateway log. Pending final writes remain protected
+until their persistence owner settles, even after a chat client disconnects.
 
 ### `gateway resume <suspensionId>`
 

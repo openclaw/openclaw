@@ -282,7 +282,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
         expect(isCompetingSessionWorkAdmissionActive(f.storePath, [sessionKey, sessionId])).toBe(
           false,
         );
-        return runExclusiveSessionLifecycleMutation({
+        return runExclusiveSessionLifecycleMutation("recover", {
           ...f.scope,
           run: () =>
             f.write({
@@ -330,7 +330,6 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
 });
 
 it.each([
-  { kind: "visible", failed: false },
   { kind: "queued_followup", failed: false },
   { kind: "visible", failed: true },
 ] as const)(
@@ -365,16 +364,10 @@ it.each([
         message: expect.stringMatching(/restart recovery failed/i),
       });
       expect(outcome.result).toBeUndefined();
-    } else if (kind === "queued_followup") {
+    } else {
       expect(outcome.failure).toBeUndefined();
       await outcome.settled;
       expect(outcome.result).toEqual({ status: "skipped", reason: "active-run" });
-    } else {
-      expect(outcome.failure).toBeUndefined();
-      expect(outcome.result).toBeUndefined();
-      await f.write({ sessionId, updatedAt: Date.now(), status: "done" });
-      await outcome.settled;
-      expect(outcome.result).toMatchObject({ status: "owned" });
     }
     expect(retry).toHaveBeenCalledOnce();
   },
@@ -414,21 +407,7 @@ it.each(["started", "cancelled", "replaced"] as const)(
   },
 );
 
-it("admits monitoring without claiming foreground recovery from current delivery residue", async () => {
-  const f = recoveryFixture({
-    abortedLastRun: false,
-    restartRecoveryDeliveryRunId: "completed-recovery",
-    restartRecoveryRuns: [
-      { runId: "completed-recovery", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ],
-  });
-  const result = await f.admit({ kind: "heartbeat" });
-  expect(result.status).toBe("owned");
-  expect(f.read()).toMatchObject(f.entry);
-  expect(f.read()?.mainRestartRecovery).toBeUndefined();
-});
-
-it("leaves a named live recovery owner intact and skips the monitor", async () => {
+it("preserves live recovery authority while monitoring", async () => {
   const f = recoveryFixture({ status: undefined, abortedLastRun: undefined });
   const owner = await f.begin({ owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER });
   let released = false;

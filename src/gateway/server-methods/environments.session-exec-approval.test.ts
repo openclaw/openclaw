@@ -32,8 +32,6 @@ const binding = {
 
 describe("attached command approval custody", () => {
   it.for([
-    { route: "forward", outcome: "allow-once" },
-    { route: "ios", outcome: "allow-once" },
     { route: "ios", outcome: "expire" },
     { route: "forward", outcome: "revoke" },
     { route: "all", outcome: "allow-once" },

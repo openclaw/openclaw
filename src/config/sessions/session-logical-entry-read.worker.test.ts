@@ -18,8 +18,10 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
-import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-native.js";
+import type {
+  AgentDatabaseExecutionScope,
+  AgentDatabaseRequestExecutionSource,
+} from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -150,46 +152,54 @@ it("preserves logical and physical owners without parent SQLite calls", async ()
   }
 });
 
-it("settles a consumed read after an unrelated registry change", async () => {
-  const scope = {
-    agentId: "ops",
-    env: state.env,
-    storePath: state.statePath("consumed-read", "sessions.json"),
-    sessionKey: "global",
-  };
-  replaceSessionEntrySync(scope, { sessionId: "consumed-session", updatedAt: 1 });
-  const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
-  const unrelatedPath = unrelated.path;
-  await closeOpenClawAgentDatabasesAsync();
-  let registryChange: Promise<void> | undefined;
-  let consumed = 0;
-  const reading = withSessionEntriesFromStoresInWorker(
-    [{ ...scope, sessionKeys: [scope.sessionKey] }],
-    ([read]) => {
-      read!.assertCurrent();
-      expect(read!.result.entries[0]?.entry.sessionId).toBe("consumed-session");
-      consumed++;
-      registryChange = Promise.resolve().then(() => {
-        unregisterOpenClawAgentDatabase({
-          agentId: "unrelated",
-          path: unrelatedPath,
-          env: state.env,
-        });
+it.each(["before-consume", "after-consume"])(
+  "retains a read across an unrelated registry change %s",
+  async (stage) => {
+    const scope = {
+      agentId: "ops",
+      env: state.env,
+      storePath: state.statePath("consumed-read", stage, "sessions.json"),
+      sessionKey: "global",
+    };
+    replaceSessionEntrySync(scope, { sessionId: "consumed-session", updatedAt: 1 });
+    const unrelated = openOpenClawAgentDatabase({ agentId: "unrelated", env: state.env });
+    const unrelatedPath = unrelated.path;
+    await closeOpenClawAgentDatabasesAsync();
+    let registryChange: Promise<void> | undefined;
+    let consumed = 0;
+    const changeRegistry = () =>
+      unregisterOpenClawAgentDatabase({
+        agentId: "unrelated",
+        path: unrelatedPath,
+        env: state.env,
       });
-      return "consumed";
-    },
-  ).then(
-    (value) => ({ value, error: undefined }),
-    (error: unknown) => ({ value: undefined, error }),
-  );
-  try {
-    const result = await reading;
-    expect(consumed).toBe(1);
-    expect(result).toEqual({ value: "consumed", error: undefined });
-  } finally {
-    await registryChange;
-  }
-});
+    const reading = withSessionEntriesFromStoresInWorker(
+      [{ ...scope, sessionKeys: [scope.sessionKey] }],
+      ([read]) => {
+        if (stage === "before-consume") {
+          changeRegistry();
+        }
+        read!.assertCurrent();
+        expect(read!.result.entries[0]?.entry.sessionId).toBe("consumed-session");
+        consumed++;
+        if (stage === "after-consume") {
+          registryChange = Promise.resolve().then(changeRegistry);
+        }
+        return "consumed";
+      },
+    ).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
+    try {
+      const result = await reading;
+      expect(consumed).toBe(1);
+      expect(result).toEqual({ value: "consumed", error: undefined });
+    } finally {
+      await registryChange;
+    }
+  },
+);
 
 it("retains the captured relative locator and environment across worker preparation", async () => {
   const originalCwd = process.cwd();

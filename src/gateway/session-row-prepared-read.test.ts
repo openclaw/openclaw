@@ -4,10 +4,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { deferCanonicalSessionValidation } from "../config/sessions/session-canonical-validation-deferral.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  authorizeGatewayRequestPreDispatch,
-  createRequestGatewayMethodRegistry,
-} from "./server-methods.js";
+import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
+import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
@@ -59,111 +57,126 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
   expect(prepare).not.toHaveBeenCalled();
 });
 
-it("rechecks dispatch scopes after canonical description readiness", async () => {
-  const { projection, client, request } = describeFixture();
-  client.connect.scopes = ["operator.read"];
-  const database = { agentId: "main", path: "/synthetic/parent.sqlite" };
-  vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-    kind: "pending",
-    database,
-  });
-  certifyReadiness.mockImplementationOnce(async () => {
-    client.connect.scopes = [];
-  });
-  await expect(authorizeGatewayRequestPreDispatch(request)).resolves.toMatchObject({
-    error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
-  });
-  expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
-});
+it.each(["dispatch scopes", "private access"] as const)(
+  "rechecks %s after canonical description readiness",
+  async (boundary) => {
+    const { projection, context, client, request } = describeFixture();
+    const database = { agentId: "main", path: "/synthetic/parent.sqlite" };
+    vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
+      kind: "pending",
+      database,
+    });
+    const describe = vi.spyOn(projection, "describe");
+    if (boundary === "dispatch scopes") {
+      client.connect.scopes = ["operator.read"];
+    }
+    certifyReadiness.mockImplementationOnce(async () => {
+      client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
+      if (boundary === "private access") {
+        client.authenticatedUserProfile = {
+          profileId: "identified-viewer",
+          displayName: "Viewer",
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+      }
+    });
+    if (boundary === "dispatch scopes") {
+      await expect(authorizeGatewayRequestPreDispatch(request)).resolves.toMatchObject({
+        error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
+      });
+    } else {
+      const respond = vi.fn();
+      await sessionByKeyReadHandlers["sessions.describe"]!({
+        req: { type: "req", id: "private-description", method: "sessions.describe" },
+        params: { key: query.key },
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => false,
+      });
+      expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
+        code: "INVALID_REQUEST",
+        message: `Incognito session "${query.key}" was not found.`,
+      });
+      expect(describe).not.toHaveBeenCalled();
+    }
+    expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
+  },
+);
 
-it("rechecks private access before responding after canonical description readiness", async () => {
-  const { projection, context, client } = describeFixture();
-  const database = { agentId: "main", path: "/synthetic/parent.sqlite" };
-  vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-    kind: "pending",
-    database,
-  });
-  const describe = vi.spyOn(projection, "describe");
-  certifyReadiness.mockImplementationOnce(async () => {
-    client.connect.scopes = ["operator.read"];
-    client.authenticatedUserProfile = {
-      profileId: "identified-viewer",
-      displayName: "Viewer",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-  });
-  const respond = vi.fn();
-  await sessionByKeyReadHandlers["sessions.describe"]!({
-    req: { type: "req", id: "private-description", method: "sessions.describe" },
-    params: { key: query.key },
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-  });
-  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, {
-    code: "INVALID_REQUEST",
-    message: `Incognito session "${query.key}" was not found.`,
-  });
-  expect(describe).not.toHaveBeenCalled();
-  expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
-});
+it.each(["operator.admin", "operator.read"])(
+  "ends describe readiness retries after its %s connection closes",
+  async (scope) => {
+    const { projection, context, client } = describeFixture();
+    const connection = new AbortController();
+    client.connect.scopes = [scope];
+    client.connectionSignal = connection.signal;
+    const prepare = vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
+      kind: "pending",
+      database: { agentId: "main", path: "/synthetic/cancelled.sqlite" },
+    });
+    certifyReadiness.mockImplementationOnce(async () => {
+      connection.abort(new Error("Requesting connection closed"));
+    });
+    const respond = vi.fn();
+    try {
+      await handleGatewayRequest({
+        req: {
+          type: "req",
+          id: "cancelled-description",
+          method: "sessions.describe",
+          params: { key: "agent:main:cancelled-read" },
+        },
+        context,
+        client,
+        respond,
+        isWebchatConnect: () => false,
+        extraHandlers: sessionByKeyReadHandlers,
+      });
+      expect(certifyReadiness).toHaveBeenCalledOnce();
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(respond).not.toHaveBeenCalled();
+    } finally {
+      projection.dispose();
+    }
+  },
+);
 
-it("prepares an exact private read without consulting bulk readiness", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  Object.defineProperty(owner, "needsMaterialization", {
-    get: () => {
-      throw new Error("keyed reads must not depend on bulk state");
-    },
-  });
-  const ready = vi.spyOn(owner, "ensureMaterialized").mockImplementation(() => {
-    throw new Error("keyed reads must not join bulk readiness");
-  });
-  const queries = vi.fn(() => [query]);
-  const describe = vi.spyOn(owner, "describe");
-  const consume = vi.fn((read: SessionRowReadView) => read.describe(query));
-  await expect(withPreparedSessionRows(owner, () => true, queries, consume)).resolves.toEqual({
-    kind: "complete",
-    value: undefined,
-  });
-  expect(ready).not.toHaveBeenCalled();
-  expect(describe).toHaveBeenCalledExactlyOnceWith(query);
-  expect(consume).toHaveBeenCalledOnce();
-});
-
-it("refuses a disposed projection before selecting or consuming rows", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  const queries = vi.fn(() => [query]);
-  const consume = vi.fn();
-  await expect(withPreparedSessionRows(owner, () => false, queries, consume)).rejects.toThrow(
-    "no longer active",
-  );
-  expect(queries).not.toHaveBeenCalled();
-  expect(consume).not.toHaveBeenCalled();
-});
-
-it("captures refreshed metadata after preparation without rereading the state getter during consumption", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  const initial = owner.state;
-  let current = initial;
-  const state = vi.fn(() => current);
-  Object.defineProperty(owner, "state", { get: state });
-  vi.spyOn(owner, "describe").mockImplementation(() => {
-    current = {
-      ...initial,
-      rowContext: {
-        ...initial.rowContext,
-        configuredDefaultModelByAgent: new Map([["main", { provider: "fixture", model: "fresh" }]]),
-      },
-    };
-    return undefined;
-  });
-  await withPreparedSessionRows(
-    owner,
-    () => true,
-    () => [query],
-    (read) => {
+it.each(["disposed", "pending", "refreshed"] as const)(
+  "consumes private rows only from an active, ready frame: %s",
+  async (preparation) => {
+    const owner = createSessionRowProjectionFixture({ cfg, store: {} });
+    const queries = vi.fn(() => [query]);
+    let database: DatabaseSync | undefined;
+    const initial = owner.state;
+    let current = initial;
+    const state = vi.fn(() => current);
+    if (preparation === "pending") {
+      const db = new DatabaseSync(":memory:");
+      database = db;
+      // The signal only needs a locator; this fixture never opens the named file.
+      vi.spyOn(db, "location").mockReturnValue("/synthetic/parent.sqlite");
+      vi.spyOn(owner, "describe").mockImplementation(() => {
+        deferCanonicalSessionValidation({ agentId: "main", db });
+        return undefined;
+      });
+    } else if (preparation === "refreshed") {
+      Object.defineProperty(owner, "state", { get: state });
+      vi.spyOn(owner, "describe").mockImplementation(() => {
+        current = {
+          ...initial,
+          rowContext: {
+            ...initial.rowContext,
+            configuredDefaultModelByAgent: new Map([
+              ["main", { provider: "fixture", model: "fresh" }],
+            ]),
+          },
+        };
+        return undefined;
+      });
+    }
+    const consume = vi.fn((read: SessionRowReadView) => {
       state.mockClear();
       expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
         provider: "fixture",
@@ -171,37 +184,33 @@ it("captures refreshed metadata after preparation without rereading the state ge
       });
       expect(read.describe(query)).toBeUndefined();
       expect(state).not.toHaveBeenCalled();
-    },
-  );
-});
-
-it("returns canonical readiness from private preparation without entering the consumer", async () => {
-  const owner = createSessionRowProjectionFixture({ cfg, store: {} });
-  const database = new DatabaseSync(":memory:");
-  // The signal only needs a locator; this fixture never opens the named file.
-  vi.spyOn(database, "location").mockReturnValue("/synthetic/parent.sqlite");
-  vi.spyOn(owner, "describe").mockImplementation(() => {
-    deferCanonicalSessionValidation({ agentId: "main", db: database });
-    return undefined;
-  });
-  const consume = vi.fn();
-  try {
-    await expect(
-      withPreparedSessionRows(
-        owner,
-        () => true,
-        () => [query],
-        consume,
-      ),
-    ).resolves.toEqual({
-      kind: "pending",
-      database: { agentId: "main", path: "/synthetic/parent.sqlite" },
     });
-    expect(consume).not.toHaveBeenCalled();
-  } finally {
-    database.close();
-  }
-});
+    try {
+      const reading = withPreparedSessionRows(
+        owner,
+        () => preparation !== "disposed",
+        queries,
+        consume,
+      );
+      if (preparation === "disposed") {
+        await expect(reading).rejects.toThrow("no longer active");
+        expect(queries).not.toHaveBeenCalled();
+      } else if (preparation === "pending") {
+        await expect(reading).resolves.toEqual({
+          kind: "pending",
+          database: { agentId: "main", path: "/synthetic/parent.sqlite" },
+        });
+      } else {
+        await reading;
+      }
+      if (preparation !== "refreshed") {
+        expect(consume).not.toHaveBeenCalled();
+      }
+    } finally {
+      database?.close();
+    }
+  },
+);
 
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",

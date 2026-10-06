@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import type { Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
@@ -8,7 +10,11 @@ import type {
   GitWorktreeEffectResult,
 } from "../agents/worktrees/git-worktree-operations.js";
 import { runGitBytes, runGitBuffered } from "../agents/worktrees/git.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { withGitProcessOperation, type GitProcessOperation } from "../process/spawn-diagnostics.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withContentGitSlot } from "./git-content-budget.js";
+import { startGitOperationTiming } from "./git-operation-timing.js";
 import { restoreGitWorkerFailure, serializeGitWorkerFailure } from "./git-worker-context.js";
 import type {
   GitWorkerCommand,
@@ -35,6 +41,47 @@ type GitWorkerRuntime = {
 };
 const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
+const log = createSubsystemLogger("git/worker");
+const SPAWN_OPERATIONS = {
+  "repository.identities": "repository.identities",
+  "repository.branches": "repository.branches",
+  "checkout.revision": "checkout.revision",
+  "checkout.context": "checkout.context",
+  "checkout.diff": "checkout.diff",
+  "checkout.baseline": "checkout.baseline",
+  "pull-request.branch-facts": "pull-request.branch-facts",
+  "worktree.snapshot": "worktree.snapshot",
+  "worktree.snapshot-verify-exact": "worktree.snapshot",
+  "worktree.cleanup-inspection": "worktree.cleanup",
+  "worktree.cleanup-fingerprint": "worktree.cleanup",
+  "worktree.eviction-classify": "worktree.cleanup",
+  "worktree.eviction-source": "worktree.cleanup",
+  "worktree.eviction-repositories": "worktree.cleanup",
+  "worktree.eviction-purge": "worktree.cleanup",
+  "worktree.provisioning-inspection": "worktree.provision",
+  "worktree.git-size": "worktree.inspect",
+  "worktree.checkout-transition-size": "worktree.inspect",
+  "worktree.directory-size": "worktree.inspect",
+  "workspace.artifacts": "workspace.inventory",
+  "workspace.inventory.select": "workspace.inventory",
+  "workspace.inventory.existing": "workspace.inventory",
+  "workspace.inventory.paths": "workspace.inventory",
+  "workspace.inventory.staged-directories": "workspace.inventory",
+  "workspace.manifest.capture": "workspace.manifest",
+  "workspace.manifest.snapshot": "workspace.manifest",
+  "workspace.manifest.parse": "workspace.manifest",
+  "workspace.manifest.serialize": "workspace.manifest",
+  "workspace.manifest.overlay": "workspace.manifest",
+  "workspace.manifest.pair": "workspace.manifest",
+  "workspace.manifest.staged": "workspace.manifest",
+  "workspace.manifest.entries": "workspace.manifest",
+  "workspace.manifest.file": "workspace.manifest",
+  "workspace.manifest.nodes": "workspace.manifest",
+  "workspace.manifest.stage-input": "workspace.manifest",
+  "workspace.manifest.tree-input": "workspace.manifest",
+  "workspace.manifest.remote-capture": "workspace.manifest",
+  "workspace.reconcile.preflight": "workspace.manifest",
+} satisfies Record<keyof GitWorkerOperations, GitProcessOperation>;
 
 function runtime(): GitWorkerRuntime {
   return resolveGlobalSingleton<GitWorkerRuntime>(
@@ -64,20 +111,26 @@ function runtime(): GitWorkerRuntime {
   );
 }
 
-function poolFor(state: GitWorkerRuntime, command: GitWorkerCommand): GitPool {
+function poolFor(
+  state: GitWorkerRuntime,
+  command: GitWorkerCommand,
+  contentRead: boolean,
+): GitPool {
   const owner =
-    command.type === "worktree.snapshot" || command.type === "worktree.cleanup-inspection"
+    command.type === "worktree.snapshot" ||
+    command.type === "worktree.cleanup-inspection" ||
+    command.type === "worktree.cleanup-fingerprint" ||
+    command.type === "worktree.eviction-classify" ||
+    command.type === "worktree.eviction-repositories" ||
+    command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
       : command.type.startsWith("worktree.")
         ? "worktrees"
         : command.type.startsWith("workspace.")
           ? "workspace"
-          : command.type === "repository.branches" ||
-              command.type === "repository.identities" ||
-              command.type === "checkout.context" ||
-              command.type === "checkout.revision"
-            ? "reads"
-            : "content";
+          : contentRead
+            ? "content"
+            : "reads";
   // Preparation can hold the allocation lease; unrelated maintenance must not block it.
   // Each worktree lane stays serial; host allocation and shared-ref guards still own writes.
   // Metadata likewise stays responsive while diffs or snapshots await slow Git work.
@@ -137,11 +190,23 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
     !Object.entries(baseEnv).some(
       ([key, value]) =>
         value !== undefined &&
-        /^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE)$/i.test(
+        (/^(GIT_DIR|GIT_WORK_TREE|GIT_COMMON_DIR|GIT_CEILING_DIRECTORIES|GIT_DISCOVERY_ACROSS_FILESYSTEM|GIT_NAMESPACE|GIT_SHALLOW_FILE|GIT_GRAFT_FILE|GIT_REPLACE_REF_BASE|GIT_NO_REPLACE_OBJECTS|GIT_INDEX_FILE|GIT_OBJECT_DIRECTORY|GIT_ALTERNATE_OBJECT_DIRECTORIES|GIT_CONFIG_PARAMETERS)$/i.test(
           key,
-        ),
-    );
-  const operation = executeOperation(poolFor(state, admitted), admitted, baseEnv, {
+        ) ||
+          (/^(HOME|XDG_CONFIG_HOME|GIT_CONFIG_GLOBAL|GIT_CONFIG_SYSTEM)$/i.test(key) &&
+            /[\r\n]/u.test(value))),
+    )
+      ? createHash("sha256")
+          .update(
+            JSON.stringify(
+              Object.entries(baseEnv).filter(([key]) =>
+                /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key),
+              ),
+            ),
+          )
+          .digest("hex")
+      : undefined;
+  const operation = executeOperation(state, admitted, baseEnv, {
     ...options,
     git: options.git ? { text: options.git.text, buffered: options.git.buffered } : undefined,
   });
@@ -155,11 +220,32 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
 }
 
 async function executeOperation(
-  pool: GitPool,
+  state: GitWorkerRuntime,
   command: GitWorkerCommand,
   baseEnv: NodeJS.ProcessEnv,
   options: GitWorkerOperationOptions,
 ): Promise<GitWorkerResult> {
+  const contentRead =
+    command.type === "checkout.diff" ||
+    command.type === "checkout.baseline" ||
+    command.type === "pull-request.branch-facts";
+  const contentGit =
+    contentRead ||
+    command.type === "worktree.snapshot" ||
+    command.type === "worktree.snapshot-verify-exact";
+  let gitCommandCount = 0;
+  let summedGitWallMs = 0;
+  let summedGitQueueWaitMs = 0;
+  const timing = contentRead
+    ? startGitOperationTiming("content-read", log, () => ({
+        operation: command.type,
+        gitCommandCount,
+        summedGitWallMs: Math.round(summedGitWallMs),
+        summedGitQueueWaitMs: Math.round(summedGitQueueWaitMs),
+      }))
+    : undefined;
+  let firstHostRequest = true;
+  let outcome: "returned" | "threw" = "threw";
   const hostWork = new Set<Promise<WorkerTaskResponse>>();
   const temporaryDirectories = new Set<string>();
   const hostErrors = new Map<number, unknown>();
@@ -179,13 +265,33 @@ async function executeOperation(
           effect.type === "git.text"
             ? (options.git?.text ?? runGitBytes)
             : (options.git?.buffered ?? runGitBuffered);
-        const output = await run(effect.input.cwd, effect.input.args, {
-          ...effect.input.options,
-          baseEnv,
-          signal,
-          beforeRun: options.assertCurrent,
-          killProcessTree: true,
-        });
+        // The parent owns the operation identity; worker batches cannot relabel their launches.
+        const queuedAt = timing ? performance.now() : 0;
+        const execute = async () => {
+          const startedAt = timing ? performance.now() : 0;
+          if (timing) {
+            gitCommandCount++;
+            summedGitQueueWaitMs += startedAt - queuedAt;
+          }
+          try {
+            return await withGitProcessOperation(SPAWN_OPERATIONS[command.type], () =>
+              run(effect.input.cwd, effect.input.args, {
+                ...effect.input.options,
+                operation: SPAWN_OPERATIONS[command.type],
+                baseEnv,
+                signal,
+                beforeRun: options.assertCurrent,
+                killProcessTree: true,
+                lowerPriority: contentGit,
+              }),
+            );
+          } finally {
+            if (timing) {
+              summedGitWallMs += performance.now() - startedAt;
+            }
+          }
+        };
+        const output = await (contentGit ? withContentGitSlot(execute, signal) : execute());
         const stdout = ownedWorkerBytes(output.stdout);
         const stderr = ownedWorkerBytes(output.stderr);
         result = { ...output, stdout, stderr };
@@ -222,13 +328,17 @@ async function executeOperation(
     }
   };
   try {
-    const reply = await pool.run(command, {
+    const reply = await poolFor(state, command, contentRead).run(command, {
       inputBytes: options.inputBytes,
       transferList: options.transferList,
       signal: options.signal,
       timeoutMs: WORKER_PHASE_TIMEOUT_MS,
       // Host exchanges retain the command's own deadline and process-tree cleanup.
       onRequest: (value, context) => {
+        if (firstHostRequest) {
+          firstHostRequest = false;
+          timing?.markPhase();
+        }
         if (
           !isRecord(value) ||
           value.type !== "git.batch" ||
@@ -254,6 +364,7 @@ async function executeOperation(
         return pending;
       },
     });
+    timing?.markPhase();
     if (!reply.ok) {
       if (reply.error.origin !== undefined && hostErrors.has(reply.error.origin)) {
         throw hostErrors.get(reply.error.origin);
@@ -262,14 +373,21 @@ async function executeOperation(
     }
     options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    outcome = "returned";
     return reply.value;
   } finally {
-    // A cancellation may terminate the worker before its host callback completes.
-    await Promise.allSettled(hostWork);
-    await Promise.all(
-      [...temporaryDirectories].map((directory) =>
-        fs.rm(directory, { recursive: true, force: true }),
-      ),
-    );
+    let cleanupSucceeded = false;
+    try {
+      // A cancellation may terminate the worker before its host callback completes.
+      await Promise.allSettled(hostWork);
+      await Promise.all(
+        [...temporaryDirectories].map((directory) =>
+          fs.rm(directory, { recursive: true, force: true }),
+        ),
+      );
+      cleanupSucceeded = true;
+    } finally {
+      timing?.finish(cleanupSucceeded ? outcome : "threw");
+    }
   }
 }

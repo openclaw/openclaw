@@ -3,7 +3,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
@@ -70,6 +73,7 @@ export function startSqliteReadOnlyLocationAsync(
     signal?: AbortSignal;
     expectedSourceIdentity?: DatabaseFileIdentity;
   } = {},
+  stagingOwner?: ReturnType<typeof captureSqliteSnapshotStagingOwner>,
 ): RetainedSqliteSnapshotPreparation {
   const signal = resolveSqliteInspectionSignal(options.signal);
   signal?.throwIfAborted();
@@ -86,7 +90,9 @@ export function startSqliteReadOnlyLocationAsync(
   const { env, cwd } = captureSqliteReadOnlyWorkerLaunch();
   const root = resolvePrivateSqliteSnapshotStagingRoot();
   const deadlineOwnedByCaller = isSqliteInspectionDeadlineOwnedByCaller();
-  const staging = captureSqliteSnapshotStagingOwner();
+  const staging = stagingOwner ?? captureSqliteSnapshotStagingOwner();
+  // A prepared owner crossed an await; check it before joining an existing single flight.
+  stagingOwner?.prepareResources();
   const runInContext = AsyncLocalStorage.snapshot();
   return startSingleFlightSqliteSnapshot(
     pathname,

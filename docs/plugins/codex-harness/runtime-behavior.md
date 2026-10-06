@@ -94,6 +94,13 @@ OpenClaw associates the response with its tool-call ID before checkpointing the 
 labeled as execution output instead. Code-mode response IDs are distinct from
 nested command IDs.
 
+If a native patch or command fails before Codex emits its native item, the mirror
+can recover a failed `apply_patch` or `bash` receipt from a single-call Code Mode
+wrapper with literal input and unmodified `text` output, including a local input
+variable. A completed script can still contain a failed command: its structured
+nonzero exit code owns that outcome. Existing native items retain their own IDs;
+unsupported wrappers and unknown responses remain outer `exec` evidence.
+
 Neither event proves the exact final model input. Codex can apply additional
 history truncation and context normalization after constructing the response;
 its app-server does not expose that final request representation here. OpenClaw
@@ -250,6 +257,9 @@ an idle chat does not require unrelated chats, model discovery, or tool-catalog
 reads to finish. OpenClaw coordinates its own lifecycle operations for each
 native thread and preserves that thread's identity across ordinary resumes.
 A closed, replaced, or retired client still cannot complete a stale handoff.
+When native interruption and subscription cleanup are confirmed, stopping one
+chat leaves other chats running on the shared client. A follow-up can resume the
+stopped thread without waiting for those chats to finish.
 
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.

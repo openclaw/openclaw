@@ -76,7 +76,7 @@ export function createSessionRowProjectionArchive(params: {
           params.referenced,
         );
         if (
-          records.sameParents(current.parents, lineage.parents) &&
+          isDeepStrictEqual(current.parents, lineage.parents) &&
           isDeepStrictEqual(current.entry, lineage.entry)
         ) {
           continue;
@@ -192,12 +192,11 @@ export function createSessionRowProjectionArchive(params: {
       readPins.clear();
       pinCounts.clear();
     },
-    describe(initial: records.Row | undefined) {
-      if (initial?.entry?.archivedAt === undefined) {
-        return initial;
+    describe(row: records.Row | undefined) {
+      if (row?.entry?.archivedAt === undefined) {
+        return row;
       }
-      const row = initial;
-      if (records.ready(row) && row.entry.archivedAt !== undefined) {
+      if (records.ready(row)) {
         const id = records.identity(row);
         materialized.delete(id);
         materialized.add(id);

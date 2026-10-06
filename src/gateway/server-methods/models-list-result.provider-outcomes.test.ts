@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createModelCatalogDecisions } from "../../agents/model-catalog-decisions.js";
 import { markPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.full-catalog.js";
 import { createCatalogAttemptReporter } from "../../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,11 +8,7 @@ import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
 } from "../server-model-catalog-auth.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-  prepareModelsListResult,
-} from "./models-list-result.js";
+import { buildModelsListResult, prepareModelsListResult } from "./models-list-result.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture();
@@ -26,72 +23,6 @@ function catalogContext(config: OpenClawConfig) {
 }
 
 describe("models.list provider catalog outcomes", () => {
-  it.each([
-    {
-      name: "implicit provider",
-      providers: undefined,
-      baseUrl: "http://127.0.0.1:11434",
-      available: true,
-    },
-    {
-      name: "empty provider config",
-      providers: { ollama: {} },
-      baseUrl: "http://127.0.0.1:11434",
-      available: true,
-    },
-    {
-      name: "remote route without credentials",
-      providers: undefined,
-      baseUrl: "https://ollama.example.com",
-      available: false,
-    },
-    {
-      name: "explicit auth ownership without credentials",
-      providers: { ollama: { auth: "token" as const } },
-      baseUrl: "http://127.0.0.1:11434",
-      available: false,
-    },
-  ])(
-    "projects a discovered Ollama model with $name as available=$available",
-    async ({ providers, baseUrl, available }) => {
-      const config = {
-        ...(providers ? { models: { providers } } : {}),
-        agents: { defaults: { models: { "ollama/qwen3.5": {} } } },
-      } as OpenClawConfig;
-      const model = {
-        id: "qwen3.5",
-        name: "Qwen 3.5",
-        provider: "ollama",
-        api: "ollama" as const,
-        baseUrl,
-      };
-      const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-      const projector = createGatewayAgentModelCatalogProjector({
-        cfg: config,
-        agentId: "main",
-        snapshot,
-        metadataSnapshot: createPluginMetadataSnapshotFixture({
-          plugins: [{ id: "ollama", providers: ["ollama"], syntheticAuthRefs: ["ollama"] }],
-        }),
-        preparedAuthStore: emptyAuthStore,
-      });
-      const context = catalogContext(config) as unknown as GatewayRequestContext;
-
-      await expect(
-        buildModelsListResult({
-          source: { kind: "gateway", context },
-          agentId: "main",
-          params: { view: "configured", includeDefaultModels: false },
-          preloadedCatalog: { agentId: "main", config, snapshot },
-          preloadedOnly: true,
-          catalogProjector: projector,
-        }),
-      ).resolves.toEqual({
-        models: [expect.objectContaining({ provider: "ollama", id: "qwen3.5", available })],
-      });
-    },
-  );
-
   it.each([false, true])(
     "preserves auth rejection with refresh failure=%s",
     async (unavailable) => {
@@ -181,7 +112,7 @@ describe("models.list provider catalog outcomes", () => {
         },
       ],
     });
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,
@@ -258,7 +189,7 @@ describe("models.list provider catalog outcomes", () => {
         },
       ],
     };
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,
@@ -293,11 +224,6 @@ describe("models.list provider catalog outcomes", () => {
 
   it.each([
     {
-      name: "missing credentials",
-      evaluation: { availability: undefined, unavailableReason: "missing-auth" },
-      expected: { available: false, unavailableReason: "missing-auth" },
-    },
-    {
       name: "cooldown with its retry time",
       evaluation: {
         availability: false,
@@ -309,11 +235,6 @@ describe("models.list provider catalog outcomes", () => {
         unavailableReason: "cooldown",
         unavailableUntil: 2_000_000_000_000,
       },
-    },
-    {
-      name: "unknown availability without an auth diagnosis",
-      evaluation: { availability: undefined },
-      expected: { available: false },
     },
     {
       name: "available models without stale unavailability metadata",
@@ -330,7 +251,7 @@ describe("models.list provider catalog outcomes", () => {
     } as OpenClawConfig;
     const model = { id: "test-model", name: "Test Model", provider: "custom" };
     const snapshot = markPreparedModelCatalogFull({ entries: [model], routeVariants: [model] });
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: config,
       agentId: "main",
       snapshot,

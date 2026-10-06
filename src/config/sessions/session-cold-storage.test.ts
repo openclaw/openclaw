@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -23,13 +24,17 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
+import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
-  loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptStatsSync,
@@ -41,8 +46,8 @@ import {
 } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import { getSessionColdStorageStatus } from "./session-cold-storage-status.js";
 import {
-  getSessionColdStorageStatus,
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
 } from "./session-cold-storage.js";
@@ -52,11 +57,13 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 const databasePaths: string[] = [];
+const sharedDatabasePath = resolveOpenClawStateSqlitePath();
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -64,9 +71,14 @@ afterEach(async () => {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: databasePath });
   }
   await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
+  await closeOpenClawStateDatabaseByPathAsync(sharedDatabasePath);
   closeOpenClawAgentDatabasesForTest();
   tempDirs.cleanup();
+});
+
+afterAll(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
 });
 
 async function createFixture() {
@@ -295,18 +307,22 @@ describe("cold transcript storage workers", () => {
     let clock = 0;
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    const archiveDiagnostics: SqliteSessionReclamationDiagnostics[] = [];
     vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
       (params) => {
         if (params.expectedMessageType !== "reclaimed") {
           return originalWorker(params);
+        }
+        if (params.diagnostics) {
+          archiveDiagnostics.push(params.diagnostics);
         }
         const withWriteAdmission = params.withWriteAdmission;
         let admissions = 0;
         return originalWorker({
           ...params,
           withWriteAdmission: async (...args) => {
-            // Measure waiting between actual Worker admissions without delaying native work.
-            if (++admissions === 2) {
+            // Measure time waiting for actual Worker admission without delaying native work.
+            if (++admissions === 1) {
               clock += 1_500;
             }
             return withWriteAdmission(...args);
@@ -314,8 +330,8 @@ describe("cold transcript storage workers", () => {
         });
       },
     );
-    const workers: Worker[] = [];
-    const observeWorker = (worker: Worker) => workers.push(worker);
+    const workers = new Map<number, Worker>();
+    const observeWorker = (worker: Worker) => workers.set(worker.threadId, worker);
     process.on("worker", observeWorker);
     try {
       closeOpenClawAgentDatabasesForTest();
@@ -337,6 +353,7 @@ describe("cold transcript storage workers", () => {
       clearOpenClawAgentIntegrityVerification(fixture.options.path);
       await restoreSessionColdTranscript(fixture.secondScope);
       expect(fixture.snapshot()).toEqual(fixture.original);
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       await flushLogger();
       const summaries = (await fs.readFile(file, "utf8"))
         .split("\n")
@@ -356,8 +373,10 @@ describe("cold transcript storage workers", () => {
           exitCode: 0,
         })),
       );
-      expect(workers.length).toBeGreaterThan(0);
-      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+      expect(archiveDiagnostics).toHaveLength(3);
+      for (const diagnostics of archiveDiagnostics) {
+        expect(workers.get(diagnostics.workerThreadId!)?.threadId).toBe(-1);
+      }
     } finally {
       process.off("worker", observeWorker);
       vi.restoreAllMocks();
@@ -484,13 +503,14 @@ describe("cold transcript storage workers", () => {
     ).toBeUndefined();
   });
 
-  it.each(["authority", "retained claim"])(
+  it.each(["authority", "database owner"])(
     "rolls back every candidate when maintenance %s is revoked at commit",
     async (revocation) => {
       const fixture = await createBatchFixture();
       await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       fixture.database();
       const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+      const archiveDiagnostics: SqliteSessionReclamationDiagnostics[] = [];
       let prepared = false;
       let revoked = false;
       let closeElapsedMs = 0;
@@ -506,12 +526,15 @@ describe("cold transcript storage workers", () => {
             return result;
           }
           if (prepared && params.expectedMessageType === "reclaimed") {
+            if (params.diagnostics) {
+              archiveDiagnostics.push(params.diagnostics);
+            }
             return originalWorker({
               ...params,
               onCommitRequest: () => {
                 const started = performance.now();
                 revoked =
-                  revocation === "retained claim"
+                  revocation === "database owner"
                     ? closeOpenClawAgentDatabaseByPath(fixture.options.path)
                     : true;
                 closeElapsedMs = performance.now() - started;
@@ -522,8 +545,8 @@ describe("cold transcript storage workers", () => {
           return originalWorker(params);
         },
       );
-      const workers: Worker[] = [];
-      const observeWorker = (worker: Worker) => workers.push(worker);
+      const workers = new Map<number, Worker>();
+      const observeWorker = (worker: Worker) => workers.set(worker.threadId, worker);
       process.on("worker", observeWorker);
       try {
         await expect(
@@ -538,16 +561,19 @@ describe("cold transcript storage workers", () => {
         ).rejects.toThrow(
           revocation === "authority"
             ? "Test maintenance authority was revoked"
-            : "claim is no longer current",
+            : "Agent database execution admission is closed",
         );
-        expect(workers.length).toBeGreaterThan(0);
-        expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
+        expect(archiveDiagnostics).toHaveLength(1);
+        expect(workers.get(archiveDiagnostics[0]!.workerThreadId!)?.threadId).toBe(-1);
       } finally {
         process.off("worker", observeWorker);
       }
       expect(prepared).toBe(true);
       expect(revoked).toBe(true);
       expect(closeElapsedMs).toBeLessThan(2_000);
+      if (revocation === "database owner") {
+        await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
+      }
       expect(fixture.snapshot()).toEqual(fixture.original);
       expect(
         fixture.database().prepare("SELECT * FROM session_transcript_cold_archives").all(),
@@ -583,7 +609,13 @@ describe("cold transcript storage workers", () => {
         sessionId: historicalId,
       }),
     ).toBeNull();
-    await expect(loadTranscriptEvents(fixture.scope)).resolves.toEqual(events);
+    const hostSql = observeHostDataSql();
+    try {
+      await expect(loadTranscriptEvents(fixture.scope)).resolves.toEqual(events);
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 
@@ -630,7 +662,7 @@ describe("cold transcript storage workers", () => {
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: fixture.scope.storePath,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -803,6 +835,7 @@ describe("cold transcript storage workers", () => {
       db.prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'").run(
         version,
       );
+      await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
       closeOpenClawAgentDatabasesForTest();
       const before = createHash("sha256")
         .update(await fs.readFile(fixture.scope.storePath))

@@ -21,13 +21,16 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
   throw new Error("Session lifecycle presentation imported plugin runtime ownership");
 });
 
+// mock-isolation: Exercise lifecycle reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
+  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
 }));
 
-vi.mock("./session-utils.js", () => ({
-  loadSessionEntry: persistenceMocks.loadSessionEntry,
+// mock-isolation: Controlled entries isolate lifecycle projection from database admission.
+vi.mock("./session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: async (...args: unknown[]) =>
+    persistenceMocks.loadSessionEntry(...args),
 }));
 
 vi.mock("../logging/subsystem.js", () => ({
@@ -620,7 +623,7 @@ describe("session lifecycle state", () => {
     // One exact-row write only. Continuation settlement owns base projection.
     expect(persistenceMocks.updateSessionEntry).toHaveBeenCalledTimes(1);
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[0]).toMatchObject({
-      sessionKey: exactCronSessionKey,
+      target: { canonicalKey: exactCronSessionKey },
     });
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
@@ -647,7 +650,7 @@ describe("session lifecycle state", () => {
         const patch = await update(structuredClone(storedEntry), {
           existingEntry: structuredClone(storedEntry),
         });
-        options?.assertCommitAllowed?.();
+        options?.workerGuard?.source?.();
         if (patch) {
           storedEntry = { ...storedEntry, ...patch };
         }

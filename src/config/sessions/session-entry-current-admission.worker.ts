@@ -16,6 +16,7 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import {
   readExactSessionEntryRow,
+  readSessionEntryByIdInDatabase,
   readSessionEntryRow,
 } from "./session-accessor.sqlite-entry-read.js";
 import { createSessionEntryRevisionGuard } from "./session-accessor.sqlite-entry-revision.js";
@@ -23,6 +24,7 @@ import {
   assertCanonicalSessionKeyWrite,
   readWithCanonicalSessionAdmission,
 } from "./session-canonical-key.js";
+import { projectSessionEntryCapabilityFacts } from "./session-entry-capability-facts.js";
 import type {
   SessionEntryCurrentAdmissionFacts,
   SessionEntryCurrentFacts,
@@ -35,6 +37,8 @@ const currentEntryReads = new WeakMap<
   {
     sessionKey: string;
     lookup: "exact" | "logical";
+    sessionIdLookup?: string;
+    projection?: "capability";
     read: () => SessionEntryCurrentFacts | undefined;
   }
 >();
@@ -43,6 +47,7 @@ function createCurrentEntryRead(
   database: OpenClawAgentReadOnlyDatabase,
   sessionKey: string,
   lookup: "exact" | "logical",
+  options: Pick<SessionEntryCurrentSource, "sessionIdLookup" | "projection">,
 ) {
   let entry: SessionEntryCurrentFacts | undefined;
   const guard = createSessionEntryRevisionGuard(
@@ -54,12 +59,22 @@ function createCurrentEntryRead(
     },
     () => {
       const current =
-        lookup === "logical"
-          ? readSessionEntryRow(database, sessionKey, "full")?.entry
-          : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
+        options.sessionIdLookup !== undefined
+          ? readSessionEntryByIdInDatabase(database, {
+              sessionId: options.sessionIdLookup,
+              projection: "list",
+            })?.entry
+          : lookup === "logical"
+            ? readSessionEntryRow(database, sessionKey, "list")?.entry
+            : readExactSessionEntryRow(database, sessionKey, "list", "canonical")?.entry;
+      if (options.projection === "capability") {
+        entry = current ? projectSessionEntryCapabilityFacts(current) : undefined;
+        return true;
+      }
       entry = current
         ? {
             sessionId: current.sessionId,
+            previousSessionId: current.previousSessionId,
             ...(current.archivedAt === undefined ? {} : { archivedAt: current.archivedAt }),
             ...(current.repositoryWorkspaceId === undefined
               ? {}
@@ -90,11 +105,22 @@ export function readSessionEntryCurrentFactsInDatabase(
   database: OpenClawAgentReadOnlyDatabase,
   sessionKey: string,
   lookup: "exact" | "logical" = "exact",
+  options: Pick<SessionEntryCurrentSource, "sessionIdLookup" | "projection"> = {},
 ): SessionEntryCurrentFacts | undefined {
   assertCanonicalSessionKeyWrite(sessionKey);
   let cached = currentEntryReads.get(database.db);
-  if (cached?.sessionKey !== sessionKey || cached.lookup !== lookup) {
-    cached = { sessionKey, lookup, read: createCurrentEntryRead(database, sessionKey, lookup) };
+  if (
+    cached?.sessionKey !== sessionKey ||
+    cached.lookup !== lookup ||
+    cached.sessionIdLookup !== options.sessionIdLookup ||
+    cached.projection !== options.projection
+  ) {
+    cached = {
+      sessionKey,
+      lookup,
+      ...options,
+      read: createCurrentEntryRead(database, sessionKey, lookup, options),
+    };
     currentEntryReads.set(database.db, cached);
   }
   return readWithCanonicalSessionAdmission(database, cached.read);
@@ -141,6 +167,7 @@ export function requestSessionEntryCurrentAdmission(
       database,
       source.sessionKey,
       options.lookup,
+      source,
     );
     const facts: SessionEntryCurrentAdmissionFacts = {
       kind: "session-entry-current",
@@ -154,7 +181,7 @@ export function requestSessionEntryCurrentAdmission(
     if (
       !isDeepStrictEqual(
         entry,
-        readSessionEntryCurrentFactsInDatabase(database, source.sessionKey, options.lookup),
+        readSessionEntryCurrentFactsInDatabase(database, source.sessionKey, options.lookup, source),
       )
     ) {
       throw new Error("Session currency changed while awaiting its native grant");
@@ -172,4 +199,20 @@ export function requestSessionEntryCurrentAdmission(
   if (!read.found) {
     throw new Error("Session currency native source is unavailable");
   }
+}
+
+/** Keep every original source live through the common grant and recheck each after it settles. */
+export function requestSessionEntriesCurrentAdmission(
+  sources: readonly SessionEntryCurrentSource[] | undefined,
+  request: SqliteWorkerAdmissionRequest,
+): void {
+  const enter = (index: number, current: SqliteWorkerAdmissionRequest): void => {
+    const source = sources?.[index];
+    if (!source) {
+      requestSqliteWorkerOperationAdmission(current);
+      return;
+    }
+    requestSessionEntryCurrentAdmission(source, current, {}, (next) => enter(index + 1, next));
+  };
+  enter(0, request);
 }

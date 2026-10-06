@@ -78,24 +78,29 @@ describe("provider auth snapshot comparison", () => {
 
 describe("provider config structural comparison", () => {
   it.each(["shared provider", "serialized equivalent"] as const)(
-    "matches a %s without changing missing-provider behavior",
+    "compares a %s using current provider bytes",
     (kind) => {
       const runtime = createProviderConfig().config;
       const input =
         kind === "shared provider"
           ? { ...runtime, agents: { defaults: { workspace: "/tmp/synthetic-agent" } } }
           : structuredClone(runtime);
-      if (kind === "serialized equivalent") {
-        runtime.models.providers.synthetic.params = { synthetic: null };
-        input.models.providers.synthetic.params = { synthetic: undefined };
-      }
-      expect(
+      const compare = () =>
         providerConfigMatchesRuntimeSnapshot({
           inputConfig: input,
           runtimeConfig: runtime,
           provider: " SYNTHETIC ",
-        }),
-      ).toBe(true);
+        });
+      expect(compare()).toBe(true);
+      if (kind === "serialized equivalent") {
+        runtime.models.providers.synthetic.params = { synthetic: null };
+        input.models.providers.synthetic.params = { synthetic: undefined };
+        expect(compare()).toBe(true);
+        runtime.models.providers.synthetic.headers = { "X-Synthetic": "changed" };
+        expect(compare()).toBe(false);
+        runtime.models.providers.synthetic = structuredClone(input.models.providers.synthetic);
+        expect(compare()).toBe(true);
+      }
       expect(
         providerConfigMatchesRuntimeSnapshot({
           inputConfig: input,
@@ -103,38 +108,20 @@ describe("provider config structural comparison", () => {
           provider: "missing",
         }),
       ).toBe(false);
+      for (const [inputConfig, runtimeConfig] of [
+        [undefined, runtime],
+        [runtime, null],
+      ] as const) {
+        expect(
+          providerConfigMatchesRuntimeSnapshot({
+            inputConfig,
+            runtimeConfig,
+            provider: "synthetic",
+          }),
+        ).toBe(false);
+      }
     },
   );
-
-  it("keeps distinct configurations current after runtime mutation and replacement", () => {
-    const input = createProviderConfig().config;
-    const runtime = createProviderConfig().config;
-    const compare = () =>
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: input,
-        runtimeConfig: runtime,
-        provider: "synthetic",
-      });
-    expect(compare()).toBe(true);
-    runtime.models.providers.synthetic.headers = { "X-Synthetic": "changed" };
-    expect(compare()).toBe(false);
-    runtime.models.providers.synthetic = structuredClone(input.models.providers.synthetic);
-    expect(compare()).toBe(true);
-    expect(
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: undefined,
-        runtimeConfig: runtime,
-        provider: "synthetic",
-      }),
-    ).toBe(false);
-    expect(
-      providerConfigMatchesRuntimeSnapshot({
-        inputConfig: runtime,
-        runtimeConfig: null,
-        provider: "synthetic",
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("managed provider auth comparison cost", () => {

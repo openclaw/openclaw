@@ -10,6 +10,7 @@ import {
 import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
 import { hasGatewayContextOwner } from "../../plugins/runtime/gateway-request-scope.js";
 import { agentSessionKeysMatchByRequestKey } from "../../routing/session-key.js";
+import { settlesWithin } from "../../shared/settle-within.js";
 import * as replyRunSettle from "./reply-run-finalization-lease.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -91,19 +92,7 @@ export async function waitForReplyOperationOwnerSettlement(
   if (!settlement) {
     return true;
   }
-  const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 100, 100);
-  let timer: NodeJS.Timeout | undefined;
-  const settled = await Promise.race([
-    settlement.then(() => true),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => resolve(false), resolvedTimeoutMs);
-      timer.unref?.();
-    }),
-  ]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  return settled;
+  return settlesWithin(settlement, resolveTimerTimeoutMs(timeoutMs, 100, 100));
 }
 
 export function expireStaleReplyRunBySessionId(
@@ -195,10 +184,16 @@ export const replyRunRegistry: ReplyRunRegistry = {
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOwner]: {
+        backendIdentity: backend,
         acceptParticipant: (overlay) => operation.personalToolParticipants?.accept(overlay),
         projectToolAuthorityFingerprint: (overlay) =>
           operation.projectToolAuthorityFingerprint(overlay),
-        resolve: (params) => resolveReplyMessageInjectionRejection({ ...params, operation }),
+        projectToolAuthorityFingerprintAsync: (overlay) =>
+          operation.projectToolAuthorityFingerprintAsync(overlay),
+        resolve: (params) =>
+          getAttachedBackend(operation) === backend
+            ? resolveReplyMessageInjectionRejection({ ...params, operation })
+            : { reason: "no_active_run" },
         recordAccepted: (options) => {
           operation.recordActivity();
           operation.markSteeredInputAccepted({ inboundAudio: options?.inboundAudio === true });
@@ -383,25 +378,19 @@ async function waitForReplyRunAdmissionBarrier(params: {
     let abortHandler: (() => void) | undefined;
     const outcome = await Promise.race([
       barrier.settled.then(() => true),
-      ...(remainingMs !== undefined
-        ? [
-            new Promise<boolean>((resolve) => {
-              timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
-              timer.unref?.();
-            }),
-          ]
-        : []),
-      ...(params.signal
-        ? [
-            new Promise<boolean>((resolve) => {
-              abortHandler = () => resolve(false);
-              params.signal?.addEventListener("abort", abortHandler, { once: true });
-              if (params.signal?.aborted) {
-                abortHandler();
-              }
-            }),
-          ]
-        : []),
+      new Promise<false>((resolve) => {
+        if (remainingMs !== undefined) {
+          timer = setTimeout(() => resolve(false), Math.max(1, remainingMs));
+          timer.unref?.();
+        }
+        if (params.signal) {
+          abortHandler = () => resolve(false);
+          params.signal.addEventListener("abort", abortHandler, { once: true });
+          if (params.signal.aborted) {
+            abortHandler();
+          }
+        }
+      }),
     ]);
     if (timer) {
       clearTimeout(timer);

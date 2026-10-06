@@ -26,6 +26,7 @@ import {
   activeClaimKey,
   createIngressSettleOwner,
   IngressAdoptionLostError,
+  isPreAdoptionState,
   resolveLaneKey,
   sortedKeys,
   type ActiveHandlerState,
@@ -311,10 +312,7 @@ export function createChannelIngressDrain<
     state: ActiveHandlerState<TPayload, TMetadata>,
     releaseOptions: { lastError?: string; recordAttempt?: boolean },
   ) => {
-    if (state.phase !== "deferred" && state.phase !== "dispatching") {
-      return;
-    }
-    if (state.guillotined || state.superseded) {
+    if (!isPreAdoptionState(state)) {
       return;
     }
     clearStallTimer(state);
@@ -325,11 +323,47 @@ export function createChannelIngressDrain<
       .catch(() => undefined);
   };
 
+  // A release between separate reads can hide a lane's head from both collections.
+  const readUnsettled = async () =>
+    queue.listUnsettled
+      ? await queue.listUnsettled({ orderBy })
+      : {
+          pending: await queue.listPending({ limit: "all", orderBy }),
+          claims: await queue.listClaims(),
+        };
+
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
   ): ChannelIngressDispatchLifecycle => {
     return {
       abortSignal: state.abortController.signal,
+      readLaneBacklog: async () => {
+        const { pending, claims } = await readUnsettled();
+        const waiting = [
+          ...pending.filter(
+            (row) => resolveIngressRetryDelayMs(row, options.retryPolicy, now()) <= 0,
+          ),
+          ...claims.filter((claim) => {
+            const active = activeByClaim.get(activeClaimKey(claim));
+            return (
+              !active ||
+              (isPreAdoptionState(active) && (active.phase !== "deferred" || active.occupiesLane))
+            );
+          }),
+        ];
+        return waiting
+          .filter(
+            (row) =>
+              row.id !== state.claim.id &&
+              resolveLaneKey(row, options.deriveLaneKey, options.reconcileStoredLaneKey) ===
+                state.laneKey,
+          )
+          .toSorted(
+            (left, right) =>
+              (orderBy === "received" ? left.receivedAt - right.receivedAt : 0) ||
+              Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
+          );
+      },
       onAdopted: async () => {
         // Lost adoption is loud: guillotine/supersede already tombstoned/failed the claim.
         if (state.guillotined) {
@@ -368,10 +402,7 @@ export function createChannelIngressDrain<
       },
       deferredHeartbeatIntervalMs: Math.max(1, Math.floor(adoptionStallTimeoutMs / 3)),
       onAdoptionFinalizing: () => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Adoption finalization (settlement hold) owns the claim; do not let a
@@ -379,10 +410,7 @@ export function createChannelIngressDrain<
         clearStallTimer(state);
       },
       onFailed: async (error) => {
-        if (state.phase !== "dispatching" && state.phase !== "deferred") {
-          return;
-        }
-        if (state.guillotined || state.superseded) {
+        if (!isPreAdoptionState(state)) {
           return;
         }
         // Keep recovery armed until disposition commits; removeActive clears it after success.
@@ -565,13 +593,7 @@ export function createChannelIngressDrain<
 
     await recoverStaleClaims();
 
-    // A release between separate reads can hide a lane's head from both collections.
-    const { pending, claims } = queue.listUnsettled
-      ? await queue.listUnsettled({ orderBy })
-      : {
-          pending: await queue.listPending({ limit: "all", orderBy }),
-          claims: await queue.listClaims(),
-        };
+    const { pending, claims } = await readUnsettled();
     const activeLaneKeys = new Set(laneOwnerByKey.keys());
     const claimedLaneKeys = new Set(
       claims

@@ -2,7 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
+import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
+import type { SessionTitleFields } from "../config/sessions/session-history-read.types.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,
@@ -57,6 +59,7 @@ export type Row = {
   /** Durable search metadata survives archive demotion, until its owner invalidates it. */
   preparedAcpMeta?: SessionAcpMeta | null;
   databaseFactsRevision: number;
+  publishedSource?: SessionEntryPublicationSource;
   /** Category uncertainty keeps identity resident; earlier structural uncertainty dominates. */
   unresolvedDatabaseFacts?: true | "category";
   /** Current committed sharing facts remain usable while display materialization is dirty. */
@@ -76,31 +79,43 @@ export type Row = {
   membership: ReadonlySet<string>;
   parents: Set<string>;
   generation: string | symbol;
+  /** Exact private reads retain their session claim only for the consuming frame. */
+  privateSource?: { identity: string | symbol; assertCurrent(): void };
+  preparedPrivate?: {
+    entries: Record<string, SessionEntry>;
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
+  };
 };
 
-/** Sharing fences every publication; selection holds only unchanged metadata. */
-export function createSessionRowProjectionRevisions() {
-  let sharing: object | undefined;
-  let selection: object | undefined;
-  const invalidate = (metadataChanged = false) => {
-    sharing = undefined;
-    if (metadataChanged) {
-      selection = undefined;
-    }
-  };
-  return {
-    sharing: () => (sharing ??= {}),
-    selection: () => (selection ??= {}),
-    invalidate,
-    replace(previous: Row | undefined, row: Row) {
-      invalidate(
-        !previous ||
-          previous.generation !== row.generation ||
-          previous.hasBoard !== row.hasBoard ||
-          !isDeepStrictEqual(previous.entry, row.entry),
-      );
-    },
-  };
+/** Accepted selection facts exclude replaceable display graphs. */
+export type SelectionRow = Pick<
+  EntryRow,
+  "key" | "agentId" | "storeTarget" | "entry" | "selection" | "hasBoard" | "generation"
+>;
+export type SelectionChange =
+  | { kind: "reset" }
+  | {
+      kind: "row";
+      id: string;
+      key: string;
+      agentId: string;
+      row: SelectionRow | undefined;
+    };
+
+export function selectionRow(row: Row): SelectionRow | undefined {
+  return row.entry
+    ? {
+        key: row.key,
+        agentId: row.agentId,
+        storeTarget: row.storeTarget,
+        entry: row.entry,
+        selection: row.selection,
+        hasBoard: row.hasBoard,
+        generation: row.generation,
+      }
+    : undefined;
 }
 
 export type Query = {
@@ -215,6 +230,46 @@ export function create(target: RowTarget, entry?: SessionEntry): Row {
   };
 }
 
+/** Native acquisition and prepared worker facts share one transient row constructor. */
+export function createIncognitoSessionRow(params: {
+  cfg: Inputs["cfg"];
+  key: string;
+  agentId: string;
+  storePath: string;
+  entry: NonNullable<Row["storedEntry"]>;
+  membership?: ReadonlySet<string>;
+  source: NonNullable<Row["privateSource"]>;
+  prepared?: {
+    relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
+  };
+}): Row {
+  const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
+  source.assertCurrent();
+  const row = create({ key, agentId, storeTarget: { agentId, storePath } });
+  const entry = projectGatewaySessionEntry(cfg, storedEntry);
+  return Object.assign(row, {
+    generation: source.identity,
+    privateSource: source,
+    storedEntry,
+    entry,
+    membership: new Set(params.membership),
+    selection: readSessionListSelectionFacts(key, entry),
+    ...(params.prepared
+      ? {
+          preparedPrivate: {
+            entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
+            databaseFacts: params.prepared.databaseFacts,
+            titleFields: params.prepared.titleFields,
+            terminalModel: params.prepared.terminalModel,
+          },
+        }
+      : {}),
+  });
+}
+
 /** Seed the complete identity inventory before any row selects its stored lineage. */
 export function seedSessionRowEntries(params: {
   targets: GatewayStoredSessionTargets;
@@ -262,6 +317,7 @@ export function renewGeneration(row: Row): Row {
     retainedDatabaseFacts: undefined,
     preparedAcpMeta: undefined,
     unresolvedDatabaseFacts: undefined,
+    publishedSource: undefined,
     sharingEntry: undefined,
     materialized: undefined,
     lastMessagePreview: undefined,
@@ -377,6 +433,7 @@ export function present(
     excludedChildKeys: options.excludedChildKeys,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
+  row.hasBoard = record.hasBoard;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -443,18 +500,13 @@ export function index(
   }
 }
 
-export function changesRowStructure(row: Row, entry: Row["storedEntry"]): boolean {
-  const previous = row.storedEntry;
-  return (
-    !previous ||
-    !entry ||
-    previous.sessionId !== entry.sessionId ||
-    previous.lifecycleRevision !== entry.lifecycleRevision ||
-    previous.parentSessionKey !== entry.parentSessionKey ||
-    previous.spawnedBy !== entry.spawnedBy ||
-    previous.incognito !== entry.incognito ||
-    previous.archivedAt !== entry.archivedAt
-  );
+export function isPrivateSourceCurrent(source: NonNullable<Row["privateSource"]>): boolean {
+  try {
+    source.assertCurrent();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function isCurrentGeneration(row: Row, current: Row | undefined): boolean {
@@ -556,18 +608,6 @@ export function readSessionRowLineage(
   };
 }
 
-export function sameParents(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
-  if (left.size !== right.size) {
-    return false;
-  }
-  for (const parent of left) {
-    if (!right.has(parent)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 export function acquireSessionRowEntry(params: {
   row: Row;
   storedEntry: SessionEntry | undefined;
@@ -588,10 +628,14 @@ export function acquireSessionRowEntry(params: {
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
-    !sameParents(row.parents, parents) ||
+    !isDeepStrictEqual(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
-    !isDeepStrictEqual(storedEntry, row.storedEntry);
-  const includeChildren = changesSessionRowDependents(row.storedEntry, storedEntry);
+    !isDeepStrictEqual(storedEntry, row.storedEntry) ||
+    !isDeepStrictEqual(entry, row.entry);
+  // Archive custody can retain new stored metadata before its lineage is acquired.
+  const includeChildren =
+    changesSessionRowDependents(row.storedEntry, storedEntry) ||
+    changesSessionRowDependents(row.entry, entry);
   if (changed) {
     params.markRelated(row, includeChildren);
   }
@@ -610,9 +654,11 @@ export function acquireSessionRowEntry(params: {
     ...lineage,
     sharingEntry: storedEntry,
     generation,
-    fallbackModel: sameFallbackModelFacts(row.storedEntry, storedEntry)
-      ? row.fallbackModel
-      : undefined,
+    fallbackModel:
+      sameFallbackModelFacts(row.storedEntry, storedEntry) &&
+      sameFallbackModelFacts(row.entry, entry)
+        ? row.fallbackModel
+        : undefined,
     ...(generation !== row.generation
       ? {
           lastMessagePreview: undefined,

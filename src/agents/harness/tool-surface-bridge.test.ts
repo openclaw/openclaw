@@ -1,10 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import {
@@ -14,6 +16,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../tool-search.js";
+import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
 import { createAgentHarnessToolSurfaceRuntimeCore as createAgentHarnessToolSurfaceRuntimeBase } from "./tool-surface-bridge.js";
@@ -23,7 +26,7 @@ function createAgentHarnessToolSurfaceRuntime(
 ): ReturnType<typeof createAgentHarnessToolSurfaceRuntimeBase> {
   return createAgentHarnessToolSurfaceRuntimeBase({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
+    config: createCanonicalAgentConfigFixture(params.config).config,
   });
 }
 
@@ -40,6 +43,107 @@ function createRuntime(config: OpenClawConfig) {
 }
 
 describe("createAgentHarnessToolSurfaceRuntime", () => {
+  it.each([
+    {
+      mode: "automatic Code Mode",
+      codeMode: "auto",
+      preferred: true,
+      search: false,
+      expected: ["exec", "wait", "fixture_direct"],
+    },
+    {
+      mode: "model Code Mode override",
+      codeMode: false,
+      preferred: false,
+      search: false,
+      override: true,
+      expected: ["exec", "wait", "fixture_direct"],
+    },
+    {
+      mode: "direct tools",
+      codeMode: false,
+      preferred: false,
+      search: false,
+      expected: ["fixture_read", "fixture_direct"],
+    },
+    {
+      mode: "Tool Search",
+      codeMode: false,
+      preferred: false,
+      search: true,
+      expected: ["tool_search", "tool_describe", "tool_call", "fixture_direct"],
+    },
+  ] as const)(
+    "preserves the local $mode projection after transporting prepared facts",
+    async ({ codeMode, preferred, search, expected, ...scenario }) => {
+      const config: OpenClawConfig = {
+        tools: { codeMode, toolSearch: search },
+        ...("override" in scenario
+          ? { agents: { defaults: { models: { "test/model": { codeMode: scenario.override } } } } }
+          : {}),
+      };
+      const model = { compat: { codeMode: preferred ? "preferred" : "capable" } };
+      const presentation = prepareAgentToolSurfacePresentation({
+        config,
+        model,
+        modelProvider: "test",
+        modelId: "model",
+        toolsEnabled: true,
+        isRawModelRun: false,
+        forceDirectMessageTool: false,
+      });
+      const local = createAgentHarnessToolSurfaceRuntimeBase({
+        config,
+        model,
+        modelProvider: "test",
+        modelId: "model",
+        modelToolsEnabled: true,
+      });
+      const worker = createAgentHarnessToolSurfaceRuntimeBase({
+        presentation: structuredClone(presentation),
+        modelToolsEnabled: true,
+      });
+      const buildTools = () => {
+        const read = createStubTool("fixture_read");
+        read.execute = async () => ({
+          content: [],
+          details: { marker: "prepared catalog result" },
+        });
+        setPluginToolMeta(read, { pluginId: "fixture", optional: true, replaySafe: true });
+        return [read, { ...createStubTool("fixture_direct"), catalogMode: "direct-only" as const }];
+      };
+      try {
+        const localSurface = local.compactTools(buildTools());
+        const workerSurface = worker.compactTools(buildTools(), {
+          prepared: { preserveToolNames: [] },
+        });
+        expect(workerSurface.tools.map((tool) => tool.name)).toEqual(expected);
+        expect(workerSurface.tools.map(projectAgentToolDefinition)).toEqual(
+          localSurface.tools.map(projectAgentToolDefinition),
+        );
+        if (presentation.codeMode.enabled || search) {
+          expect(worker.toolSearchCatalogRef?.current?.entries.map((entry) => entry.id)).toEqual([
+            "openclaw:fixture:fixture_read",
+          ]);
+          expect(workerSurface.promptToolPolicy.apply().callableToolNames).toContain(
+            "fixture_read",
+          );
+        }
+        if (search) {
+          const call = expectDefined(
+            workerSurface.tools.find((tool) => tool.name === "tool_call"),
+            "prepared catalog call control",
+          );
+          const result = await call.execute("prepared-call", { id: "fixture_read", args: {} });
+          expect(JSON.stringify(result)).toContain("prepared catalog result");
+        }
+      } finally {
+        local.cleanup();
+        worker.cleanup();
+      }
+    },
+  );
+
   it.each(["tools", "directory"] as const)(
     "returns the canonical %s directory only after applying prompt policy",
     (mode) => {

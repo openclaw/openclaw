@@ -1,14 +1,17 @@
 // Persists the root ownership record for one Claw-created agent and workspace.
 
-import type { DatabaseSync } from "node:sqlite";
 import { stableStringify } from "@openclaw/normalization-core";
+import {
+  assertAgentDeletionAllowsMutation,
+  type AgentDeletionOperation,
+} from "../agents/agent-lifecycle-registry.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
+  type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { digestClawValue } from "./digest.js";
 import {
@@ -21,28 +24,25 @@ import {
   type PackageRefRow,
   type PersistedClawPackageRef,
 } from "./package-extension-provenance.js";
+import { updateClawPackageRefStatusInDatabase } from "./package-status.kernel.js";
+import { encodeClawAgentOwnership, type ClawAgentOrigin } from "./provenance-agent-origin.js";
 import {
-  persistClawMigrationOwnershipWithInstallRecordReader,
-  releaseAdoptedClawInstallRecordWithInstallRecordReader,
-} from "./provenance-adopted.js";
-import {
-  decodeClawAgentOwnership,
-  encodeClawAgentOwnership,
-  type ClawAgentOrigin,
-} from "./provenance-agent-origin.js";
-import {
-  clawBootstrapProvenanceFromRow,
-  selectClawBootstrapProvenanceColumns,
-} from "./provenance-bootstrap.js";
-import { legacySafeColumnProjection } from "./provenance-legacy-columns.js";
+  readClawInstallRecordFromDatabase,
+  readClawInstallRecordsInDatabase,
+  readClawPackageRefsInDatabase,
+  type ClawPackageRefQuery,
+} from "./provenance-read.kernel.js";
 import {
   cacheClawInstallSchemaVersion,
   deleteCachedClawInstallSchemaVersion,
 } from "./provenance-runtime-read.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
 import type { ClawInstallStatus, PersistedClawInstall } from "./provenance-types.js";
-import type { ClawAddPlan, ClawPackage, ResolvedClawPackage } from "./types.js";
-import type { PersistedClawWorkspaceFile } from "./workspace.js";
+import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
+export {
+  persistClawMigrationOwnership,
+  releaseAdoptedClawInstallRecord,
+} from "./provenance-adopted.js";
 export {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
   type PersistedClawPackageRef,
@@ -53,59 +53,6 @@ type ClawProvenanceDatabase = Pick<
   DB,
   "claw_installs" | "claw_package_refs" | "claw_workspace_files"
 >;
-
-type ClawInstallRow = {
-  schema_version: string;
-  source_kind: "package" | "development";
-  claw_name: string;
-  claw_version: string;
-  package_root: string;
-  manifest_path: string;
-  integrity_kind: "artifact" | "development-snapshot";
-  integrity: string;
-  source_byte_length: number | bigint;
-  manifest_schema_version: number | bigint;
-  plan_integrity: string;
-  agent_id: string;
-  workspace: string;
-  agent_config_digest: string;
-  agent_owned_paths_json: string;
-  bootstrap_source_path: string | null;
-  bootstrap_content_digest: string | null;
-  status: ClawInstallStatus;
-  added_at_ms: number | bigint;
-  updated_at_ms: number | bigint;
-};
-
-function rowToRecord(row: ClawInstallRow): PersistedClawInstall {
-  const ownership = decodeClawAgentOwnership(row.agent_owned_paths_json, row.schema_version);
-  return {
-    schemaVersion: installRecordSchema.parseClawInstallRecordSchemaVersion(row.schema_version),
-    claw: {
-      kind: row.source_kind,
-      name: row.claw_name,
-      version: row.claw_version,
-      packageRoot: row.package_root,
-      manifestPath: row.manifest_path,
-      integrityKind: row.integrity_kind,
-      integrity: row.integrity,
-      byteLength: sqliteNumber(row.source_byte_length),
-    },
-    manifestSchemaVersion: sqliteNumber(
-      row.manifest_schema_version,
-    ) as ClawAddPlan["manifestSchemaVersion"],
-    planIntegrity: row.plan_integrity,
-    agentId: row.agent_id,
-    workspace: row.workspace,
-    agentConfigDigest: row.agent_config_digest,
-    agentOrigin: ownership.origin,
-    agentOwnedPaths: ownership.paths,
-    ...clawBootstrapProvenanceFromRow(row),
-    status: row.status,
-    addedAtMs: sqliteNumber(row.added_at_ms),
-    updatedAtMs: sqliteNumber(row.updated_at_ms),
-  };
-}
 
 function agentOwnedPaths(plan: ClawAddPlan): string[] {
   return plan.actions.filter((action) => action.kind === "agent").map((action) => action.target);
@@ -143,61 +90,11 @@ export function clawInstallRecordMatchesPlan(
   );
 }
 
-function selectClawInstallRow(db: DatabaseSync, agentId: string): ClawInstallRow | undefined {
-  const bootstrapColumns = selectClawBootstrapProvenanceColumns(db);
-  return db /* sqlite-allow-raw: this Claw prototype state-table read is scoped to one owned row. */
-    .prepare(
-      `SELECT agent_id, schema_version, source_kind, claw_name, claw_version,
-              package_root, manifest_path, integrity_kind, integrity, source_byte_length,
-              manifest_schema_version, plan_integrity, workspace, agent_config_digest,
-              agent_owned_paths_json, ${bootstrapColumns},
-              status, added_at_ms, updated_at_ms
-         FROM claw_installs
-        WHERE agent_id = ?`,
-    )
-    .get(agentId) as ClawInstallRow | undefined;
-}
-
-export function readClawInstallRecordFromDatabase(
-  db: DatabaseSync,
-  agentId: string,
-): PersistedClawInstall | undefined {
-  const row = selectClawInstallRow(db, agentId);
-  return row ? rowToRecord(row) : undefined;
-}
-
-export function persistClawMigrationOwnership(
-  plan: ClawAddPlan,
-  workspaceFiles: PersistedClawWorkspaceFile[],
-  options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
-): PersistedClawInstall {
-  return persistClawMigrationOwnershipWithInstallRecordReader(
-    plan,
-    workspaceFiles,
-    readClawInstallRecordFromDatabase,
-    options,
-  );
-}
-
-export function releaseAdoptedClawInstallRecord(
-  agentId: string,
-  expectedPlanIntegrity: string,
-  options: OpenClawStateDatabaseOptions = {},
-): void {
-  releaseAdoptedClawInstallRecordWithInstallRecordReader(
-    agentId,
-    expectedPlanIntegrity,
-    readClawInstallRecordFromDatabase,
-    options,
-  );
-}
-
 export function readClawInstallRecord(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawInstall | undefined {
-  const row = selectClawInstallRow(openOpenClawStateDatabase(options).db, agentId);
-  return row ? rowToRecord(row) : undefined;
+  return readClawInstallRecordFromDatabase(openOpenClawStateDatabase(options).db, agentId);
 }
 
 export function persistClawInstallRecord(
@@ -217,18 +114,19 @@ export function persistClawInstallRecord(
   const ownedPaths = agentOwnedPaths(plan);
   const ownership = encodeClawAgentOwnership(ownedPaths, options.agentOrigin ?? "created");
   const bootstrap = bootstrapProvenance(plan);
-  const persistedRecord = runOpenClawStateWriteTransaction(({ db }) => {
-    const existing = selectClawInstallRow(db, plan.agent.finalId);
-    if (existing) {
-      const record = rowToRecord(existing);
+  const persistedRecord = runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
+    const { db } = database;
+    const record = readClawInstallRecordFromDatabase(db, plan.agent.finalId);
+    if (record) {
       const expectedPlan = options.expectedExistingPlan ?? plan;
-      if (existing.status !== "complete" && clawInstallRecordMatchesPlan(record, expectedPlan)) {
+      if (record.status !== "complete" && clawInstallRecordMatchesPlan(record, expectedPlan)) {
         if (record.schemaVersion !== installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION) {
           if (options.deferLegacyPlanUpgrade) {
             return record;
           }
-          return installRecordSchema.upgradeClawInstallSchema(
-            db,
+          return upgradeClawInstallSchema(
+            database,
             plan.agent.finalId,
             record,
             options.expectedExistingRecord,
@@ -304,9 +202,12 @@ export function updateClawInstallRecordStatus(
   options: OpenClawStateDatabaseOptions & {
     nowMs?: number;
     expectedStatuses?: ClawInstallStatus[];
+    deletionOperation?: AgentDeletionOperation;
   } = {},
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, agentId, options.deletionOperation);
+    const { db } = database;
     const expectedStatuses = options.expectedStatuses ?? [];
     let query = getNodeSqliteKysely<ClawProvenanceDatabase>(db)
       .updateTable("claw_installs")
@@ -320,6 +221,7 @@ export function updateClawInstallRecordStatus(
         `Claw install record for agent ${JSON.stringify(agentId)} did not match the expected phase.`,
       );
     }
+    options.deletionOperation?.handoffToRetry(database);
   }, options);
 }
 
@@ -327,7 +229,9 @@ export function deleteClawInstallRecord(
   agentId: string,
   options: OpenClawStateDatabaseOptions & { expectedStatuses?: ClawInstallStatus[] } = {},
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
+  runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, agentId);
+    const { db } = database;
     const expectedStatuses = options.expectedStatuses ?? [];
     let query = getNodeSqliteKysely<ClawProvenanceDatabase>(db)
       .deleteFrom("claw_installs")
@@ -347,22 +251,7 @@ export function deleteClawInstallRecord(
 export function readClawInstallRecords(
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedClawInstall[] {
-  const database = openOpenClawStateDatabase(options);
-  const bootstrapColumns = selectClawBootstrapProvenanceColumns(database.db);
-  const rows =
-    database.db /* sqlite-allow-raw: read-only Claw install inventory ordered by stable agent id. */
-      .prepare(
-        `SELECT schema_version, source_kind, claw_name, claw_version, package_root,
-              manifest_path, integrity_kind, integrity, source_byte_length,
-              manifest_schema_version, plan_integrity, agent_id, workspace,
-              agent_config_digest, agent_owned_paths_json, ${bootstrapColumns},
-              status, added_at_ms,
-              updated_at_ms
-         FROM claw_installs
-        ORDER BY agent_id`,
-      )
-      .all() as ClawInstallRow[];
-  return rows.map(rowToRecord);
+  return readClawInstallRecordsInDatabase(openOpenClawStateDatabase(options).db);
 }
 
 export function updateClawInstallRecord(
@@ -374,21 +263,21 @@ export function updateClawInstallRecord(
     agentConfigDigest?: string;
   } = {},
 ): PersistedClawInstall {
-  const current = readClawInstallRecord(plan.agent.finalId, options);
-  if (!current) {
-    throw new Error(
-      `No Claw install record exists for agent ${JSON.stringify(plan.agent.finalId)}.`,
-    );
-  }
   const updatedAtMs = options.nowMs ?? Date.now();
   const status = options.status ?? "complete";
   const agentConfigDigest = options.agentConfigDigest ?? digestClawValue(plan.agent.config);
-  const ownedAgentPaths = plan.actions
-    .filter((action) => action.kind === "agent")
-    .map((action) => action.target);
-  const bootstrap = bootstrapProvenance(plan) ?? current.bootstrap;
-  const ownership = encodeClawAgentOwnership(ownedAgentPaths, current.agentOrigin);
-  runOpenClawStateWriteTransaction(({ db }) => {
+  const ownedAgentPaths = agentOwnedPaths(plan);
+  const record = runOpenClawStateWriteTransaction((database) => {
+    assertAgentDeletionAllowsMutation(database, plan.agent.finalId);
+    const { db } = database;
+    const current = readClawInstallRecordFromDatabase(db, plan.agent.finalId);
+    if (!current) {
+      throw new Error(
+        `No Claw install record exists for agent ${JSON.stringify(plan.agent.finalId)}.`,
+      );
+    }
+    const bootstrap = bootstrapProvenance(plan) ?? current.bootstrap;
+    const ownership = encodeClawAgentOwnership(ownedAgentPaths, current.agentOrigin);
     const result = executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<ClawProvenanceDatabase>(db)
@@ -422,22 +311,22 @@ export function updateClawInstallRecord(
         `Claw install record changed for agent ${JSON.stringify(plan.agent.finalId)}.`,
       );
     }
+    return {
+      schemaVersion: ownership.schemaVersion,
+      claw: plan.claw,
+      manifestSchemaVersion: plan.manifestSchemaVersion,
+      planIntegrity: plan.planIntegrity,
+      agentId: plan.agent.finalId,
+      workspace: plan.agent.workspace,
+      agentConfigDigest,
+      agentOrigin: current.agentOrigin,
+      agentOwnedPaths: ownedAgentPaths,
+      ...(bootstrap ? { bootstrap } : {}),
+      status,
+      addedAtMs: current.addedAtMs,
+      updatedAtMs,
+    };
   }, options);
-  const record = {
-    schemaVersion: ownership.schemaVersion,
-    claw: plan.claw,
-    manifestSchemaVersion: plan.manifestSchemaVersion,
-    planIntegrity: plan.planIntegrity,
-    agentId: plan.agent.finalId,
-    workspace: plan.agent.workspace,
-    agentConfigDigest,
-    agentOrigin: current.agentOrigin,
-    agentOwnedPaths: ownedAgentPaths,
-    ...(bootstrap ? { bootstrap } : {}),
-    status,
-    addedAtMs: current.addedAtMs,
-    updatedAtMs,
-  };
   cacheClawInstallSchemaVersion(
     plan.agent.finalId,
     record.schemaVersion,
@@ -566,80 +455,46 @@ export function updateClawPackageRefStatus(
   status: ClawPackageRefStatus,
   options: OpenClawStateDatabaseOptions & { nowMs?: number } = {},
 ): PersistedClawPackageRef {
-  const nowMs = options.nowMs ?? Date.now();
-  runOpenClawStateWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<ClawProvenanceDatabase>(db)
-        .updateTable("claw_package_refs")
-        .set({ package_status: status, updated_at_ms: nowMs })
-        .where("agent_id", "=", ref.agentId)
-        .where("package_kind", "=", ref.kind)
-        .where("package_source", "=", ref.source)
-        .where("package_ref", "=", ref.ref)
-        .where("package_version", "=", ref.version)
-        .where("package_integrity", "=", ref.integrity),
-    );
-  }, options);
-  return { ...ref, status, updatedAtMs: nowMs };
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => updateClawPackageRefStatusInDatabase(db, ref, status, options.nowMs ?? Date.now()),
+    options,
+  );
 }
 
 export function readClawPackageRefs(
-  options: OpenClawStateDatabaseOptions & {
-    agentId?: string;
-    kind?: ClawPackage["kind"];
-    source?: ClawPackage["source"];
-    ref?: string;
-    version?: string;
-    integrity?: string;
-    status?: ClawPackageRefStatus;
-  } = {},
+  options: OpenClawStateDatabaseOptions & ClawPackageRefQuery = {},
 ): PersistedClawPackageRef[] {
-  const database = openOpenClawStateDatabase(options);
-  if (
-    options.readOnly &&
-    !database.db /* sqlite-allow-raw: read-only Claw package-ref table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_package_refs'")
-      .get()
-  ) {
-    return [];
+  return readClawPackageRefsInDatabase(openOpenClawStateDatabase(options).db, options);
+}
+
+function upgradeClawInstallSchema(
+  database: OpenClawStateDatabase,
+  agentId: string,
+  record: PersistedClawInstall,
+  expectedRecord: PersistedClawInstall | undefined,
+  replacement: Pick<PersistedClawInstall, "planIntegrity" | "agentConfigDigest">,
+): PersistedClawInstall {
+  assertAgentDeletionAllowsMutation(database, agentId);
+  if (!expectedRecord || stableStringify(record) !== stableStringify(expectedRecord)) {
+    throw new Error(
+      `Legacy Claw install record for agent ${JSON.stringify(agentId)} is not an exact resumable attempt.`,
+    );
   }
-  const conditions: string[] = [];
-  const params: Record<string, string> = {};
-  for (const [column, value] of [
-    ["agent_id", options.agentId],
-    ["package_kind", options.kind],
-    ["package_source", options.source],
-    ["package_ref", options.ref],
-    ["package_version", options.version],
-    ["package_integrity", options.integrity],
-    ["package_status", options.status],
-  ] as const) {
-    if (value !== undefined) {
-      conditions.push(`${column} = @${column}`);
-      params[column] = value;
-    }
-  }
-  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
-  const extensionColumns = legacySafeColumnProjection(database.db, "claw_package_refs", [
-    "extension_id",
-    "extension_format",
-    "extension_detected_format",
-    "extension_mapped_json",
-    "extension_unavailable_json",
-    "extension_adapter_identity",
-  ]);
-  const rows =
-    database.db /* sqlite-allow-raw: read-only Claw package reference lookup with closed column filters. */
-      .prepare(
-        `SELECT schema_version, agent_id, claw_name, package_kind, package_source,
-              package_ref, package_version, package_integrity, package_status, relationship, origin,
-              independent_owner, ${extensionColumns},
-              installed_at_ms,
-              updated_at_ms
-         FROM claw_package_refs${where}
-        ORDER BY agent_id, package_kind, package_ref`,
-      )
-      .all(params) as PackageRefRow[];
-  return rows.map(rowToPackageRef);
+  database.db /* sqlite-allow-raw: exact legacy retry atomically replaces the consent-bound plan identity. */
+    .prepare(
+      `UPDATE claw_installs
+          SET schema_version = ?, plan_integrity = ?, agent_config_digest = ?
+        WHERE agent_id = ?`,
+    )
+    .run(
+      installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+      replacement.planIntegrity,
+      replacement.agentConfigDigest,
+      agentId,
+    );
+  return {
+    ...record,
+    ...replacement,
+    schemaVersion: installRecordSchema.CLAW_INSTALL_RECORD_SCHEMA_VERSION,
+  };
 }

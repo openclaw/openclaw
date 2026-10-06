@@ -1,46 +1,13 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import {
-  captureChatOutboxAdmission,
-  subscribeStoredChatOutboxChanges,
-} from "../../lib/chat/outbox-store.ts";
+import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createState, reconnectItem, admitItem } from "./composer-persistence.test-support.ts";
 import {
-  admitStoredChatComposerQueueItem,
   persistChatComposerState,
   removeStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
-
-type ComposerState = Parameters<typeof persistChatComposerState>[0];
-
-function createState(): ComposerState {
-  return {
-    settings: { gatewayUrl: "ws://gateway.test/control" },
-    sessionKey: "agent:lily:main",
-    chatMessage: "",
-    chatQueue: [],
-  };
-}
-
-function reconnectItem(id: string, createdAt: number): ChatQueueItem {
-  return {
-    id,
-    text: `message ${id}`,
-    createdAt,
-    sendRunId: `run-${id}`,
-    sendState: "waiting-reconnect",
-  };
-}
-
-function admitItem(state: ComposerState, item: ChatQueueItem) {
-  return admitStoredChatComposerQueueItem(
-    state,
-    captureChatOutboxAdmission(state, state.sessionKey, item.agentId),
-    item,
-  );
-}
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => vi.unstubAllGlobals());

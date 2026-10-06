@@ -1,6 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isSummaryProviderError } from "../../../packages/agent-core/src/harness/types.js";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import type { CompactionSafeguardCancellation } from "../agent-hooks/compaction-safeguard-runtime.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import { extractFailoverHttpStatus } from "../failover/retry-evidence.js";
@@ -37,6 +39,32 @@ export function resolveCompactionFailure(params: {
       ? params.safeguardCancellation
       : undefined;
   return { reason: cancellation?.reason ?? reason, error: cancellation?.error ?? params.error };
+}
+
+/**
+ * Only an actual summary timeout qualifies: the summary watchdog fired (the caller is still
+ * live, so its composed signal aborted on the deadline), or the provider answered 408/504.
+ * Failover's broader "timeout" class also covers fast 5xx, 410, and DNS failures, which keep
+ * their owners' outcomes.
+ */
+export function isSummaryTimeoutFailure(params: {
+  error: unknown;
+  summarySignal?: AbortSignal;
+  safeguardCancellation?: CompactionSafeguardCancellation | null;
+  abortSignal?: AbortSignal;
+}): boolean {
+  // Terminal failures (model-fallback stop) rethrow before any timeout verdict.
+  let providerFailure = resolveCompactionFailure(params).error;
+  if (params.summarySignal?.aborted) {
+    return true;
+  }
+  while (providerFailure instanceof Error && !isSummaryProviderError(providerFailure)) {
+    providerFailure = providerFailure.cause;
+  }
+  const status = isSummaryProviderError(providerFailure)
+    ? extractErrorHttpStatus(providerFailure.response.errorMessage?.trim() ?? "")?.code
+    : undefined;
+  return status === 408 || status === 504;
 }
 
 export function classifyCompactionReason(reason?: string): string {

@@ -11,6 +11,7 @@ import {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
 import { extractSystemAgentRescueMessage, runSystemAgentRescueMessage } from "./rescue-message.js";
@@ -146,11 +147,15 @@ async function withRescueStateDir(
 ): Promise<void> {
   const stateDir = await makeStateDir(prefix);
   resetPluginStateStoreForTests();
-  try {
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => await run(stateDir));
-  } finally {
-    resetPluginStateStoreForTests();
-  }
+  await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    try {
+      await run(stateDir);
+    } finally {
+      vi.useRealTimers();
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+    }
+  });
 }
 
 function commandContext(overrides: Partial<CommandContext> = {}): CommandContext {

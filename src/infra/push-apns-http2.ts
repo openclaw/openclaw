@@ -29,7 +29,6 @@ const APNS_HTTP2_MIN_TIMEOUT_MS = 1000;
 type ApnsResponseBodyCapture = {
   chunks: Buffer[];
   capturedBytes: number;
-  bytes: number;
   truncated: boolean;
 };
 
@@ -230,7 +229,7 @@ function resolveApnsHttp2TimeoutMs(timeoutMs: number): number {
 }
 
 export function createApnsResponseBodyCapture(): ApnsResponseBodyCapture {
-  return { chunks: [], capturedBytes: 0, bytes: 0, truncated: false };
+  return { chunks: [], capturedBytes: 0, truncated: false };
 }
 
 export function appendApnsResponseBodyCapture(
@@ -239,7 +238,6 @@ export function appendApnsResponseBodyCapture(
   maxBytes = APNS_RESPONSE_BODY_MAX_BYTES,
 ): void {
   const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-  capture.bytes += buffer.byteLength;
   const remaining = maxBytes - capture.capturedBytes;
   if (remaining <= 0) {
     capture.truncated = capture.truncated || buffer.byteLength > 0;

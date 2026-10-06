@@ -48,8 +48,7 @@ type SessionsUsageCacheKeyParams = {
   includeContextWeight: boolean;
 };
 
-// Every normalized query axis that can change response bytes belongs in this
-// key; the 30s TTL mirrors usage.cost and keeps dashboard refreshes coherent.
+// Revisions replace the value for a stable query instead of retaining every rollup.
 function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
   return JSON.stringify([
     params.agentScope === "all" ? "all" : `agent:${params.agentId}`,
@@ -62,8 +61,6 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    readUserProfileVersion(),
-    getSessionCostUsageUpdatedAt(),
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -77,6 +74,7 @@ export async function loadSessionsUsageResultCached(
     cache: sessionsUsageCache,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}`,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
@@ -96,11 +94,12 @@ export async function loadCostUsageSummaryCached(params: {
     ? undefined
     : normalizeAgentId(params.agentId ?? resolveSessionAgentId({ config: params.config }));
   const dayBucketKey = usageDayBucketCacheKey(params.dayBucket);
-  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}:${getSessionCostUsageUpdatedAt()}`;
+  const cacheKey = `${allAgents ? "all" : `agent:${agentId}`}:${params.startMs}-${params.endMs}:${dayBucketKey}`;
   return await loadUsageResultCached({
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
+    revision: getSessionCostUsageUpdatedAt(),
     load: () =>
       allAgents
         ? loadAllAgentCostUsageSummary({
@@ -116,7 +115,6 @@ export async function loadCostUsageSummaryCached(params: {
             config: params.config,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
-            refreshMode: "background",
           }),
   });
 }
@@ -142,7 +140,6 @@ async function loadAllAgentCostUsageSummary(params: {
           config: params.config,
           agentId,
           requestRefresh: true,
-          refreshMode: "background",
         }),
     ),
   );

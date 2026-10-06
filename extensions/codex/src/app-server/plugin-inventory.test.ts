@@ -59,8 +59,6 @@ describe("Codex plugin inventory", () => {
         id: "google-calendar-app",
         name: "google-calendar-app",
         accessible: true,
-        enabled: true,
-        needsAuth: false,
       },
     ]);
     expect(calls).toEqual(["plugin/installed", "plugin/read"]);
@@ -477,15 +475,12 @@ describe("Codex plugin inventory", () => {
 
       const record = inventory.records[0];
       expect(record?.appOwnership).toBe("proven");
-      expect(record?.authRequired).toBe(true);
       expect(record?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
       expect(record?.apps).toStrictEqual([
         {
           id: "google-calendar-app",
           name: "google-calendar-app",
           accessible: false,
-          enabled: false,
-          needsAuth: true,
         },
       ]);
     },
@@ -514,14 +509,11 @@ describe("Codex plugin inventory", () => {
     });
 
     expect(inventory.records[0]?.appOwnership).toBe("proven");
-    expect(inventory.records[0]?.authRequired).toBe(false);
     expect(inventory.records[0]?.apps).toEqual([
       {
         id: "google-calendar-app",
         name: "google-calendar-app",
         accessible: true,
-        enabled: false,
-        needsAuth: false,
       },
     ]);
   });

@@ -53,7 +53,7 @@ describe("restart log conventions", () => {
       OPENCLAW_STATE_DIR: "/Volumes/External/openclaw",
     };
 
-    expect(resolveGatewaySupervisorLogPaths(env, { platform: "darwin" })).toEqual({
+    expect(resolveGatewaySupervisorLogPaths(env)).toEqual({
       logDir: "/Users/test/Library/Logs/openclaw",
       stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
       stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
@@ -69,7 +69,7 @@ describe("restart log conventions", () => {
       OPENCLAW_PROFILE: "work",
     };
 
-    expect(resolveGatewaySupervisorLogPaths(env, { platform: "darwin" })).toEqual({
+    expect(resolveGatewaySupervisorLogPaths(env)).toEqual({
       logDir: "/Users/test/Library/Logs/openclaw",
       stdoutPath: "/Users/test/Library/Logs/openclaw/gateway-work.log",
       stderrPath: "/Users/test/Library/Logs/openclaw/gateway-work.err.log",

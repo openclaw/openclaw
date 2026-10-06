@@ -6,7 +6,7 @@ import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 export type { CommandArgValues, CommandArgs } from "./commands-args.types.js";
 
 /** Where a command may be invoked. */
-export type CommandScope = "text" | "native" | "both";
+type CommandScope = "text" | "native" | "both";
 
 /**
  * Controls progressive disclosure of commands in the UI.
@@ -56,7 +56,7 @@ export type CommandArgDefinition = {
 };
 
 /** Menu metadata for commands that should prompt for a missing argument. */
-export type CommandArgMenuSpec = {
+type CommandArgMenuSpec = {
   arg: string;
   title?: string;
 };
@@ -105,12 +105,6 @@ export type CommandNormalizeOptions = {
   preserveArguments?: boolean;
   /** Strip an explicit command target only while channel bot identity is unavailable. */
   targetedCommandMode?: "pre-identity";
-};
-
-/** Cached exact/regex command detector built from current registry aliases. */
-export type CommandDetection = {
-  exact: Set<string>;
-  regex: RegExp;
 };
 
 /** Inputs for deciding whether text slash commands should run on a surface. */

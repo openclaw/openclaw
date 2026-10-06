@@ -2,8 +2,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withAgentRosterFactsBatch } from "./agent-scope-config.js";
+import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
 import { listConfiguredOwnerInputs } from "./prepared-model-runtime.configured.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 import { retirePreparedModelRuntimeGeneration } from "./prepared-model-runtime.lifecycle.js";
@@ -319,6 +320,7 @@ export function createPreparedModelRuntimeRecovery(host: {
     const assertLifetime = host.captureLifetime();
     const replacement = host.getAdmissionReplacement();
     if (replacement && !replacement.degraded) {
+      assertPreparedModelRuntimeAdmissionCanWait(owner);
       const joinsRecovery = recovery.replacementGateId === replacement.gateId;
       // A publication for another scope must not spend this failure's scheduled opportunity.
       if (demand === "scheduled" && joinsRecovery) {
@@ -338,6 +340,7 @@ export function createPreparedModelRuntimeRecovery(host: {
     ) {
       return;
     }
+    assertPreparedModelRuntimeAdmissionCanWait(owner);
     if (demand === "scheduled") {
       recovery.scheduledAttempted = true;
     }

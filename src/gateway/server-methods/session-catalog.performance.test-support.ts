@@ -6,8 +6,8 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { vi } from "vitest";
 import { WebSocketServer } from "ws";
 import type {
-  SessionCatalogHost,
   SessionsCatalogListParams,
+  SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -24,6 +24,7 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import { createPluginServiceScheduler } from "../../plugins/service-scheduler.js";
 import type { OpenClawPluginDefinition } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -33,6 +34,7 @@ import {
   resolveBundledPluginPublicModulePath,
 } from "../../test-utils/bundled-plugin-public-surface.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -44,9 +46,6 @@ import {
 import type { createCatalogIoCounters } from "./session-catalog.performance-counters.test-support.js";
 import type { GatewayClient } from "./types.js";
 
-type CatalogResult = {
-  catalogs: Array<{ id: string; hosts: SessionCatalogHost[]; error?: { message: string } }>;
-};
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 
 export async function createComposedCatalogFixture(
@@ -147,6 +146,8 @@ export async function createComposedCatalogFixture(
     throw new Error("Expected a bound loopback native endpoint");
   }
   const previous = captureActivePluginRegistrySnapshot();
+  const scheduler = createTestGatewayScheduler();
+  const serviceScheduler = createPluginServiceScheduler(scheduler).scheduler;
   let stopCatalog: (() => Promise<void>) | undefined;
   let projection: SessionRowProjection | undefined;
   let stateOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
@@ -160,11 +161,16 @@ export async function createComposedCatalogFixture(
   };
   const cleanup = async () => {
     projection?.dispose();
+    serviceScheduler.beginClose();
     try {
       await stopCatalog?.();
     } finally {
       try {
-        await closeEndpoint();
+        try {
+          await scheduler.stop();
+        } finally {
+          await closeEndpoint();
+        }
       } finally {
         try {
           if (stateOwner) {
@@ -186,7 +192,7 @@ export async function createComposedCatalogFixture(
       computerUse: { enabled: false },
     };
     const config: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true, agentDir, workspace: state.workspaceDir }] },
+      agents: { entries: { main: { agentDir, workspace: state.workspaceDir } } },
       plugins: {
         slots: { memory: "none" },
         entries: { codex: { enabled: true, config: pluginConfig } },
@@ -253,6 +259,7 @@ export async function createComposedCatalogFixture(
       stateDir: state.stateDir,
       workspaceDir: state.workspaceDir,
       logger,
+      scheduler: serviceScheduler,
     };
     stopCatalog = async () => {
       await service.stop?.(serviceContext);
@@ -309,14 +316,16 @@ export async function createComposedCatalogFixture(
       }
       return result;
     }
-    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
-      const result = (await call("sessions.catalog.list", {
+    const requestList = async (params: Partial<SessionsCatalogListParams> = {}) =>
+      (await call("sessions.catalog.list", {
         catalogId: "codex",
         agentId: "main",
         limitPerHost: 64,
         ...params,
         hostIds: ["gateway:local"],
-      })) as CatalogResult;
+      })) as SessionsCatalogListResult;
+    const list = async (params: Partial<SessionsCatalogListParams> = {}) => {
+      const result = await requestList(params);
       const catalog = result.catalogs.find((value) => value.id === "codex");
       if (!catalog || catalog.error) {
         throw new Error(catalog?.error?.message ?? "Missing Codex catalog");
@@ -336,6 +345,7 @@ export async function createComposedCatalogFixture(
       projection,
       rows,
       requests,
+      requestList,
       list,
       setupMaintenance,
       async continueSession(hostId: string, threadId: string, sourceHomeId?: string) {

@@ -234,26 +234,38 @@ describe("node desktop runtime policy", () => {
     }
   });
 
-  it.each(["activation", "pairing"] as const)(
-    "does not dispatch after the requesting connection closes during %s",
-    async (boundary) => {
+  it.each([
+    { boundary: "activation", revoked: "requester" },
+    { boundary: "activation", revoked: "policy" },
+    { boundary: "pairing", revoked: "policy" },
+  ] as const)(
+    "does not dispatch after $revoked revocation during $boundary",
+    async ({ boundary, revoked }) => {
       const fixture = createFixture(boundary);
       const controller = new AbortController();
       const observed = fixture.service
         .observe({
           nodeId: "node",
           control: false,
-          requester: {
-            signal: controller.signal,
-            isCurrent: () => !controller.signal.aborted,
-          },
+          ...(revoked === "requester"
+            ? {
+                requester: {
+                  signal: controller.signal,
+                  isCurrent: () => !controller.signal.aborted,
+                },
+              }
+            : {}),
         })
         .then(
           () => true,
           () => false,
         );
       await fixture.reached;
-      controller.abort();
+      if (revoked === "requester") {
+        controller.abort();
+      } else {
+        fixture.revoke();
+      }
       fixture.release();
       expect(await observed).toBe(false);
       expect(fixture.forwarded).toEqual([]);
@@ -319,23 +331,6 @@ describe("node desktop runtime policy", () => {
     expect(mintedRequester?.isCurrent()).toBe(false);
     expect(controller.signal.aborted).toBe(false);
   });
-
-  it.each(["activation", "pairing"] as const)(
-    "does not dispatch after policy changes during %s",
-    async (boundary) => {
-      const fixture = createFixture(boundary);
-      const observed = fixture.service.observe({ nodeId: "node", control: false }).then(
-        () => true,
-        () => false,
-      );
-      await fixture.reached;
-      fixture.revoke();
-      fixture.release();
-
-      expect(await observed).toBe(false);
-      expect(fixture.forwarded).toEqual([]);
-    },
-  );
 
   it("destroys a late attachment instead of publishing a revoked desktop", async () => {
     const fixture = createFixture("attachment");

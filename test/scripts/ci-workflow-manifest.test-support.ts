@@ -396,6 +396,7 @@ export function runCiManifestFixture(options: {
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
           "check:test-timeout-race-ratchet": "true",
+          "check:test-mock-exports": "true",
         }
       : {};
     writeFileSync(
@@ -751,7 +752,6 @@ export function runCiManifestFixture(options: {
         ),
         GITHUB_REF: "refs/heads/main",
         OPENCLAW_CI_HOSTED_HEALTHY: "",
-        OPENCLAW_CI_AUTHOR_ASSOCIATION: "CONTRIBUTOR",
         OPENCLAW_CI_HEAD_REPOSITORY: options.repository ?? "openclaw/openclaw",
         OPENCLAW_CI_RUNNER_BACKEND: options.runnerBackend ?? options.runnerProfile ?? "",
         OPENCLAW_CI_RUNNER_PROFILE: options.runnerProfile ?? options.runnerBackend ?? "blacksmith",

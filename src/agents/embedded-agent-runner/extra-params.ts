@@ -450,127 +450,6 @@ function createParallelToolCallsWrapper(
   };
 }
 
-type ApplyExtraParamsContext = {
-  agent: { streamFn?: StreamFn };
-  provider: string;
-  modelId: string;
-  thinkingLevel?: ProviderThinkLevel;
-  model?: ProviderRuntimeModel;
-  effectiveExtraParams: Record<string, unknown>;
-  override?: Record<string, unknown>;
-};
-
-function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
-  const baseExtraParams =
-    ctx.override && hasRequestScopedExtraParams(ctx.override)
-      ? stripRequestScopedExtraParams(ctx.effectiveExtraParams)
-      : ctx.effectiveExtraParams;
-  const streamParams = ctx.override ? { ...baseExtraParams, ...ctx.override } : baseExtraParams;
-  const wrappedStreamFn = createStreamFnWithExtraParams(
-    ctx.agent.streamFn,
-    streamParams,
-    ctx.provider,
-    ctx.model,
-  );
-
-  if (wrappedStreamFn) {
-    log.debug(`applying extraParams to agent streamFn for ${ctx.provider}/${ctx.modelId}`);
-    ctx.agent.streamFn = wrappedStreamFn;
-  }
-
-  if (
-    shouldApplySiliconFlowThinkingOffCompat({
-      provider: ctx.provider,
-      modelId: ctx.modelId,
-      thinkingLevel: ctx.thinkingLevel,
-    })
-  ) {
-    log.debug(
-      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${ctx.provider}/${ctx.modelId})`,
-    );
-    ctx.agent.streamFn = createSiliconFlowThinkingWrapper(ctx.agent.streamFn);
-  }
-}
-
-function applyPostPluginStreamWrappers(
-  ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
-): void {
-  const streamParams = ctx.override
-    ? { ...ctx.effectiveExtraParams, ...ctx.override }
-    : ctx.effectiveExtraParams;
-  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn, streamParams);
-  ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
-  ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
-  ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
-
-  if (!ctx.providerWrapperHandled) {
-    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: (model) =>
-        isDeepSeekV4OpenAICompletionsModel(model) &&
-        !isMicrosoftFoundryProviderId(model.provider) &&
-        deepSeekV4NativeThinkingAllowedByCompat(model),
-    });
-    ctx.agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(ctx.agent.streamFn);
-
-    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
-    // DeepSeek-style reasoning_content format for multi-turn tool calls.
-    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
-    });
-    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
-    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
-    ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
-      baseStreamFn: ctx.agent.streamFn,
-      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
-    });
-
-    // Guard Google-family payloads against invalid negative thinking budgets
-    // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
-    ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
-
-    // Work around upstream shared model runtime hardcoding `store: false` for Responses API.
-    // Force `store=true` for direct OpenAI Responses models and auto-enable
-    // server-side compaction for compatible Responses payloads.
-    ctx.agent.streamFn = createOpenAIResponsesContextManagementWrapper(
-      ctx.agent.streamFn,
-      ctx.effectiveExtraParams,
-    );
-  }
-
-  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
-  // visible reply path because it does not emit native Anthropic thinking
-  // blocks. Disable thinking unless an earlier wrapper already set it.
-  ctx.agent.streamFn = createMinimaxThinkingDisabledWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
-
-  ctx.agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
-    requireBaseStreamFn(ctx.agent.streamFn),
-    [ctx.effectiveExtraParams, ctx.override],
-  );
-
-  const rawParallelToolCalls = resolveAliasedParamValue(
-    [ctx.effectiveExtraParams, ctx.override],
-    ["parallel_tool_calls", "parallelToolCalls"],
-  );
-  if (rawParallelToolCalls === undefined) {
-    return;
-  }
-  if (typeof rawParallelToolCalls === "boolean") {
-    ctx.agent.streamFn = createParallelToolCallsWrapper(ctx.agent.streamFn, rawParallelToolCalls);
-    return;
-  }
-  if (rawParallelToolCalls === null) {
-    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
-    return;
-  }
-  const summary =
-    typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
-  log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
-}
-
 function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
@@ -608,23 +487,14 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
  * retain the model-ID fallback to DeepSeek's native wire format.
  */
 function deepSeekV4NativeThinkingAllowedByCompat(model: Parameters<StreamFn>[0]): boolean {
-  const thinkingFormat = resolveDeepSeekV4ThinkingFormatOverride(model);
-  return thinkingFormat === undefined || thinkingFormat === "deepseek";
-}
-
-function resolveDeepSeekV4ThinkingFormatOverride(
-  model: Parameters<StreamFn>[0],
-): string | undefined {
   const compat = (model as ProviderRuntimeModel).compat;
   const configured = compat && typeof compat === "object" ? compat.thinkingFormat : undefined;
   if (typeof configured === "string") {
-    return configured;
+    return configured === "deepseek";
   }
   const detected = detectOpenAICompletionsCompat(model as ProviderRuntimeModel).defaults
     .thinkingFormat;
-  return detected === "openrouter" || detected === "together" || detected === "zai"
-    ? detected
-    : undefined;
+  return detected !== "openrouter" && detected !== "together" && detected !== "zai";
 }
 
 function createDeepSeekV4NonNativeCompatSanitizerWrapper(
@@ -663,23 +533,15 @@ const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
 ]);
 const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
 
-function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
-  return (
-    model.api === "openai-completions" &&
-    normalizedModelId !== undefined &&
-    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
-  );
-}
-
-function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+function isMiMoOpenAICompatibleModel(
   model: Parameters<StreamFn>[0],
+  modelIds: ReadonlySet<string>,
 ): boolean {
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
     normalizedModelId !== undefined &&
-    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
+    modelIds.has(normalizedModelId)
   );
 }
 
@@ -708,12 +570,6 @@ export function applyExtraParamsToAgent(
     workspaceDir,
     runtimeHandle: getModelProviderRuntimePluginHandle(model),
   });
-  const resolvedExtraParams = resolveExtraParams({
-    cfg,
-    provider,
-    modelId,
-    agentId,
-  });
   const override = sanitizeExtraParamsOverride(extraParamsOverride);
   const effectiveExtraParams =
     options?.preparedExtraParams ??
@@ -726,22 +582,11 @@ export function applyExtraParamsToAgent(
       agentId,
       agentDir,
       workspaceDir,
-      resolvedExtraParams,
       model,
       resolvedTransport,
       providerRuntimeHandle,
       auth: options?.auth,
     });
-  const wrapperContext: ApplyExtraParamsContext = {
-    agent,
-    provider,
-    modelId,
-    thinkingLevel,
-    model,
-    effectiveExtraParams,
-    override,
-  };
-
   const providerStreamBase = agent.streamFn;
   const nativeWebSearchAllowedByToolPolicy = options?.nativeWebSearchPolicyContext
     ? isNativeWebSearchAllowedByToolPolicy({
@@ -770,14 +615,108 @@ export function applyExtraParamsToAgent(
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
   // Apply caller/config extra params outside provider defaults so explicit runtime
   // transport values can override provider-added defaults.
-  applyPrePluginStreamWrappers(wrapperContext);
+  const baseExtraParams =
+    override && hasRequestScopedExtraParams(override)
+      ? stripRequestScopedExtraParams(effectiveExtraParams)
+      : effectiveExtraParams;
+  const streamParams = override ? { ...baseExtraParams, ...override } : baseExtraParams;
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    streamParams,
+    provider,
+    model,
+  );
+
+  if (wrappedStreamFn) {
+    log.debug(`applying extraParams to agent streamFn for ${provider}/${modelId}`);
+    agent.streamFn = wrappedStreamFn;
+  }
+
+  if (
+    shouldApplySiliconFlowThinkingOffCompat({
+      provider,
+      modelId,
+      thinkingLevel,
+    })
+  ) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
+    );
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
+  }
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;
-  applyPostPluginStreamWrappers({
-    ...wrapperContext,
-    providerWrapperHandled,
-  });
+  const cacheStreamParams = override
+    ? { ...effectiveExtraParams, ...override }
+    : effectiveExtraParams;
+  agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn, cacheStreamParams);
+  agent.streamFn = createOpenAIStringContentWrapper(agent.streamFn);
+  agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(agent.streamFn);
+  agent.streamFn = createOpenAICompletionsToolsCompatWrapper(agent.streamFn);
+
+  if (!providerWrapperHandled) {
+    agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: agent.streamFn,
+      thinkingLevel,
+      shouldPatchModel: (candidateModel) =>
+        isDeepSeekV4OpenAICompletionsModel(candidateModel) &&
+        !isMicrosoftFoundryProviderId(candidateModel.provider) &&
+        deepSeekV4NativeThinkingAllowedByCompat(candidateModel),
+    });
+    agent.streamFn = createDeepSeekV4NonNativeCompatSanitizerWrapper(agent.streamFn);
+
+    // Unowned MiMo proxy routes bypass the Xiaomi hook but still need its
+    // DeepSeek-style reasoning_content format for multi-turn tool calls.
+    agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: agent.streamFn,
+      thinkingLevel,
+      shouldPatchModel: (candidateModel) =>
+        isMiMoOpenAICompatibleModel(candidateModel, MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS),
+    });
+    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
+    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
+    agent.streamFn = createThinkingOnlyFinalTextWrapper({
+      baseStreamFn: agent.streamFn,
+      shouldPatchModel: (candidateModel) =>
+        isMiMoOpenAICompatibleModel(candidateModel, MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS),
+    });
+
+    // Guard Google-family payloads against invalid negative thinking budgets
+    // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
+    agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
+
+    // Work around upstream shared model runtime hardcoding `store: false` for Responses API.
+    // Force `store=true` for direct OpenAI Responses models and auto-enable
+    // server-side compaction for compatible Responses payloads.
+    agent.streamFn = createOpenAIResponsesContextManagementWrapper(
+      agent.streamFn,
+      effectiveExtraParams,
+    );
+  }
+
+  // MiniMax's Anthropic-compatible stream can leak reasoning_content into the
+  // visible reply path because it does not emit native Anthropic thinking
+  // blocks. Disable thinking unless an earlier wrapper already set it.
+  agent.streamFn = createMinimaxThinkingDisabledWrapper(agent.streamFn, thinkingLevel);
+
+  agent.streamFn = createOpenAICompletionsPayloadPolicyWrapper(
+    requireBaseStreamFn(agent.streamFn),
+    [effectiveExtraParams, override],
+  );
+
+  const rawParallelToolCalls = resolveAliasedParamValue(
+    [effectiveExtraParams, override],
+    ["parallel_tool_calls", "parallelToolCalls"],
+  );
+  if (typeof rawParallelToolCalls === "boolean") {
+    agent.streamFn = createParallelToolCallsWrapper(agent.streamFn, rawParallelToolCalls);
+  } else if (rawParallelToolCalls === null) {
+    log.debug("parallel_tool_calls suppressed by null override, skipping injection");
+  } else if (rawParallelToolCalls !== undefined) {
+    const summary =
+      typeof rawParallelToolCalls === "string" ? rawParallelToolCalls : typeof rawParallelToolCalls;
+    log.warn(`ignoring invalid parallel_tool_calls param: ${summary}`);
+  }
 
   return { effectiveExtraParams, nativeWebSearchAllowedByToolPolicy };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -6,7 +6,7 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import { sleepWithAbort } from "@openclaw/retry";
+import { racePromiseWithAbortSignal, sleepWithAbort } from "@openclaw/retry";
 import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
@@ -15,6 +15,7 @@ import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { shouldDetachChildForProcessTree } from "../process/child-process-tree.js";
 import { prepareOomScoreAdjustedSpawnPreservingExecEnv as prepareLocalServiceSpawn } from "../process/linux-oom-score.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   appendLocalServiceOutputTail,
   formatLocalServiceDiagnosticTail,
@@ -141,7 +142,11 @@ async function acquireProviderLocalService(
   }
   throwIfAborted(signal);
 
-  validateLocalServiceConfig(service, target.providerId);
+  if (!path.isAbsolute(service.command)) {
+    throw new Error(
+      `models.providers.${target.providerId}.localService.command must be an absolute path`,
+    );
+  }
   const healthUrl = resolveHealthUrl(service, target.baseUrl);
   const healthHeaders = buildHealthProbeHeaders(target.headers);
   const key = localServiceKey(target.providerId, service, healthUrl);
@@ -190,21 +195,25 @@ async function acquireProviderLocalService(
       }
       if (!managed.starting) {
         // Concurrent callers share one startup promise for the same service key.
-        const startupAbort = new AbortController();
-        managed.startupAbort = startupAbort;
-        managed.starting = startAndWaitForLocalService({
+        const startup = {
           key,
           provider: target.providerId,
           service,
           healthUrl,
           healthHeaders,
           managed,
-          signal: startupAbort.signal,
-        }).finally(() => {
-          managed.starting = undefined;
-          if (managed.startupAbort === startupAbort) {
-            managed.startupAbort = undefined;
-          }
+        };
+        managed.starting = runInDetachedAsyncContext(() => {
+          const startupAbort = new AbortController();
+          managed.startupAbort = startupAbort;
+          return startAndWaitForLocalService({ ...startup, signal: startupAbort.signal }).finally(
+            () => {
+              managed.starting = undefined;
+              if (managed.startupAbort === startupAbort) {
+                managed.startupAbort = undefined;
+              }
+            },
+          );
         });
       }
       await waitForAbort(managed.starting, signal);
@@ -262,12 +271,6 @@ export function getManagedProviderLocalServiceDiagnosticsForTest(): LocalService
       .map((managed) => managed.diagnostics)
       .filter((value): value is LocalServiceDiagnostics => value !== undefined),
   );
-}
-
-function validateLocalServiceConfig(service: ModelProviderLocalServiceConfig, provider: string) {
-  if (!path.isAbsolute(service.command)) {
-    throw new Error(`models.providers.${provider}.localService.command must be an absolute path`);
-  }
 }
 
 function resolveHealthUrl(service: ModelProviderLocalServiceConfig, baseUrl: string): string {
@@ -481,15 +484,17 @@ function scheduleIdleStop(
     return;
   }
   // Services without idleStopMs remain running until process exit or test cleanup.
-  managed.idleTimer = setTimeout(() => {
-    if (managed.active === 0) {
-      void stopManagedService(key, managed, "idle").catch((error: unknown) => {
-        log.warn("idle local model service shutdown failed", {
-          error: toErrorObject(error, "Local model service shutdown failed").message,
+  managed.idleTimer = runInDetachedAsyncContext(() =>
+    setTimeout(() => {
+      if (managed.active === 0) {
+        void stopManagedService(key, managed, "idle").catch((error: unknown) => {
+          log.warn("idle local model service shutdown failed", {
+            error: toErrorObject(error, "Local model service shutdown failed").message,
+          });
         });
-      });
-    }
-  }, idleStopMs);
+      }
+    }, idleStopMs),
+  );
   managed.idleTimer.unref?.();
 }
 
@@ -623,23 +628,8 @@ function waitForAbort<T>(promise: Promise<T>, signal?: AbortSignal | null): Prom
   if (!signal) {
     return promise;
   }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      cleanup();
-      reject(toAbortError(signal));
-    };
-    const cleanup = () => signal.removeEventListener("abort", onAbort);
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(
-      (value) => {
-        cleanup();
-        resolve(value);
-      },
-      (error: unknown) => {
-        cleanup();
-        reject(toErrorObject(error, "Non-Error rejection"));
-      },
-    );
+  return racePromiseWithAbortSignal(promise, signal, toAbortError).catch((error: unknown) => {
+    throw toErrorObject(error, "Non-Error rejection");
   });
 }
 

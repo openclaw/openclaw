@@ -21,6 +21,14 @@ page.
 
 MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
 
+Explicit `provider/model` selections use the agent's canonical model resolver,
+including configured models and accepted bundled aliases. Ambiguous model-only
+selectors continue to enumerate matching discovered models. Invalid selectors and
+requested models that cannot be resolved are reported before probes run. Provider
+allowlists still narrow the selection, and intentional model caps still limit how
+many candidates run. Resolving every applicable selector proves availability, not
+inference for models omitted by a cap.
+
 ### Layer 1: Direct model completion (no gateway)
 
 - Test: `src/agents/models.profiles.live.test.ts`

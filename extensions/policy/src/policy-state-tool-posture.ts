@@ -26,7 +26,6 @@ export function scanPolicyToolPosture(
     sandbox: defaultSandbox,
     inheritedSandbox: {},
     sourceBase: "oc://openclaw.config/tools",
-    inheritedSourceBase: "oc://openclaw.config/tools",
   });
 
   collectPolicyConfiguredAgents(agents).forEach((configured) => {
@@ -43,7 +42,6 @@ export function scanPolicyToolPosture(
       sandbox: asNonArrayRecord(agent.sandbox),
       inheritedSandbox: defaultSandbox,
       sourceBase: `${configured.sourceBase}/tools`,
-      inheritedSourceBase: "oc://openclaw.config/tools",
     });
   });
 
@@ -187,7 +185,7 @@ function pushToolElevatedPosture(
     entries.push({
       id: `${params.id}-elevated-allow-from-${ocPathSegment(provider)}`,
       kind: "elevatedAllowFrom",
-      source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
+      source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/elevated/allowFrom/${ocPathSegment(provider)}`,
       scope: params.scope,
       ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
       entries: localEntries.length > 0 ? localEntries : inheritedEntries,
@@ -205,7 +203,6 @@ type ToolPostureParams = {
   readonly sandbox: Record<string, unknown>;
   readonly inheritedSandbox: Record<string, unknown>;
   readonly sourceBase: string;
-  readonly inheritedSourceBase: string;
 };
 
 function pushToolPostureValue(
@@ -223,7 +220,7 @@ function pushToolPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
+    source: `${entry.inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),
@@ -256,7 +253,7 @@ function pushToolPostureList(
   entries.push({
     id: `${params.id}-${key}`,
     kind: key,
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/${key}`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/${key}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: [...inheritedEntries, ...localEntries],
@@ -278,7 +275,7 @@ function pushToolAlsoAllowPostureList(
   entries.push({
     id: `${params.id}-alsoAllow`,
     kind: "alsoAllow",
-    source: `${inherited ? params.inheritedSourceBase : params.sourceBase}/alsoAllow`,
+    source: `${inherited ? "oc://openclaw.config/tools" : params.sourceBase}/alsoAllow`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     entries: inherited ? inheritedEntries : localEntries,

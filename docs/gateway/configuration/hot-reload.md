@@ -29,11 +29,18 @@ change applies, and shutdown cancels pending retries. Other reload failures rema
 visible in the Gateway log.
 
 If an automatic plugin reload cannot drain active work, the Gateway records the
-failure and keeps the last-good runtime. Later config edits do not repeat that
-drain while its plugin generation is still active. Run `openclaw plugins reload
-<id> --wait` to finish the replacement, or revert the pending plugin settings.
-Edits that still include the unapplied plugin settings remain pending until
-recovery; they cannot publish those settings through an unrelated hot update.
+failure and keeps the last-good runtime. When the drain timed out on that
+plugin's admitted work, the Gateway retries the replacement automatically once
+the work finishes; no additional config edit is needed. Other drain failures
+wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
+settings. Until then, later edits do not repeat the drain, and edits that still
+include the unapplied plugin settings stay pending; they cannot publish those
+settings through an unrelated hot update, and they apply together with the
+retry or recovery. While edits are pending, `config.get` reports an
+`appliedConfigHash` that differs from the saved revision, which the Control UI
+shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
+watch a timed-out replacement finish. A Gateway restart applies the saved config
+in full.
 
 Direct file edits are treated as untrusted until they validate. The source's file adapter waits
 for editor temp-write/rename churn to settle, reads the final file, and rejects
@@ -115,6 +122,16 @@ back to OpenClaw.
 Changes to `agents.defaults.models`, agent model selection and fallbacks, and
 `models.providers` hot-apply without draining the Codex plugin. Changing Codex's
 own plugin settings still follows its plugin reload policy.
+
+Agent sandbox tool allow/deny lists under `agents.entries.<id>.tools.sandbox`
+hot-apply without restarting plugin services. Workboard reads live session facts;
+File Transfer reloads only for workspace inputs.
+
+If a service stop times out during config hot reload, that service remains owned
+and degraded while the Gateway keeps serving. Healthy services can finish their
+reloads. The warning names the plugin and service; plugin health includes its service
+failure. Once cleanup settles, retry `openclaw plugins reload <id>` to recover the
+affected plugin. A slow service cleanup does not schedule a Gateway restart.
 
 Channel transport edits, such as `channels.slack.streaming.mode`, retain prepared
 session rows and model catalogs. Agent rosters, session policy, store topology,

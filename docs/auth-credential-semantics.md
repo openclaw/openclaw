@@ -84,6 +84,8 @@ and first-run noninteractive setup retain their existing behavior.
 
 Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
 
+OAuth sibling synchronization writes the selected primary profile first, then the discovered shared owner before other siblings. This preserves read-through inheritance regardless of filesystem directory order. A shared owner outside the selected agents tree is not added to the synchronization targets.
+
 Auth usage and cooldown updates wait for write admission on their actual agent
 database owner, including the legacy shared store. Relocated shared-state auth
 uses its own coordinator. Queued updates retain their selected state root and
@@ -94,6 +96,24 @@ Cold agent opens validate integrity asynchronously and recheck ownership before
 writing.
 OAuth upserts recheck the current local or inherited credential after admission,
 before applying the existing generation-replacement rules.
+
+Runtime auth-store updates keep their read, merge, encode, and commit in the
+existing SQLite worker. Update callbacks execute at most once against the
+transaction's current rows; live owner admission is checked again before commit.
+Local updates refuse an observed shared-store change during preparation without
+replaying callbacks. Large cells cross the worker boundary as bounded fields.
+Shared credential publication reuses the committed shared store and leaves
+unaffected local snapshots and their revisions intact. Resolved secrets remain
+with their existing runtime owner.
+Doctor auth repairs retain the native transaction owned by their schema-maintenance
+lease; they do not borrow ordinary worker authority.
+Model-catalog workers use their request's native auth-write scope, pinned to the
+captured state root. The request waits for claimed OAuth refreshes to settle before
+closing that scope; retained callbacks cannot write after it closes.
+Temporary probe stores wait for their database work and shared-registry removal
+before deleting credential files. If disposal fails, cleanup retains the directory
+and reports its location.
+Stored formats, schema versions, and update or rollback behavior are unchanged.
 
 Inline API-key failure bookkeeping reads and updates the selected agent's auth
 state through its existing SQLite worker. It preserves credential bytes and

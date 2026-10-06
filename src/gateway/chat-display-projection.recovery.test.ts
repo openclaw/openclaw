@@ -101,7 +101,7 @@ it.each([
       expect.objectContaining({
         type: "text",
         text: expect.stringContaining(
-          "⚠️ The provider returned an unfinished tool call. Earlier actions may have completed; verify their results before continuing.",
+          "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
         ),
       }),
     ]),
@@ -109,7 +109,7 @@ it.each([
   const serialized = JSON.stringify(messages);
   expect(serialized).not.toContain("PRIVATE_PROVIDER_DETAIL");
   expect(serialized).not.toContain("PRIVATE_COMMENTARY");
-  expect(serialized.split("The provider returned an unfinished tool call.")).toHaveLength(2);
+  expect(serialized.split("The task couldn't finish.")).toHaveLength(2);
   if (JSON.stringify(partial).includes("Partial reply")) {
     expect(serialized).toContain("Partial reply");
   }
@@ -172,7 +172,7 @@ it("retires the empty failure when its fallback answer reaches the output limit"
   ]);
 });
 
-it("refreshes SSE history after an appended failure recovers", () => {
+it("refreshes SSE history after an appended failure recovers", async () => {
   const state = SessionHistorySseState.fromSnapshot({
     target: { sessionId: "session", sessionKey: "agent:main:test" },
     snapshot: {
@@ -182,10 +182,12 @@ it("refreshes SSE history after an appended failure recovers", () => {
       assistantErrorPending: false,
     },
   });
-  expect(state.appendInlineMessage({ message: failed, messageSeq: 2 })?.message).toMatchObject({
+  expect(
+    (await state.prepareInlineMessage({ message: failed, messageSeq: 2 }))()?.message,
+  ).toMatchObject({
     stopReason: "error",
   });
-  expect(state.appendInlineMessage({ message: answer, messageSeq: 3 })).toEqual({
+  expect((await state.prepareInlineMessage({ message: answer, messageSeq: 3 }))()).toEqual({
     shouldRefresh: true,
   });
 });

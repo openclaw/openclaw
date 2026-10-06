@@ -48,7 +48,7 @@ describe("live catalog consumer cancellation", () => {
     },
   );
 
-  it.each(["synchronous", "queued"] as const)(
+  it.each(["synchronous", "queued", "warm"] as const)(
     "preserves completion ordering against a %s abort",
     async (timing) => {
       const pending = createDeferred<string>();
@@ -56,10 +56,14 @@ describe("live catalog consumer cancellation", () => {
       const reason = new Error("consumer closed");
       const params = { keyParts: [timing], load: () => pending.promise };
       const survivor = getCachedLiveCatalogValue(params);
+      if (timing === "warm") {
+        pending.resolve("catalog");
+        await survivor;
+      }
       const consumer = getCachedLiveCatalogValue({ ...params, signal: controller.signal });
       const joined = Promise.allSettled([survivor, consumer]);
       pending.resolve("catalog");
-      if (timing === "synchronous") {
+      if (timing !== "queued") {
         controller.abort(reason);
       } else {
         queueMicrotask(() => controller.abort(reason));
@@ -73,15 +77,6 @@ describe("live catalog consumer cancellation", () => {
       );
     },
   );
-
-  it("keeps a warm value when its consumer aborts after reading starts", async () => {
-    const params = { keyParts: ["warm"], load: async () => "catalog" };
-    await getCachedLiveCatalogValue(params);
-    const controller = new AbortController();
-    const consumer = getCachedLiveCatalogValue({ ...params, signal: controller.signal });
-    controller.abort(new Error("consumer closed"));
-    await expect(consumer).resolves.toBe("catalog");
-  });
 
   it("records shared completion expiry in each consumer's context", async () => {
     const pending = createDeferred<string>();

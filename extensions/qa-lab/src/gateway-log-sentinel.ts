@@ -46,10 +46,6 @@ type GatewayLogSentinelScanOptions = {
   ignoreKinds?: readonly GatewayLogSentinelKind[];
 };
 
-type GatewayLogSentinelAssertOptions = GatewayLogSentinelScanOptions & {
-  allowEnvironmentBlocked?: boolean;
-};
-
 type GatewayLogSentinelRule = Omit<GatewayLogSentinelFinding, "line" | "text"> & {
   test: (line: string) => boolean;
 };
@@ -312,16 +308,10 @@ export function formatGatewayLogSentinelSummary(findings: readonly GatewayLogSen
 
 export function assertNoGatewayLogSentinels(
   logs: string | undefined,
-  options?: GatewayLogSentinelAssertOptions,
+  options?: GatewayLogSentinelScanOptions,
 ) {
   const findings = scanGatewayLogSentinels(logs, options);
   if (findings.length === 0) {
-    return findings;
-  }
-  if (
-    options?.allowEnvironmentBlocked === true &&
-    findings.every((finding) => finding.verdict === "environment-blocked")
-  ) {
     return findings;
   }
   throw new Error(

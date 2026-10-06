@@ -32,15 +32,14 @@ export async function prepareSessionEntryInWorker(
   return prepare(...args);
 }
 
-export async function readSessionEntrySummariesInWorker(
-  input: Parameters<
-    typeof import("../../../../src/config/sessions/session-entry-read-runtime.js").readSessionEntrySummariesInWorker
-  >[0],
+export async function readSessionTranscriptCorpusInWorker(
+  ...args: Parameters<
+    typeof import("../../../../src/config/sessions/session-transcript-inventory-runtime.js").readSessionTranscriptCorpusInWorker
+  >
 ) {
-  const captured = { ...input, env: cloneEnvWithPlatformSemantics(input.env ?? process.env) };
-  const { readSessionEntrySummariesInWorker: read } =
-    await import("../../../../src/config/sessions/session-entry-read-runtime.js");
-  return read(captured);
+  const { readSessionTranscriptCorpusInWorker: read } =
+    await import("../../../../src/config/sessions/session-transcript-inventory-runtime.js");
+  return read(...args);
 }
 
 export { resolveSessionAgentId } from "../../../../src/agents/agent-scope.js";
@@ -53,11 +52,7 @@ export {
   SILENT_REPLY_TOKEN,
   isSilentReplyPayloadText,
 } from "../../../../src/auto-reply/tokens.js";
-export {
-  getRuntimeConfig,
-  /** @deprecated Use getRuntimeConfig(), or pass the already loaded config through the call path. */
-  loadConfig,
-} from "../../../../src/config/config.js";
+export { getRuntimeConfig } from "../../../../src/config/config.js";
 export {
   isCompactionCheckpointTranscriptFileName,
   isSessionArchiveArtifactName,
@@ -69,9 +64,9 @@ export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/ma
 export {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
-  type SessionTranscriptInstance,
 } from "../../../../src/config/sessions/session-history.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
 export {

@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -39,10 +40,15 @@ those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
 that still contains these retired keys and directs you through the same bridge.
 
+The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
+before canonical tables are created. Preserve the original state and configuration,
+then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
+Unrelated tables with these generic names remain untouched.
+
 If a newer release has already upgraded your SQLite databases, use a compatible
 pre-update backup for the bridge. Older releases cannot open newer database
 schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
-before running `2026.9.5` against that state.
+before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -114,6 +120,25 @@ including Linux hosts without systemd, the update continues and records a warnin
 It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
+
+On Linux, unmask a managed systemd unit before updating. A masked unit
+(`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
+unit with no start path causes preflight to refuse before replacing files or
+running migrations. For the default user service:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope reported by `openclaw gateway status --deep` for a custom
+profile or system service. If an operator applies a mask or another start
+restriction during the update, OpenClaw retains the activated candidate and
+reports a service-definition warning instead of rolling back because systemd
+refused to start it. Gateway readiness is still unverified; remove the reported
+restriction, run `openclaw gateway start`, then check `openclaw gateway status --deep`.
+These checks belong to the installed updater; unmask before updating from an
+older release too. See [Linux maintenance holds](/cli/gateway/service#linux-maintenance-holds).
 
 Service membership uses the running Gateway's process ancestry and native supervisor
 facts. An external terminal that inherited service environment markers can still update after native
@@ -327,7 +352,8 @@ installation where possible, and prints a short next action. A running updated
 Gateway can also report a plugin that did not load without turning the core update
 into a failure. Individual plugin outcomes remain available in `--json` output.
 Failures to install core, repair required configuration or state, or start the
-updated Gateway remain update failures.
+updated Gateway remain update failures, except for the service-definition refusals
+described above.
 Local copies selected through `plugins.load.paths` are operator-managed. Updates
 and `openclaw update repair` retain the selected copy and any npm install it
 shadows, and record a `plugin-operator-managed` warning in the outcome and update
@@ -430,7 +456,8 @@ checks still prevent completion.
 
 ### Package-publication recovery
 
-Supported POSIX npm updates print an external-Node recovery command before
+Supported POSIX npm updates print a recovery command using the selected external
+Node or Bun executable before
 transferring the staged package into recovery custody. Keep the printed commands;
 each names one operation with required `--anchor` and `--operation` arguments.
 The initial journal and helper are published together in a private control
@@ -444,6 +471,12 @@ package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
+Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
+run without Node installed. The installed updater controls the first upgrade:
+older releases may omit the recovery command on Bun or refuse a Bun recovery
+runtime. Installing a newer candidate does not change that first-hop behavior;
+subsequent updates use the candidate's recovery support.
+
 Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last
 receipt remains in the control directory and is readable through
@@ -456,6 +489,12 @@ update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
 
+SQLite recovery and rollback custody verify file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes; replaced
+files or changed database or journal bytes still require recovery by their owner.
+Snapshot publication uses the same checks, including on older Linux kernels where
+reported file creation time changes after ordinary writes or hard-link removal.
+
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
 current updater only inspects these journals; use their original helper to
@@ -466,6 +505,11 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

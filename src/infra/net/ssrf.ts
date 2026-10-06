@@ -1,5 +1,3 @@
-// SSRF policy helpers validate hostnames/IP literals, build pinned DNS lookups,
-// and create dispatcher policies for guarded network fetches.
 import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
@@ -19,6 +17,7 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { normalizeHostname } from "./hostname.js";
 import {
@@ -298,17 +297,12 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
   if (!isCanonicalDottedDecimalIPv4(normalized) && isLegacyIpv4Literal(normalized)) {
     return true;
   }
-  if (looksLikeUnsupportedIpv4Literal(normalized)) {
-    return true;
-  }
-  return false;
+  return looksLikeUnsupportedIpv4Literal(normalized);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
-  if (BLOCKED_HOSTNAMES.has(normalized)) {
-    return true;
-  }
   return (
+    BLOCKED_HOSTNAMES.has(normalized) ||
     normalized.endsWith(".localhost") ||
     normalized.endsWith(".local") ||
     normalized.endsWith(".internal")
@@ -325,12 +319,6 @@ export function isBlockedHostnameOrIp(hostname: string, policy?: SsrFPolicy): bo
 
 const BLOCKED_HOST_OR_IP_MESSAGE = "Blocked hostname or private/internal/special-use IP address";
 const BLOCKED_RESOLVED_IP_MESSAGE = "Blocked: resolves to private/internal/special-use IP address";
-
-function assertAllowedHostOrIpOrThrow(hostnameOrIp: string, policy?: SsrFPolicy): void {
-  if (isBlockedHostnameOrIp(hostnameOrIp, policy)) {
-    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
-  }
-}
 
 function resolveHostnamePolicyChecks(
   hostname: string,
@@ -360,9 +348,8 @@ function resolveHostnamePolicyChecks(
   }
 
   const skipPrivateNetworkChecks = shouldSkipPrivateNetworkChecks(normalized, policy);
-  if (!skipPrivateNetworkChecks) {
-    // Fail fast for literal hosts/IPs before any DNS lookup side-effects.
-    assertAllowedHostOrIpOrThrow(normalized, policy);
+  if (!skipPrivateNetworkChecks && isBlockedHostnameOrIp(normalized, policy)) {
+    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
 
   return { normalized, skipPrivateNetworkChecks };
@@ -587,9 +574,6 @@ export async function resolvePinnedHostnameWithPolicy(
   // Prefer addresses returned as IPv4 by DNS family metadata before other
   // families so Happy Eyeballs and pinned round-robin both attempt IPv4 first.
   const addresses = dedupeAndPreferIpv4(results);
-  if (addresses.length === 0) {
-    throw new Error(`Unable to resolve hostname: ${hostname}`);
-  }
 
   return {
     hostname: normalized,
@@ -630,7 +614,7 @@ function withPinnedLookup(
   lookup: PinnedHostname["lookup"],
   connect?: Record<string, unknown>,
 ): Record<string, unknown> {
-  return connect ? { ...connect, lookup } : { lookup };
+  return { ...connect, lookup };
 }
 
 function resolvePinnedDispatcherLookup(
@@ -718,26 +702,16 @@ async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<vo
     destroyDispatcher(candidate);
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       Promise.resolve(close.call(candidate)),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
-          timeout = undefined;
-          destroyDispatcher(candidate);
-          resolve();
-        }, DISPATCHER_CLOSE_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
+      DISPATCHER_CLOSE_TIMEOUT_MS,
+      () => destroyDispatcher(candidate),
+      { ref: false },
+    );
   } catch (err) {
     destroyDispatcher(candidate);
     throw err;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 

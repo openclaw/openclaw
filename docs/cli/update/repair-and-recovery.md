@@ -78,6 +78,12 @@ history; replacing the code alone cannot undo a migration. The original
 failed update still exits nonzero after the agent finishes, even if the repair
 succeeds.
 
+On Linux, systemd can unload an inactive unit after the updater stops it. The
+owning updater reloads that unit's metadata when rechecking admission, retaining
+the original manager and service identity. This does not start the service or
+rewrite its definition. A later refusal still uses the recorded stop to restore
+the previous Gateway; a service that was already stopped remains stopped.
+
 After activation succeeds, a failure to read or publish update reporting leaves
 the updated installation in place. Reporting failures do not trigger package
 rollback. The command still exits nonzero when required finalization cannot
@@ -149,27 +155,44 @@ alongside valid captures, with its directory and no sealed manifest reference.
 Keep current data and inspect the originals before attempting restoration.
 Older installed updaters may not preserve or forward an original capture; a
 newer Doctor reports that limitation instead of treating current bytes as the
-pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+pre-update state. If capture discovery cannot verify an older driver's history,
+Doctor warns and continues repairs under its existing maintenance and update
+ownership. Required migration backups still apply.
+Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 ### Retained updater runtime
 
 An update can retain its running code in an `openclaw-update-runtime-*` directory
 beside the installation or in the system temporary directory. The updater settles
-its workers and removes that directory after success, failure, an exception, or
-`SIGINT`/`SIGTERM`, including failures while reporting the outcome. If a worker
-cannot settle or removal fails, it records `Runtime retained at <path>: <reason>`
-and leaves cleanup available to Doctor. A cleanup warning does not replace the
-original update outcome. An earlier nonzero exit remains nonzero while cleanup
-is draining. Mutation and recovery owners must still drain; their failures produce
-a nonzero exit even if the printed command result was successful.
+its workers after success, failure, an exception, or `SIGINT`/`SIGTERM`, including
+failures while reporting the outcome. Complete projections record
+`Runtime retained at <path>: <reason>` for the next eligible update or Doctor
+cleanup, so recursive deletion does not delay command exit. Incomplete preparation
+keeps immediate best-effort cleanup. Unsettled workers retain their runtime with
+the failure reason. A cleanup warning does not replace the original update
+outcome. An earlier nonzero exit remains nonzero while workers are draining.
+Mutation and recovery owners must still drain; their failures produce a nonzero
+exit even if the printed command result was successful.
 
 Retention copies plugin manifests and files inspected by plugin safety checks,
 so retaining the updater does not make the checkout's plugins fail hardlink
 validation. Other runtime files remain hardlinked when supported.
 
+Updaters using `@openclaw/fs-safe` 0.23.1 or later rely on its guarded byte-copy
+fallback when a container or filesystem refuses file cloning. Native filesystem
+safeguards, source identity checks, file modes, snapshot verification, and SQLite
+byte-copy space admission remain active. Genuine I/O errors still fail the copy.
+This includes Proxmox LXC containers whose seccomp policy denies the `FICLONE`
+ioctl; changing that policy is unnecessary for an updater using this dependency.
+Do not globally disable native filesystem support to bypass cloning: Doctor's
+state migrations require native safeguards.
+
 These lifecycle and copying changes apply when the installed updater supports
 them; installing a newer candidate cannot change the updater already running.
+For the first hop from 2026.9.7 in an affected container, manually install a
+release containing this fix with npm. Subsequent `openclaw update` runs inherit
+the fallback from the installed updater's fs-safe dependency.
 
 On Windows, interruption before activation still lets the admitted recovery
 owner restore task autostart after pending task operations settle. Cancellation
@@ -200,7 +223,93 @@ finishes interrupted finalization, and `update cleanup` retires eligible recover
 originals; neither clears the run ledger. Keep history and backups rather than
 deleting database rows to work around this failure.
 
+## Docker image-layer package updates
+
+Docker OverlayFS can reject moving an npm package installed in an image layer
+with `EXDEV`, even when the package and its backup are on the same mount.
+Updaters with the copy fallback immediately retain and verify an independent
+copy, record its identity for recovery, and remove the original before publishing
+the candidate. A mismatched copy leaves the original package intact. The verified
+copy remains available for rollback until activation is confirmed.
+
+The first update from **2026.9.7 or 2026.9.8** still needs a manual installation
+hop: those installed updaters run their own publication code, so the candidate
+cannot supply this fallback. Prefer rebuilding the Docker image with the desired
+OpenClaw version. For an in-container replacement, follow the
+[manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+including a verified backup and stopping the managed Gateway, then run
+`npm install -g openclaw@<version>`. Run Doctor and, if needed, `openclaw update repair`
+from the new installation before restarting through the service manager.
+
 ## `update repair`
+
+An older updater can leave package activation at `prepared` after refusing an
+update before publication. Run `openclaw update repair` from an installation
+containing this fix. Repair verifies that the original package and launchers are
+unchanged, aborts the unused preparation, and retires its recovery artifacts so
+the next update can proceed. It does not publish the staged candidate. An active
+updater, changed package or launcher, or unfinished state restoration keeps its
+existing recovery checks. A candidate cannot patch the older updater already
+running; use the manual installation hop below if the installed CLI lacks this
+repair.
+
+For a publication stranded at `publishing` after an external write, repair can
+close it as `publication-settled-external-change` when the installed build-info
+reports the exact candidate version, every file in the package's own dist content
+inventory still matches, the original helper's seal verifies, and no updater owns
+the installation. The root `package.json` must parse with name `openclaw`, the
+candidate version, and type `module`; every `main`, `exports`, and `bin` target must
+resolve to a file in the package. Targets within `dist/` must be inventoried;
+top-level targets such as `openclaw.mjs` are checked for resolution without content
+verification. Extra `package.json` files under `dist/` refuse settlement because
+they can change how inventoried code loads. Dependency manifests under
+`node_modules/` are expected and ignored. Other extra dist files remain warnings.
+Restore any changed inventoried file to its packaged bytes before retrying; a
+working Gateway alone does not waive an inventory failure. Repair preserves the
+previous package and sealed helper, leaves the installed package and launchers in
+place, and records the warning and extra paths in update history. The warning and
+receipt identify the root manifest as field-verified, not content-verified. The
+sealed tree digest cannot identify old per-file metadata differences. Use a CLI
+containing this fix; the original sealed helper keeps its original recovery checks.
+
+For a package update stranded by an older updater's launcher ownership checks,
+use the manual installation hop, then repair from the new CLI at the same root:
+
+```bash
+npm install -g openclaw@latest
+openclaw doctor --fix
+openclaw update repair
+```
+
+Follow the [manual update precautions](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+including a verified backup and stopping the managed Gateway during replacement.
+When the installed package directory matches neither recorded generation, repair
+closes the previous package operation as `superseded-by-manual-install`, warns with
+its operation ID, and preserves its staged files and helper beside the installation.
+The original failed history entry remains intact. The pending package-recovery
+gate then clears, so another update can proceed. Other same-identity recovery keeps
+its original sealed-helper checks; missing packages, active update owners, and pending
+database or configuration restoration still require their existing recovery path.
+
+If recovery instead reports `managed handoff lease database identity changed`,
+run `openclaw update repair` from a CLI containing this fix. Repair acquires fresh
+update ownership on the current lease database and closes the orphaned package
+operation as `recovery-lease-identity-changed`. It warns with the old operation ID
+and retained artifact path, leaves the installed package and launchers in place,
+and clears package admission for the next update. The original helper cannot
+recover against a replaced lease database. Matching lease identities keep the
+original recovery checks; another live update owner still prevents settlement.
+No recovery artifacts are deleted. An older installed CLI cannot obtain this fix
+from a candidate it has not yet staged; use the manual installation hop above.
+
+The same repair handles `ENOENT` when the recorded handoff lease database is
+missing, for example after a reboot clears a temporary filesystem. Its storage
+owner recreates the lease database, and repair acquires fresh update ownership
+before closing the orphaned package operation as `recovery-lease-missing`.
+The installed package, launchers, and retained recovery evidence keep the same
+protections. Repair then continues through Doctor and plugin convergence;
+plugin data/settings warnings clear only when their migration owners complete
+the required work. Remaining warnings name the next repair action.
 
 Rerun update finalization after the core package already changed but later
 repair work did not finish cleanly. This is the supported recovery path when
@@ -430,6 +539,12 @@ it stopped, leaves migrations pending, and names the next repair action. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
 cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
 
+If a required repair phase exceeds its deadline, repair exits with code 1 and JSON reports
+`status: "failed"` with the `stuckPhase`. That result remains available after
+service restoration, including when the Gateway is still starting or restoration
+also fails. A startup warning after otherwise successful Doctor repair does not
+clear a repair phase timeout.
+
 Recorded pending-migration warnings stop appearing after the migration owner
 records completion. Unrelated warnings and later or reintroduced obligations
 remain visible; the original update history is preserved.
@@ -533,6 +648,21 @@ it does not approve future capability additions.
 
 ### Skipped legacy audit recovery
 
+Doctor can migrate legacy audit logs on filesystems that reject native
+no-replace rename by using an exclusive hard link, then removing the old name.
+This preserves the original inode, including later appends from an older CLI's
+open file descriptor. Existing destinations are never overwritten. Doctor
+recovers interrupted link pairs before importing; backups capture one sanitized
+copy without changing either live name.
+
+If the filesystem also rejects hard links, Doctor preserves the audit files and
+reports a recoverable warning with the affected filename and a command targeting
+that state directory. Other repairs and update finalization continue. Restore
+hard-link support, or stop the Gateway and all CLI writers before moving the
+complete state directory to a compatible filesystem, then run the reported `openclaw doctor --fix`
+command. If the directory moved, update `OPENCLAW_STATE_DIR` in that command.
+Doctor never substitutes a file copy: doing so could lose later audit appends.
+
 When a legacy audit raw archive changed other than by append, Doctor preserves it
 beside itself with a `.quarantined-<date>-<id>` suffix. The warning names the
 quarantined path and explains the expected append-only growth and observed change.
@@ -578,8 +708,9 @@ openclaw --profile work update cleanup --dry-run --json
 Cleanup targets the selected profile and `OPENCLAW_STATE_DIR` / `OPENCLAW_CONFIG_PATH`
 overrides. It displays that state directory and does not redirect to a managed
 service. Confirm the displayed directory is the installation you intend to clean.
-`--dry-run` reads only configuration and recovery metadata, without opening
-databases, taking a maintenance lock, loading plugins, or creating state.
+`--dry-run` reads configuration and recovery metadata, including existing update
+history for startup-migration backups, without taking a maintenance lock, loading
+plugins, or creating state.
 Candidate bytes still require identity verification; historical artifacts are
 listed separately as requiring verification. Protected and blocked artifacts
 include reason codes.
@@ -618,6 +749,12 @@ eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
 protected. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Cleanup has no automatic expiration policy.
+Doctor's `<database>.pre-startup-migration-<id>.bak` groups become eligible only
+after Doctor verifies migration completion and update history records a successful
+update that started later. Until then they appear as protected. Changed or
+unrecorded backups remain protected or blocked; cleanup never infers permission
+to delete from their filenames. Keep these files with your pre-upgrade backups
+while you still need to restore the matching database generation.
 Private package, command-shim, and Git runtime backups remain owned by the update
 transaction and are outside this migration cleanup. An interrupted entry in update
 history does not block cleanup of otherwise eligible migration archives.

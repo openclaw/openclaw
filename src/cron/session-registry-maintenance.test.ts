@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -123,6 +124,21 @@ describe("runSessionRegistryMaintenance", () => {
           scopes.push({ agentId, sessionKey, storePath });
         }
 
+        if (kind === "per-agent") {
+          // Preview isolates discovery from the lifecycle writer's live commit guards.
+          const observation = observeHostDataSql();
+          try {
+            const preview = await runSessionRegistryMaintenance({ apply: false });
+            expect(preview.pruned).toBe(2);
+            expect(
+              observation.queries.filter((sql) =>
+                /ambient-group-watch|database_paths_json|cleanup_paths_json/u.test(sql),
+              ),
+            ).toEqual([]);
+          } finally {
+            observation.restore();
+          }
+        }
         const summary = await runSessionRegistryMaintenance({ apply: true });
 
         expect(summary.skippedReason).toBeUndefined();
@@ -216,31 +232,26 @@ describe("runSessionRegistryMaintenance", () => {
     },
   );
 
-  it("keeps incomplete agent deletions terminal", async () => {
+  it.each(["incomplete deletion", "corrupt store"])("keeps %s terminal", async (defect) => {
     await withMaintenanceState(async (state) => {
       const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
-      await writeStaleCronSession(retiredStorePath, "retired");
-      writeAgentDeletion(state, "retired", false);
-      closeOpenClawAgentDatabasesForTest();
-
-      await expect(runSessionRegistryMaintenance({ apply: false })).rejects.toThrow(
-        "OpenClaw agent database is unavailable while agent retired is deleted.",
-      );
-    });
-  });
-
-  it("keeps corrupt discovered stores terminal", async () => {
-    await withMaintenanceState(async (state) => {
-      openOpenClawStateDatabase();
-      const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
-      const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
-      if (!sqlitePath) {
-        throw new Error("expected retired store to resolve to SQLite");
+      if (defect === "incomplete deletion") {
+        await writeStaleCronSession(retiredStorePath, "retired");
+        writeAgentDeletion(state, "retired", false);
+        closeOpenClawAgentDatabasesForTest();
+        await expect(runSessionRegistryMaintenance({ apply: false })).rejects.toThrow(
+          "OpenClaw agent database is unavailable while agent retired is deleted.",
+        );
+      } else {
+        openOpenClawStateDatabase();
+        const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
+        if (!sqlitePath) {
+          throw new Error("expected retired store to resolve to SQLite");
+        }
+        await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+        await fs.writeFile(sqlitePath, "not a sqlite database");
+        await expect(runSessionRegistryMaintenance({ apply: false })).rejects.toThrow();
       }
-      await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-      await fs.writeFile(sqlitePath, "not a sqlite database");
-
-      await expect(runSessionRegistryMaintenance({ apply: false })).rejects.toThrow();
     });
   });
 });

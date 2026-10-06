@@ -156,12 +156,9 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
   }
 }
 
-async function fetchGravatar(
-  hash: string,
-  fetchImpl: typeof globalThis.fetch,
-): Promise<GravatarResult> {
+async function fetchGravatar(hash: string): Promise<GravatarResult> {
   try {
-    const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
+    const response = await fetch(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
       signal: AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS),
     });
@@ -193,11 +190,8 @@ async function fetchGravatar(
   }
 }
 
-async function resolveGravatar(
-  hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number },
-): Promise<GravatarResult> {
-  const cached = getCachedGravatar(hash, options.nowMs());
+async function resolveGravatar(hash: string): Promise<GravatarResult> {
+  const cached = getCachedGravatar(hash, Date.now());
   if (cached) {
     return cached;
   }
@@ -205,9 +199,9 @@ async function resolveGravatar(
     gravatarRequests,
     hash,
     async () => {
-      const result = await fetchGravatar(hash, options.fetchImpl);
+      const result = await fetchGravatar(hash);
       if (result.kind !== "error") {
-        cacheGravatar(hash, result, options.nowMs());
+        cacheGravatar(hash, result, Date.now());
       }
       return result;
     },
@@ -244,8 +238,6 @@ export async function handleUserProfileAvatarHttpRequest(
   pathname: string,
   opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    fetchImpl?: typeof globalThis.fetch;
-    nowMs?: () => number;
   },
 ): Promise<boolean> {
   const parsed = parseControlUiUserAvatarPath(pathname, opts.basePath ?? "");
@@ -371,20 +363,17 @@ export async function handleUserProfileAvatarHttpRequest(
   try {
     for (const hash of hashes) {
       waiterSignal.throwIfAborted();
-      const result = await racePromiseWithAbortSignal(
-        resolveGravatar(hash, {
-          fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-          nowMs: opts.nowMs ?? Date.now,
-        }),
-        waiterSignal,
-      );
+      const result = await racePromiseWithAbortSignal(resolveGravatar(hash), waiterSignal);
       waiterSignal.throwIfAborted();
       authResult.assertCurrent();
       if (result.kind === "hit") {
         sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
       }
-      transientFailure ||= result.kind === "error";
+      if (result.kind === "error") {
+        transientFailure = true;
+        break;
+      }
     }
   } catch (error) {
     if (!waiterSignal.aborted) {

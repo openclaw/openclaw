@@ -197,7 +197,7 @@ it("cancels a pending admission retry on shutdown without applying or leaking ti
   expect(harness.watcher.close).toHaveBeenCalledOnce();
 });
 
-it.each([
+const nonRetryableErrors = [
   new OpenClawStateLeaseAcquisitionError("plugin lifecycle lease", {
     kind: "store-unavailable",
     reason: "storage-error",
@@ -209,10 +209,24 @@ it.each([
   }),
   new OpenClawStateLeaseError("lease lost", { code: "OPENCLAW_STATE_LEASE_LOST" }),
   new Error("store unavailable (lifecycle-busy)"),
-])("keeps non-retryable admission failures visible: %s", async (error) => {
-  const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-    .mockRejectedValueOnce(error);
+];
+
+it.each([
+  ...nonRetryableErrors.map((error) => ({ error, entered: false })),
+  { error: busyError(), entered: true },
+])("does not retry $error after callback entry: $entered", async ({ error, entered }) => {
+  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
+  const acquire = vi.spyOn(pluginLifecycleLease, "withPluginLifecycleLease");
+  if (entered) {
+    acquire.mockImplementationOnce((options, run) =>
+      withLease(options, async (lease) => {
+        await run(lease);
+        throw error;
+      }),
+    );
+  } else {
+    acquire.mockRejectedValueOnce(error);
+  }
   const write = makeZeroDebounceHookWrite("permanent-failure");
   const harness = createReloaderHarness(async () => write.snapshot);
   await harness.reloader.ready;
@@ -220,28 +234,6 @@ it.each([
   await flushReload(harness.reloader);
   await flushReload(harness.reloader, 10_000);
   expect(acquire).toHaveBeenCalledTimes(1);
-  expect(harness.log.error).toHaveBeenCalledWith(`config reload failed: ${String(error)}`);
-  expect(harness.onHotReload).not.toHaveBeenCalled();
-});
-
-it("does not retry an acquisition error propagated after reload callback entry", async () => {
-  const withLease = pluginLifecycleLease.withPluginLifecycleLease;
-  const error = busyError();
-  const acquire = vi
-    .spyOn(pluginLifecycleLease, "withPluginLifecycleLease")
-    .mockImplementationOnce((options, run) =>
-      withLease(options, async (lease) => {
-        await run(lease);
-        throw error;
-      }),
-    );
-  const write = makeZeroDebounceHookWrite("post-entry-failure");
-  const harness = createReloaderHarness(async () => write.snapshot);
-  await harness.reloader.ready;
-  harness.watcher.emit("change");
-  await flushReload(harness.reloader);
-  await flushReload(harness.reloader, 10_000);
-  expect(acquire).toHaveBeenCalledTimes(1);
-  expect(harness.onHotReload).toHaveBeenCalledOnce();
+  expect(harness.onHotReload).toHaveBeenCalledTimes(entered ? 1 : 0);
   expect(harness.log.error).toHaveBeenCalledWith(`config reload failed: ${String(error)}`);
 });

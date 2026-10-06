@@ -196,7 +196,6 @@
   height: 14px;
   translate: 0 -50%;
   stroke: var(--muted);
-  fill: none;
   stroke-width: 1.8px;
   pointer-events: none;
 }
@@ -212,20 +211,25 @@
   gap: var(--space-1);
 }
 
-.session-filter-field {
+.session-filter-field,
+.session-filter-check {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
   height: 30px;
   box-sizing: border-box;
-  padding: 0 4px 0 8px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-filter-field {
+  padding: 0 4px 0 8px;
   transition: border-color var(--duration-fast) ease;
 }
 
-.session-filter-field:focus-within {
+.session-filter-field:focus-within,
+.session-filter-check:hover {
   border-color: var(--border-strong);
   background: var(--bg-hover);
 }
@@ -266,25 +270,12 @@
 
 .session-filter-check {
   position: relative;
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  height: 30px;
-  box-sizing: border-box;
   padding: 0 8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   user-select: none;
   transition:
     border-color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     color var(--duration-fast) ease;
-}
-
-.session-filter-check:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
 }
 
 .session-filter-check--active {
@@ -501,14 +492,12 @@
   border-radius: var(--radius-sm);
 }
 
-.session-avatar svg {
+.session-avatar svg,
+.session-actions .icon-btn svg,
+.session-details-toggle svg {
   width: 14px;
   height: 14px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .session-avatar--cron {
@@ -564,7 +553,8 @@
   white-space: nowrap;
 }
 
-.session-key-display-name {
+.session-key-display-name,
+.session-detail-stat__value {
   min-width: 0;
   overflow: hidden;
   font-size: var(--control-ui-text-sm);
@@ -683,30 +673,26 @@
 .data-table-empty-state__message svg {
   width: 26px;
   height: 26px;
-  stroke: currentColor;
-  fill: none;
   stroke-width: 1.6px;
   opacity: 0.45;
 }
 
 /* Activity cells */
-.session-token-cell {
-  min-width: 96px;
+.session-token-cell,
+.session-tokens__value {
   font-family: var(--mono);
   font-size: var(--control-ui-text-sm);
   white-space: nowrap;
+}
+
+.session-token-cell {
+  min-width: 96px;
 }
 
 .session-tokens {
   display: grid;
   gap: 5px;
   cursor: default;
-}
-
-.session-tokens__value {
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
 }
 
 /* Actions cell: details disclosure + row tools */
@@ -724,19 +710,21 @@
   gap: 2px;
 }
 
-/* icons.ts SVGs carry no stroke/fill attributes; without these rules the
-   glyphs paint solid black and read as blank squares on dark surfaces. */
-.session-actions .icon-btn {
+.session-actions .icon-btn,
+.session-details-toggle {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
   height: 28px;
-  padding: 0;
   color: var(--muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.session-actions .icon-btn {
+  justify-content: center;
+  width: 28px;
+  padding: 0;
   opacity: 0.65;
   transition:
     color var(--duration-fast) ease,
@@ -745,28 +733,20 @@
     opacity var(--duration-fast) ease;
 }
 
-.session-actions .icon-btn svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .sessions-table tr:hover .session-actions .icon-btn,
 .session-actions .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.session-actions .icon-btn:hover:not(:disabled) {
+.session-actions .icon-btn:hover:not(:disabled),
+.session-details-toggle:hover {
   color: var(--text);
   background: var(--bg-hover);
   border-color: var(--border);
 }
 
-.session-actions .icon-btn:focus-visible {
+.session-actions .icon-btn:focus-visible,
+.session-details-toggle:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -777,38 +757,15 @@
 }
 
 .session-details-toggle {
-  display: inline-flex;
-  align-items: center;
   gap: 5px;
-  height: 28px;
   padding: 0 7px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--radius-sm);
   transition:
     color var(--duration-fast) ease,
     background-color var(--duration-fast) ease,
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle:hover {
-  color: var(--text);
-  background: var(--bg-hover);
-  border-color: var(--border);
-}
-
-.session-details-toggle:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .session-details-toggle svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 2px;
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -921,18 +878,6 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.session-details-section__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.session-details-section__title {
-  font-size: 13px;
-  font-weight: 700;
-}
-
 .session-overrides-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
@@ -975,13 +920,8 @@
 }
 
 .session-detail-stat__value {
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--control-ui-text-sm);
   font-weight: 600;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 @media (max-width: 768px) {

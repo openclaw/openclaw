@@ -29,13 +29,15 @@ function runtimeMetadata(nodeVersion = "26.8.1", sqliteVersion = "3.53.4") {
   };
 }
 
+function runtimeOutput(metadata: unknown) {
+  return `process.stdout.write(${JSON.stringify(JSON.stringify(metadata))});`;
+}
+
 describe.skipIf(process.platform === "win32")("runtime pin executable boundary", () => {
   it("uses a bounded sanitized probe without inheriting secrets or Node preloads", async () => {
     const file = runtimeFixture(
       "if (process.env.FIXTURE_SECRET || process.env.NODE_OPTIONS) process.exit(9);\n" +
-        "process.stdout.write(" +
-        JSON.stringify(JSON.stringify(runtimeMetadata())) +
-        ");",
+        runtimeOutput(runtimeMetadata()),
     );
     await expect(
       resolvePinnedDaemonRuntimePath(file, "node", {
@@ -46,13 +48,12 @@ describe.skipIf(process.platform === "win32")("runtime pin executable boundary",
   });
 
   it.each([
-    ["old Node", runtimeMetadata("22.16.0"), /unsupported/],
-    ["unsafe SQLite", runtimeMetadata("26.8.1", "3.51.0"), /unsupported/],
-    ["malformed output", {}, /probe failed/],
-  ])("refuses %s without selecting a replacement", async (_name, metadata, error) => {
-    const file = runtimeFixture(
-      "process.stdout.write(" + JSON.stringify(JSON.stringify(metadata)) + ");",
-    );
+    ["old Node", runtimeOutput(runtimeMetadata("22.16.0")), /unsupported/],
+    ["unsafe SQLite", runtimeOutput(runtimeMetadata("26.8.1", "3.51.0")), /unsupported/],
+    ["malformed output", runtimeOutput({}), /probe failed/],
+    ["oversized output", 'process.stdout.write("x".repeat(2 * 1024 * 1024));', /probe failed/],
+  ] as const)("refuses %s without selecting a replacement", async (_name, script, error) => {
+    const file = runtimeFixture(script);
     await expect(resolvePinnedDaemonRuntimePath(file, "node", {})).rejects.toThrow(error);
   });
 
@@ -60,11 +61,6 @@ describe.skipIf(process.platform === "win32")("runtime pin executable boundary",
     const file = runtimeFixture("setInterval(() => {}, 1000);");
     await expect(resolvePinnedDaemonRuntimePath(file, "node", {})).rejects.toThrow(/probe failed/);
   }, 15_000);
-
-  it("rejects output beyond the bounded probe buffer", async () => {
-    const file = runtimeFixture('process.stdout.write("x".repeat(2 * 1024 * 1024));');
-    await expect(resolvePinnedDaemonRuntimePath(file, "node", {})).rejects.toThrow(/probe failed/);
-  });
 
   it("rejects a mismatched runtime family before executing it", async () => {
     const file = runtimeFixture('throw new Error("must not execute");', "bun");

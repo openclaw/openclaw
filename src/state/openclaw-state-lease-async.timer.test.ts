@@ -205,9 +205,16 @@ function fixture() {
     );
   return {
     run,
+    enter(result: ReturnType<typeof run>) {
+      return Promise.race([
+        entered.promise,
+        result.outcome.then((outcome) => {
+          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
+        }),
+      ]);
+    },
     maintenance,
     resources,
-    entered,
     finishCallback,
     onRenew,
     onVerify,
@@ -219,99 +226,68 @@ function fixture() {
 }
 
 describe("async state lease timer", () => {
-  it("joins renewal before sealing public methods and keeps private final verification available", async () => {
-    const f = fixture();
-    const renewing = createDeferredCore();
-    const reply = createDeferredCore();
-    const verifying = createDeferredCore();
-    const finalReply = createDeferredCore();
-    f.onRenew.mockImplementationOnce(async (command) => {
-      renewing.resolve();
-      await reply.promise;
-      command.assertCurrent();
-      return command.publish(Date.now() + 3_000);
-    });
-    const result = f.run();
-    try {
-      const { lease, within } = await Promise.race([
-        f.entered.promise,
-        result.outcome.then((outcome) => {
-          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-        }),
-      ]);
-      await within(() => vi.advanceTimersByTimeAsync(1_000));
-      await renewing.promise;
-      f.finishCallback.resolve();
-      await within(() => lease.assertOwned());
-      expect(result.settled()).toBe(false);
-      expect(f.release).not.toHaveBeenCalled();
-      f.onVerify.mockImplementationOnce(async (command) => {
-        const expiresAt = command.publish(Date.now() + 3_000);
-        verifying.resolve();
-        await finalReply.promise;
+  it.each([false, true])(
+    "joins renewal before sealing public methods (committed before reply: %s)",
+    async (committedEarly) => {
+      const f = fixture();
+      const renewing = createDeferredCore();
+      const reply = createDeferredCore();
+      const verifying = createDeferredCore();
+      const finalReply = createDeferredCore();
+      f.onRenew.mockImplementationOnce(async (command) => {
+        const expiresAt = committedEarly ? command.publish(Date.now() + 3_000) : undefined;
+        renewing.resolve();
+        await reply.promise;
         command.assertCurrent();
-        return expiresAt;
+        return expiresAt ?? command.publish(Date.now() + 3_000);
       });
-      reply.resolve();
-      await verifying.promise;
-      const verifies = f.verify.mock.calls.length;
-      await expect(within(() => lease.assertOwned())).rejects.toThrow(
-        "differs from its live owner",
-      );
-      await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
-      expect(f.verify).toHaveBeenCalledTimes(verifies);
-      await within(() => vi.advanceTimersByTimeAsync(1_000));
-      expect(f.renew).toHaveBeenCalledOnce();
-      finalReply.resolve();
-      expect(await result.outcome).toEqual({ ok: true, value: "completed" });
-      await f.maintenance.close();
-      expect(f.events).toEqual(["release", "actor-close"]);
-      expect(f.resources.size).toBe(0);
-    } finally {
-      reply.resolve();
-      finalReply.resolve();
-      f.finishCallback.resolve();
-      await result.outcome;
-      await f.maintenance.close();
-    }
-  });
-
-  it("observes committed renewal at the old expiry while the actor reply is still pending", async () => {
-    const f = fixture();
-    const committed = createDeferredCore();
-    const reply = createDeferredCore();
-    f.onRenew.mockImplementationOnce(async (command) => {
-      const expiresAt = command.publish(Date.now() + 3_000);
-      committed.resolve();
-      await reply.promise;
-      command.assertCurrent();
-      return expiresAt;
-    });
-    const result = f.run();
-    try {
-      const { lease, within } = await Promise.race([
-        f.entered.promise,
-        result.outcome.then((outcome) => {
-          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-        }),
-      ]);
-      await within(() => vi.advanceTimersByTimeAsync(1_000));
-      await committed.promise;
-      await within(() => vi.advanceTimersByTimeAsync(2_000));
-      expect(lease.signal.aborted).toBe(false);
-      expect(f.renew).toHaveBeenCalledOnce();
-      await within(() => lease.assertOwned());
-      reply.resolve();
-      f.finishCallback.resolve();
-      expect(await result.outcome).toEqual({ ok: true, value: "completed" });
-      expect(f.release).toHaveBeenCalledOnce();
-    } finally {
-      reply.resolve();
-      f.finishCallback.resolve();
-      await result.outcome;
-      await f.maintenance.close();
-    }
-  });
+      const result = f.run();
+      try {
+        const { lease, within } = await f.enter(result);
+        await within(() => vi.advanceTimersByTimeAsync(1_000));
+        await renewing.promise;
+        if (committedEarly) {
+          await within(() => vi.advanceTimersByTimeAsync(2_000));
+          expect(lease.signal.aborted).toBe(false);
+          expect(f.renew).toHaveBeenCalledOnce();
+          await within(() => lease.assertOwned());
+        }
+        f.finishCallback.resolve();
+        await within(() => lease.assertOwned());
+        expect(result.settled()).toBe(false);
+        expect(f.release).not.toHaveBeenCalled();
+        f.onVerify.mockImplementationOnce(async (command) => {
+          const expiresAt = command.publish(Date.now() + 3_000);
+          verifying.resolve();
+          await finalReply.promise;
+          command.assertCurrent();
+          return expiresAt;
+        });
+        reply.resolve();
+        await verifying.promise;
+        const verifies = f.verify.mock.calls.length;
+        await expect(within(() => lease.assertOwned())).rejects.toThrow(
+          "differs from its live owner",
+        );
+        await expect(within(() => lease.renew())).rejects.toThrow("differs from its live owner");
+        expect(f.verify).toHaveBeenCalledTimes(verifies);
+        await within(() => vi.advanceTimersByTimeAsync(1_000));
+        expect(f.renew).toHaveBeenCalledOnce();
+        finalReply.resolve();
+        expect(await result.outcome).toEqual({ ok: true, value: "completed" });
+        expect(f.release).toHaveBeenCalledOnce();
+        await f.maintenance.close();
+        expect(f.events).toEqual(["release", "actor-close"]);
+        expect(f.resources.size).toBe(0);
+      } finally {
+        reply.resolve();
+        finalReply.resolve();
+        f.finishCallback.resolve();
+        await result.outcome;
+        await f.maintenance.close();
+      }
+    },
+  );
 
   it.each(["assertOwned", "result"] as const)(
     "rejects delayed %s after expiry even before the timer callback runs",
@@ -321,12 +297,7 @@ describe("async state lease timer", () => {
       const reply = createDeferredCore();
       const result = f.run();
       try {
-        const { lease, within } = await Promise.race([
-          f.entered.promise,
-          result.outcome.then((outcome) => {
-            throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-          }),
-        ]);
+        const { lease, within } = await f.enter(result);
         f.onVerify.mockImplementationOnce(async (command) => {
           const expiresAt = command.publish(Date.now() + 3_000);
           checked.resolve();

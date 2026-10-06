@@ -32,52 +32,50 @@ function connectedStore() {
 }
 
 describe("native dashboard connection health", () => {
-  it("keeps terminal first-connect failures red until intentionally stopped", () => {
-    const { gateway, current } = createGatewayStoreTestStore();
-    cleanups.push(() => gateway.stop());
-    cleanups.push(startNativeGatewayHealthReporting(gateway));
-    gateway.start();
-    current().opts.onClose?.({ code: 4008, reason: "connect failed", willRetry: false });
-    expect(gateway.snapshot.phase).toBe("stopped");
-    expect(gateway.snapshot.lastError).toContain("4008");
-    expect(Reflect.get(window, HEALTH)).toEqual({
-      gatewayUrl: gateway.connection.gatewayUrl,
-      health: "error",
-    });
-    gateway.stop();
-    expect(Reflect.get(window, HEALTH)).toEqual({
-      gatewayUrl: gateway.connection.gatewayUrl,
-      health: "unknown",
-    });
-  });
-
-  it("publishes the real connection, deduplicates unrelated updates, and follows loss and recovery", () => {
-    const { gateway, current } = connectedStore();
-    const events = vi.fn();
-    window.addEventListener(EVENT, events);
-    cleanups.push(() => window.removeEventListener(EVENT, events));
-    const stop = startNativeGatewayHealthReporting(gateway);
-    cleanups.push(stop);
-    const gatewayUrl = gateway.connection.gatewayUrl;
-    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
-    expect(events).toHaveBeenCalledOnce();
-    gateway.setSessionKey("agent:main:another");
-    expect(events).toHaveBeenCalledOnce();
-
-    current().opts.onClose?.({ code: 1006, reason: "socket lost", willRetry: true });
-    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "error" });
-    current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
-    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
-    gateway.stop();
-    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
-
-    stop();
-    events.mockClear();
-    gateway.start();
-    current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
-    expect(events).not.toHaveBeenCalled();
-    expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
-  });
+  it.each([false, true])(
+    "reports failure until recovery or intentional stop (admitted=%s)",
+    (admitted) => {
+      const { gateway, current } = createGatewayStoreTestStore();
+      cleanups.push(() => gateway.stop());
+      gateway.start();
+      if (admitted) {
+        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      }
+      const events = vi.fn();
+      window.addEventListener(EVENT, events);
+      cleanups.push(() => window.removeEventListener(EVENT, events));
+      const stop = startNativeGatewayHealthReporting(gateway);
+      cleanups.push(stop);
+      const gatewayUrl = gateway.connection.gatewayUrl;
+      if (admitted) {
+        expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
+        expect(events).toHaveBeenCalledOnce();
+        gateway.setSessionKey("agent:main:another");
+        expect(events).toHaveBeenCalledOnce();
+      }
+      current().opts.onClose?.(
+        admitted
+          ? { code: 1006, reason: "socket lost", willRetry: true }
+          : { code: 4008, reason: "connect failed", willRetry: false },
+      );
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "error" });
+      if (admitted) {
+        current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+        expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "ok" });
+      } else {
+        expect(gateway.snapshot.phase).toBe("stopped");
+        expect(gateway.snapshot.lastError).toContain("4008");
+      }
+      gateway.stop();
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+      stop();
+      events.mockClear();
+      gateway.start();
+      current().opts.onHello?.(GATEWAY_STORE_TEST_HELLO);
+      expect(events).not.toHaveBeenCalled();
+      expect(Reflect.get(window, HEALTH)).toEqual({ gatewayUrl, health: "unknown" });
+    },
+  );
 
   it("reports endpoint changes and cannot be overwritten by an older reporter or client", () => {
     const first = connectedStore();

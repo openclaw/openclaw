@@ -70,18 +70,8 @@ let cachedWindowsOemCodePage: number | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 function parseWindowsCodePage(raw: string): number | null {
-  if (!raw) {
-    return null;
-  }
-  const match = raw.match(/\b(\d{3,5})\b/);
-  if (!match?.[1]) {
-    return null;
-  }
-  const codePage = Number.parseInt(match[1], 10);
-  if (!Number.isFinite(codePage) || codePage <= 0) {
-    return null;
-  }
-  return codePage;
+  const codePage = Number(raw.match(/\b(\d{3,5})\b/)?.[1]);
+  return codePage > 0 ? codePage : null;
 }
 
 /** Resolves and caches the current Windows console encoding for subprocess output. */
@@ -170,11 +160,9 @@ export function decodeWindowsOutputBuffer(params: {
 }
 
 /** Decodes a text file, preferring valid UTF-8 before the Windows system encoding. */
-export function decodeWindowsTextFileBuffer(params: {
-  buffer: Buffer;
-  platform?: NodeJS.Platform;
-  windowsEncoding?: string | null;
-}): string {
+export function decodeWindowsTextFileBuffer(
+  params: Parameters<typeof decodeWindowsOutputBuffer>[0],
+): string {
   return decodeWindowsBufferWithFallback({
     ...params,
     resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
@@ -335,8 +323,8 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
   while (index >= 0 && continuationBytes < 3) {
-    const byte = buffer.at(index);
-    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+    const byte = buffer.readUInt8(index);
+    if (byte < 0x80 || byte > 0xbf) {
       break;
     }
     continuationBytes += 1;
@@ -346,11 +334,7 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer.at(index);
-  if (leadByte === undefined) {
-    return Buffer.alloc(0);
-  }
-  const sequenceLength = getUtf8SequenceLength(leadByte);
+  const sequenceLength = getUtf8SequenceLength(buffer.readUInt8(index));
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);
   }

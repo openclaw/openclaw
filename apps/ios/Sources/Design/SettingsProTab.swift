@@ -37,9 +37,7 @@ struct SettingsProTab: View {
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var selectedAgentPickerId = ""
-    @State var gatewayToken = ""
-    @State var gatewayPassword = ""
-    @State var gatewayCredentialFieldStableID: String?
+    @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
     @State var manualGatewayContextPath: String?
     @State var setupStatusText: String?
@@ -47,7 +45,6 @@ struct SettingsProTab: View {
     @State var setupAttemptID: UUID?
     @State var manualConnectGeneration: UInt64 = 0
     @State var stagedGatewaySetupLink: GatewayConnectDeepLink?
-    @State var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     @State var scannerResultHandoff = QRScannerResultHandoff()
     @State var scannerScanID: UInt64 = 0
     @State var pendingTargetSuppression = GatewayPendingTargetSuppression()

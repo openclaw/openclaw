@@ -62,7 +62,12 @@ export const cronHistoryHandler: GatewayRequestHandler = async (opts) => {
     if (
       (callerScope || visibility) &&
       (!job ||
-        !cronJobMatchesCallerScope({ job, callerScope, defaultAgentId, allowCurrentJob: true }) ||
+        !cronJobMatchesCallerScope({
+          job,
+          callerScope,
+          defaultAgentId,
+          allowCurrentJob: true,
+        }) ||
         !cronJobIsVisible(job, visibility, defaultAgentId))
     ) {
       throw new Error("Cron job not found");

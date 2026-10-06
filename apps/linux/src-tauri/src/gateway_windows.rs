@@ -722,70 +722,44 @@ impl Routing {
     }
 
     fn refresh_primary(&mut self, label: &str) -> Intent {
-        let inherited = self
-            .windows
-            .get(label)
-            .and_then(|route| route.pending.as_ref())
-            .map(|pending| (pending.intent.clone(), pending.completion));
-        let source_url = self
-            .windows
-            .get(label)
-            .and_then(|route| route.document.as_ref())
-            .map(|doc| doc.navigation_url.clone());
-        let previous_base = self
-            .windows
-            .get(label)
-            .filter(|route| route.target == PRIMARY)
-            .and_then(|route| route.document.as_ref())
-            .map(|doc| doc.url.clone());
-        let mut destination = source_url.clone();
-        let document_completion = self
-            .windows
-            .get(label)
-            .and_then(|route| route.document.as_ref())
-            .and_then(|doc| doc.completion);
-        let mut next = self.begin(
-            label,
-            PRIMARY,
-            inherited
-                .as_ref()
-                .and_then(|(intent, _)| intent.source.clone()),
+        let route = self.windows.get(label);
+        let inherited = route.and_then(|route| route.pending.as_ref());
+        let document = route.and_then(|route| route.document.as_ref());
+        let source_url = inherited.map_or_else(
+            || document.map(|doc| doc.navigation_url.clone()),
+            |pending| pending.intent.source_url.clone(),
         );
+        let destination = inherited
+            .and_then(|pending| pending.intent.navigation_url.as_ref())
+            .or_else(|| document.map(|doc| &doc.navigation_url));
+        let previous_base = route
+            .filter(|route| route.target == PRIMARY)
+            .and(document)
+            .map(|doc| &doc.url);
+        let navigation_url = previous_base
+            .zip(destination)
+            .and_then(|(base, destination)| {
+                self.primary
+                    .as_ref()
+                    .and_then(|primary| primary.retained_destination(base, destination))
+            });
+        let completion = inherited
+            .map(|pending| pending.completion)
+            .or_else(|| document.and_then(|doc| doc.completion));
+        let source = inherited.and_then(|pending| pending.intent.source.clone());
+        let mut next = self.begin(label, PRIMARY, source);
         next.source_url = source_url;
-        if let Some((previous, completion)) = inherited {
-            next.source_url = previous.source_url;
-            destination = previous.navigation_url.or(destination);
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = completion;
-            }
-        } else if let Some(completion) = document_completion {
-            if let Some(pending) = self
-                .windows
-                .get_mut(label)
-                .and_then(|route| route.pending.as_mut())
-            {
-                pending.completion = completion;
-            }
-        }
-        next.navigation_url =
-            previous_base
-                .as_ref()
-                .zip(destination.as_ref())
-                .and_then(|(base, destination)| {
-                    self.primary
-                        .as_ref()
-                        .and_then(|primary| primary.retained_destination(base, destination))
-                });
-        if let Some(pending) = self
+        next.navigation_url = navigation_url;
+        let pending = self
             .windows
             .get_mut(label)
-            .and_then(|route| route.pending.as_mut())
-        {
-            pending.intent = next.clone();
+            .expect("reserved window")
+            .pending
+            .as_mut()
+            .expect("reserved primary refresh");
+        pending.intent = next.clone();
+        if let Some(completion) = completion {
+            pending.completion = completion;
         }
         next
     }
@@ -1146,13 +1120,7 @@ impl DocumentRegistration {
                 })
                 .unwrap_or((false, None));
             if let Some(intent) = replacement {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let label = intent.label.clone();
-                    if let Err(error) = select_intent(app.clone(), intent).await {
-                        show_error(&app, &label, &error);
-                    }
-                });
+                schedule_selection(app, intent);
             }
             allowed
         });
@@ -1388,13 +1356,7 @@ impl GatewayWindows {
             state.select_primary(url, auth_script, accepted, ownership)
         };
         for intent in reconnects {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let label = intent.label.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    show_error(&app, &label, &error);
-                }
-            });
+            schedule_selection(app, intent);
         }
         self.publish(app);
         Ok(selection)
@@ -1434,19 +1396,13 @@ impl GatewayWindows {
             })?
         };
         for intent in reconnects {
-            let app = app.clone();
-            tauri::async_runtime::spawn(async move {
-                let label = intent.label.clone();
-                if let Err(error) = select_intent(app.clone(), intent).await {
-                    show_error(&app, &label, &error);
-                }
-            });
+            schedule_selection(app, intent);
         }
         self.publish(app);
         Ok(())
     }
 
-    pub fn main_is_primary(&self, _app: &AppHandle) -> bool {
+    pub fn main_is_primary(&self) -> bool {
         self.routing
             .lock()
             .is_ok_and(|state| state.follows_primary())
@@ -2092,6 +2048,16 @@ async fn select(
     }
 }
 
+fn schedule_selection(app: &AppHandle, intent: Intent) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let label = intent.label.clone();
+        if let Err(error) = select_intent(app.clone(), intent).await {
+            show_error(&app, &label, &error);
+        }
+    });
+}
+
 async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     let preparing_app = app.clone();
     let preparing_intent = intent.clone();
@@ -2166,10 +2132,8 @@ async fn select_intent(app: AppHandle, intent: Intent) -> Result<(), String> {
     .await;
     let leftover = pending.lock().map_err(|_| STALE)?.take();
     retire_tunnel(&app, leftover);
-    if result.is_err() {
-        if let Err(error) = &result {
-            report_selection_failure(&app, &cleanup, error).await;
-        }
+    if let Err(error) = &result {
+        report_selection_failure(&app, &cleanup, error).await;
         cancel_intent(&app, &cleanup);
     }
     result
@@ -2737,11 +2701,6 @@ fn create_gateway_window(app: &AppHandle, label: &str, name: &str) -> Result<(),
         .map_err(|_| "Could not prepare Gateway window controls.".to_string())
 }
 
-#[cfg(target_os = "linux")]
-pub(crate) fn show_primary_url(app: &AppHandle, target: Url) -> Result<(), String> {
-    show_primary_route(app, Some(target))
-}
-
 pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
     let owner = app.state::<GatewayWindows>();
     let available = {
@@ -2758,7 +2717,7 @@ pub(crate) fn show_primary(app: &AppHandle) -> Result<(), String> {
     show_primary_route(app, None)
 }
 
-fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
+pub(crate) fn show_primary_route(app: &AppHandle, mut target: Option<Url>) -> Result<(), String> {
     let owner = app.state::<GatewayWindows>();
     let (primary, generation, existing) = {
         let mut state = owner.routing.lock().map_err(|_| STALE)?;
@@ -3085,7 +3044,13 @@ pub(crate) async fn gateway_request(
                     }
                 })
                 .await?;
-                crate::promote_gateway_profile(&app, profile.request, guard).await
+                app.state::<crate::GatewayOperationQueue>()
+                    .execute(crate::GatewayOperation::PromoteProfile {
+                        request: profile.request,
+                        guard,
+                    })
+                    .await
+                    .map(|_| ())
             }
             .await;
             cancel_intent(&app, &intent);
@@ -3254,13 +3219,7 @@ pub(crate) async fn gateway_profile_request(
     })
     .await?;
     for intent in reconnects {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            let label = intent.label.clone();
-            if let Err(error) = select_intent(app.clone(), intent).await {
-                show_error(&app, &label, &error);
-            }
-        });
+        schedule_selection(&app, intent);
     }
     Ok(result)
 }

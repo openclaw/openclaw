@@ -6,32 +6,30 @@ const createTelegramBot = vi.hoisted(() => vi.fn());
 vi.mock("./bot.js", () => ({ createTelegramBot }));
 
 describe("Telegram webhook routes", () => {
-  it.each([undefined, false as const, { port: 8787 }])(
-    "rejects the exact health path with legacy listener %j",
-    async (legacyWebhook) => {
+  it.each([
+    ...[undefined, false as const, { port: 8787 }].map((legacyWebhook) => ({
+      path: "/healthz",
+      legacyWebhook,
+      error: /webhook path "\/healthz" conflicts with the health path/,
+    })),
+    ...telegramReservedGatewayPaths
+      .filter((path) => ["/health", "/healthz?token=known", "/ready", "/startup"].includes(path))
+      .map((path) => ({
+        path,
+        legacyWebhook: false as const,
+        error: /webhook path.*reserved.*Gateway probes/i,
+      })),
+    ...["/api/channels/telegram", "/%61pi/channels/telegram"].map((path) => ({
+      path,
+      legacyWebhook: false as const,
+      error: /requires Gateway authentication/,
+    })),
+  ])(
+    "rejects $path with legacy listener $legacyWebhook",
+    async ({ path, legacyWebhook, error }) => {
       await expect(
-        startTelegramWebhook({ token: "tok", secret: "secret", path: "/healthz", legacyWebhook }),
-      ).rejects.toThrow('webhook path "/healthz" conflicts with the health path');
-      expect(createTelegramBot).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(telegramReservedGatewayPaths.filter((path) => path !== "/healthz"))(
-    "rejects reserved Gateway path %s",
-    async (path) => {
-      await expect(
-        startTelegramWebhook({ token: "tok", secret: "secret", path, legacyWebhook: false }),
-      ).rejects.toThrow(/webhook path.*reserved.*Gateway probes/i);
-      expect(createTelegramBot).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["/api/channels/telegram", "/%61pi/channels/telegram"])(
-    "rejects Gateway-authenticated path %s",
-    async (path) => {
-      await expect(
-        startTelegramWebhook({ token: "tok", secret: "secret", path, legacyWebhook: false }),
-      ).rejects.toThrow("requires Gateway authentication");
+        startTelegramWebhook({ token: "tok", secret: "secret", path, legacyWebhook }),
+      ).rejects.toThrow(error);
       expect(createTelegramBot).not.toHaveBeenCalled();
     },
   );

@@ -140,8 +140,9 @@ function buildOpenAICompletionsClientConfig(
   let baseURL = model.baseUrl;
   let isAzureHost = false;
 
-  try {
-    const parsed = new URL(model.baseUrl);
+  // Keep invalid configured URLs unchanged so the OpenAI SDK owns their errors.
+  const parsed = URL.parse(model.baseUrl);
+  if (parsed) {
     isAzureHost = isAzureOpenAICompatibleHost(parsed.hostname.toLowerCase());
     parsed.searchParams.forEach((value, key) => {
       if (value) {
@@ -150,8 +151,6 @@ function buildOpenAICompletionsClientConfig(
     });
     parsed.search = "";
     baseURL = parsed.toString().replace(/\/$/, "");
-  } catch {
-    // Keep the configured base URL unchanged; the OpenAI SDK will surface invalid URLs.
   }
 
   if (isAzureHost) {
@@ -399,9 +398,6 @@ export function streamOpenAICompletionsRequest(
         signal: options?.signal,
         error,
         cleanup: () => {
-          if (mode === "managed") {
-            output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-          }
           finalizeOpenAICompletionsToolCalls(output, { allowSilentToolCallPromotion: false });
           clearPendingCommentaryText(provisionalCommentaryTags);
           tagUnresolvedTextAsCommentary(output);

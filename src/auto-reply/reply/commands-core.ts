@@ -5,15 +5,12 @@ import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import { maybeHandleResetCommand } from "./commands-reset.js";
 import type {
   CommandDispatchParams,
-  CommandHandler,
   CommandHandlerResult,
   HandleCommandsParams,
 } from "./commands-types.js";
-const commandHandlersRuntimeLoader = createLazyImportLoader(
-  () => import("./commands-handlers.runtime.js"),
+const commandHandlersRuntimeLoader = createLazyImportLoader(async () =>
+  (await import("./commands-handlers.runtime.js")).loadCommandHandlers(),
 );
-
-let HANDLERS: CommandHandler[] | null = null;
 
 function normalizeCommandHandlerResult(result: CommandHandlerResult): CommandHandlerResult {
   if (!result.reply) {
@@ -65,16 +62,14 @@ export async function handleCommands(params: CommandDispatchParams): Promise<Com
     ...commandParams,
     ...(await resolveModelLevels()),
   };
-  if (HANDLERS === null) {
-    HANDLERS = (await commandHandlersRuntimeLoader.load()).loadCommandHandlers();
-  }
+  const handlers = await commandHandlersRuntimeLoader.load();
   const allowTextCommands = shouldHandleTextCommands({
     cfg: params.cfg,
     surface: params.command.surface,
     commandSource: params.ctx.CommandSource,
   });
 
-  for (const handler of HANDLERS) {
+  for (const handler of handlers) {
     const result = await handler(handlerParams, allowTextCommands);
     if (result) {
       return normalizeCommandHandlerResult(result);

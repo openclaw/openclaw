@@ -274,7 +274,7 @@ final class GatewayProcessManager {
         runtimeForUpdate: BundledRuntime? = nil,
         runtimeEnvironment: [String: String]? = nil,
         nodeMigration: ManagedNodeGatewayMigration.Candidate? = nil,
-        serviceForRestoration: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
+        serviceForRestoration: ServiceRestoration? = nil,
         expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority? = nil,
         mutationCheck: (@MainActor @Sendable () async throws -> Void)? = nil) async -> LaunchAgentEnableResult
     {
@@ -362,7 +362,8 @@ final class GatewayProcessManager {
         if let candidate = request.nodeMigration {
             return await self.performManagedNodeMigration(candidate, generation: request.generation)
         }
-        if let cli = request.serviceForRestoration {
+        if let restoration = request.serviceForRestoration {
+            let cli = restoration.retained
             do { try await request.mutationCheck?() } catch { return .failed(error.localizedDescription) }
             guard self.isCurrentGatewayStart(request.generation), let bun = cli.prefix.first else { return .skipped }
             let runtime = BundledRuntime(root: URL(fileURLWithPath: bun)
@@ -373,7 +374,8 @@ final class GatewayProcessManager {
                     allowUnconfigured: request.allowUnconfigured,
                     runtime: runtime,
                     launchAgentExists: false),
-                installedCLI: cli,
+                runtime: restoration.installer,
+                restoring: cli,
                 expectedServiceAuthority: request.expectedServiceAuthority,
                 checkCurrent: request.mutationCheck)
             {
@@ -638,7 +640,8 @@ final class GatewayProcessManager {
         self.launchAgentEnablePendingRequest = nil
         let enableTask = self.launchAgentEnableTask
         self.status = .stopped
-        self.logger.info("gateway stop requested")
+        self.logger.info(
+            "gateway stop requested (profile \(AppProfile.current.name ?? "default"), \(hosting.rawValue) hosting)")
         let priorDisableTask = self.launchAgentDisableTask
         let disableTask = Task { @MainActor in
             _ = await priorDisableTask?.value
@@ -706,11 +709,9 @@ final class GatewayProcessManager {
         self.lastEnvironmentRefresh = now
         self.environmentRefreshTask = Task { [weak self] in
             let status = await GatewayEnvironment.check()
-            await MainActor.run {
-                guard let self else { return }
-                self.environmentStatus = status
-                self.environmentRefreshTask = nil
-            }
+            guard let self else { return }
+            self.environmentStatus = status
+            self.environmentRefreshTask = nil
         }
     }
 
@@ -722,13 +723,11 @@ final class GatewayProcessManager {
             let log = await Task.detached(priority: .utility) {
                 Self.readGatewayLog(path: path, limit: limit)
             }.value
-            await MainActor.run {
-                guard let self else { return }
-                if !log.isEmpty {
-                    self.log = log
-                }
-                self.logRefreshTask = nil
+            guard let self else { return }
+            if !log.isEmpty {
+                self.log = log
             }
+            self.logRefreshTask = nil
         }
     }
 
@@ -1316,14 +1315,9 @@ extension GatewayProcessManager {
             // retain the connected channel; only replacement evidence forces refresh.
             self.refreshControlChannelIfNeeded(reason: refreshReason, force: replaced)
             self.lastObservedGatewayPID = instance?.pid ?? self.lastObservedGatewayPID
-            if self.launchAgentInstallGeneration == context.generation {
-                self.launchAgentInstallGeneration = nil
-            }
-            if self.launchAgentFreshInstallGeneration == context.generation {
-                self.launchAgentFreshInstallGeneration = nil
-            }
+            self.clearCompletedLaunchAgentInstall(generation: context.generation)
             self.refreshLog()
-            self.markChildHealthy(instance: instance)
+            if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
             return true
 
         case let .failed(terminalFailure):
@@ -1375,6 +1369,15 @@ extension GatewayProcessManager {
         }
     }
 
+    private func clearCompletedLaunchAgentInstall(generation: UInt64) {
+        if self.launchAgentInstallGeneration == generation {
+            self.launchAgentInstallGeneration = nil
+        }
+        if self.launchAgentFreshInstallGeneration == generation {
+            self.launchAgentFreshInstallGeneration = nil
+        }
+    }
+
     private func canPublishGatewayReadiness(
         instance: PortGuardian.Descriptor?,
         context: GatewayReadinessContext) async -> Bool
@@ -1387,10 +1390,6 @@ extension GatewayProcessManager {
             startGeneration: context.generation)
         else { return false }
         return self.isCurrentGatewayReadiness(context)
-    }
-
-    private func markChildHealthy(instance: PortGuardian.Descriptor?) {
-        if let pid = instance?.pid { self.childSupervisor.markHealthy(pid: pid) }
     }
 
     private func probeGatewayHealth<C: Clock>(timeoutMs: Double, clock: C) async throws -> Data
@@ -1420,7 +1419,6 @@ extension GatewayProcessManager {
     }
 
     private nonisolated static func readGatewayLog(path: String, limit: Int) -> String {
-        guard FileManager().fileExists(atPath: path) else { return "" }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }
         let text = String(data: data, encoding: .utf8) ?? ""
         if text.count <= limit { return text }
@@ -1480,14 +1478,6 @@ extension GatewayProcessManager {
             return true
         }
         return false
-    }
-
-    func setTestingDesiredActive(_ active: Bool) {
-        self.desiredActive = active
-    }
-
-    func setTestingLastFailureReason(_ reason: String?) {
-        self.lastFailureReason = reason
     }
 
     func setTestingStatus(_ status: Status) {

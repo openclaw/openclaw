@@ -65,6 +65,11 @@ it("records failed scratch cleanup without failing the published backup", async 
         await expect(fs.stat(result.archivePath)).resolves.toMatchObject({
           size: expect.any(Number),
         });
+        await expect(
+          fs.stat(path.join(scratchRoot, scratch!, "owner.sqlite")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
         removal.mockRestore();
         const repaired = await maintainBackupScratch({ roots: [scratchRoot], repair: true });
         expect(repaired.reclaimed).toEqual([path.join(scratchRoot, scratch!)]);

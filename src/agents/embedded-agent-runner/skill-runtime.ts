@@ -1,3 +1,4 @@
+import { prepareSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   buildSkillSnapshot,
   resolveSkillsPrompt,
@@ -114,6 +115,13 @@ export async function prepareEmbeddedSkills(params: {
       eligibility: skillsEligibility,
       preserveEntryOrder,
     });
+    const libraryEntries = params.sandbox?.enabled
+      ? []
+      : await prepareSkillLibrarySelection(
+          skillsSnapshot.librarySelections ?? [],
+          {},
+          params.assertCurrent ?? (() => {}),
+        );
     params.assertCurrent?.();
     // Preparation may yield to abort/revocation. Apply process-wide overrides only
     // once all filesystem work has settled and this caller can take custody.
@@ -140,7 +148,7 @@ export async function prepareEmbeddedSkills(params: {
     // Sandboxes keep their existing materialized paths; never resolve host library pins there.
     const skillReadResources = params.sandbox?.enabled
       ? undefined
-      : resolveSkillResourceCandidates(skillsSnapshot);
+      : resolveSkillResourceCandidates(skillsSnapshot, libraryEntries);
     return {
       restoreSkillEnv,
       skillReadResources,

@@ -1,7 +1,12 @@
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import { isAwaitingGatewayFailure } from "../gateway-availability.ts";
+import {
+  isAgentDatabaseInspectionPendingError,
+  isAwaitingGatewayFailure,
+  resolveGatewayReadRetryDelayMs,
+} from "../gateway-availability.ts";
+import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
@@ -15,8 +20,44 @@ import type {
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
-import { requestSessionListParams } from "./session-requests.ts";
+import {
+  normalizeManagedSessionListQuery,
+  requestSessionListParams,
+  sessionListQueryKey,
+} from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+
+export function getManagedSessionList(
+  lists: Map<string, ManagedSessionList>,
+  scope: SessionListScope,
+  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
+): ManagedSessionList {
+  const key = sessionListQueryKey(scope);
+  const current = lists.get(key);
+  if (current) {
+    return current;
+  }
+  const query = normalizeManagedSessionListQuery(scope);
+  const entry: ManagedSessionList = {
+    key,
+    query,
+    scope: Object.freeze({ ...scope }),
+    retainedLimit: query.limit,
+    startupRetryAttempt: 0,
+    readGeneration: 0,
+    connectionEpoch: null,
+    snapshot: { result: null, agentId: null, loading: false, error: null },
+    listeners: new Set(),
+    coordinator: createSessionEventRefreshCoordinator({
+      active: false,
+      refresh: (isCurrent) => refresh(entry, isCurrent),
+    }),
+    pending: null,
+    queued: null,
+  };
+  lists.set(key, entry);
+  return entry;
+}
 
 export function publishManagedList(
   entry: ObservedSessionList,
@@ -77,6 +118,10 @@ export function createSessionManagedListRefresh(
       return Promise.resolve();
     }
     if (entry.pending) {
+      // A subscriber may extend the accepted window before this drain settles.
+      if (refresh.append && !entry.snapshot.loading && !entry.queued) {
+        entry.queued = refresh;
+      }
       if (
         refresh.invalidated &&
         (!refresh.background || !entry.queued || entry.queued.background)
@@ -144,6 +189,14 @@ export function createSessionManagedListRefresh(
           if (!response) {
             throw new Error("The session query did not return a result. Try again.");
           }
+          if (
+            next.append &&
+            response.hasMore &&
+            (response.nextOffset ?? (requestParams.offset ?? 0) + response.sessions.length) <=
+              (requestParams.offset ?? 0)
+          ) {
+            throw new Error("Session list pagination did not advance.");
+          }
           const result = host.reconcileList(response, issuedRevision, entry.query.agentId);
           const previous = entry.snapshot.result;
           // Only this response's rows were observed now; pagination retains older
@@ -174,7 +227,9 @@ export function createSessionManagedListRefresh(
             false,
           );
           entry.connectionEpoch = scope.epoch;
+          entry.startupRetryAttempt = 0;
           const snapshot: SessionListSnapshot = {
+            readSucceeded: true,
             result: decorated,
             agentId: agentId ?? null,
             loading: false,
@@ -203,12 +258,22 @@ export function createSessionManagedListRefresh(
             return;
           }
           const awaitingGateway = isAwaitingGatewayFailure(error, host.snapshot());
+          const startupPending = isAgentDatabaseInspectionPendingError(error);
+          if (startupPending) {
+            entry.coordinator.scheduleRetry(
+              resolveGatewayReadRetryDelayMs(error, entry.startupRetryAttempt++),
+            );
+          } else {
+            entry.startupRetryAttempt = 0;
+          }
           publishManagedList(
             entry,
             {
               ...entry.snapshot,
               loading: false,
               error: awaitingGateway ? null : formatUiError(error),
+              readSucceeded: false,
+              startupPending,
             },
             isCurrent,
           );

@@ -2,7 +2,6 @@
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getImageGenerationProvider,
@@ -11,8 +10,6 @@ import {
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
-  buildNoCapabilityModelConfiguredMessage,
-  resolveCapabilityModelCandidates,
   resolveMediaProviderRequestTimeoutMs,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
@@ -25,8 +22,6 @@ import type { ImageGenerationResult } from "./types.js";
 
 const log = createSubsystemLogger("image-generation");
 
-// Runtime dependency seam for tests and plugin-host callers. Production uses
-// the plugin registry and provider-env helpers by default.
 /** Dependency seam used by image-generation runtime tests and plugin host callers. */
 type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
@@ -36,19 +31,6 @@ type ImageGenerationRuntimeDeps = {
 };
 
 export type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
-
-function buildNoImageGenerationModelConfiguredMessage(
-  cfg: OpenClawConfig,
-  deps: ImageGenerationRuntimeDeps,
-): string {
-  const listProviders = deps.listProviders ?? listImageGenerationProviders;
-  return buildNoCapabilityModelConfiguredMessage({
-    capabilityLabel: "image-generation",
-    modelConfigKey: "mediaModels.image",
-    providers: listProviders(cfg),
-    getProviderEnvVars: deps.getProviderEnvVars,
-  });
-}
 
 /** Lists image-generation providers visible for the current config. */
 export function listRuntimeImageGenerationProviders(
@@ -85,29 +67,13 @@ async function runImageGeneration(
   const requestedTimeoutMs =
     params.timeoutMs ??
     resolveAgentModelTimeoutMsValue(params.cfg.agents?.defaults?.mediaModels?.image);
-  const candidates = resolveCapabilityModelCandidates({
-    cfg: params.cfg,
-    modelConfig: params.cfg.agents?.defaults?.mediaModels?.image,
-    modelOverride: params.modelOverride,
-    parseModelRef: parseImageGenerationModelRef,
-    agentDir: params.agentDir,
-    listProviders,
-    autoProviderFallback: params.autoProviderFallback,
-  });
-  if (candidates.length === 0) {
-    throw new Error(buildNoImageGenerationModelConfiguredMessage(params.cfg, deps));
-  }
 
   return runMediaGenerationCandidates({
-    candidates,
+    request: params,
+    listProviders,
+    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "image",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
-    includeSkipFailureDetails: true,
-    onMissingProvider: (attempt) => {
-      logger.warn(
-        `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,
-      );
-    },
     onFailure: (attempt) => {
       logger.warn(
         `image-generation candidate failed: ${attempt.provider}/${attempt.model}: ${attempt.error}`,

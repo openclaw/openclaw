@@ -70,10 +70,6 @@ const INSTALL_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   workspace: 3,
 };
 
-function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | undefined): boolean {
-  return !current || INSTALL_ORIGIN_PRIORITY[candidate] < INSTALL_ORIGIN_PRIORITY[current];
-}
-
 function resolveInstallInfoFromInstallRecord(
   record: InstalledPluginInstallRecordInfo | undefined,
 ): PluginPackageInstall | null {
@@ -176,7 +172,10 @@ function resolvePreferredInstallsByPluginId(
       continue;
     }
     const existing = preferredByPluginId.get(record.pluginId);
-    if (!existing || isPreferredOrigin(record.origin, existing.origin)) {
+    if (
+      !existing ||
+      INSTALL_ORIGIN_PRIORITY[record.origin] < INSTALL_ORIGIN_PRIORITY[existing.origin]
+    ) {
       preferredByPluginId.set(record.pluginId, {
         origin: record.origin,
         install,

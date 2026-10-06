@@ -22,10 +22,6 @@ enum ExecEnvInvocationUnwrapper {
         return token.range(of: pattern, options: .regularExpression) != nil
     }
 
-    static func unwrap(_ command: [String]) -> [String]? {
-        self.unwrapWithMetadata(command)?.command
-    }
-
     static func unwrapWithMetadata(
         _ command: [String],
         skippingEmptyArguments: Bool = false) -> UnwrapResult?

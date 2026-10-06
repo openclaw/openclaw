@@ -32,6 +32,7 @@ function startNode(
 }
 
 const activePids = new Set<number>();
+const DESCENDANT_CLEANUP_GUARD_MS = 5_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function parsePidPair(output: string): [number, number] {
@@ -55,8 +56,8 @@ function createRetainedDescendantFixture() {
     }, 20);
     writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
   `;
-  const readPid = async () => {
-    const pid = await waitForPidFile(pidPath, 5_000);
+  const readPid = async (signal: AbortSignal) => {
+    const pid = await waitForPidFile(pidPath, signal);
     activePids.add(pid);
     return pid;
   };
@@ -73,7 +74,8 @@ function createRetainedDescendantFixture() {
     releaseAndJoin: async <T>(waitForExtinction: () => Promise<T>, signal: AbortSignal) => {
       await writeFile(releasePath, "", "utf8");
       // Read again on failure paths where readiness was not observed before cleanup.
-      const pid = await readPid();
+      // Cleanup hang guard after the owner released the descendant, not a readiness race.
+      const pid = await readPid(AbortSignal.timeout(DESCENDANT_CLEANUP_GUARD_MS));
       await Promise.all([withinTest(waitForExtinction(), signal), waitFor(() => !isAlive(pid))]);
       activePids.delete(pid);
     },
@@ -123,6 +125,27 @@ describeSpawnTransports("POSIX child invocation identity", () => {
 });
 
 describeSpawnTransports("service-managed child lifecycle", () => {
+  it("rejects NUL input before creating a relay and leaves shutdown clean", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const supervisor = createProcessSupervisor();
+    const relay = vi.spyOn(relayIntegration, "spawnServiceChildRelay");
+    try {
+      await expect(
+        supervisor.spawn({ mode: "child", argv: ["/bin/sh", "-c", "printf bad\0command"] }),
+      ).rejects.toThrow(/NUL bytes|null bytes/);
+      await expect(
+        supervisor.spawn({ mode: "anchored-shell", command: "printf bad\0command" }),
+      ).rejects.toThrow(/NUL bytes|null bytes/);
+      expect(relay.mock.calls.length).toBe(0);
+      const run = await supervisor.spawn({ mode: "anchored-shell", command: "printf ready" });
+      await expect(run.wait()).resolves.toMatchObject({ exitCode: 0, stdout: "ready" });
+      await run.waitForExtinction?.();
+    } finally {
+      relay.mockRestore();
+      await supervisor.shutdown();
+    }
+  });
+
   it.each([
     { reason: "manual-cancel" as const, timeoutMs: undefined, noOutputTimeoutMs: undefined },
     { reason: "overall-timeout" as const, timeoutMs: 100, noOutputTimeoutMs: undefined },
@@ -171,7 +194,9 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     }
   });
 
-  it("preserves construction cleanup uncertainty while the real command self-cleans", async () => {
+  it("preserves construction cleanup uncertainty while the real command self-cleans", async ({
+    signal,
+  }) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
     const cwd = tempDirs.make("openclaw-service-secret-construction-");
     const pidPath = path.join(cwd, "command.pid");
@@ -202,7 +227,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
     });
     let commandPid: number | undefined;
     try {
-      const startedPid = await waitForPidFile(pidPath, 5_000, realDelay);
+      const startedPid = await waitForPidFile(pidPath, signal, realDelay);
       commandPid = startedPid;
       activePids.add(startedPid);
       expect(isAlive(startedPid)).toBe(true);
@@ -219,7 +244,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       await expect(supervisor.shutdown()).rejects.toThrow("cleanup identity lost");
       // TERM must still reach the command after failed cleanup joins. Dedicated
       // escalation cases cover commands that keep running through the TERM grace.
-      await waitForPidFile(termPath, 5_000, realDelay);
+      await waitForPidFile(termPath, signal, realDelay);
       await waitFor(() => !isAlive(startedPid));
     } finally {
       vi.useRealTimers();
@@ -377,7 +402,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       },
     });
     try {
-      const descendantPid = await fixture.readPid();
+      const descendantPid = await fixture.readPid(signal);
       const exit = await withinTest(run.wait(), signal);
 
       expect(exit).toMatchObject({ reason: "exit", exitCode: 0, exitSignal: null });

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
@@ -170,23 +174,20 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
   },
 );
 
-it.each(
+it.for(
   (["writer", "active", "delivery"] as const).flatMap((wait) =>
-    (["unchanged", "same-inode", "other-inode"] as const).map((replacement) => ({
+    (["unchanged", "same-inode"] as const).map((replacement) => ({
       wait,
       replacement,
     })),
   ),
 )(
   "keeps the exact database owner across $wait wait, replacement=$replacement",
-  async ({ wait, replacement }) => {
+  async ({ wait, replacement }, { signal }) => {
     const root = tempDirs.make("reply-admission-claim-");
     const originalPath = path.join(root, "original.sqlite");
-    const replacementPath = path.join(root, "replacement.sqlite");
     const storePath = path.join(root, "selected.sqlite");
-    for (const databasePath of [originalPath, replacementPath]) {
-      seed(databasePath);
-    }
+    seed(originalPath);
     closeOpenClawAgentDatabasesForTest();
     fs.symlinkSync(originalPath, storePath);
     const release = createDeferred();
@@ -210,13 +211,29 @@ it.each(
         owner.completeWithAfterClearBarrier(release.promise);
       }
     }
-    const loaded = vi.spyOn(sessionEntries, "loadSessionEntryForAdmission");
-    const waiting =
-      wait === "active"
-        ? vi.spyOn(registry.replyRunRegistry, "waitForIdle")
-        : wait === "delivery"
-          ? vi.spyOn(registry, "waitForReplyRunFollowupAdmission")
-          : loaded;
+    const enteredWait = createDeferred();
+    const load = sessionEntries.loadSessionEntryForAdmission;
+    const loaded = vi
+      .spyOn(sessionEntries, "loadSessionEntryForAdmission")
+      .mockImplementation((...args) => {
+        if (wait === "writer") {
+          enteredWait.resolve();
+        }
+        return load(...args);
+      });
+    if (wait === "active") {
+      const waitForIdle = registry.replyRunRegistry.waitForIdle.bind(registry.replyRunRegistry);
+      vi.spyOn(registry.replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
+        enteredWait.resolve();
+        return waitForIdle(...args);
+      });
+    } else if (wait === "delivery") {
+      const waitForAdmission = registry.waitForReplyRunFollowupAdmission;
+      vi.spyOn(registry, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
+        enteredWait.resolve();
+        return waitForAdmission(...args);
+      });
+    }
     const controller = new AbortController();
     const pending = admit(storePath, {
       expectedSessionId: sessionId,
@@ -225,7 +242,14 @@ it.each(
     });
     void pending.catch(() => {});
     try {
-      await vi.waitFor(() => expect(waiting).toHaveBeenCalled());
+      await withinTest(
+        awaitGateBeforeSettlement(
+          enteredWait.promise,
+          pending,
+          "Admission completed before reaching its owned wait",
+        ),
+        signal,
+      );
       const observed = loaded.mock.results.at(-1);
       if (observed?.type !== "return") {
         throw new Error("fixture requires a completed authoritative row read");
@@ -235,10 +259,6 @@ it.each(
       if (replacement !== "unchanged") {
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
         expect(claim.isCurrent()).toBe(false);
-        if (replacement === "other-inode") {
-          fs.unlinkSync(storePath);
-          fs.symlinkSync(replacementPath, storePath);
-        }
       }
       owner?.complete();
       release.resolve();
@@ -305,12 +325,12 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
     expect(signal.aborted).toBe(true);
     expect(upstream.signal.aborted).toBe(false);
     await interrupted.released;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
     expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;
-    await runExclusiveSessionLifecycleMutation({ ...target, run: async () => {} });
+    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
   }
 });

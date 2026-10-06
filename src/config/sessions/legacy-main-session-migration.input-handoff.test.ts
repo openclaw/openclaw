@@ -125,6 +125,7 @@ function createInputHandoff(sharedStore = false) {
       }
     } finally {
       receipt.finish(params.disposition ?? "interrupted");
+      await receipt.settled?.();
     }
     return receipt;
   };
@@ -183,7 +184,7 @@ describe("legacy main session input handoff", () => {
       ),
       completions: [],
     });
-    expect(listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
+    expect(await listSessionPendingInputs(f.scope(f.destination))).toMatchObject({
       total: 2,
       items: [
         { id: queued.inputId, message: queued.message, state: "interrupted" },

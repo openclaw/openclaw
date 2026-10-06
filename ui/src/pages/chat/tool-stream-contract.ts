@@ -37,6 +37,9 @@ export type ToolStreamEntry = {
   resultReceived?: boolean;
   startedAt: number;
   receivedAt: number;
+  /** User boundaries observed while this live tool belonged to the active run. */
+  afterBoundaryRunId?: string;
+  boundaryRunId?: string;
   message: Record<string, unknown>;
 };
 
@@ -104,3 +107,7 @@ export type ToolStreamHost = {
   requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
+
+export type LiveToolStreamState = Partial<
+  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">
+>;

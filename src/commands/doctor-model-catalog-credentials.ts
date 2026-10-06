@@ -33,11 +33,6 @@ import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type PlaintextCredential = { key: string; provider: string };
-type AgentCatalogs = {
-  agentDir: string;
-  localStore: AuthProfileStore;
-  providers: Record<string, unknown>[];
-};
 
 function emptyStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -244,7 +239,7 @@ async function persistCredentials(params: {
   return { migrated: added, removed: removedProfiles.length };
 }
 
-function collectAgentCatalogs(agentDir: string, warnings: string[]): AgentCatalogs {
+function collectAgentCatalogs(agentDir: string, warnings: string[]) {
   const localStore = loadPersistedAuthProfileStore(agentDir) ?? emptyStore();
   const providers: Record<string, unknown>[] = [];
   const rootPath = path.join(agentDir, "models.json");
