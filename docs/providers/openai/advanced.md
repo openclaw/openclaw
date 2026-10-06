@@ -153,29 +153,30 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     calls without fast mode. The cutoff defaults to 60 seconds; set
     `params.fastAutoOnSeconds` on the active model to change it.
 
-    For the embedded OpenClaw runtime, the Control UI combines provider model
-    limits with account observations when offering Standard, Fast, and Ultrafast.
-    This works for auth profiles, environment keys, and provider config (including
-    SecretRefs). Daybreak Blue supports Standard and Fast; Daybreak Red uses
-    Standard. Neither offers Ultrafast. Custom endpoints and ChatGPT account
-    catalogs retain their own tier policy.
+    For the embedded OpenClaw runtime, the Control UI uses provider model and
+    route limits when offering Standard, Fast, and Ultrafast. This works for
+    auth profiles, environment keys, and provider config (including SecretRefs).
+    Models limited to Standard or Fast keep those restrictions. Custom endpoints
+    and ChatGPT account catalogs retain their own tier policy.
 
     If a response to an Ultrafast request echoes a different `service_tier`,
-    OpenClaw records the downgrade for that selected credential, model, and route
-    and removes Ultrafast from later model-list results. If the native OpenAI API
-    explicitly rejects `service_tier` before output, tool activity, or active-response
-    steering, OpenClaw automatically retries the same request at a slower tier:
-    Ultrafast → Fast → Standard. It does not retry tier errors after cancellation
-    or an ambiguous connection failure. Rejected tiers are removed from later
-    model-list choices without rewriting saved speed preferences. Explicit
-    low-level tier overrides are still sent as configured and can trigger this
-    rejection recovery again.
+    OpenClaw records a temporary observation for that credential, model, and route.
+    Ultrafast stays selectable, and the composer's Speed tooltip shows the requested
+    and served tiers. Later calls keep requesting the selected tier. A response
+    honoring it clears the hint immediately; otherwise the observation expires
+    five minutes after its latest occurrence.
 
-    Profile observations clear when account discovery refreshes or credentials
-    change; direct-key observations clear when their configured binding changes.
-    Both clear when the prepared runtime retires and are not persisted across
-    restarts. ChatGPT-account
-    availability remains based on authenticated account catalog discovery.
+    If the native OpenAI API explicitly rejects `service_tier` before output,
+    tool activity, or active-response steering, OpenClaw automatically retries
+    that request at a slower tier: Ultrafast → Fast → Standard. The hint records
+    that recovery without changing saved preferences or later requests. It does
+    not retry tier errors after cancellation or an ambiguous connection failure.
+    Explicit low-level tier overrides are still sent as configured.
+
+    Observations also clear on credential replacement, profile discovery refresh,
+    or retirement of the prepared runtime, and are not persisted across restarts.
+    ChatGPT-account availability remains based on authenticated account catalog
+    discovery.
 
     ```json5
     {
