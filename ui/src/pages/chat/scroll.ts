@@ -153,11 +153,14 @@ function applyChatScroll(
   // force=true only overrides when we haven't auto-scrolled yet (initial load).
   // After initial load, respect the user's scroll position.
   const effectiveForce = force && !host.chatHasAutoScrolled;
+  // Content commits measure after rows grow. Preserve the pre-growth reader intent
+  // in chatFollowLocked instead of re-deriving it from the new geometry.
   const shouldStick =
     manualScroll ||
     effectiveForce ||
     (!host.chatFollowLocked &&
-      (options.source === "resize" ||
+      (contentChanged ||
+        options.source === "resize" ||
         host.chatUserNearBottom ||
         distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
