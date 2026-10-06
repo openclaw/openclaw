@@ -599,6 +599,38 @@ describe("canonical transcript archive batch transactions", () => {
     }
   });
 
+  it("lets runtime publication supersede an interrupted Doctor receipt", async () => {
+    const f = fixture(1);
+    try {
+      await expect(
+        f.migrate({
+          transformContent: changeContent,
+          writeCursor: () => {
+            throw new Error("cursor write failed");
+          },
+        }),
+      ).rejects.toThrow("cursor write failed");
+      const archivePath = path.join(f.archiveDirectory, "archive-0.jsonl");
+      fs.mkdirSync(f.archiveDirectory, { recursive: true });
+      fs.writeFileSync(archivePath, archiveBlob(f.database, "s00000"));
+      f.database
+        .prepare(
+          "UPDATE session_transcript_archives SET published_at = 456 WHERE session_id = 's00000'",
+        )
+        .run();
+
+      expect(await f.migrate()).toMatchObject({ rewrittenArchives: 0, warnings: [] });
+      expect(f.database.prepare("SELECT count(*) AS count FROM schema_meta").get()?.count).toBe(0);
+      expect(
+        f.database.prepare("SELECT published_at FROM session_transcript_archives").get()
+          ?.published_at,
+      ).toBe(456);
+      expect(fs.readFileSync(archivePath)).toEqual(archiveBlob(f.database, "s00000"));
+    } finally {
+      f.close();
+    }
+  });
+
   it("carries a missing-file receipt through another transform of the pending blob", async () => {
     const f = fixture(1);
     try {
