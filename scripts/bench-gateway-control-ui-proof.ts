@@ -4,6 +4,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { stopChild } from "./lib/gateway-bench-child.ts";
 import { runControlUiLoad } from "./lib/gateway-bench-control-ui.ts";
@@ -92,6 +93,7 @@ async function main() {
       const resources = createGatewayLoadResources(parent);
       const workers = path.join(root, `${scenario}-workers.jsonl`);
       const port = await getFreePort();
+      const spawnedEpochMs = performance.timeOrigin + performance.now();
       const child: ChildProcess = spawn(
         runtime,
         [
@@ -183,6 +185,14 @@ async function main() {
             );
             if (scenario === "normal") {
               assert.ok(result.summary.replies > 0 && result.placement.length === 1);
+              const firstEvent = JSON.parse(readFileSync(workers, "utf8").split("\n")[0]!);
+              assert.ok(
+                result.startEpochMs !== null &&
+                  firstEvent.epochMs >= spawnedEpochMs &&
+                  firstEvent.epochMs <= result.startEpochMs &&
+                  result.startEpochMs <= performance.timeOrigin + performance.now(),
+                "Gateway and driver epoch clocks differ",
+              );
             } else {
               assert.ok(
                 result.requests.length > 0 || result.errors.length > 0,

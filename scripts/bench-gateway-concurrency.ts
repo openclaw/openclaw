@@ -3354,6 +3354,11 @@ async function main(): Promise<void> {
   }
   const options = parseOptions(argv);
   if (options.controlUiLoad) {
+    if (process.versions.bun) {
+      throw new CliArgumentError(
+        "Control UI load requires a Node controller; select Bun with --gateway-runtime",
+      );
+    }
     const controller = new AbortController();
     const cancel = () => controller.abort(new Error("Control UI benchmark interrupted"));
     process.on("SIGINT", cancel);

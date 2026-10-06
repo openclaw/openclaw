@@ -62,6 +62,8 @@ and miss brief peaks; it is not cgroup `memory.peak`. Observations bound thread
 lifetimes. Verify Gateway JavaScript-worker event coverage separately for each runtime.
 Workers without individual exit notifications have only the recorded process-exit
 upper bound; report them separately instead of inventing complete lifetimes.
+Worker `atNs` has a runtime-local origin. Use `epochMs` with the driver's
+`startEpochMs` to classify load-window events; raw Node/Bun `hrtime` origins differ.
 
 ## Cache policy and proof
 

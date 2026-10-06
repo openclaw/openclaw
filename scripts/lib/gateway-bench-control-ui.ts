@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stopChild } from "./gateway-bench-child.ts";
@@ -152,6 +153,7 @@ export async function runControlUiLoad(
   let windowBefore: Sample | null = null;
   let windowAfter: Sample | null = null;
   let startNs: string | null = null;
+  let startEpochMs: number | null = null;
   let cleaning = false;
   const placement: unknown[] = [];
   const exits: unknown[] = [];
@@ -253,6 +255,8 @@ export async function runControlUiLoad(
     }
     const start = process.hrtime.bigint() + 100_000_000n;
     startNs = String(start);
+    startEpochMs =
+      performance.timeOrigin + performance.now() + Number(start - process.hrtime.bigint()) / 1e6;
     const sampleAt = (at: bigint) =>
       new Promise<Sample>((resolve, reject) => {
         const timer = setTimeout(
@@ -367,6 +371,7 @@ export async function runControlUiLoad(
     drivers: options.drivers,
     durationMs: options.durationMs,
     startNs,
+    startEpochMs,
     placement,
     streamObservations: journals.flatMap((journal) => journal.streams),
     requests,
