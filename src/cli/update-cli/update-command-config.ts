@@ -456,9 +456,9 @@ export async function maybeRepairLegacyConfigForUpdateChannel(
     return params.configSnapshot;
   }
 
-  const { repairLegacyConfigForUpdateChannel } =
+  const { repairLegacyConfigForUpdateChannel: repairLegacyConfig } =
     await import("../../commands/doctor/legacy-config-repair.js");
-  const { snapshot, repaired, warnings } = await repairLegacyConfigForUpdateChannel(params);
+  const { snapshot, repaired, warnings } = await repairLegacyConfig(params);
   for (const warning of warnings ?? []) {
     defaultRuntime.error(`Warning: ${warning}`);
   }

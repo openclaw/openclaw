@@ -84,15 +84,12 @@ export type OnboardingPluginInstallEntry = {
   versionBoundToOpenClaw?: boolean;
 };
 
-/** Outcome status for a single onboarding plugin install attempt. */
-export type OnboardingPluginInstallStatus = "installed" | "skipped" | "failed" | "timed_out";
-
 /** Config and status returned after attempting an onboarding plugin install. */
 type OnboardingPluginInstallResult = {
   cfg: OpenClawConfig;
   installed: boolean;
   pluginId: string;
-  status: OnboardingPluginInstallStatus;
+  status: "installed" | "skipped" | "failed" | "timed_out";
   /** Sanitized actionable detail for non-interactive callers. */
   error?: string;
 };
@@ -104,7 +101,7 @@ type OnboardingPluginInstallParams = Parameters<typeof ensureOnboardingPluginIns
 function incompletePluginInstall(
   cfg: OpenClawConfig,
   pluginId: string,
-  status: Exclude<OnboardingPluginInstallStatus, "installed">,
+  status: Exclude<OnboardingPluginInstallResult["status"], "installed">,
   error?: string,
 ): OnboardingPluginInstallResult {
   return { cfg, installed: false, pluginId, status, ...(error === undefined ? {} : { error }) };
