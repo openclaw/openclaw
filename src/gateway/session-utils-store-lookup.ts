@@ -518,14 +518,13 @@ export async function withGatewaySessionStoreTarget<T>(
             },
           );
         } catch (error) {
+          // Sharing admission may refresh its snapshot; explicit ordered reads retain their owner.
           // The inventory still pins the original stores. Never repeat a consumer's effects.
           if (
             consumed ||
             attempt >= 1 ||
-            !(
-              error instanceof GatewaySessionFactsChangedDuringReadError ||
-              error instanceof SessionEntryChangedDuringReadError
-            )
+            (!(error instanceof GatewaySessionFactsChangedDuringReadError) &&
+              (!params.includeMembership || !(error instanceof SessionEntryChangedDuringReadError)))
           ) {
             throw error;
           }
