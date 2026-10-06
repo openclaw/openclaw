@@ -356,7 +356,10 @@ fn decode_key(encoded: &str, kind: &str) -> Result<[u8; 32], String> {
 }
 
 fn device_id(public_key: &[u8; 32]) -> String {
-    format!("{:x}", Sha256::digest(public_key))
+    Sha256::digest(public_key)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn unix_time_ms() -> Result<u64, String> {

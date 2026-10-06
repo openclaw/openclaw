@@ -31,7 +31,10 @@ pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
 }
 
 fn runtime_directory(prefix: &Path, bytes: &str, manifest: &Manifest) -> PathBuf {
-    let digest = format!("{:x}", Sha256::digest(bytes.as_bytes()));
+    let digest: String = Sha256::digest(bytes.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     prefix
         .join("tools/desktop-runtime")
         .join(format!("{}-{digest}", manifest.tag))
@@ -235,7 +238,11 @@ fn verify_payload(
             }
             digest.update(&buffer[..count]);
         }
-        let actual = format!("{:x}", digest.finalize());
+        let actual: String = digest
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         if actual != *expected_hash {
             return Err(format!(
                 "Embedded runtime checksum changed: {file}; reinstall the app."
