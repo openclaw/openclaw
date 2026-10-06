@@ -34,8 +34,6 @@ type ChannelUiMetaEntry = {
   systemImage?: string;
 };
 
-export type ChannelUiCatalog = ReturnType<typeof buildChannelUiCatalog>;
-
 type ChannelPluginCatalogInstall = PluginPackageInstall &
   ({ clawhubSpec: string } | { npmSpec: string });
 
