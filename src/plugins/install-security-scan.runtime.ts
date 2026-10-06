@@ -19,6 +19,7 @@ import {
 import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
+import { createBeforeInstallHookPayload } from "./install-policy-context.js";
 import type {
   InstallSecurityScanResult,
   SkillInstallSpecMetadata,
@@ -524,35 +525,21 @@ async function runBeforeInstallHook(params: {
   }
 
   try {
-    const hookResult = await hookRunner.runBeforeInstall(
-      {
-        targetType: params.targetType,
-        targetName: params.targetName,
-        sourcePath: params.sourcePath,
-        sourcePathKind: params.sourcePathKind,
-        ...(params.origin ? { origin: params.origin } : {}),
-        request: {
-          kind: params.requestKind,
-          mode: params.requestMode,
-          ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
-        },
-        builtinScan: {
-          status: "ok",
-          scannedFiles: 0,
-          critical: 0,
-          warn: 0,
-          info: 0,
-          findings: [],
-        },
-        ...(params.skill ? { skill: params.skill } : {}),
-        ...(params.plugin ? { plugin: params.plugin } : {}),
+    const { event, ctx } = createBeforeInstallHookPayload({
+      targetName: params.targetName,
+      targetType: params.targetType,
+      origin: params.origin,
+      sourcePath: params.sourcePath,
+      sourcePathKind: params.sourcePathKind,
+      request: {
+        kind: params.requestKind,
+        mode: params.requestMode,
+        ...(params.requestedSpecifier ? { requestedSpecifier: params.requestedSpecifier } : {}),
       },
-      {
-        targetType: params.targetType,
-        requestKind: params.requestKind,
-        ...(params.origin ? { origin: params.origin } : {}),
-      },
-    );
+      ...(params.skill ? { skill: params.skill } : {}),
+      ...(params.plugin ? { plugin: params.plugin } : {}),
+    });
+    const hookResult = await hookRunner.runBeforeInstall(event, ctx);
     if (hookResult?.block) {
       const reason = hookResult.blockReason || "Installation blocked by plugin hook";
       params.logger.warn?.(`WARNING: ${params.installLabel} blocked by plugin hook: ${reason}`);

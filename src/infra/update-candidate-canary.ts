@@ -17,6 +17,10 @@ import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
+import {
+  buildUpdateCanaryCommands,
+  type UpdateCanaryCommand,
+} from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
 import {
@@ -52,8 +56,7 @@ import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryCommandPhase = "doctor" | "lint" | "config" | "plugins" | "runtime";
-type CanaryPhase = CanaryCommandPhase | "snapshot" | "startup" | "readiness";
+type CanaryPhase = UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
 
 type CanaryResult = {
   phase: CanaryPhase;
@@ -270,30 +273,9 @@ export async function validateUpdateCandidateCanary(params: {
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands: { phase: CanaryCommandPhase; name: string; args: string[]; entry?: string }[] =
-      params.migrationPolicy === "startup-only"
-        ? []
-        : [
-            {
-              phase: "doctor",
-              name: "candidate-doctor",
-              args: ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
-            },
-            {
-              phase: "lint",
-              name: "candidate-doctor-lint",
-              args: ["doctor", "--lint", "--json", "--severity-min", "error"],
-            },
-            { phase: "config", name: "candidate-config", args: ["config", "validate", "--json"] },
-            { phase: "plugins", name: "candidate-plugins", args: ["plugins", "list", "--json"] },
-          ];
-    // After a schema bump only a fresh candidate may finalize the run;
-    // prove its full recovery import graph before live state changes.
-    commands.push({
-      phase: "runtime",
-      name: "candidate-recovery",
-      entry: continuationEntry,
-      args: ["--check"],
+    const commands = buildUpdateCanaryCommands({
+      continuationEntry,
+      migrationPolicy: params.migrationPolicy,
     });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
