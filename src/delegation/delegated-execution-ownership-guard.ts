@@ -13,7 +13,6 @@ import {
   listLiveDelegatedExecutionOwnership,
 } from "./delegated-execution-ownership.js";
 import {
-  DELEGATED_EXECUTION_OWNERSHIP_LIVE_STATES,
   DELEGATED_EXECUTION_OWNERSHIP_STATES,
   type DelegatedExecutionOwnershipRecord,
   type DelegatedExecutionOwnershipState,
@@ -45,10 +44,6 @@ export type DelegatedExecutionAdmissionParams = Readonly<{
 
 function isPersistedState(value: string): value is DelegatedExecutionOwnershipState {
   return (DELEGATED_EXECUTION_OWNERSHIP_STATES as readonly string[]).includes(value);
-}
-
-function isLive(record: DelegatedExecutionOwnershipRecord): boolean {
-  return (DELEGATED_EXECUTION_OWNERSHIP_LIVE_STATES as readonly string[]).includes(record.state);
 }
 
 function deny(
