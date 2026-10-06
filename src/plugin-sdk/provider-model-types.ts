@@ -1,7 +1,7 @@
 /**
  * Public SDK type surface for model provider and model definition config.
  */
-import type { ModelApi } from "../config/types.models.js";
+import type { ModelApi, ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Private selected-request facts; omission means the host cannot establish applicability. */
@@ -12,6 +12,7 @@ export type ProviderFastModePolicyContext = {
   baseUrl?: string;
   authMode?: string;
   runtimeId?: string;
+  compat?: ModelCompatConfig;
   modelParams?: Record<string, unknown>;
   params?: Record<string, unknown>;
   requestCapabilities: {

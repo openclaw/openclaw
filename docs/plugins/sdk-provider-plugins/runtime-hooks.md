@@ -331,11 +331,17 @@ managed-provider selection must remain authoritative.
 and registered on the provider. Return `false` only for a confirmed no-op
 Fast choice, `true` for an applicable local request mapping, or `undefined`
 when facts are missing. `ProviderFastModePolicyContext` carries the selected
-model, route, auth mode, runtime, request parameters and transport policy;
+model, route, model compatibility settings (`compat`), auth mode, runtime,
+request parameters and transport policy;
 credentials are not included. Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
+
+Register the same hook on the runtime provider to keep Fast request mapping
+provider-owned, including when the policy returns `undefined`. For an explicitly
+compatible custom Responses model without this hook, the host supplies the
+service-tier mapping. An unrelated `wrapStreamFn` alone does not claim Fast policy.
 
 `resolveServiceTiers(ctx)` can publish known model/route tier restrictions through
 the same lightweight artifact and provider registration. It receives

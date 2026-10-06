@@ -1,6 +1,10 @@
 import { supportsNativeOpenAIResponsesEndpoint } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  normalizeOpenAIServiceTier,
+  supportsOpenAIResponsesFastMode,
+} from "../llm/providers/openai-fast-mode.js";
 import type { ProviderFastModePolicyContext } from "../plugin-sdk/provider-model-types.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -72,6 +76,7 @@ export function createModelSpeedPolicyResolver(params: {
       baseUrl: route.baseUrl,
       authMode: evaluation.selectedAuthMode,
       runtimeId: runtimeId ?? entry.nativeRuntime,
+      compat: entry.compat,
       modelParams: entry.params,
       params: Object.assign({}, defaultParams, modelParams, agentModelParams, agentParams),
       requestCapabilities: resolveProviderRequestCapabilities({
@@ -82,8 +87,21 @@ export function createModelSpeedPolicyResolver(params: {
         providerMetadataOwners: params.metadataSnapshot.owners,
       }),
     };
+    const supportsFastMode = policy.resolveFastModeSupport
+      ? policy.resolveFastModeSupport(context)
+      : context.runtimeId === "openclaw" && entry.compat?.supportsServiceTier !== undefined
+        ? normalizeOpenAIServiceTier(
+            context.params?.serviceTier ?? context.params?.service_tier,
+          ) === undefined &&
+          supportsOpenAIResponsesFastMode({
+            provider: entry.provider,
+            api: route.api,
+            baseUrl: route.baseUrl,
+            compat: entry.compat,
+          })
+        : undefined;
     return {
-      supportsFastMode: policy.resolveFastModeSupport?.(context),
+      supportsFastMode,
       serviceTiers: policy.resolveServiceTiers?.(context),
       supportsServiceTierRecovery:
         context.runtimeId === "openclaw" &&

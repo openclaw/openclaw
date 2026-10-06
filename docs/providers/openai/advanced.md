@@ -248,6 +248,57 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
 
   </Accordion>
 
+  <Accordion title="Fast mode for custom Responses providers">
+    Custom provider IDs using `api: "openai-responses"` can opt individual
+    models into service-tier requests with `compat.supportsServiceTier: true`.
+    Set this only after verifying that the HTTP(S) endpoint accepts
+    `service_tier: "priority"`:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://example.invalid/v1",
+            api: "openai-responses",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom model",
+                compat: { supportsServiceTier: true },
+              },
+            ],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "custom-provider/custom-model": {
+              agentRuntime: { id: "openclaw" },
+              params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    On the OpenClaw runtime, this enables the Fast control for custom providers
+    without their own Fast policy. Fast on requests `priority`; off omits the
+    Fast-derived tier; auto uses the configured cutoff. An explicit valid
+    `params.serviceTier` or `params.service_tier` takes precedence over Fast,
+    and a tier already supplied by the transport takes precedence over both.
+
+    Undeclared custom models stay opted out. Set the capability to `false` to
+    disable OpenClaw's service-tier mapping, including on native OpenAI routes.
+    Provider plugins retain their own Fast applicability policy. The opt-in
+    does not advertise Ultrafast entitlement or tier-rejection recovery, and
+    does not enable native Codex behavior, storage, prompt caching, instructions,
+    or server-side compaction. Actual tier availability remains endpoint-specific.
+
+  </Accordion>
+
   <Accordion title="Server-side compaction (Responses API)">
     For store-capable direct OpenAI Responses models (`openai/*` resolved to
     `api.openai.com`), the OpenAI plugin's OpenClaw stream wrapper auto-enables

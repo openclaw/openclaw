@@ -2,6 +2,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelSpeedPolicyResolver } from "./model-fast-mode.js";
 
@@ -11,6 +12,14 @@ const opus: ModelCatalogEntry = {
   provider: "anthropic",
   api: "anthropic-messages",
   baseUrl: "https://api.anthropic.com",
+};
+const custom: ModelCatalogEntry = {
+  id: "custom-model",
+  name: "Custom model",
+  provider: "custom-provider",
+  api: "openai-responses",
+  baseUrl: "https://example.invalid/v1",
+  compat: { supportsServiceTier: true },
 };
 function fastResolver(params: Parameters<typeof createModelSpeedPolicyResolver>[0]) {
   const resolve = createModelSpeedPolicyResolver(params);
@@ -35,6 +44,70 @@ function resolver(cfg: OpenClawConfig = {}) {
   });
 }
 describe("private selected Fast metadata", () => {
+  it("keeps custom Responses support scoped to the selected route and runtime", () => {
+    const resolve = createModelSpeedPolicyResolver({
+      cfg: {},
+      agentId: "main",
+      catalog: [custom],
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+    });
+    const evaluation = { availability: true, routeResolution: null };
+    expect(resolve(custom, evaluation, "openclaw")).toEqual({
+      supportsFastMode: true,
+      serviceTiers: undefined,
+      supportsServiceTierRecovery: false,
+    });
+    expect(resolve(custom, evaluation, "codex").supportsFastMode).toBeUndefined();
+    expect(resolve(custom, evaluation).supportsFastMode).toBeUndefined();
+    expect(
+      resolve(
+        custom,
+        { availability: undefined, routeResolution: { kind: "indeterminate" } },
+        "openclaw",
+      ),
+    ).toEqual({});
+    expect(
+      resolve(
+        custom,
+        {
+          ...evaluation,
+          selectedRoute: {
+            api: "openai-completions",
+            baseUrl: custom.baseUrl!,
+            authRequirement: "api-key",
+            requestTransportOverrides: "none",
+          },
+        },
+        "openclaw",
+      ).supportsFastMode,
+    ).toBe(false);
+  });
+  it.each([false, undefined])("preserves a provider's Fast decision of %s", (supported) => {
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.providers.push({
+      pluginId: "custom-provider",
+      source: "test",
+      provider: {
+        id: "custom-provider",
+        label: "Custom provider",
+        auth: [],
+        resolveFastModeSupport: () => supported,
+        resolveServiceTiers: () => ["default"],
+      },
+    });
+    const resolve = createModelSpeedPolicyResolver({
+      cfg: {},
+      agentId: "main",
+      catalog: [custom],
+      metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+      pluginRegistry,
+    });
+    expect(resolve(custom, { availability: true, routeResolution: null }, "openclaw")).toEqual({
+      supportsFastMode: supported,
+      serviceTiers: ["default"],
+      supportsServiceTierRecovery: false,
+    });
+  });
   it("uses each selected model's policy and effective agent parameters", () => {
     const catalog: ModelCatalogEntry[] = [
       {
@@ -43,6 +116,14 @@ describe("private selected Fast metadata", () => {
         provider: "openai",
         api: "openai-responses",
         baseUrl: "https://api.openai.com/v1",
+      },
+      {
+        id: "disabled-speed-fixture",
+        name: "Disabled speed fixture",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        compat: { supportsServiceTier: false },
       },
       { id: "grok-3", name: "Grok 3", provider: "xai", api: "openai-responses" },
       { id: "MiniMax-M2.7", name: "MiniMax M2.7", provider: "minimax", api: "anthropic-messages" },
@@ -68,10 +149,12 @@ describe("private selected Fast metadata", () => {
     const evaluation = { availability: true, routeResolution: null, selectedAuthMode: "api_key" };
     expect(catalog.map((entry) => resolve(entry, evaluation, "openclaw"))).toEqual([
       false,
+      false,
       true,
       true,
     ]);
     expect(catalog.map((entry) => resolve(entry, evaluation, "codex"))).toEqual([
+      undefined,
       undefined,
       undefined,
       undefined,

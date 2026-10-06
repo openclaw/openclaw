@@ -184,7 +184,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
           }),
       });
       const initialPolicyReads = resolvePolicy.mock.calls.length;
-      const read = await prepared;
+      const { read } = await prepared;
 
       const rows = read();
       expect(rows).toEqual(expect.arrayContaining(catalog));
@@ -217,7 +217,7 @@ describe("resolveLogicalVisibleModelCatalog", () => {
       });
     try {
       const preparedEntries: ModelCatalogEntry[] = [];
-      const read = await prepareLogicalVisibleModelCatalog({
+      const { read } = await prepareLogicalVisibleModelCatalog({
         cfg: {},
         catalog,
         policy,

@@ -19,6 +19,7 @@ import {
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIResponsesContextManagementWrapper,
+  createOpenAIResponsesServiceTierWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
@@ -653,6 +654,14 @@ export function applyExtraParamsToAgent(
   agent.streamFn = createOpenAIStringContentWrapper(agent.streamFn);
   agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(agent.streamFn);
   agent.streamFn = createOpenAICompletionsToolsCompatWrapper(agent.streamFn);
+
+  // A declared Fast policy owns request mapping; unrelated provider wrappers do not.
+  if (
+    !providerRuntimeHandle.plugin?.resolveFastModeSupport &&
+    model?.compat?.supportsServiceTier === true
+  ) {
+    agent.streamFn = createOpenAIResponsesServiceTierWrapper(agent.streamFn, streamParams);
+  }
 
   if (!providerWrapperHandled) {
     agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({

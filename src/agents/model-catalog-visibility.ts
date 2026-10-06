@@ -90,14 +90,14 @@ export async function resolveLogicalVisibleModelCatalog(
     ): Promise<LogicalModelCatalogEntryState>;
   },
 ): Promise<ModelCatalogEntry[]> {
-  const read = await prepareLogicalVisibleModelCatalog({
+  const prepared = await prepareLogicalVisibleModelCatalog({
     ...params,
     prepareEntry: async (entry, variants) => {
       const state = await params.evaluateEntry(entry, variants);
       return () => state;
     },
   });
-  return read();
+  return prepared.read();
 }
 
 /** Prepare host facts once; observe revocable state only in the synchronous publication. */
@@ -108,7 +108,10 @@ export async function prepareLogicalVisibleModelCatalog(
       routeVariants: readonly ModelCatalogEntry[],
     ): Promise<() => LogicalModelCatalogEntryState>;
   },
-): Promise<() => ModelCatalogEntry[]> {
+): Promise<{
+  read: () => ModelCatalogEntry[];
+  runtimeEntryFor: (entry: ModelCatalogEntry) => ModelCatalogEntry;
+}> {
   const policy =
     params.policy ??
     createModelVisibilityPolicy({
@@ -164,9 +167,10 @@ export async function prepareLogicalVisibleModelCatalog(
   const catalogKeys = new Set(params.catalog.map(createModelCatalogIdentityKeyResolver()));
   let previousStates: Map<string, LogicalModelCatalogEntryState> | undefined;
   let previousCatalog: ModelCatalogEntry[] | undefined;
-  return () => {
+  const runtimeEntries = new WeakMap<ModelCatalogEntry, ModelCatalogEntry>();
+  const read = () => {
     // Observe revocable readiness each time; stable membership keeps its prepared ordering.
-    const states = new Map([...readers].map(([key, read]) => [key, read()]));
+    const states = new Map([...readers].map(([key, readState]) => [key, readState()]));
     const retainedStates = previousStates;
     if (
       params.isCurrent?.() &&
@@ -218,11 +222,12 @@ export async function prepareLogicalVisibleModelCatalog(
     const projectEntries = (entries: readonly ModelCatalogEntry[]) => {
       const projected = entries.flatMap((entry) => {
         const state = getEntryState(entry);
-        const row = catalogView.readProjection(
+        const { entry: row, runtimeEntry } = catalogView.readProjection(
           entry,
           state.routeProjection,
           publicationKeyOf(entry),
-        ).entry;
+        );
+        runtimeEntries.set(row, runtimeEntry);
         // A selected native runtime owns its opaque model; a donor label does not.
         if (
           !state.nativeRuntime &&
@@ -309,5 +314,15 @@ export async function prepareLogicalVisibleModelCatalog(
             configuredKeys.has(publicationKeyOf(entry))),
       ),
     );
+  };
+  return {
+    read,
+    runtimeEntryFor: (entry) => {
+      const runtimeEntry = runtimeEntries.get(entry);
+      if (!runtimeEntry) {
+        throw new Error("Model catalog publication omitted its paired runtime entry");
+      }
+      return runtimeEntry;
+    },
   };
 }

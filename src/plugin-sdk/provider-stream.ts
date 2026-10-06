@@ -4,15 +4,12 @@ import { resolveMoonshotThinkingKeep } from "../llm/providers/stream-wrappers/mo
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
-  createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
   createOpenAIResponsesContextManagementWrapper,
-  createOpenAIServiceTierWrapper,
+  createOpenAIResponsesServiceTierWrapper,
   createOpenAIStringContentWrapper,
   createOpenAITextVerbosityWrapper,
   createOpenAIThinkingLevelWrapper,
-  resolveOpenAIFastMode,
-  resolveOpenAIServiceTier,
   resolveOpenAITextVerbosity,
 } from "../llm/providers/stream-wrappers/openai.js";
 import {
@@ -56,13 +53,6 @@ export type ProviderStreamFamily =
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
-
-function hasFastModeParam(extraParams: Record<string, unknown> | undefined): boolean {
-  return Boolean(
-    extraParams &&
-    (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),
-  );
-}
 
 function resolveBooleanFastMode(
   extraParams: Record<string, unknown> | undefined,
@@ -120,18 +110,7 @@ export function buildProviderStreamFamilyHooks(
           // before payload-shape and context-management compatibility rewrites.
           let nextStreamFn = createOpenAIAttributionHeadersWrapper(ctx.streamFn);
 
-          const serviceTier = resolveOpenAIServiceTier(ctx.extraParams);
-          // Payload/transport tier stays authoritative, then an explicit tier, then fast's default.
-          // Skip fast for valid config so its payload hook cannot install priority first.
-          if (!serviceTier && hasFastModeParam(ctx.extraParams)) {
-            nextStreamFn = createOpenAIFastModeWrapper(nextStreamFn, () =>
-              resolveOpenAIFastMode(ctx.extraParams),
-            );
-          }
-
-          if (serviceTier) {
-            nextStreamFn = createOpenAIServiceTierWrapper(nextStreamFn, serviceTier);
-          }
+          nextStreamFn = createOpenAIResponsesServiceTierWrapper(nextStreamFn, ctx.extraParams);
 
           const textVerbosity = resolveOpenAITextVerbosity(ctx.extraParams);
           if (textVerbosity) {

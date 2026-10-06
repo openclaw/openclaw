@@ -29,6 +29,70 @@ describe("models.list configured static entries", () => {
     vi.useRealTimers();
   });
 
+  it("publishes custom Responses Fast capability with the implicit OpenClaw runtime", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "custom-responses-catalog-" },
+      async (state) => {
+        const cases = [
+          { id: "opted-in", supportsServiceTier: true, params: undefined, expected: true },
+          { id: "opted-out", supportsServiceTier: false, params: undefined, expected: false },
+          {
+            id: "undeclared",
+            supportsServiceTier: undefined,
+            params: undefined,
+            expected: undefined,
+          },
+          {
+            id: "explicit-tier",
+            supportsServiceTier: true,
+            params: { serviceTier: "flex" },
+            expected: false,
+          },
+          {
+            id: "explicit-tier-alias",
+            supportsServiceTier: true,
+            params: { service_tier: "default" },
+            expected: false,
+          },
+        ];
+        const result = await listModels({
+          cfg: {
+            agents: {
+              defaults: {
+                model: "custom-provider/opted-in",
+                models: Object.fromEntries(
+                  cases.map(({ id, params }) => [`custom-provider/${id}`, { params }]),
+                ),
+              },
+            },
+          },
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          view: "configured",
+          metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
+          catalog: cases.map(({ id, supportsServiceTier }) => ({
+            id,
+            name: id,
+            provider: "custom-provider",
+            api: "openai-responses",
+            baseUrl: "https://example.invalid/v1",
+            compat: { supportsServiceTier },
+          })),
+        });
+        expect(result.models).toHaveLength(cases.length);
+        for (const { id, expected } of cases) {
+          const row = result.models.find((entry) => entry.id === id);
+          expect(row, id).toBeDefined();
+          expect(row?.supportsFastMode, id).toBe(expected);
+          expect(row).not.toHaveProperty("agentRuntime");
+          expect(row).not.toHaveProperty("serviceTiers");
+          expect(row).not.toHaveProperty("supportsServiceTierRecovery");
+          expect(row).not.toHaveProperty("effectiveFastMode");
+        }
+      },
+    );
+  });
+
   it("keeps the utility runtime on the prepared catalog's plugin generation", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "utility-runtime-generation-" },

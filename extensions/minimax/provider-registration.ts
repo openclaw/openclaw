@@ -47,6 +47,7 @@ import {
   createMinimaxProvider,
   minimaxAuthMethodMetadata,
 } from "./provider-contract-api.js";
+import { resolveFastModeSupport } from "./provider-policy-api.js";
 import { resolveMinimaxThinkingProfile } from "./thinking.js";
 
 const API_PROVIDER_ID = "minimax";
@@ -63,6 +64,7 @@ const MINIMAX_PROVIDER_HOOKS = {
     anthropicModelDropThinkingBlocks: true,
   }),
   ...buildProviderStreamFamilyHooks("minimax-fast-mode"),
+  resolveFastModeSupport,
   resolveReasoningOutputMode: () => "native" as const,
   resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
     resolveMinimaxThinkingProfile(modelId),
