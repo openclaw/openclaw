@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateNpmPackageLock } from "../../scripts/generate-npm-package-lock.mts";
@@ -100,4 +100,45 @@ describe("package manifest preparation", () => {
     expect(await readFile(manifestPath, "utf8")).toBe(edited);
     expect(await restorePackageManifest(root)).toBe(false);
   });
+
+  it.each([false, true])(
+    "recovers v2026.9.8 raw receipts without overwriting edits (%s)",
+    async (edited) => {
+      const root = tempDirs.make("package-manifest-legacy-");
+      const manifestPath = path.join(root, "package.json");
+      const backupPath = path.join(
+        root,
+        ".artifacts",
+        "package-manifest",
+        "package.json.prepack-backup",
+      );
+      const original = {
+        name: "fixture",
+        scripts: { check: "node scripts/crabbox-wrapper.mjs --check" },
+        devDependencies: { local: "workspace:*", tooling: "1.0.0" },
+      };
+      const originalBytes = `${JSON.stringify(original)}\n`;
+      const prepared = {
+        ...original,
+        scripts: { check: "node dist/crabbox-wrapper.js --check" },
+        devDependencies: { tooling: "1.0.0" },
+        ...(edited ? { description: "intervening edit" } : {}),
+      };
+      const currentBytes = `${JSON.stringify(prepared, null, 2)}\n`;
+      await mkdir(path.dirname(backupPath), { recursive: true });
+      await writeFile(backupPath, originalBytes);
+      await writeFile(manifestPath, currentBytes);
+
+      if (edited) {
+        await expect(restorePackageManifest(root)).rejects.toThrow("changed after prepack");
+        expect(await readFile(manifestPath, "utf8")).toBe(currentBytes);
+        expect(await readFile(backupPath, "utf8")).toBe(originalBytes);
+      } else {
+        expect(await restorePackageManifest(root)).toBe(true);
+        expect(await readFile(manifestPath, "utf8")).toBe(originalBytes);
+        expect(await restorePackageManifest(root)).toBe(false);
+      }
+      expect(generateNpmPackageLock).not.toHaveBeenCalled();
+    },
+  );
 });

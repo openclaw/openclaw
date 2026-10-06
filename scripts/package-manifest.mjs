@@ -68,10 +68,15 @@ export async function restorePackageManifest(cwd = process.cwd()) {
     readFile(backupPath, "utf8"),
     readFile(packageJsonPath, "utf8"),
   ]);
-  const { original, prepared } = JSON.parse(receipt);
-  if (typeof original !== "string" || typeof prepared !== "string") {
-    throw new Error(`Invalid package manifest preparation receipt: ${backupPath}`);
-  }
+  const stored = JSON.parse(receipt);
+  const captured =
+    Object.keys(stored).length === 2 &&
+    typeof stored.original === "string" &&
+    typeof stored.prepared === "string";
+  // v2026.9.8 left raw manifests here after interrupted packs. Recover those
+  // using the prior source-only transform, without resolving dependencies.
+  const original = captured ? stored.original : receipt;
+  const prepared = captured ? stored.prepared : preparedPackageManifest(receipt);
   if (current !== original && current !== prepared) {
     throw new Error(
       `Refusing to restore ${PACKAGE_JSON_PATH} because it changed after prepack sanitized it.`,
