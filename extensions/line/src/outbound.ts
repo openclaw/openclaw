@@ -16,7 +16,7 @@ import {
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
@@ -193,7 +193,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
               .map((text) => ({ type: "text" as const, text })),
     );
     const hasText = orderedMessages.some((message) => message.type === "text");
-    const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
+    const mediaUrls = resolveOutboundMediaUrls(payload);
     const mediaOptions = {
       mediaKind: lineData.mediaKind,
       previewImageUrl: lineData.previewImageUrl,
@@ -203,11 +203,15 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
     const shouldSendQuickRepliesInline = !hasText && hasQuickReplies;
     const sendMediaMessages = async () => {
       for (const url of mediaUrls) {
+        const trimmed = url?.trim();
+        if (!trimmed) {
+          continue;
+        }
         await recordResult(
           sendText(to, "", {
             ...sendOptions,
             ...mediaOptions,
-            mediaUrl: url,
+            mediaUrl: trimmed,
           }),
         );
       }
@@ -288,7 +292,11 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       }
       quickReplyMessages.push(...orderedMessages);
       for (const url of mediaUrls) {
-        quickReplyMessages.push(await buildLineMediaMessage(url, mediaOptions, to));
+        const trimmed = url?.trim();
+        if (!trimmed) {
+          continue;
+        }
+        quickReplyMessages.push(await buildLineMediaMessage(trimmed, mediaOptions, to));
       }
       const lastMessage = quickReplyMessages.at(-1);
       if (lastMessage && quickReply) {

@@ -13,7 +13,8 @@ const {
   findGraphUsersByExactIdentity: vi.fn(),
 }));
 
-vi.mock("./graph.js", () => ({
+vi.mock("./graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./graph.js")>()),
   listTeamsByNameWithPageInfo,
   listChannelsForTeamWithPageInfo,
   resolveGraphToken,

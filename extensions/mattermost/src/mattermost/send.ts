@@ -245,7 +245,14 @@ async function resolveMattermostSendContext(to: string, opts: MattermostSendOpts
     allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
     assertRequestCurrent: opts.assertDirectAdapterHandoff,
   });
-  const dmRetryOptions = account.config.dmChannelRetry;
+  const retry = account.config.dmChannelRetry;
+  const dmRetryOptions = retry && {
+    // Snapshot before the user lookup can yield.
+    maxRetries: retry.maxRetries,
+    initialDelayMs: retry.initialDelayMs,
+    maxDelayMs: retry.maxDelayMs,
+    timeoutMs: retry.timeoutMs,
+  };
 
   let channelId: string;
   try {
