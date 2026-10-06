@@ -6,6 +6,7 @@ import {
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
+import { stripUserEnvelopeForDisplay } from "../../../../src/auto-reply/reply/user-envelope-display.js";
 import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
@@ -363,13 +364,22 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
-function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+function stripMessageDisplayMetadata(
+  items: MessageContentItem[],
+  role: string,
+): MessageContentItem[] {
   return items
     .map((item) => {
       if (item.type !== "text" || typeof item.text !== "string") {
         return item;
       }
-      return { ...item, text: stripInboundMetadata(item.text) };
+      return {
+        ...item,
+        text:
+          role.toLowerCase() === "user"
+            ? stripUserEnvelopeForDisplay(item.text)
+            : stripInboundMetadata(item.text),
+      };
     })
     .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
@@ -587,7 +597,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
   const sourceClients = role === "user" ? readMessageClientSources(m) : [];
 
-  content = stripMessageDisplayMetadata(content);
+  content = stripMessageDisplayMetadata(content, role);
   const senderSession = readMessageSenderSession(m.senderSession);
 
   const normalized: NormalizedMessage = {

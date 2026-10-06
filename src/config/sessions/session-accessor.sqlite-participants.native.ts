@@ -7,10 +7,7 @@ import {
   deferOpenClawAgentPostCommitPublication,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  confirmSessionParticipantsSchemaEnsured,
-  ensureSessionParticipantsSchema,
-} from "../../state/openclaw-agent-session-participants-schema.js";
+import { ensureSessionParticipantsSchema } from "../../state/openclaw-agent-session-participants-schema.js";
 import { readUserProfileAliases } from "../../state/user-profiles.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -26,18 +23,16 @@ import { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
 import {
   participantIdentityNamespace,
   mergeParticipantAggregate,
-  type SessionParticipantIdentity,
 } from "./session-participant-identity.js";
-
-export type RecordSessionParticipantResult = "inserted" | "updated" | "capped";
+import type {
+  RecordSessionParticipantResult,
+  SessionParticipantRecordInput,
+} from "./session-sharing-store.types.js";
+export type { RecordSessionParticipantResult } from "./session-sharing-store.types.js";
 
 export function recordSessionParticipant(
   scope: SessionAccessScope,
-  params: {
-    identity: SessionParticipantIdentity;
-    promptedAt?: number;
-    sessionAgentId?: string;
-  },
+  params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
   const actorId = params.identity.id;
   if (!actorId || (params.identity.type === "agent" && actorId === params.sessionAgentId)) {
@@ -53,11 +48,7 @@ export function recordSessionParticipant(
       : undefined;
   const result = runOpenClawAgentWriteTransaction(
     (database) => {
-      if (ensureSessionParticipantsSchema(database.db)) {
-        deferOpenClawAgentPostCommitPublication(database, () =>
-          confirmSessionParticipantsSchemaEnsured(database.db),
-        );
-      }
+      ensureSessionParticipantsSchema(database.db);
       const kysely = getSessionKysely(database.db);
       const participantQuery = kysely
         .selectFrom("session_participants")

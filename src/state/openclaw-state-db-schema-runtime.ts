@@ -1,15 +1,18 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread } from "node:worker_threads";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
 } from "../infra/sqlite-index-schema.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
+import { getSqliteWorkerStateIntegrityAdmission } from "../infra/sqlite-worker-state-context.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { migrateLegacyCronRunLogsToTaskRuns } from "../infra/state-migrations.cron-run-logs.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
+import { captureOpenClawStateIntegrityAdmission } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -67,13 +70,17 @@ export function ensureOpenClawStateRuntimeSchema(
   busyTimeoutMs = OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   initializeNativeOnly = false,
 ): string[] {
+  // Workers borrow host generation proof, never mint a competing receipt in their isolate.
+  const integrity =
+    getSqliteWorkerStateIntegrityAdmission() ??
+    (isMainThread ? captureOpenClawStateIntegrityAdmission(pathname) : undefined);
   if (isExistingOpenClawStateSchema(pathname, db)) {
-    assertExistingOpenClawStateRuntimeSchema(db, pathname);
+    assertExistingOpenClawStateRuntimeSchema(db, pathname, integrity);
     assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
     return [];
   }
   try {
-    if (isOpenClawStateSchemaFastPathEligible(db, pathname)) {
+    if (isOpenClawStateSchemaFastPathEligible(db, pathname, integrity)) {
       // A claim made during validation must not retain a writable handle.
       assertOpenClawStateWriteAllowed({ database: db, databasePath: pathname, env });
       return [];
@@ -110,7 +117,11 @@ export function ensureOpenClawStateRuntimeSchema(
             OPENCLAW_STATE_SCHEMA_SQL,
             {
               allowMissingColumns: true,
-              validateAfterRepair: () => assertCurrentStateRuntimeSchema(db, pathname),
+              validateAfterRepair: () => {
+                // Index repair precedes additive-column convergence in this transaction.
+                assertCanonicalStateSchemaShape(db, pathname);
+                assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+              },
             },
           );
           ensureAdditiveStateColumns(db, "runtime");

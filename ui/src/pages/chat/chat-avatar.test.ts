@@ -465,7 +465,6 @@ describe("refreshChatAvatar", () => {
     const fetchAvatar = vi.spyOn(globalThis, "fetch");
     await refreshChatAvatar(host);
     expect(host.chatAvatarUrl).toBeNull();
-    expect(host.chatAvatarSource).toBe("https://example.com/avatar.png");
     expect(host.chatAvatarReason).toBe("missing");
     expect(fetchAvatar).not.toHaveBeenCalled();
   });

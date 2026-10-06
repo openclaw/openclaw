@@ -32,18 +32,23 @@ const credentialLeaseSchema = z.object({
   expiresAtMs: z.number().int(),
 });
 
-const credentialRecordSchema = z.object({
-  credentialId: z.string().min(1),
-  credentialFingerprint: z.string().optional(),
-  kind: z.string().min(1),
-  status: credentialStatusSchema,
-  createdAtMs: z.number().int(),
-  updatedAtMs: z.number().int(),
-  lastLeasedAtMs: z.number().int(),
-  note: z.string().optional(),
-  lease: credentialLeaseSchema.optional(),
-  payload: z.unknown().optional(),
-});
+const credentialRecordSchema = z
+  .object({
+    credentialId: z.string().min(1),
+    credentialFingerprint: z.string().optional(),
+    kind: z.string().min(1),
+    status: credentialStatusSchema,
+    createdAtMs: z.number().int(),
+    updatedAtMs: z.number().int(),
+    lastLeasedAtMs: z.number().int(),
+    note: z.string().optional(),
+    lease: credentialLeaseSchema.optional(),
+    payload: z.unknown().optional(),
+  })
+  .transform((credential) => ({
+    ...credential,
+    credentialFingerprint: fingerprintQaCredentialId(credential.credentialId),
+  }));
 
 const addCredentialResponseSchema = z.object({
   status: z.literal("ok"),
@@ -109,11 +114,6 @@ type QaCredentialDoctorCheck = {
   status: "fail" | "pass" | "warn";
 };
 
-type QaCredentialDoctorResult = {
-  checks: QaCredentialDoctorCheck[];
-  status: "fail" | "pass" | "warn";
-};
-
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   return parseQaCredentialPositiveIntegerEnv({
     env,
@@ -162,16 +162,6 @@ function resolveAdminAuthToken(env: NodeJS.ProcessEnv): string {
     code: "MISSING_MAINTAINER_SECRET",
     message: "Missing OPENCLAW_QA_CONVEX_SECRET_MAINTAINER for qa credential admin commands.",
   });
-}
-
-function summarizeQaCredentialDoctorStatus(checks: readonly QaCredentialDoctorCheck[]) {
-  if (checks.some((check) => check.status === "fail")) {
-    return "fail" as const;
-  }
-  if (checks.some((check) => check.status === "warn")) {
-    return "warn" as const;
-  }
-  return "pass" as const;
 }
 
 export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {}) {
@@ -253,8 +243,12 @@ export async function diagnoseQaCredentialBroker(options: AdminBaseOptions = {})
 
   return {
     checks,
-    status: summarizeQaCredentialDoctorStatus(checks),
-  } satisfies QaCredentialDoctorResult;
+    status: checks.some((check) => check.status === "fail")
+      ? "fail"
+      : checks.some((check) => check.status === "warn")
+        ? "warn"
+        : "pass",
+  } as const;
 }
 
 function resolveAdminConfig(options: AdminBaseOptions, operation: "add" | "remove" | "list") {
@@ -384,7 +378,7 @@ function normalizeLimit(value: number | undefined) {
   if (value === undefined) {
     return undefined;
   }
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+  if (!Number.isInteger(value) || value < 1) {
     throw new QaCredentialAdminError({
       code: "INVALID_ARGUMENT",
       message: "--limit must be a positive integer.",
@@ -393,16 +387,9 @@ function normalizeLimit(value: number | undefined) {
   return value;
 }
 
-function withQaCredentialFingerprint(credential: QaCredentialRecord): QaCredentialRecord {
-  return {
-    ...credential,
-    credentialFingerprint: fingerprintQaCredentialId(credential.credentialId),
-  };
-}
-
 export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
   const config = resolveAdminConfig(options, "add");
-  const result = await postJson({
+  return postJson({
     ...config,
     responseSchema: addCredentialResponseSchema,
     body: {
@@ -413,15 +400,11 @@ export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
       actorId: config.actorId,
     },
   });
-  return {
-    ...result,
-    credential: withQaCredentialFingerprint(result.credential),
-  };
 }
 
 export async function removeQaCredentialSet(options: RemoveQaCredentialSetOptions) {
   const config = resolveAdminConfig(options, "remove");
-  const result = await postJson({
+  return postJson({
     ...config,
     responseSchema: removeCredentialResponseSchema,
     body: {
@@ -429,17 +412,13 @@ export async function removeQaCredentialSet(options: RemoveQaCredentialSetOption
       actorId: config.actorId,
     },
   });
-  return {
-    ...result,
-    credential: withQaCredentialFingerprint(result.credential),
-  };
 }
 
 export async function listQaCredentialSets(options: ListQaCredentialSetsOptions) {
   const config = resolveAdminConfig(options, "list");
   const status = normalizeStatus(options.status);
   const limit = normalizeLimit(options.limit);
-  const result = await postJson({
+  return postJson({
     ...config,
     responseSchema: listCredentialsResponseSchema,
     body: {
@@ -449,8 +428,4 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
       ...(limit !== undefined ? { limit } : {}),
     },
   });
-  return {
-    ...result,
-    credentials: result.credentials.map(withQaCredentialFingerprint),
-  };
 }

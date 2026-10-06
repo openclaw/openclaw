@@ -12,6 +12,7 @@ import {
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { buildRuntimeContextCustomMessage } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { SessionManager } from "../sessions/session-manager.js";
@@ -186,7 +187,7 @@ describe("canonical CLI history", () => {
       }
       appendNote("CURRENT_NOTE");
       appendNote("EXCLUDED_NOTE", { excludeFromContext: true });
-      appendNote("TRANSIENT_NOTE", { customType: "openclaw.runtime-context" });
+      manager.appendMessage(buildRuntimeContextCustomMessage("TRANSIENT_NOTE")!);
       const before = structuredClone(manager.getEntries());
       for (const owner of [params, { ...params, sessionManager: manager }]) {
         const context = await loadCliSessionPromptContext(owner);

@@ -19,6 +19,7 @@ const SESSION_SQLITE_WARNING_ISSUE_CODES = new Set([
   "legacy_index_informational",
   "plugin_migration_source_retained",
   "retained_plugin_source_index_rebuilt",
+  "retained_empty_transcript_superseded",
   "retained_plugin_source_conflict",
   "transcript_archive_failed",
   "transcript_malformed",

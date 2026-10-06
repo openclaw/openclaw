@@ -1,5 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Insertable, Selectable } from "kysely";
+import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -10,7 +10,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import { allocateHostPort } from "./cell-profile.js";
 import type {
   FleetCellRecord,
-  FleetRegistryWriteOperations,
+  FleetCellOperationName,
   ReserveFleetCellParams,
 } from "./registry.types.js";
 
@@ -68,18 +68,6 @@ function rowToRecord(row: FleetCellRow): FleetCellRecord {
   };
 }
 
-function recordToRow(record: FleetCellRecord): Insertable<FleetCellsTable> {
-  return {
-    tenant_id: record.tenantId,
-    created_at_ms: record.createdAtMs,
-    image: record.image,
-    runtime: record.runtime,
-    host_port: record.hostPort,
-    container_name: record.containerName,
-    data_dir: record.dataDir,
-  };
-}
-
 export function listFleetCellsInDatabase(db: DatabaseSync): FleetCellRecord[] {
   if (!tableExists(db, "fleet_cells")) {
     return [];
@@ -134,7 +122,18 @@ export function reserveFleetCellInDatabase(
     containerName: params.containerName,
     dataDir: params.dataDir,
   };
-  executeSqliteQuerySync(db, kysely.insertInto("fleet_cells").values(recordToRow(record)));
+  executeSqliteQuerySync(
+    db,
+    kysely.insertInto("fleet_cells").values({
+      tenant_id: record.tenantId,
+      created_at_ms: record.createdAtMs,
+      image: record.image,
+      runtime: record.runtime,
+      host_port: record.hostPort,
+      container_name: record.containerName,
+      data_dir: record.dataDir,
+    }),
+  );
   return record;
 }
 
@@ -154,7 +153,7 @@ export function updateFleetCellImageInDatabase(
 
 export function acquireFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.acquire"]["input"],
+  params: { tenantId: string; operation: FleetCellOperationName; owner: string; nowMs?: number },
 ): void {
   const nowMs = params.nowMs ?? Date.now();
   const expiresAt = nowMs + FLEET_OPERATION_LEASE_TTL_MS;
@@ -213,7 +212,7 @@ export function acquireFleetCellOperationInDatabase(
 
 export function heartbeatFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.heartbeat"]["input"],
+  params: { tenantId: string; owner: string; nowMs?: number },
 ): void {
   const nowMs = params.nowMs ?? Date.now();
   const expiresAt = nowMs + FLEET_OPERATION_LEASE_TTL_MS;
@@ -234,7 +233,7 @@ export function heartbeatFleetCellOperationInDatabase(
 
 export function releaseFleetCellOperationInDatabase(
   db: DatabaseSync,
-  params: FleetRegistryWriteOperations["fleet.operation.release"]["input"],
+  params: { tenantId: string; owner: string },
 ): void {
   executeSqliteQuerySync(
     db,

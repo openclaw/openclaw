@@ -9,15 +9,18 @@ import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
-import type {
-  ChatQueueItem,
-  ChatQueueDisplayItem,
-  HumanMention,
-} from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
+import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
   queue: ChatQueueItem[];
@@ -28,14 +31,7 @@ type ChatQueueProps = {
   onQueueRetry?: (id: string) => void;
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, targetId: string) => void;
-  onQueueEdit?: (id: string) => void;
-  onQueueEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
-  onQueueEditSubmit?: () => void;
-  onQueueEditCancel?: () => void;
-  editingId?: string | null;
-  editingText?: string;
-  editingMentions?: readonly HumanMention[];
-  editingSource?: ChatQueueItem;
+  queuedEdit?: ChatComposerProps["queuedEdit"];
   onQueueRemove: (id: string) => void;
 };
 
@@ -169,6 +165,7 @@ function sendStateLabel(item: ChatQueueItem, offline: boolean): string | null {
 }
 
 export function renderChatQueue(props: ChatQueueProps) {
+  const edit = props.queuedEdit;
   const visibleQueue = (props.displayQueue ?? props.queue).filter(
     (item) =>
       item.sendState !== "submitting" &&
@@ -178,11 +175,11 @@ export function renderChatQueue(props: ChatQueueProps) {
   // A peer can retire the source while this pane is away. Render its retained
   // correction for recovery/cancel; this never recreates a row in the outbox.
   if (
-    props.editingSource &&
-    props.editingId === props.editingSource.id &&
-    !visibleQueue.some((item) => item.id === props.editingId)
+    edit?.source &&
+    edit.editingId === edit.source.id &&
+    !visibleQueue.some((item) => item.id === edit.editingId)
   ) {
-    visibleQueue.push(props.editingSource);
+    visibleQueue.push(edit.source);
   }
   if (!visibleQueue.length) {
     return nothing;
@@ -193,7 +190,7 @@ export function renderChatQueue(props: ChatQueueProps) {
   const movableSegments = chatQueueMovableSegments(
     props.queue,
     (item) =>
-      visibleIds.has(item.id) && isMovableChatQueueItem(item) && item.id !== props.editingId,
+      visibleIds.has(item.id) && isMovableChatQueueItem(item) && item.id !== edit?.editingId,
   ).map((rows) => rows.map((row) => row.id));
   const reorder: ChatQueueReorder = {
     segments: movableSegments,
@@ -283,8 +280,11 @@ function renderChatQueueItem(
   props: ChatQueueProps,
   reorder: ChatQueueReorder,
 ) {
+  const edit = props.queuedEdit;
   const authorAvatar = renderChatAuthorAvatar(item.sender);
   const hasAuthorAvatar = authorAvatar !== nothing;
+  const images = item.attachments?.filter((attachment) => attachment.mimeType.startsWith("image/"));
+  const previewUrl = images?.[0] ? getChatAttachmentPreviewUrl(images[0]) : null;
   const failed =
     item.sendState === "failed" || item.sendState === "unconfirmed" || item.sendState === "held";
   const reconnecting =
@@ -292,9 +292,9 @@ function renderChatQueueItem(
   const stateLabel = sendStateLabel(item, !item.serverQueued && props.offline === true);
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
-  const editing = props.editingId === item.id;
-  const mentionText = editing ? (props.editingText ?? item.text) : item.text;
-  const mentions = editing ? props.editingMentions : item.mentions;
+  const editing = edit?.editingId === item.id;
+  const mentionText = editing ? (edit?.editingText ?? item.text) : item.text;
+  const mentions = editing ? edit?.editingMentions : item.mentions;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
   const showsSteer =
@@ -312,9 +312,8 @@ function renderChatQueueItem(
   const canMove = showsHandle && moveIndex >= 0 && segment.length > 1;
   // Every row keeps its handle and action slots in every state and goes inert
   // instead of empty while an edit is open, so no column moves mid-flow.
-  const editable =
-    Boolean(props.onQueueEdit) && isMovableChatQueueItem(item) && !item.localCommandName;
-  const canEdit = editable && !props.editingId;
+  const editable = Boolean(edit?.onEdit) && isMovableChatQueueItem(item) && !item.localCommandName;
+  const canEdit = editable && !edit?.editingId;
   const text =
     item.text ||
     (item.attachments?.length
@@ -323,7 +322,7 @@ function renderChatQueueItem(
   // The leading glyph identifies the object, not its transient delivery state.
   // Row tone, badges, and actions carry failure, review, reconnect, and steer.
   const leadingIcon = queueWaitingIcon;
-  const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${steered ? " chat-queue__item--steered" : ""}${
+  const itemClass = `chat-queue__item${hasAuthorAvatar ? "" : " chat-queue__item--no-avatar"}${previewUrl ? " chat-queue__item--with-images" : ""}${steered ? " chat-queue__item--steered" : ""}${
     failed ? " chat-queue__item--failed" : ""
   }${reconnecting ? " chat-queue__item--reconnect" : ""}${
     editing ? " chat-queue__item--editing" : ""
@@ -356,7 +355,7 @@ function renderChatQueueItem(
               queueDoubleClickEditRows.delete(row);
               event.stopPropagation();
               markQueueEditFocus(row, false);
-              props.onQueueEdit?.(item.id);
+              edit?.onEdit?.(item.id);
             }
           : undefined
       }
@@ -446,11 +445,25 @@ function renderChatQueueItem(
       }
       ${authorAvatar}
       ${
+        previewUrl && images
+          ? html`<img
+              class="chat-queue__images"
+              src=${previewUrl}
+              alt=${t("chat.queue.imageCount", { count: String(images.length) })}
+              draggable="false"
+              width="24"
+              height="24"
+              loading="lazy"
+              decoding="async"
+            />`
+          : nothing
+      }
+      ${
         editing
           ? html`<textarea
               class="chat-queue__edit-input"
               rows="1"
-              ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
+              ${ref((element) => mountQueueEditInput(element, edit?.editingText ?? item.text))}
               aria-label=${t("chat.queue.editQueuedMessage")}
               @beforeinput=${(event: InputEvent) => {
                 if (event.currentTarget instanceof HTMLTextAreaElement) {
@@ -467,7 +480,7 @@ function renderChatQueueItem(
                   const textarea = event.currentTarget;
                   fitQueueEditInput(textarea);
                   if (mentions?.length) {
-                    props.onQueueEditChange?.(
+                    edit?.onEditChange?.(
                       textarea.value,
                       updateHumanMentions(
                         mentionText,
@@ -477,24 +490,27 @@ function renderChatQueueItem(
                       ),
                     );
                   } else {
-                    props.onQueueEditChange?.(textarea.value);
+                    edit?.onEditChange?.(textarea.value);
                   }
                   queueMentionInputs.delete(textarea);
                 }
               }}
               @keydown=${(event: KeyboardEvent) => {
-                if (event.isComposing || event.keyCode === 229) {
+                if (isComposingKeyboardEvent(event)) {
                   return;
                 }
                 if (event.key === "Escape") {
                   event.preventDefault();
                   event.stopPropagation();
-                  props.onQueueEditCancel?.();
+                  edit?.onCancel();
                 } else if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
-                  props.onQueueEditSubmit?.();
+                  edit?.onEditSubmit?.();
                 }
               }}
+              @compositionend=${recordCompositionEnd}
+              @keyup=${clearCompositionEnd}
+              @blur=${clearCompositionEnd}
             ></textarea>`
           : html`<span class="chat-queue__copy">
               <span class="chat-queue__text" title=${text}>${text}</span>
@@ -561,7 +577,7 @@ function renderChatQueueItem(
                   class="chat-queue__edit-submit"
                   type="button"
                   aria-label=${t("chat.runControls.sendMessage")}
-                  @click=${() => props.onQueueEditSubmit?.()}
+                  @click=${() => edit?.onEditSubmit?.()}
                 >
                   ${icons.check}
                 </button>
@@ -569,7 +585,7 @@ function renderChatQueueItem(
                   class="chat-queue__edit-cancel"
                   type="button"
                   aria-label=${t("chat.queue.cancelEdit")}
-                  @click=${() => props.onQueueEditCancel?.()}
+                  @click=${() => edit?.onCancel()}
                 >
                   ${icons.x}
                 </button>
@@ -584,7 +600,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
+                    ?disabled=${item.serverQueued && !props.canRemoveServerQueued}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.
@@ -614,7 +630,7 @@ function renderChatQueueItem(
                         dropdown instanceof Element ? dropdown.closest(".chat-queue__item") : null;
                       const keyboard = selectedItem.matches(":focus-visible");
                       markQueueEditFocus(row, keyboard);
-                      props.onQueueEdit?.(item.id);
+                      edit?.onEdit?.(item.id);
                     }
                   }}
                 >
@@ -648,7 +664,7 @@ function renderChatQueueItem(
                       class="chat-queue__remove"
                       type="button"
                       aria-label=${t("chat.mentions.remove")}
-                      @click=${() => props.onQueueEditChange?.(mentionText, [])}
+                      @click=${() => edit?.onEditChange?.(mentionText, [])}
                     >
                       ${icons.x}
                     </button>`

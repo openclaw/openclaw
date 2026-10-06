@@ -40,7 +40,7 @@ import {
 import { isWSL } from "../infra/wsl.js";
 import { ExitError, type RuntimeEnv } from "../runtime.js";
 import { sleep } from "../utils.js";
-import { buildGatewayInstallPlan, gatewayInstallErrorHint } from "./daemon-install-helpers.js";
+import { gatewayInstallErrorHint } from "./daemon-install-helpers.js";
 import { GATEWAY_DAEMON_RUNTIME_OPTIONS, type GatewayDaemonRuntime } from "./daemon-runtime.js";
 import { buildGatewayRuntimeHints } from "./doctor-format.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -53,6 +53,7 @@ import {
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
+import { prepareGatewayServiceInstall } from "./gateway-service-setup.js";
 import { resolveGatewaySetupRuntime } from "./gateway-setup-runtime.js";
 import { formatGatewayClosedDiagnostic, formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
@@ -239,6 +240,13 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
   if (params.healthOk) {
+    if (process.platform === "linux" && (await shouldManageGatewayService())) {
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: process.env });
+      const refusal = state.runtime?.systemd?.startRefusal;
+      if (refusal) {
+        note(refusal.message, "Gateway");
+      }
+    }
     await maybeReportEstablishedGatewayClients(params.cfg, params.options.deep ?? false);
     return;
   }
@@ -281,6 +289,11 @@ export async function maybeRepairGatewayDaemon(params: {
   if (serviceOwner) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
     note(formatInstallOwnerMessage(serviceOwner), "Gateway");
+    return;
+  }
+  const startRefusal = serviceState.runtime?.systemd?.startRefusal;
+  if (startRefusal) {
+    note(startRefusal.message, "Gateway");
     return;
   }
   if (serviceState.loadState.status === "unknown") {
@@ -429,24 +442,16 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
       const port = resolveGatewayPort(params.cfg, process.env);
-      const plan = await buildGatewayInstallPlan({
-        env: selection.env,
+      const installation = await prepareGatewayServiceInstall({
+        service,
+        selection,
         port,
-        runtime: selection.runtime,
-        runtimeExplicit: selection.runtimeExplicit,
-        runtimePath: selection.runtimePath,
-        pinnedRuntimePath: selection.pinnedRuntimePath,
         existingCommand: serviceState.command,
         warn: (message, title) => note(message, title),
         config: params.cfg,
       });
       try {
-        await service.install({
-          env: process.env,
-          stdout: process.stdout,
-          ...plan,
-          runtimePinUpdate: selection.runtimePinUpdate,
-        });
+        await installation.install();
       } catch (err) {
         note(`Gateway service install failed: ${String(err)}`, "Gateway");
         note(gatewayInstallErrorHint(), "Gateway");
@@ -455,7 +460,7 @@ export async function maybeRepairGatewayDaemon(params: {
     return;
   }
 
-  noteGatewayRuntime(serviceRuntime, process.env);
+  noteGatewayRuntime(serviceRuntime, serviceEnv);
 
   if (serviceRuntime?.status !== "running") {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
@@ -474,6 +479,15 @@ export async function maybeRepairGatewayDaemon(params: {
       serviceRepairPolicy,
     );
     if (start) {
+      if (process.platform === "win32" && serviceRuntime?.state === "Disabled") {
+        try {
+          await service.start({ env: serviceEnv, stdout: process.stdout });
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          note(`Gateway service start failed: ${detail}`, "Gateway");
+        }
+        return;
+      }
       const restartResult = await restartGatewayService();
       if (!restartResult) {
         return;

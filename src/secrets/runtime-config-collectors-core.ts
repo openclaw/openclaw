@@ -26,7 +26,7 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "./runtime-media-secret-owner.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type SecretAssignmentOwner,
   type ResolverContext,
   type SecretDefaults,

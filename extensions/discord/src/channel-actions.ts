@@ -55,23 +55,6 @@ function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string 
   return target ? normalizeDiscordMessagingTarget(target) : undefined;
 }
 
-function matchesCurrentDiscordThread(params: {
-  args: Record<string, unknown>;
-  toolContext: {
-    currentChannelId?: string;
-    currentMessagingTarget?: string;
-  };
-}): boolean {
-  const requestedTarget = resolveDiscordThreadReplyTarget(params.args);
-  if (!requestedTarget) {
-    return false;
-  }
-  return matchesDiscordToolContextTarget({
-    target: requestedTarget,
-    toolContext: params.toolContext,
-  });
-}
-
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
   () => import("./actions/handle-action.js"),
 );
@@ -223,8 +206,10 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       aliases: ["threadId"],
       deliveryTargetAliases: ["threadId"],
       resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
-      matchesCurrentConversation: ({ args, toolContext }) =>
-        matchesCurrentDiscordThread({ args, toolContext }),
+      matchesCurrentConversation: ({ args, toolContext }) => {
+        const target = resolveDiscordThreadReplyTarget(args);
+        return target ? matchesDiscordToolContextTarget({ target, toolContext }) : false;
+      },
     },
   },
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
@@ -285,45 +270,9 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       },
     };
   },
-  handleAction: async ({
-    action,
-    params,
-    cfg,
-    accountId,
-    requesterAccountId,
-    requesterSenderId,
-    senderIsOwner,
-    toolContext,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    conversationReadOrigin,
-    reply,
-    progressSnapshot,
-    assertDirectAdapterHandoff,
-  }) => {
-    return await (
-      await loadDiscordChannelActionsRuntime()
-    ).handleDiscordMessageAction({
-      action,
-      params,
-      cfg,
-      accountId,
-      requesterSenderId,
-      senderIsOwner,
-      toolContext,
-      mediaAccess,
-      mediaLocalRoots,
-      mediaReadFile,
+  handleAction: async ({ channel: _channel, sessionKey, ...ctx }) =>
+    (await loadDiscordChannelActionsRuntime()).handleDiscordMessageAction({
+      ...ctx,
       ...(sessionKey ? { sessionKey } : {}),
-      ...(inboundEventKind ? { inboundEventKind } : {}),
-      ...(requesterAccountId ? { requesterAccountId } : {}),
-      ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-      ...(reply ? { reply } : {}),
-      ...(progressSnapshot ? { progressSnapshot } : {}),
-      ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
-    });
-  },
+    }),
 };

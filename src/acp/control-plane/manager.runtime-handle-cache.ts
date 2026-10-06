@@ -143,7 +143,7 @@ export class ManagerRuntimeHandleCache {
       });
       if (isRuntimeStatusUnavailable(status)) {
         logVerbose(
-          `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status probe: ${status.summary ?? "status unavailable"}`,
+          `acp-manager: evicting cached runtime handle for ${params.sessionKey} after unhealthy status check: ${status.summary ?? "status unavailable"}`,
         );
         return false;
       }
@@ -153,7 +153,7 @@ export class ManagerRuntimeHandleCache {
         throw error;
       }
       logVerbose(
-        `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status probe failed: ${String(error)}`,
+        `acp-manager: evicting cached runtime handle for ${params.sessionKey} after status check failed: ${String(error)}`,
       );
       return false;
     }

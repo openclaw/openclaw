@@ -4,10 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -16,9 +14,17 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import {
+  withIncognitoSessionActor,
+  withIncognitoSessionBinding,
+} from "../config/sessions/session-incognito-binding.js";
+import type { SessionEntry } from "../config/sessions/types.js";
+import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
+import {
   beginSessionWorkAdmission,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
+import { deleteIncognitoSessionForReset } from "./session-reset-incognito.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -27,6 +33,7 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sessionLifecycleHookMocks,
   writeSingleLineSession,
   sessionStoreEntry,
   directSessionReq,
@@ -229,6 +236,12 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
   for (const sessionId of [canonicalSessionId, aliasSessionId]) {
     await replaceTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }, [
       { type: "session", id: sessionId, content: sessionId },
+      {
+        type: "message",
+        id: `${sessionId}-message`,
+        parentId: null,
+        message: { role: "user", content: `content for ${sessionId}` },
+      },
     ]);
   }
 
@@ -253,6 +266,25 @@ test("sessions.delete removes a locked plugin-owned session from its persisted a
       loadTranscriptEvents({ sessionKey: requestedKey, sessionId, storePath }),
     ).resolves.toEqual([]);
   }
+  const endCall = sessionLifecycleHookMocks.runSessionEnd.mock.calls.at(0);
+  if (!endCall) {
+    throw new Error("expected session_end hook call");
+  }
+  const [endEvent, endContext] = endCall;
+  const endedTranscript = readAttachedSessionEndTranscriptSourceForTest(endContext);
+  expect(endedTranscript.available).toBe(true);
+  if (!endedTranscript.available || !endEvent?.sessionId) {
+    throw new Error("expected archived ended transcript source");
+  }
+  await expect(
+    endedTranscript.readTail({ maxMessages: 10, maxBytes: 64 * 1_024 }),
+  ).resolves.toMatchObject({
+    messages: [
+      expect.objectContaining({ role: "user", content: `content for ${endEvent.sessionId}` }),
+    ],
+    totalMessages: 1,
+    truncated: false,
+  });
 });
 
 test.each(["session id", "updated at"] as const)(
@@ -282,7 +314,7 @@ test.each(["session id", "updated at"] as const)(
     let releaseBlockingMutation = () => {};
     const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
       createDeferred();
-    const blockingMutation = runExclusiveSessionLifecycleMutation({
+    const blockingMutation = runExclusiveSessionLifecycleMutation("delete", {
       scope: storePath,
       identities: [sessionKey],
       run: async () => {
@@ -320,36 +352,16 @@ test.each(["session id", "updated at"] as const)(
   },
 );
 
-test.each(["runtime loading", "cleanup"] as const)(
-  "sessions.delete rejects a same-key successor created during %s without a caller identity guard",
-  async (phase) => {
-    const sessionKey = "agent:main:cleanup-successor";
-    const { storePath } = await createSessionStoreDir();
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("original-session") } });
-    const replace = () => {
-      replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry("successor-session"));
-    };
-    const shared = await import("./server-methods/sessions-shared.js");
-    const loadRuntime = shared.loadSessionsRuntimeModule;
-    const loading =
-      phase === "runtime loading"
-        ? vi.spyOn(shared, "loadSessionsRuntimeModule").mockImplementationOnce(async () => {
-            const runtime = await loadRuntime();
-            replace();
-            return runtime;
-          })
-        : undefined;
-    if (phase === "cleanup") {
-      bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => replace());
-    }
-    try {
-      await expectSessionDeleteChanged({ key: sessionKey });
-      expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("successor-session");
-    } finally {
-      loading?.mockRestore();
-    }
-  },
-);
+test("sessions.delete rejects a same-key successor created during cleanup without a caller identity guard", async () => {
+  const sessionKey = "agent:main:cleanup-successor";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("original-session") } });
+  bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
+    replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry("successor-session"));
+  });
+  await expectSessionDeleteChanged({ key: sessionKey });
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("successor-session");
+});
 
 test("sessions.delete includes cleanup-owned row changes in its guarded deletion", async () => {
   const sessionKey = "agent:main:cron:cleanup";
@@ -641,11 +653,11 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
       }),
     },
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:acp-parent",
     meta: acpMeta("agent:main:acp-parent"),
   });
-  writeAcpSessionMetaForMigration({
+  seedCanonicalAcpSessionMeta({
     sessionKey: "agent:main:acp-child",
     meta: acpMeta("agent:main:acp-child"),
   });
@@ -731,4 +743,111 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   ).toEqual([]);
 
   ws.close();
+});
+
+test("sessions.delete retains full actor ownership and refreshes metadata changed by cleanup", async () => {
+  await createSessionStoreDir();
+  const authority = { assertCurrent() {} };
+  const actor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    authority,
+  });
+  expect(actor).toBeDefined();
+  if (!actor) {
+    throw new Error("Expected an incognito actor");
+  }
+  const sessionKey = "agent:main:dashboard:incognito-delete-composition";
+  const entry = {
+    sessionId: "delete-composition",
+    lifecycleRevision: "initial",
+    updatedAt: 1,
+    incognito: true,
+    modelSelectionLocked: true,
+    pluginOwnerId: "synthetic-plugin",
+  } satisfies SessionEntry;
+  try {
+    await actor.sessions.create(authority, { sessionKey, entry });
+    browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockImplementationOnce(async () => {
+      await replaceSessionEntry(
+        { agentId: actor.agentId, storePath: actor.path, sessionKey },
+        {
+          ...entry,
+          updatedAt: 2,
+          label: "Cleanup metadata",
+        },
+      );
+      return 0;
+    });
+    const result = await withIncognitoSessionActor(actor, () =>
+      directSessionReq<{ deleted: boolean }>("sessions.delete", { key: sessionKey }),
+    );
+    expect(result.error).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).toHaveBeenCalledOnce();
+    expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
+  } finally {
+    await actor.close();
+  }
+});
+
+test("reset deletion settles after scheduler abort and parent release during its before-delete hook", async () => {
+  await createSessionStoreDir();
+  const authority = { assertCurrent() {} };
+  const actor = await captureOpenClawAgentDatabaseExecution({
+    kind: "ephemeral",
+    agentId: "main",
+    authority,
+  });
+  if (!actor) {
+    throw new Error("Expected an incognito actor");
+  }
+  try {
+    const sessionKey = "agent:main:dashboard:incognito-reset-composition";
+    const entry = {
+      sessionId: "reset-composition",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+      incognito: true,
+    } satisfies SessionEntry;
+    const { entry: createdEntry } = await actor.sessions.create(authority, { sessionKey, entry });
+    if (!createdEntry) {
+      throw new Error("Expected the created incognito entry");
+    }
+    const borrowed = await captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: actor.agentId,
+      authority,
+      existingOnly: true,
+    });
+    if (!borrowed) {
+      throw new Error("Expected the existing incognito actor");
+    }
+    const controller = new AbortController();
+    let released: Promise<void> | undefined;
+    try {
+      await expect(
+        withIncognitoSessionBinding({ actor: borrowed, admissionSignal: controller.signal }, () =>
+          deleteIncognitoSessionForReset({
+            key: sessionKey,
+            agentId: actor.agentId,
+            storePath: actor.path,
+            target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+            entry: createdEntry,
+            commitGuard() {},
+            beforeDelete: async () => {
+              controller.abort(new Error("Scheduler closing"));
+              released = borrowed.release();
+            },
+          }),
+        ),
+      ).rejects.toThrow("reference is released");
+      await released;
+      expect((await actor.sessions.read(authority, { sessionKey })).entry).toBeUndefined();
+    } finally {
+      await borrowed.release();
+    }
+  } finally {
+    await actor.close();
+  }
 });

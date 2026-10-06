@@ -235,6 +235,21 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       throw new Error("spawn argv cannot be empty");
     }
     const resolvedArgs = input.mode === "child" ? input.resolveArgs?.() : undefined;
+    const argv =
+      input.mode === "anchored-shell"
+        ? []
+        : resolvedArgs
+          ? [...input.argv, ...resolvedArgs]
+          : input.argv;
+    if (
+      argv.some((argument) => argument.includes("\0")) ||
+      (input.mode === "child" && input.argv0?.includes("\0")) ||
+      (input.mode === "anchored-shell" && input.command.includes("\0"))
+    ) {
+      throw new Error(
+        "Execution command and arguments must not contain NUL bytes. Remove them and retry.",
+      );
+    }
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
@@ -366,6 +381,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       const construction = {
         assertCurrent: input.assertCurrent,
         beforeSpawn: input.beforeSpawn,
+        initiateSpawn: input.initiateSpawn,
         cwd: input.cwd,
         env: input.env,
         abortSignal: constructionAbort.signal,
@@ -375,8 +391,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         input.mode === "pty"
           ? createPtyAdapter({
               ...construction,
-              shell: expectDefined(input.argv[0], "spawn executable"),
-              args: input.argv.slice(1),
+              shell: expectDefined(argv[0], "spawn executable"),
+              args: argv.slice(1),
             }).then((adapter) => ({ adapter, ready: Promise.resolve() }))
           : input.mode === "anchored-shell"
             ? createChildAdapter({
@@ -386,7 +402,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             : createChildAdapter({
                 ...construction,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
-                argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
+                argv,
                 argv0: input.argv0,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,
@@ -553,10 +569,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         // Windows has no catchable SIGTERM equivalent: the adapter implements it
         // with asynchronous taskkill, so waiting the cleanup grace only delays an
         // already-expired deadline before the same forced tree termination.
-        if (
-          process.platform === "win32" &&
-          (reason === "overall-timeout" || reason === "no-output-timeout")
-        ) {
+        if (process.platform === "win32" && isTimeoutReason(reason)) {
           adapter.kill("SIGKILL");
           return;
         }
@@ -569,31 +582,29 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         forceKillTimer.unref?.();
       };
 
-      const waitOutcome = Promise.allSettled([
-        (async (): Promise<RunExit> => {
-          const result = await adapter.wait();
-          const terminalReason = forcedReason;
-          settleResult(adapter);
+      const waitPromise = (async (): Promise<RunExit> => {
+        const result = await adapter.wait();
+        const terminalReason = forcedReason;
+        settleResult(adapter);
 
-          const reason: TerminationReason =
-            terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
-          const exit: RunExit = {
-            reason,
-            exitCode: result.code,
-            exitSignal: result.signal,
-            oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
-            durationMs: Date.now() - startedAtMs,
-            ...captured,
-            timedOut: isTimeoutReason(reason),
-            noOutputTimedOut: terminalReason === "no-output-timeout",
-          };
-          return exit;
-        })().finally(() => {
-          if (!resultSettled) {
-            settleResult(adapter);
-          }
-        }),
-      ]);
+        const reason: TerminationReason =
+          terminalReason ?? (result.signal != null ? ("signal" as const) : ("exit" as const));
+        return {
+          reason,
+          exitCode: result.code,
+          exitSignal: result.signal,
+          oomScoreWrapperSelected: adapter.oomScoreWrapperSelected === true,
+          durationMs: Date.now() - startedAtMs,
+          ...captured,
+          timedOut: isTimeoutReason(reason),
+          noOutputTimedOut: terminalReason === "no-output-timeout",
+        };
+      })().finally(() => {
+        if (!resultSettled) {
+          settleResult(adapter);
+        }
+      });
+      void waitPromise.catch(() => undefined);
 
       const managedRun: ManagedRun = {
         activity: Object.freeze({
@@ -613,13 +624,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         pid: adapter.pid,
         startedAtMs,
         stdin: adapter.stdin,
-        wait: async () => {
-          const [outcome] = await waitOutcome;
-          if (outcome.status === "rejected") {
-            throw outcome.reason;
-          }
-          return outcome.value;
-        },
+        wait: () => waitPromise,
         ...(adapter.waitForExtinction && { waitForExtinction: () => cleanup.promise }),
         cancel: (reason = "manual-cancel") => {
           requestCancel(reason);

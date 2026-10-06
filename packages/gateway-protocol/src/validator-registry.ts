@@ -25,6 +25,9 @@ export {
 
 // Validator names mirror schemas so callers can pair them with wire contracts.
 export const validateCommandsListParams = compile(S.CommandsListParamsSchema);
+export const validateBackupStatusParams = compile(S.BackupStatusParamsSchema);
+export const validateStorageLocationsListParams = compile(S.StorageLocationsListParamsSchema);
+export const validateStorageLocationsProbeParams = compile(S.StorageLocationsProbeParamsSchema);
 export const validateComputerStatusParams = compile(S.ComputerStatusParamsSchema);
 export const validateComputerInvokeParams = compile(S.ComputerInvokeParamsSchema);
 export const validateCanvasDocumentPreviewParams = compile(S.CanvasDocumentPreviewParamsSchema);
@@ -158,6 +161,8 @@ export const validateWorktreesCreateParams = compile(S.WorktreesCreateParamsSche
 export const validateWorktreesRemoveParams = compile(S.WorktreesRemoveParamsSchema);
 export const validateWorktreesRestoreParams = compile(S.WorktreesRestoreParamsSchema);
 export const validateWorktreesGcParams = compile(S.WorktreesGcParamsSchema);
+export const validateWorktreesRecoverRemovalParams = compile(S.WorktreesRecoverRemovalParamsSchema);
+export const validateWorktreesRetireSnapshotParams = compile(S.WorktreesRetireSnapshotParamsSchema);
 export const validateWorktreesBranchesParams = compile(S.WorktreesBranchesParamsSchema);
 export const validateFsListDirParams = compile(S.FsListDirParamsSchema);
 export const validateFsListDirResult = compile(S.FsListDirResultSchema);
@@ -267,6 +272,7 @@ export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRou
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
 export const validateSessionsCatalogContinueParams = compile(S.SessionsCatalogContinueParamsSchema);
+export const validateSessionsCatalogImportParams = compile(S.SessionsCatalogImportParamsSchema);
 export const validateSessionsCatalogArchiveParams = compile(S.SessionsCatalogArchiveParamsSchema);
 export const validateSessionsCatalogStartTerminalParams = compile(
   S.SessionsCatalogStartTerminalParamsSchema,
@@ -279,6 +285,7 @@ export const validateSessionsDescribeParams = compile(S.SessionsDescribeParamsSc
 export const validateSessionsResolveParams = compile(S.SessionsResolveParamsSchema);
 export const validateSessionsFilesListParams = compile(S.SessionsFilesListParamsSchema);
 export const validateSessionsFilesGetParams = compile(S.SessionsFilesGetParamsSchema);
+export const validateSessionsFilesAssetsParams = compile(S.SessionsFilesAssetsParamsSchema);
 export const validateSessionsFilesSetParams = compile(S.SessionsFilesSetParamsSchema);
 export const validateSessionsFilesRevealParams = compile(S.SessionsFilesRevealParamsSchema);
 export const validateSessionsDiffParams = compile(S.SessionsDiffParamsSchema);
@@ -588,3 +595,6 @@ export const validateTranscriptsSummarizeParams = compile(S.TranscriptsSummarize
 export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
 export const validateTranscriptsExportParams = compile(S.TranscriptsExportParamsSchema);
 export const validateTranscriptsStatusParams = compile(S.TranscriptsStatusParamsSchema);
+
+export const validateCatalogBrowseParams = compile(S.CatalogBrowseParamsSchema);
+export const validateCatalogSearchKeywordsParams = compile(S.CatalogSearchKeywordsParamsSchema);

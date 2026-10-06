@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
@@ -37,92 +35,47 @@ import type { WorkerSessionPlacementRecord } from "./worker-environments/placeme
 // SHA256 pins JSON.stringify wire bytes, including serialized property order.
 const START = Date.UTC(2026, 8, 15);
 const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
-const GOLDEN_HASHES: Record<string, readonly [string, string, string]> = {
-  "ACP metadata owns the runtime": [
+const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
+  "ACP metadata owns the runtime":
     "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-    "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-    "8663e7d988e076ebebce9c1e3a657ef210162af9db649e4efe887a5fdd53508b",
-  ],
-  "activity current and active correlated placement": [
+  "activity current and active correlated placement":
     "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-    "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-    "e627d174fba0e16a93597370ec813d757d91d87395695c31954cc9cb5ce3669b",
-  ],
-  "activity stale and uncorrelated placement": [
+  "activity stale and uncorrelated placement":
     "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-    "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-    "e0cc8bb8123fc35e8510b79c1bb9369fe05d69c7fda9172d066664b0c12b9b6a",
-  ],
   "child retention keeps canonical live recent and unknown links": [
     "6f112eca27fe78b2b465ce23bef1a491945d749d77149f74c96d488d14ab2079",
     "6f112eca27fe78b2b465ce23bef1a491945d749d77149f74c96d488d14ab2079",
     "c648339258cd170449ac11880ab233d5116b829687597d6308a6eb937ab49dcf",
   ],
-  "ended run uses persisted lifecycle timestamps": [
+  "ended run uses persisted lifecycle timestamps":
     "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-    "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-    "61ce9d8cbf18ab8857404095db01c1d0cfb1dccc5247c4e0ba80dbcd33fc132d",
-  ],
-  "expired status and incognito draft": [
+  "expired status and incognito draft":
     "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-    "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-    "e4dcdcd973ef2be2571559a21c89ed55135ef38e59c4362f5ba071eefcb0e5c9",
-  ],
-  "goal below budget retains committed timestamps": [
+  "goal below budget retains committed timestamps":
     "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-    "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-    "c7ac0dd0d60fd458bcc3e7dc1274c66ff2263ba10e074ba455158405b4716320",
-  ],
   "goal budget becomes limited at presentation time": [
     "49b9ccdccb43c6ca33e717bf753a26a081acc97dd7774f62e4bcf2929119762f",
     "9bfc840cd113478d41ca63695f4b8132fd99b681ab94b24d9bf999ee1f19e3df",
     "f581d45d04e9301490cafffe57817dd9e13425b1ef7e0f1bee829a6d580d7591",
   ],
-  "live status and persisted running lifecycle": [
-    "0524604bb6cbe3e494c5496e2268ef8ba93ab6561aa8babcdf3d7084d0193b6b",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
-    "9f3171d5359d2db405063eeb027118e8596975e5a0c71a6c5efedafecd4d7746",
-  ],
-  "live subagent accumulated runtime and inherited model": [
+  "live subagent accumulated runtime and inherited model":
     "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-    "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-    "4a833af6b758b95675873d624f26df008768eee039fd1afeac34779426e826c4",
-  ],
-  "missing entry": [
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-    "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
-  ],
-  "observer digest equal than run start": [
+  "missing entry": "80d3d3667a0a0ef29e051ba202c1a462005ec0a4d96c237ee0302ca6185c9bf1",
+  "observer digest equal than run start":
     "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-    "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-    "d1d9d048f7259e3cb460977f949ca1e47746e94c02edcf350cba035e84bd128a",
-  ],
-  "observer digest newer than run start": [
+  "observer digest newer than run start":
     "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-    "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-    "aca8beaa411b0a3e189561814db7cb5654862ce22cd8a8e4f1da2f84e4836409",
-  ],
-  "observer digest older than run start": [
+  "observer digest older than run start":
     "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-    "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-    "36b676f9aae3e00611fbac03ba7785ad399e1c69dbe759613b5d399e8511b9a6",
-  ],
   "retention changes control owner and transcript fallback cost": [
     "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
     "28ac6cb9f2484f9cae484e69933f552b7afea1a04b4fa2b1e1b76ff3b01061b4",
     "708bc5184e4b8f011b96e3dd2f64c3ba39982f3610a2430b36a01823f1033473",
   ],
-  "single-row snapshot without an explicit swarm context": [
+  "single-row snapshot without an explicit swarm context":
     "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-    "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-    "251869ca15900f633ab059427f4f2672bf56bb78d1510dbed8466e383b582d78",
-  ],
-  "swarm summary retains collector completion and children": [
+  "swarm summary retains collector completion and children":
     "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-    "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-    "dfc43e4ef8b97e3fc30bfa8eb92941add9ad2de301baaaee55c75d3d29880384",
-  ],
 };
 
 const PARENT = "agent:main:dashboard:parent";
@@ -148,17 +101,19 @@ type RowFixture = {
   name: string;
   key: string;
   entry?: InternalSessionEntry;
+  acpMeta?: SessionEntry["acp"];
   store?: Record<string, SessionEntry>;
   runs?: SubagentRunRecord[];
   transcript?: boolean;
   omitRowContext?: boolean;
+  expectedIsDock?: boolean;
   decoration?: "current" | "stale";
 };
 
 function config(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "main", default: true, identity: { name: "Fixture agent" } }],
+      entries: { main: { identity: { name: "Fixture agent" } } },
       defaults: {
         model: { primary: "row-fixture/primary" },
         thinkingDefault: "off",
@@ -201,7 +156,6 @@ function fixtures(): RowFixture[] {
       ...BASE_ENTRY,
       sessionId: "live-session",
       parentSessionKey: PARENT,
-      status: "running",
     },
     [ended]: { ...BASE_ENTRY, parentSessionKey: PARENT, status: "done", endedAt: START },
     [unknown]: { ...BASE_ENTRY, parentSessionKey: PARENT },
@@ -260,18 +214,9 @@ function fixtures(): RowFixture[] {
     {
       name: "single-row snapshot without an explicit swarm context",
       key: "agent:main:dashboard:single",
-      entry: BASE_ENTRY,
+      entry: { ...BASE_ENTRY, createdSurface: "plugin-dock" },
       omitRowContext: true,
-    },
-    {
-      name: "live status and persisted running lifecycle",
-      key: "agent:main:dashboard:running",
-      entry: {
-        ...BASE_ENTRY,
-        status: "running",
-        startedAt: START,
-        agentStatus: { note: "Need a key", attention: "key", expiresAt: START + 30_000 },
-      },
+      expectedIsDock: true,
     },
     {
       name: "expired status and incognito draft",
@@ -385,16 +330,14 @@ function fixtures(): RowFixture[] {
     {
       name: "ACP metadata owns the runtime",
       key: "agent:main:acp:golden",
-      entry: {
-        ...BASE_ENTRY,
-        acp: {
-          backend: "acpx",
-          agent: "fixture",
-          runtimeSessionName: "golden-acp",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: START,
-        },
+      entry: BASE_ENTRY,
+      acpMeta: {
+        backend: "acpx",
+        agent: "fixture",
+        runtimeSessionName: "golden-acp",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: START,
       },
     },
     {
@@ -487,33 +430,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-test("stamps read snapshots without changing persisted session update time", async () => {
-  await withStateDirEnv("openclaw-row-snapshot-clock-", async ({ stateDir }) => {
-    const cfg = config();
-    setRuntimeConfigSnapshot(cfg);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const key = "agent:main:snapshot-clock";
-    const entry = { sessionId: "snapshot-clock", updatedAt: 10 };
-    const project = (now: number) =>
-      buildGatewaySessionRow({
-        cfg,
-        agentId: "main",
-        storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
-        store: { [key]: entry },
-        key,
-        entry,
-        now,
-        skipTranscriptUsageFallback: true,
-      });
-    const earlier = project(100);
-    const later = project(200);
-    expect(earlier).toMatchObject({ snapshotAt: 100, updatedAt: 10 });
-    expect(later).toMatchObject({ snapshotAt: 200, updatedAt: 10 });
-    expect(structuredClone(earlier).snapshotAt).toBe(100);
-    expect(entry).toEqual({ sessionId: "snapshot-clock", updatedAt: 10 });
-  });
-});
-
 test("preserves complete base rows across time and caller presentation fixtures", async () => {
   await withStateDirEnv("openclaw-row-materialize-golden-", async ({ stateDir }) => {
     const cfg = config();
@@ -527,6 +443,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
     });
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     for (const fixture of fixtures()) {
+      const originalEntry = structuredClone(fixture.entry);
       if (fixture.transcript && fixture.entry) {
         const scope = {
           agentId: "main",
@@ -568,6 +485,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
         agentId: "main",
         key: fixture.key,
         entry: fixture.entry,
+        preparedAcpMeta: fixture.acpMeta ?? null,
         store: fixture.store ?? (fixture.entry ? { [fixture.key]: fixture.entry } : {}),
         storePath,
         now: TIMES[0],
@@ -619,24 +537,28 @@ test("preserves complete base rows across time and caller presentation fixtures"
       expect(materialized.row.snapshotAt).toBeUndefined();
       rows.forEach((row, index) => {
         expect(row.snapshotAt).toBe(TIMES[index]);
-        // Sampling metadata is additive; retain golden coverage of every existing wire field.
-        const { snapshotAt: _snapshotAt, ...previousWireFields } = row;
+        expect(structuredClone(row).snapshotAt).toBe(TIMES[index]);
+        expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
+        expect(row.isDock).toBe(fixture.expectedIsDock ?? false);
+        // Assert additive fields separately while preserving the frozen wire-byte coverage.
+        const {
+          snapshotAt: _snapshotAt,
+          createdSurface: _createdSurface,
+          isDock: _isDock,
+          ...previousWireFields
+        } = row;
         const json = JSON.stringify(previousWireFields);
         const actualHash = createHash("sha256").update(json).digest("hex");
-        const expectedHash = GOLDEN_HASHES[fixture.name]?.[index];
-        if (actualHash !== expectedHash) {
-          // openclaw-temp-dir: allow failure diagnostics live until the Vitest wrapper cleans its namespace
-          const directory = mkdtempSync(path.join(tmpdir(), "openclaw-row-golden-mismatch-"));
-          const actualPath = path.join(directory, `${TIMES[index]}.json`);
-          writeFileSync(actualPath, json);
-          throw new Error(
-            `${fixture.name} at ${TIMES[index]}: expected SHA256 ${expectedHash}, ` +
-              `actual SHA256 ${actualHash}; actual canonical JSON: ${actualPath}\n${json}`,
-          );
-        }
+        const hashes = GOLDEN_HASHES[fixture.name];
+        const expectedHash = typeof hashes === "string" ? hashes : hashes?.[index];
+        expect(actualHash, `${fixture.name} at ${TIMES[index]}\n${json}`).toBe(expectedHash);
       });
       if (fixture.transcript) {
         const lightweight = buildGatewaySessionRow({ ...rowParams, lightweightListRow: true });
+        expect(lightweight).toMatchObject({
+          snapshotAt: TIMES[0],
+          updatedAt: fixture.entry?.updatedAt,
+        });
         expect(lightweight.totalTokens).toBe(rows[0]?.totalTokens);
         expect(lightweight.totalTokens).toBeGreaterThan(0);
         expect(lightweight.estimatedCostUsd).toBe(fixture.entry?.estimatedCostUsd);
@@ -649,6 +571,7 @@ test("preserves complete base rows across time and caller presentation fixtures"
         ]);
         expect(rows[0]?.estimatedCostUsd).not.toEqual(rows[2]?.estimatedCostUsd);
       }
+      expect(fixture.entry).toStrictEqual(originalEntry);
     }
   });
 });

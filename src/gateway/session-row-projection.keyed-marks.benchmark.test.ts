@@ -7,7 +7,7 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 
 it("benchmarks 10,000 keyed publications over 4,428 resident session rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const liveRows = 2_300;
     const totalRows = 4_428;
     for (let index = 0; index < totalRows; index++) {

@@ -1,12 +1,7 @@
-// Agent delivery planning resolves final reply destinations from explicit
-// options, session history, turn source, bindings, and channel route hooks.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import type {
-  ChannelId,
-  ChannelOutboundTargetMode,
-  ChannelPlugin,
-} from "../../channels/plugins/types.public.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId, ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import { isRouteBinding, listConfiguredBindings } from "../../config/bindings.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

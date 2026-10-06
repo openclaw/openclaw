@@ -66,24 +66,46 @@ describe("native hook execution admission", () => {
     expect(accepted).not.toHaveBeenCalled();
   });
 
-  it.each(["owned", "public"] as const)(
-    "records native execution custody only through the bundled owner (%s)",
-    async (registration) => {
+  it.each([
+    { registration: "owned", work: "none", matcher: ["exec"] },
+    { registration: "public", work: "none", matcher: undefined },
+    { registration: "owned", work: "scoped policy", matcher: ["apply_patch", "exec"] },
+    { registration: "owned", work: "all tools", matcher: undefined },
+    { registration: "owned", work: "loop detection", matcher: undefined },
+  ] as const)(
+    "selects native execution custody for $registration registration with $work",
+    async ({ registration, work, matcher }) => {
+      if (work === "scoped policy" || work === "all tools") {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            {
+              hookName: "before_tool_call",
+              handler: vi.fn(),
+              ...(work === "scoped policy" ? { matcher: ["apply_patch"] } : {}),
+            },
+          ]),
+        );
+      }
       const admit = vi.fn();
       const params = {
         provider: "codex" as const,
         sessionId: "openclaw-session",
         runId: "execution-admission",
-        executionAdmission: { toolNames: ["exec_command"], admit },
+        ...(work !== "none" ? { sessionKey: "agent:main:execution-admission" } : {}),
+        ...(work === "loop detection"
+          ? { config: { tools: { loopDetection: { enabled: true } } } }
+          : {}),
+        executionAdmission: { toolNames: [work === "none" ? "exec_command" : "exec"], admit },
       };
       const relay =
         registration === "owned"
           ? registerOwnedNativeHookRelay(params)
           : registerNativeHookRelay(params);
       expect(relay.shouldRelayEvent("pre_tool_use")).toBe(registration === "owned");
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        registration === "owned" ? ["exec"] : undefined,
-      );
+      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(matcher);
+      if (work !== "none") {
+        return;
+      }
       const rawPayload = {
         session_id: "native-root",
         turn_id: "native-turn",
@@ -121,37 +143,6 @@ describe("native hook execution admission", () => {
         rawPayload: { ...rawPayload, tool_name: "apply_patch" },
       });
       expect(admit).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["scoped policy", "all tools", "loop detection"] as const)(
-    "unions execution custody with existing pre-tool work (%s)",
-    (work) => {
-      if (work !== "loop detection") {
-        initializeGlobalHookRunner(
-          createMockPluginRegistry([
-            {
-              hookName: "before_tool_call",
-              handler: vi.fn(),
-              ...(work === "scoped policy" ? { matcher: ["apply_patch"] } : {}),
-            },
-          ]),
-        );
-      }
-      const relay = registerOwnedNativeHookRelay({
-        provider: "codex",
-        sessionId: "execution-admission",
-        sessionKey: "agent:main:execution-admission",
-        runId: "execution-admission",
-        ...(work === "loop detection"
-          ? { config: { tools: { loopDetection: { enabled: true } } } }
-          : {}),
-        executionAdmission: { toolNames: ["exec"], admit: vi.fn() },
-      });
-      expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
-      expect(relay.toolMatcherForEvent("pre_tool_use")).toEqual(
-        work === "scoped policy" ? ["apply_patch", "exec"] : undefined,
-      );
     },
   );
 

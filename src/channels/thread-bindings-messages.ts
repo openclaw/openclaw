@@ -4,13 +4,13 @@ import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/nu
  * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
 const DEFAULT_THREAD_BINDING_FAREWELL_TEXT =
   "This conversation is no longer bound to that session.";
 
-/** Formats thread-binding timeout durations for compact user-facing messages. */
 export function formatThreadBindingDurationLabel(durationMs: number): string {
   if (durationMs <= 0) {
     return "disabled";
@@ -25,7 +25,6 @@ export function formatThreadBindingDurationLabel(durationMs: number): string {
   return `${totalMinutes}m`;
 }
 
-/** Builds the native thread name for a thread-bound session. */
 export function resolveThreadBindingThreadName(params: {
   agentId?: string;
   label?: string;
@@ -37,7 +36,6 @@ export function resolveThreadBindingThreadName(params: {
   return truncateUtf16Safe(raw, 100);
 }
 
-/** Builds the system-prefixed intro text posted when a thread binding becomes active. */
 export function resolveThreadBindingIntroText(params: {
   agentId?: string;
   label?: string;
@@ -52,9 +50,7 @@ export function resolveThreadBindingIntroText(params: {
   const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
   const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   const cwd = normalizeOptionalString(params.sessionCwd);
-  const details = (params.sessionDetails ?? [])
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  const details = normalizeTrimmedStringList(params.sessionDetails);
   if (cwd) {
     details.unshift(`cwd: ${cwd}`);
   }
@@ -80,7 +76,6 @@ export function resolveThreadBindingIntroText(params: {
   return prefixSystemMessage(`${intro}\n${details.join("\n")}`);
 }
 
-/** Builds the system-prefixed farewell text posted when a thread binding ends. */
 export function resolveThreadBindingFarewellText(params: {
   reason?: string;
   farewellText?: string;

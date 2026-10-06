@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
-import { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+import {
+  LEGACY_TALK_VOICE_CALL_INHERITANCE,
+  normalizeLegacyTalkConfig,
+} from "./legacy-talk-config-normalizer.js";
 
 function migrateLegacyConfig(raw: Record<string, unknown> | null) {
   const changes: string[] = [];
@@ -19,6 +22,69 @@ function providerTts(provider: string, config: Record<string, unknown>) {
 }
 
 describe("legacy migrate provider-shaped config", () => {
+  it.each([
+    {
+      talk: undefined,
+      inheritedProvider: undefined,
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: undefined,
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: { realtime: { providers: { google: { model: "explicit" } } } },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "inherited" }, google: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "google", providers: { openai: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "openai", providers: { OpenAI: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { OpenAI: { model: "explicit" } },
+    },
+  ])("persists inherited Talk settings with selected provider $provider", (fixture) => {
+    const raw: Record<string, unknown> = {
+      ...(fixture.talk ? { talk: fixture.talk } : {}),
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                provider: fixture.inheritedProvider,
+                providers: { openai: { model: "inherited" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const plugins = structuredClone(raw.plugins);
+    const changes: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, changes);
+    expect(raw.talk).toEqual({
+      realtime: { provider: fixture.provider, providers: fixture.providers },
+    });
+    expect(raw.plugins).toEqual(plugins);
+    const again: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, again);
+    expect(again).toEqual([]);
+  });
+
   const legacyTts = {
     provider: "edge",
     enabled: true,
@@ -27,24 +93,6 @@ describe("legacy migrate provider-shaped config", () => {
   const voiceAndEnabled = ["tts.speaker-selection-keys", "tts.enabled-auto-mode"];
 
   it.each<{ name: string; path: string; value: unknown; expected: string[] }>([
-    {
-      name: "root TTS",
-      path: "tts",
-      value: legacyTts,
-      expected: ["tts.providers-generic-shape", ...voiceAndEnabled],
-    },
-    {
-      name: "keyed agent entries",
-      path: "agents",
-      value: { entries: { main: { tts: legacyTts } } },
-      expected: voiceAndEnabled,
-    },
-    {
-      name: "channel accounts",
-      path: "channels",
-      value: { slack: { accounts: { work: { tts: legacyTts } } } },
-      expected: voiceAndEnabled,
-    },
     {
       name: "blocked channel and account keys",
       path: "channels",
@@ -74,43 +122,6 @@ describe("legacy migrate provider-shaped config", () => {
         ),
       ).map((migration) => migration.id),
     ).toEqual(expected);
-  });
-
-  it("moves legacy realtime Talk selectors without overwriting canonical realtime config", () => {
-    const input = {
-      talk: {
-        provider: "openai",
-        voiceId: "legacy-voice",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        voice: "alloy",
-        unknown: "discarded",
-      },
-    };
-    const migrated = normalizeLegacyTalkConfig(input, []);
-    expect(migrated.talk).toEqual({
-      provider: "openai",
-      voiceId: "legacy-voice",
-      providers: { openai: { apiKey: "test-key", custom: true } },
-      realtime: {
-        provider: "openai",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        speakerVoice: "alloy",
-      },
-    });
-    const conflicting = {
-      ...migrated,
-      talk: { ...migrated.talk, model: "obsolete", voice: "obsolete" },
-    };
-    expect(normalizeLegacyTalkConfig(conflicting, [])).toEqual(migrated);
-    expect(normalizeLegacyTalkConfig(migrated, [])).toBe(migrated);
   });
 
   it("does not copy plain Talk speech provider config into talk.realtime", () => {
@@ -194,14 +205,19 @@ describe("legacy migrate provider-shaped config", () => {
       messages: {
         tts: {
           provider: "openai",
-          openai: { voice: "alloy" },
-          providers: { elevenlabs: { voiceId: "voice-1" } },
+          openai: { voice: "alloy", voiceName: "cedar" },
+          providers: { elevenlabs: { voiceId: "voice-1", speakerVoiceId: "canonical-voice" } },
           personas: { narrator: providerTts("google", { voiceName: "Kore" }) },
         },
       },
       agents: {
         defaults: { tts: providerTts("openai", { voice: "cedar", speakerVoice: "marin" }) },
-        list: [{ id: "voice-agent", tts: providerTts("openai", { voice: "cedar" }) }],
+        list: [
+          {
+            id: "voice-agent",
+            tts: providerTts("openai", { voice: "cedar", speakerVoice: "marin" }),
+          },
+        ],
       },
       channels: {
         discord: {
@@ -227,7 +243,7 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.config).toHaveProperty("tts", {
       provider: "openai",
       providers: {
-        elevenlabs: { speakerVoiceId: "voice-1" },
+        elevenlabs: { speakerVoiceId: "canonical-voice" },
         openai: { speakerVoice: "alloy" },
       },
       personas: { narrator: { providers: { google: { speakerVoice: "Kore" } } } },
@@ -237,7 +253,7 @@ describe("legacy migrate provider-shaped config", () => {
     });
     expect(res.config).toHaveProperty("agents.list.0", {
       id: "voice-agent",
-      tts: { providers: { openai: { speakerVoice: "cedar" } } },
+      tts: { providers: { openai: { speakerVoice: "marin" } } },
     });
     expect(res.config).toHaveProperty("channels.discord.tts", {
       providers: { microsoft: { voice: "en-US-AvaNeural" } },
@@ -254,6 +270,9 @@ describe("legacy migrate provider-shaped config", () => {
     expect(res.config).toHaveProperty("plugins.entries.voice-call.config.tts", {
       providers: { xai: { speakerVoiceId: "eve" } },
     });
+    expect(res.changes).toContain(
+      "Removed tts.providers.openai.voiceName (tts.providers.openai.speakerVoice already set).",
+    );
     expect(migrateLegacyConfig(res.config)).toEqual({ config: null, changes: [] });
   });
 

@@ -1,9 +1,17 @@
 // Msteams tests cover file consent plugin behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { describe, expect, it, vi } from "vitest";
-import { uploadToConsentUrl } from "./file-consent.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { uploadToConsentUrl as uploadConsentFile } from "./file-consent.js";
 import { resolveMSTeamsSharePointUploadTimeoutMs } from "./request-timeout.js";
 import { buildUserAgent } from "./user-agent.js";
+
+const { lookupMock } = vi.hoisted(() => ({ lookupMock: vi.fn() }));
+vi.mock("node:dns/promises", () => ({ lookup: lookupMock }));
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  lookupMock.mockReset();
+});
 
 // Helper: a resolveFn that returns a public IP by default
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -16,9 +24,25 @@ const failingResolve = async () => {
   throw new Error("DNS failure");
 };
 
-type ConsentValidationOptions = NonNullable<
-  Parameters<typeof uploadToConsentUrl>[0]["validationOpts"]
->;
+type ConsentValidationOptions = {
+  resolveFn?: (hostname: string) => Promise<{ address: string } | { address: string }[]>;
+};
+
+function uploadToConsentUrl({
+  fetchFn = async () => new Response(null, { status: 200 }),
+  validationOpts,
+  ...params
+}: Parameters<typeof uploadConsentFile>[0] & {
+  fetchFn?: typeof fetch;
+  validationOpts?: ConsentValidationOptions;
+}) {
+  vi.stubGlobal("fetch", fetchFn);
+  lookupMock.mockImplementation(async (hostname: string) => {
+    const result = await (validationOpts?.resolveFn ?? publicResolve)(hostname);
+    return Array.isArray(result) ? result : [result];
+  });
+  return uploadConsentFile(params);
+}
 
 async function validateConsentUploadUrl(url: string, validationOpts?: ConsentValidationOptions) {
   await uploadToConsentUrl({
@@ -92,15 +116,6 @@ describe("validateConsentUploadUrl", () => {
     ).rejects.toThrow("Failed to resolve");
   });
 
-  it("accepts a custom allowlist", async () => {
-    await expect(
-      validateConsentUploadUrl("https://custom.example.org/file", {
-        allowlist: ["example.org"],
-        resolveFn: publicResolve,
-      }),
-    ).resolves.toBeUndefined();
-  });
-
   it("rejects hosts that are suffix-tricked (e.g. notsharepoint.com)", async () => {
     await expect(
       validateConsentUploadUrl("https://notsharepoint.com/file", { resolveFn: publicResolve }),
@@ -154,6 +169,7 @@ describe("uploadToConsentUrl", () => {
     });
 
     expect(fetchFn).toHaveBeenCalledOnce();
+    expect(lookupMock).toHaveBeenCalledWith("contoso.sharepoint.com", { all: true });
     const [url, opts] = expectDefined(fetchFn.mock.calls[0], "fetch call");
     expect(url).toBe("https://contoso.sharepoint.com/upload");
     expect(opts?.method).toBe("PUT");
@@ -188,7 +204,6 @@ describe("uploadToConsentUrl", () => {
         url: "https://contoso.sharepoint.com/upload",
         buffer: Buffer.from("hello"),
         fetchFn,
-        timeoutMs: 25,
         validationOpts: { resolveFn: publicResolve },
       });
 
@@ -200,7 +215,7 @@ describe("uploadToConsentUrl", () => {
         message: "request timed out",
       });
 
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(resolveMSTeamsSharePointUploadTimeoutMs(5));
       await uploadRejection;
       expect(observedSignal?.aborted).toBe(true);
     } finally {
@@ -229,7 +244,6 @@ describe("uploadToConsentUrl", () => {
         url: "https://contoso.sharepoint.com/upload",
         buffer: Buffer.from("hello"),
         fetchFn,
-        timeoutMs: 50,
         validationOpts: { resolveFn: publicResolve },
       });
 
@@ -241,7 +255,7 @@ describe("uploadToConsentUrl", () => {
       await expect(uploadPromise).resolves.toBeUndefined();
       expect(observedSignal?.aborted).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(25);
+      await vi.advanceTimersByTimeAsync(resolveMSTeamsSharePointUploadTimeoutMs(5));
       expect(observedSignal?.aborted).toBe(false);
     } finally {
       vi.useRealTimers();

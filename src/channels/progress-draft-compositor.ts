@@ -595,11 +595,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return await renderAfterRetraction();
       }
       const isNewPreambleItem = Boolean(itemId && itemId !== preambleItemId);
-      if (isNewPreambleItem) {
-        preambleItemId = itemId;
-      } else if (!itemId) {
-        preambleItemId = undefined;
-      }
+      preambleItemId = itemId;
       if (normalized === preambleText && !isNewPreambleItem) {
         return false;
       }
@@ -706,7 +702,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       }
       const line: ChannelProgressDraftLine = {
         id: lineId,
-        // The lane marker (💬, matching 🧠 thinking / 🛠️ tools) is a per-channel
+        // The lane marker (such as 💬 for commentary) is a per-channel
         // presentation choice supplied via commentaryLinePrefix; default none.
         text: `${commentaryLinePrefix}${commentaryItalics ? normalized : bareNormalized}`,
         kind: "item",

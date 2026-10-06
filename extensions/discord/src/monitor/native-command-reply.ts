@@ -60,10 +60,7 @@ function isDiscordUnknownInteraction(error: unknown): boolean {
   if (err.status === 404 && /Unknown interaction/i.test(err.message ?? "")) {
     return true;
   }
-  if (/Unknown interaction/i.test(err.rawBody?.message ?? "")) {
-    return true;
-  }
-  return false;
+  return /Unknown interaction/i.test(err.rawBody?.message ?? "");
 }
 
 function resolveDiscordInteractionMessageParts(payload: ReplyPayload) {

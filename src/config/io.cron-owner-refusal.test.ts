@@ -18,6 +18,7 @@ const state = (
     rawJobs,
     invalidConfigRows,
     projectedOwnersByJobId,
+    ownerRows: [],
   }) as unknown as LegacyCronRepairState;
 const deps = (
   activeGateway?: {
@@ -31,7 +32,6 @@ const deps = (
     activeGateway ? { ...activeGateway, createdAt: new Date(0).toISOString() } : undefined,
   ),
   loadLegacyCronRepairState: vi.fn(async () => (jobs ? state(jobs) : null)),
-  materializeLegacyDefaultCronJobOwners: vi.fn(async () => 0),
 });
 const cfg = { agents: { entries: { ops: {} } } };
 
@@ -102,74 +102,45 @@ it("keeps include-owned binding writes fail closed", () => {
   ).toThrow("cannot append to $include-owned bindings");
 });
 
-it("materializes a proven retained owner before the commit recheck", async () => {
-  for (const safe of [deps(), deps(undefined, [{ id: "owned", agentId: "research" }])]) {
-    await prepareCronOwnerWriteRefusal(
-      cfg,
-      { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
-      safe,
-    );
-    expect(safe.materializeLegacyDefaultCronJobOwners).not.toHaveBeenCalled();
-  }
-
-  const injected = deps(undefined, [{ id: "ownerless" }, { id: "owned", agentId: "research" }]);
-  injected.loadLegacyCronRepairState.mockResolvedValueOnce(
+it("refuses a retained historical owner even when the runtime projects a new default", async () => {
+  const injected = deps();
+  injected.loadLegacyCronRepairState.mockResolvedValue(
     state(
       [{ id: "ownerless" }, { id: "owned", agentId: "research" }],
       [],
       new Map([
-        ["ownerless", { kind: "runtime-default" as const, agentId: "ops" }],
+        ["ownerless", { kind: "runtime-default" as const, agentId: "research" }],
         ["owned", { kind: "explicit" as const, agentId: "research" }],
       ]),
     ),
   );
-  injected.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(async () => {
-    injected.loadLegacyCronRepairState.mockResolvedValue(
-      state([
-        { id: "ownerless", agentId: "ops" },
-        { id: "owned", agentId: "research" },
-      ]),
-    );
-    return 1;
-  });
-
-  const plan = await prepareCronOwnerWriteRefusal(
+  const refusal = prepareCronOwnerWriteRefusal(
     cfg,
-    {
-      storePath: "/tmp/custom-cron.json",
-      provenOwnerAgentId: "ops",
-      env: { OPENCLAW_STATE_DIR: "/tmp/state" },
-    },
+    { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
     injected,
   );
-  await plan.recheck();
+  await expect(refusal).rejects.toSatisfy(isCronOwnerWriteRefusalError);
+  await expect(refusal).rejects.toThrow("openclaw doctor --fix");
 
-  expect(injected.materializeLegacyDefaultCronJobOwners).toHaveBeenCalledOnce();
-  expect(injected.materializeLegacyDefaultCronJobOwners).toHaveBeenCalledWith({
-    storePath: "/tmp/custom-cron.json",
-    legacyDefaultAgentId: "ops",
-    env: { OPENCLAW_STATE_DIR: "/tmp/state" },
-  });
+  injected.loadLegacyCronRepairState.mockResolvedValue(
+    state([
+      { id: "ownerless", agentId: "ops" },
+      { id: "owned", agentId: "research" },
+    ]),
+  );
+  const permitted = await prepareCronOwnerWriteRefusal(
+    cfg,
+    { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
+    injected,
+  );
+  await permitted.recheck();
 });
 
-it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
+it("keeps ambiguous and unreadable ownership as typed refusals", async () => {
   const ambiguous = deps(undefined, [{ id: "ownerless" }]);
   await expect(
     prepareCronOwnerWriteRefusal(cfg, { storePath: "/tmp/cron.json" }, ambiguous),
   ).rejects.toSatisfy(isCronOwnerWriteRefusalError);
-  expect(ambiguous.materializeLegacyDefaultCronJobOwners).not.toHaveBeenCalled();
-
-  const failed = deps(undefined, [{ id: "ownerless" }]);
-  failed.materializeLegacyDefaultCronJobOwners.mockImplementationOnce(async () => {
-    throw new Error("database is temporarily read-only");
-  });
-  const failure = prepareCronOwnerWriteRefusal(
-    cfg,
-    { storePath: "/tmp/cron.json", provenOwnerAgentId: "ops" },
-    failed,
-  );
-  await expect(failure).rejects.toSatisfy(isCronOwnerWriteRefusalError);
-  await expect(failure).rejects.toThrow("database is temporarily read-only");
 
   const corrupt = deps();
   corrupt.loadLegacyCronRepairState.mockRejectedValueOnce(
@@ -182,5 +153,4 @@ it("keeps ambiguous and failed owner handoffs as typed refusals", async () => {
   );
   await expect(unreadable).rejects.toSatisfy(isCronOwnerWriteRefusalError);
   await expect(unreadable).rejects.toThrow("database disk image is malformed");
-  expect(corrupt.materializeLegacyDefaultCronJobOwners).not.toHaveBeenCalled();
 });

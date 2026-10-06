@@ -4,20 +4,18 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import {
   OpenClawAgentDatabaseLeaseActiveError,
   assertAgentDatabaseMaintenanceAuthority,
   assertNoOpenClawAgentDatabaseLeases,
 } from "../state/openclaw-agent-db-lease.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
   migrateOpenClawAgentDatabaseForMaintenance,
 } from "../state/openclaw-agent-db-maintenance.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  type OpenClawAgentDatabase,
-  withAgentDatabaseMaintenanceLease,
-} from "../state/openclaw-agent-db.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
 import {
@@ -36,7 +34,9 @@ import {
 } from "./state-migrations.media-persistence-targets.js";
 import {
   migrateTranscriptDirectiveArchives,
+  recoverPendingTranscriptArchivePublication,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
+  transcriptDirectiveArchiveRecoveryPending,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
 import {
@@ -120,28 +120,23 @@ function writeMigrationCursor(
 ): void {
   const now = Date.now();
   const db = getNodeSqliteKysely<TranscriptDirectiveMigrationDatabase>(database);
+  const row = {
+    agent_id: agentId,
+    app_version: JSON.stringify(cursor),
+    role: "agent",
+    schema_version: 1,
+    updated_at: now,
+  };
   executeSqliteQuerySync(
     database,
     db
       .insertInto("schema_meta")
       .values({
-        agent_id: agentId,
-        app_version: JSON.stringify(cursor),
+        ...row,
         created_at: now,
         meta_key: MIGRATION_META_KEY,
-        role: "agent",
-        schema_version: 1,
-        updated_at: now,
       })
-      .onConflict((conflict) =>
-        conflict.column("meta_key").doUpdateSet({
-          agent_id: agentId,
-          app_version: JSON.stringify(cursor),
-          role: "agent",
-          schema_version: 1,
-          updated_at: now,
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("meta_key").doUpdateSet(row)),
   );
 }
 
@@ -326,7 +321,13 @@ async function migrateAgentDatabase(
     assertOpenClawAgentDatabaseForMaintenance(database, params);
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return { archivedTranscripts: 0, transcriptSessions: 0, warnings: [] };
+      const warnings = await recoverPendingTranscriptArchivePublication({
+        agentId: params.agentId,
+        database,
+        pathname: params.pathname,
+        signal: maintenance.signal,
+      });
+      return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
     const transcriptSessions =
@@ -346,6 +347,7 @@ async function migrateAgentDatabase(
             agentId: params.agentId,
             database,
             pathname: params.pathname,
+            signal: maintenance.signal,
             start: archiveCursor,
             writeCursor: (next) =>
               writeMigrationCursor(
@@ -384,7 +386,7 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
     }
     const cursor = readMigrationCursor(database, params.pathname);
     if (cursor.phase === "complete") {
-      return false;
+      return transcriptDirectiveArchiveRecoveryPending(database);
     }
     if (
       cursor.phase === "transcripts" &&

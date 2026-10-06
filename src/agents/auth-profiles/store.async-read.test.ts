@@ -199,28 +199,27 @@ it("invalidates warm rows immediately after an owner bookkeeping write", async (
   expect(reader.read).toHaveBeenCalledTimes(2);
 });
 
-it("does not retain rows when identity changes during a cold read", async () => {
-  const { databasePath, rows, load } = prepareCachedRuntimeRead();
-  reader.read.mockImplementationOnce(async () => {
-    fs.writeFileSync(`${databasePath}-wal`, "synthetic pending write");
-    return rows;
-  });
-  await load();
-  await load();
-  expect(reader.read).toHaveBeenCalledTimes(2);
-});
-
-it("does not extend the probe interval by time spent awaiting a cold read", async () => {
-  const { databasePath, rows, clock, load } = prepareCachedRuntimeRead();
-  reader.read.mockImplementationOnce(async () => {
-    clock.mockReturnValue(100);
-    return rows;
-  });
-  await load();
-  fs.writeFileSync(`${databasePath}-wal`, "synthetic external write");
-  await load();
-  expect(reader.read).toHaveBeenCalledTimes(2);
-});
+it.each(["during the cold read", "after a 100 ms cold read"] as const)(
+  "does not reuse cached rows changed %s",
+  async (timing) => {
+    const { databasePath, rows, clock, load } = prepareCachedRuntimeRead();
+    const write = () => fs.writeFileSync(`${databasePath}-wal`, "synthetic external write");
+    reader.read.mockImplementationOnce(async () => {
+      if (timing === "during the cold read") {
+        write();
+      } else {
+        clock.mockReturnValue(100);
+      }
+      return rows;
+    });
+    await load();
+    if (timing === "after a 100 ms cold read") {
+      write();
+    }
+    await load();
+    expect(reader.read).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each([
   "rotation",

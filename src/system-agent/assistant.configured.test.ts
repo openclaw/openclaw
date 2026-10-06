@@ -6,7 +6,7 @@ import { resolveRequestStreamTransportOverrides } from "../agents/embedded-agent
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { CommandLane } from "../process/lanes.js";
-import { planSystemAgentCommand } from "./assistant.js";
+import { planSystemAgentCommand } from "./assistant.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -329,14 +329,12 @@ describe("OpenClaw configured-model planner", () => {
     const config: OpenClawConfig = {
       agents: {
         defaults: {},
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir: "/tmp/ops-agent",
             model: "claude-cli/claude-opus-4-8@claude-cli:ops",
           },
-        ],
+        },
       },
     };
     const runCliAgent = vi.fn(async (_params: RunCliAgentParams) => ({
@@ -390,15 +388,13 @@ describe("OpenClaw configured-model planner", () => {
   it("plans through the configured default agent embedded runtime without tools", async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir: "/tmp/ops-agent",
             model: "openai/gpt-5.4@openai:ops",
             models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
     };
     const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
@@ -462,15 +458,13 @@ describe("OpenClaw configured-model planner", () => {
   it("keeps the verified child runtime while parsing a JSON plan", async () => {
     const config = {
       agents: {
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             agentDir: "/tmp/ops-agent",
             model: "openai/gpt-5.5",
             models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
-        ],
+        },
       },
     } satisfies OpenClawConfig;
     const { binding, deps } = await createSystemAgentVerifiedInferenceTestFixture(config);

@@ -2,7 +2,9 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as outputFiles from "./output-files.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -10,7 +12,7 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 const expectedUrl = "http://127.0.0.1/inline.png";
-let downloadCurrentDocumentViaPlaywright: typeof import("./pw-tools-core.downloads.js").downloadCurrentDocumentViaPlaywright;
+import { downloadCurrentDocumentViaPlaywright } from "./pw-tools-core.downloads.js";
 
 describe("download current document", () => {
   installPwToolsCoreTestHooks();
@@ -20,10 +22,6 @@ describe("download current document", () => {
   let closed: boolean;
   const mainFrame = {};
   const evaluate = vi.fn(async () => {});
-
-  beforeAll(async () => {
-    ({ downloadCurrentDocumentViaPlaywright } = await import("./pw-tools-core.downloads.js"));
-  });
 
   beforeEach(async () => {
     rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-download-test-"));
@@ -161,9 +159,22 @@ describe("download current document", () => {
     expect(download.saveAs).not.toHaveBeenCalled();
   });
 
-  it.each(["caller", "navigation", "close"] as const)(
+  it.for(["caller", "navigation", "close"] as const)(
     "cancels an active save on %s and leaves no partial file",
-    async (reason) => {
+    async (reason, { signal, onTestFinished }) => {
+      const writeSettled = Promise.withResolvers<void>();
+      const writeOutput = outputFiles.writeExternalFileWithinOutputRoot;
+      const write = vi
+        .spyOn(outputFiles, "writeExternalFileWithinOutputRoot")
+        .mockImplementation((params) => {
+          const pending = writeOutput(params);
+          void pending.then(
+            () => writeSettled.resolve(),
+            () => writeSettled.resolve(),
+          );
+          return pending;
+        });
+      onTestFinished(() => write.mockRestore());
       const controller = new AbortController();
       const download = makeDownload();
       download.saveAs.mockImplementationOnce(async (destination) => {
@@ -184,7 +195,9 @@ describe("download current document", () => {
       await expect(start({ signal: controller.signal })).rejects.toThrow(
         reason === "caller" ? "caller cancelled" : "The tab changed",
       );
-      await vi.waitFor(async () => expect(await fs.readdir(rootDir)).toEqual([]));
+      // The capture rejects before the output owner's staging cleanup has settled.
+      await withinTest(writeSettled.promise, signal);
+      expect(await fs.readdir(rootDir)).toEqual([]);
       expect(download.cancel).toHaveBeenCalledOnce();
     },
   );

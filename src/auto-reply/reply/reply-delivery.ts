@@ -1,8 +1,8 @@
-/** Delivers prepared block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
 import {
+  addReplyPayloadMediaFailures,
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
   isRenderablePayload,
@@ -44,7 +44,6 @@ export async function resolveReplyFailureVisibility(
   );
 }
 
-/** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -84,16 +83,19 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrls?.[0] ?? mediaUrls?.[0];
 
   return {
-    payload: copyReplyPayloadMetadata(params.payload, {
-      ...params.payload,
-      text,
-      mediaUrls,
-      mediaUrl,
-      replyToId: params.payload.replyToId ?? parsed?.replyToId,
-      replyToTag: params.payload.replyToTag || parsed?.replyToTag,
-      replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
-      audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
-    }),
+    payload: addReplyPayloadMediaFailures(
+      copyReplyPayloadMetadata(params.payload, {
+        ...params.payload,
+        text,
+        mediaUrls,
+        mediaUrl,
+        replyToId: params.payload.replyToId ?? parsed?.replyToId,
+        replyToTag: params.payload.replyToTag || parsed?.replyToTag,
+        replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
+        audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      }),
+      parsed?.mediaFailures,
+    ),
     isSilent: parsed?.isSilent ?? false,
   };
 }
@@ -137,7 +139,6 @@ async function sendDirectBlockReply(params: {
   }
 }
 
-/** Creates the handler used for assistant block replies during streaming/tool phases. */
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;

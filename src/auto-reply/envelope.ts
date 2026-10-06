@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -52,12 +49,7 @@ type ResolvedEnvelopeTimezone =
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
-  return value
-    .replace(/\r\n|\r|\n/g, " ")
-    .replaceAll("[", "(")
-    .replaceAll("]", ")")
-    .replace(/\s+/g, " ")
-    .trim();
+  return value.replaceAll("[", "(").replaceAll("]", ")").replace(/\s+/g, " ").trim();
 }
 
 /** Resolves envelope formatting defaults from agent config. */
@@ -77,7 +69,7 @@ function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvel
   if (!trimmed) {
     return { mode: "local" };
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (lowered === "utc" || lowered === "gmt") {
     return { mode: "utc" };
   }

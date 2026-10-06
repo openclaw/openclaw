@@ -1,26 +1,52 @@
 // Ui tests cover ui script behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
   resolvePnpmSpawnCall,
 } from "../../scripts/ui.mts";
+import {
+  CONTROL_UI_ASSET_MANIFEST_FILENAME,
+  CONTROL_UI_ASSET_MANIFEST_VERSION,
+  hashControlUiAssetManifestEntries,
+} from "../../src/gateway/control-ui-asset-manifest.js";
 import { CONTROL_UI_BUILD_ID_ATTRIBUTE } from "../../src/gateway/control-ui-root-assets.js";
 import { inspectControlUiRootAssets } from "../../src/infra/control-ui-assets.js";
 import { mergeProcessEnv } from "../../src/infra/process-env.js";
 import { isPidDefinitelyDead } from "../../src/shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { normalizeControlUiBuildInfo } from "../../ui/src/build-info-normalizers.ts";
+import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const fixtureLifetime = createFixtureLifetime();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await fixtureLifetime.cleanup();
+    cleanup();
+  }),
+);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 function copyUiFixture(root: string): void {
   for (const file of [
@@ -90,28 +116,38 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 3_00
   }
 }
 
-async function waitForExit(
+function waitForExit(
   child: ChildProcess,
-  timeoutMs = 3_000,
 ): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      child.kill("SIGKILL");
-      reject(new Error("timed out waiting for child exit"));
-    }, timeoutMs);
-    child.once("exit", (code, signal) => {
-      clearTimeout(timer);
-      resolve({ code, signal });
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
+  return new Promise((resolve, reject) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+    child.once("error", reject);
   });
+}
+
+function fixtureReadyBeforeExit(
+  file: string,
+  label: string,
+  completion: ReturnType<typeof waitForExit>,
+): Promise<void> {
+  // Socket receipts can trail wrapper exit. The fixture publishes the complete
+  // file before its receipt, so that durable record decides an exit-first race.
+  const verifyRecord = () => {
+    if (readNonEmpty(file) === null) {
+      throw new Error(`timed out waiting for ${label}`);
+    }
+  };
+  const settled = completion.then(verifyRecord, (error: unknown) => {
+    if (readNonEmpty(file) === null) {
+      throw error;
+    }
+  });
+  return Promise.race([receipts.waitFor(file, "ready"), settled]);
 }
 
 async function withUiProcessCleanup(
   wrapper: ChildProcess,
+  completion: ReturnType<typeof waitForExit>,
   root: string,
   pidFiles: string[],
   run: () => Promise<void>,
@@ -127,32 +163,30 @@ async function withUiProcessCleanup(
     }
     return pid;
   };
-  await runQaGatewayFixture(
-    run,
-    () => fs.writeFileSync(path.join(root, "release"), "release"),
-    async () => {
-      if (wrapper.exitCode === null && wrapper.signalCode === null) {
-        await waitForExit(wrapper);
-      }
-    },
-    ...pidFiles.map((file) => async () => {
-      const pid = readPid(file);
-      if (pid !== null) {
-        await waitFor(() => !pidAlive(pid), "UI fixture process exit", 5_000);
-      }
-    }),
-    () => {
-      if (
-        (wrapper.exitCode === null && wrapper.signalCode === null) ||
-        pidFiles.some((file) => {
-          const pid = readPid(file);
-          return pid !== null && pidAlive(pid);
-        })
-      ) {
-        throw new Error(`UI fixture cleanup is unverified; retained ${root}`);
-      }
-      fs.rmSync(root, { force: true, recursive: true });
-    },
+  await fixtureLifetime.run(() =>
+    runQaGatewayFixture(
+      run,
+      () => fs.writeFileSync(path.join(root, "release"), "release"),
+      () => completion,
+      ...pidFiles.map((file) => async () => {
+        const pid = readPid(file);
+        if (pid !== null) {
+          await waitFor(() => !pidAlive(pid), "UI fixture process exit", 5_000);
+        }
+      }),
+      () => {
+        if (
+          (wrapper.exitCode === null && wrapper.signalCode === null) ||
+          pidFiles.some((file) => {
+            const pid = readPid(file);
+            return pid !== null && pidAlive(pid);
+          })
+        ) {
+          throw new Error(`UI fixture cleanup is unverified; retained ${root}`);
+        }
+        fs.rmSync(root, { force: true, recursive: true });
+      },
+    ),
   );
 }
 
@@ -577,6 +611,7 @@ const fs = require("node:fs");
 const rename = fs.renameSync;
 let remainingDenials = ${publishDenials};
 const waits = [];
+process.umask(0o077);
 Atomics.wait = (_array, _index, _value, delay) => {
   waits.push(delay);
   return "timed-out";
@@ -648,6 +683,18 @@ require("node:module").syncBuiltinESMExports();
         }
       }
       if (expectedExit === 0) {
+        if (process.platform !== "win32") {
+          const published = [
+            output,
+            ...fs
+              .readdirSync(output, { recursive: true, encoding: "utf8" })
+              .map((entry) => path.join(output, entry)),
+          ];
+          for (const entry of published) {
+            const stat = fs.statSync(entry);
+            expect(stat.mode & 0o777, entry).toBe(stat.isDirectory() ? 0o755 : 0o644);
+          }
+        }
         const calls = result.stdout
           .trim()
           .split("\n")
@@ -686,6 +733,26 @@ require("node:module").syncBuiltinESMExports();
       fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
       fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
     }
+    // Vite inventories the finalized assets and sidecars before either validator runs.
+    const assets = fs
+      .readdirSync(path.join(staging, "assets"))
+      .toSorted((left, right) => left.localeCompare(right))
+      .map((name) => {
+        const bytes = fs.readFileSync(path.join(staging, "assets", name));
+        return {
+          path: `assets/${name}`,
+          sha256: createHash("sha256").update(bytes).digest("hex"),
+          size: bytes.byteLength,
+        };
+      });
+    fs.writeFileSync(
+      path.join(staging, CONTROL_UI_ASSET_MANIFEST_FILENAME),
+      JSON.stringify({
+        version: CONTROL_UI_ASSET_MANIFEST_VERSION,
+        generation: hashControlUiAssetManifestEntries(assets),
+        assets,
+      }),
+    );
     for (const [script, ...args] of [
       ["check-control-ui-precompressed-assets.mts", staging],
       ["check-control-ui-performance.mts", "--report-only", "--dist", staging],
@@ -902,7 +969,7 @@ require("node:module").syncBuiltinESMExports();
     expect(packageJson.scripts["ui:build"]).toBe("node scripts/ui.js build");
   });
 
-  it.runIf(process.platform !== "win32").each([
+  it.runIf(process.platform !== "win32").for([
     {
       label: "acknowledged SIGTERM",
       requested: "SIGTERM",
@@ -933,7 +1000,7 @@ require("node:module").syncBuiltinESMExports();
     },
   ] as const)(
     "preserves $label after UI wrapper shutdown",
-    async ({ requested, childSignal, code, signal }) => {
+    async ({ requested, childSignal, code, signal }, { signal: testSignal }) => {
       // Keep the release outside the disposable Vitest namespace until every
       // fixture process is confirmed stopped, including on an assertion failure.
       const tempDir = fs.mkdtempSync(
@@ -957,9 +1024,11 @@ require("node:module").syncBuiltinESMExports();
         runnerPath,
         [
           "import fs from 'node:fs';",
+          fixtureReceiptClientSource(receipts.endpoint),
           ...handlerLines,
           "fs.writeFileSync(process.env.RUNNER_PID_FILE, String(process.pid));",
           "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
+          "sendReceipt(process.env.READY_FILE, 'ready');",
           "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
         ].join("\n"),
       );
@@ -975,12 +1044,16 @@ require("node:module").syncBuiltinESMExports();
         },
         stdio: "ignore",
       });
-      await withUiProcessCleanup(wrapper, tempDir, [runnerPidFile], async () => {
-        await waitFor(() => readNonEmpty(readyFile) !== null, "UI runner readiness");
+      const completion = waitForExit(wrapper);
+      await withUiProcessCleanup(wrapper, completion, tempDir, [runnerPidFile], async () => {
+        await withinTest(
+          fixtureReadyBeforeExit(readyFile, "UI runner readiness", completion),
+          testSignal,
+        );
         expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
         const runnerPid = Number(fs.readFileSync(runnerPidFile, "utf8"));
         wrapper.kill(requested);
-        const exit = await waitForExit(wrapper);
+        const exit = await withinTest(completion, testSignal);
         expect(exit).toEqual({ code, signal });
         expect(fs.readFileSync(signaledFile, "utf8")).toBe(requested);
         expect(pidAlive(runnerPid), "UI wrapper returned before its child stopped").toBe(false);
@@ -988,9 +1061,9 @@ require("node:module").syncBuiltinESMExports();
     },
   );
 
-  it.runIf(process.platform !== "win32").each([false, true])(
+  it.runIf(process.platform !== "win32").for([false, true])(
     "keeps resistant-descendant cleanup raw with failed capture=%s",
-    async (failedCapture) => {
+    async (failedCapture, { signal }) => {
       const tempDir = fs.mkdtempSync(
         path.join(path.dirname(os.tmpdir()), "openclaw-ui-wrapper-tree-"),
       );
@@ -1002,8 +1075,10 @@ require("node:module").syncBuiltinESMExports();
       const failedCaptureFile = path.join(tempDir, "capture-failed");
       const descendantSource = [
         "import fs from 'node:fs';",
+        fixtureReceiptClientSource(receipts.endpoint),
         "process.on('SIGTERM', () => {});",
         "fs.writeFileSync(process.env.DESCENDANT_PID_FILE, String(process.pid));",
+        "sendReceipt(process.env.DESCENDANT_PID_FILE, 'ready');",
         "setInterval(() => { if (fs.existsSync(process.env.RELEASE_FILE)) process.exit(0); }, 20);",
       ].join("\n");
       fs.writeFileSync(
@@ -1043,21 +1118,28 @@ require("node:module").syncBuiltinESMExports();
         env,
         stdio: "ignore",
       });
-      await withUiProcessCleanup(wrapper, tempDir, [runnerPidFile, descendantPidFile], async () => {
-        // The descendant publishes only after its resistant handler is installed.
-        await waitFor(
-          () => readNonEmpty(descendantPidFile) !== null,
-          "UI runner descendant readiness",
-        );
-        const descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
-        wrapper.kill("SIGTERM");
-        const exit = await waitForExit(wrapper, 8_000);
-        expect(exit).toEqual({ code: null, signal: failedCapture ? "SIGTERM" : "SIGKILL" });
-        expect(pidAlive(descendantPid)).toBe(failedCapture);
-        if (failedCapture) {
-          expect(fs.readFileSync(failedCaptureFile, "utf8")).toBe("failed");
-        }
-      });
+      const completion = waitForExit(wrapper);
+      await withUiProcessCleanup(
+        wrapper,
+        completion,
+        tempDir,
+        [runnerPidFile, descendantPidFile],
+        async () => {
+          // The descendant publishes only after its resistant handler is installed.
+          await withinTest(
+            fixtureReadyBeforeExit(descendantPidFile, "UI runner descendant readiness", completion),
+            signal,
+          );
+          const descendantPid = Number(fs.readFileSync(descendantPidFile, "utf8"));
+          wrapper.kill("SIGTERM");
+          const exit = await withinTest(completion, signal);
+          expect(exit).toEqual({ code: null, signal: failedCapture ? "SIGTERM" : "SIGKILL" });
+          expect(pidAlive(descendantPid)).toBe(failedCapture);
+          if (failedCapture) {
+            expect(fs.readFileSync(failedCaptureFile, "utf8")).toBe("failed");
+          }
+        },
+      );
     },
   );
 });

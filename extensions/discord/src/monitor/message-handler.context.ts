@@ -22,7 +22,7 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntry,
-  readSessionUpdatedAt,
+  readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -419,7 +419,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const effectivePreviousTimestamp =
     effectiveSessionKey === route.sessionKey
       ? previousTimestamp
-      : readSessionUpdatedAt({
+      : await readSessionUpdatedAtAsync({
           storePath,
           sessionKey: effectiveSessionKey,
         });

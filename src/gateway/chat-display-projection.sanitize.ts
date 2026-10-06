@@ -272,10 +272,7 @@ function sanitizeAssistantPhasedContentBlocks(content: unknown[]): {
   };
 }
 
-function projectAssistantMixedToolContent(
-  content: unknown[],
-  maxChars: number,
-): { content: unknown[]; changed: boolean } | null {
+function projectAssistantMixedToolContent(content: unknown[], maxChars: number): unknown[] | null {
   const hasToolHistoryBlock = content.some((block) =>
     isToolHistoryBlockType(readObjectRecord(block)?.type),
   );
@@ -309,7 +306,7 @@ function projectAssistantMixedToolContent(
 
   // Mixed messages supply both the visible bubble and its reasoning/tool trace.
   // Keep structured siblings or a history reload loses activity shown while live.
-  return hasVisibleText ? { content: projectedContent, changed: true } : null;
+  return hasVisibleText ? projectedContent : null;
 }
 
 const COST_FIELDS = ["input", "output", "cacheRead", "cacheWrite", "total"] as const;
@@ -551,7 +548,7 @@ export function sanitizeChatHistoryMessage(
     if (entry.role === "assistant" && Array.isArray(entry.content)) {
       const mixedToolContent = projectAssistantMixedToolContent(entry.content, maxChars);
       if (mixedToolContent) {
-        entry.content = mixedToolContent.content;
+        entry.content = mixedToolContent;
         if (entry.phase === "commentary") {
           delete entry.phase;
         }

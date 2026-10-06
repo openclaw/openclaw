@@ -135,63 +135,56 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-it.each(["ready", "next mutation"] as const)(
-  "recovers a settled write through another live facade's %s after readback fails",
-  async (retry) => {
-    const database = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-recovery-") },
-    });
-    const first = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const survivor = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
-    const publications: string[] = [];
-    const unsubscribe = sessionChanges.subscribe((change) => {
-      if ("all" in change && change.scope === "worker-environments") {
-        publications.push(survivor.get("worker-recovery")!.environmentId);
-      }
-    });
-    try {
-      delivery.loseIntentResult = true;
-      delivery.failReadback = true;
-      await expect(
-        first.createIntent({
-          environmentId: "worker-recovery",
-          providerId: "fake-provider",
-          profileId: "test-profile",
-          profileSnapshot: { settings: {} },
-          provisionOperationId: "provision:worker-recovery",
-        }),
-      ).rejects.toMatchObject({
-        errors: [delivery.resultFailure, delivery.readFailure],
-        cause: delivery.readFailure,
-      });
-      expect(() => survivor.get("worker-recovery")).toThrow("unsettled mutation");
-      expect(publications).toEqual([]);
-      await first.close();
-      delivery.hideReceipt = false;
-      delivery.hideSettlement = false;
-      if (retry === "ready") {
-        await survivor.ready();
-      } else {
-        await survivor.revokeEnvironmentCredential("worker-recovery");
-      }
-      expect(survivor.get("worker-recovery")).toMatchObject({
-        state: "requested",
-        environmentId: "worker-recovery",
-      });
-      expect(delivery.intentWrites).toBe(1);
-      expect(
-        database.db.prepare("SELECT count(*) AS count FROM worker_environments").get(),
-      ).toEqual({ count: 1 });
-      expect(delivery.readbackIds).toEqual([["worker-recovery"], ["worker-recovery"]]);
-      expect(publications).toEqual(["worker-recovery"]);
-      await survivor.ready();
-      expect(delivery.readbackIds).toHaveLength(2);
-    } finally {
-      unsubscribe();
-      await Promise.all([first.close(), survivor.close()]);
+it("recovers a settled write through another live facade's next mutation after readback fails", async () => {
+  const database = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("environment-recovery-") },
+  });
+  const first = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  const survivor = await createWorkerEnvironmentStore({ database, now: () => 1_000 });
+  const publications: string[] = [];
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if ("all" in change && change.scope === "worker-environments") {
+      publications.push(survivor.get("worker-recovery")!.environmentId);
     }
-  },
-);
+  });
+  try {
+    delivery.loseIntentResult = true;
+    delivery.failReadback = true;
+    await expect(
+      first.createIntent({
+        environmentId: "worker-recovery",
+        providerId: "fake-provider",
+        profileId: "test-profile",
+        profileSnapshot: { settings: {} },
+        provisionOperationId: "provision:worker-recovery",
+      }),
+    ).rejects.toMatchObject({
+      errors: [delivery.resultFailure, delivery.readFailure],
+      cause: delivery.readFailure,
+    });
+    expect(() => survivor.get("worker-recovery")).toThrow("unsettled mutation");
+    expect(publications).toEqual([]);
+    await first.close();
+    delivery.hideReceipt = false;
+    delivery.hideSettlement = false;
+    await survivor.revokeEnvironmentCredential("worker-recovery");
+    expect(survivor.get("worker-recovery")).toMatchObject({
+      state: "requested",
+      environmentId: "worker-recovery",
+    });
+    expect(delivery.intentWrites).toBe(1);
+    expect(database.db.prepare("SELECT count(*) AS count FROM worker_environments").get()).toEqual({
+      count: 1,
+    });
+    expect(delivery.readbackIds).toEqual([["worker-recovery"], ["worker-recovery"]]);
+    expect(publications).toEqual(["worker-recovery"]);
+    await survivor.ready();
+    expect(delivery.readbackIds).toHaveLength(2);
+  } finally {
+    unsubscribe();
+    await Promise.all([first.close(), survivor.close()]);
+  }
+});
 
 it("publishes permanent revocation once across committed, rolled-back and unknown worker outcomes", async () => {
   const database = openOpenClawStateDatabase({

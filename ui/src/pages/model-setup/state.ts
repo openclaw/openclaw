@@ -80,7 +80,7 @@ type ModelSetupWizardPhase =
       busy: boolean;
       validationError: string | null;
     }
-  | { phase: "done"; authChoice: string; preparedModelRef?: string }
+  | { phase: "done" }
   | { phase: "cancelled"; message: string }
   | { phase: "error"; message: string };
 
@@ -170,11 +170,7 @@ export function wizardStateFromResult(
     };
   }
   if (result.done && result.status === "done") {
-    return {
-      phase: "done",
-      authChoice,
-      ...(result.preparedModelRef ? { preparedModelRef: result.preparedModelRef } : {}),
-    };
+    return { phase: "done" };
   }
   if (result.status === "cancelled") {
     return { phase: "cancelled", message: formatUiExternalText(result.error, fallbackError) };

@@ -2,21 +2,24 @@ import { createRequire } from "node:module";
 import { compileFunction } from "node:vm";
 import { requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import type { WorkspaceManifestComputationOperations } from "./workspace-manifest-computation.js";
-import { createWorkspaceManifestProgram } from "./workspace-sync-scripts.js";
+import { WORKSPACE_MANIFEST_PROGRAM } from "./workspace-sync-scripts.js";
 
 const require = createRequire(import.meta.url);
+// Invocation bindings keep workspace state private while the resident worker reuses the code.
+const capture = compileFunction(`${WORKSPACE_MANIFEST_PROGRAM}\nreturn main();`, [
+  "process",
+  "require",
+  "readManifestInput",
+  "assertManifestCurrent",
+  "readManifestGit",
+  "MAX_WORKSPACE_HASH_MEMO_BYTES",
+]);
 
 export async function captureNodeWorkspaceManifestImpl(
   input: WorkspaceManifestComputationOperations["workspace.manifest.remote-capture"]["input"],
   assertCurrent: () => void = () => {},
 ): Promise<string> {
   let stdout = "";
-  const capture = compileFunction(
-    `${createWorkspaceManifestProgram(input.maxHashMemoBytes)}\nreturn main();`,
-    ["process", "require", "readManifestInput", "assertManifestCurrent", "readManifestGit"],
-  );
-  // Only our fixed program is compiled. Per-invocation process bindings keep HOME,
-  // argv and output private without changing the resident worker's process state.
   await capture(
     {
       argv: [process.execPath, ...input.argv],
@@ -48,6 +51,7 @@ export async function captureNodeWorkspaceManifestImpl(
       }
       return Buffer.from(result.stdout);
     },
+    input.maxHashMemoBytes,
   );
   return stdout;
 }

@@ -6,6 +6,7 @@ import {
   logLaneDequeue,
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   applyCommandLaneCapacity,
   canAdmitInGroup,
@@ -21,7 +22,6 @@ import {
   enqueueLaneQueue,
   type CommandLaneTaskMarker,
   getQueueState,
-  type LaneGroupState,
   type LaneState,
   normalizeLane,
   removeLaneQueueEntry,
@@ -424,14 +424,14 @@ function drainLane(
 }
 
 function drainReadyCommandLane(lane: string, completedState?: LaneState): void {
-  if (getLaneGroup(lane)) {
-    drainCommandLaneGroup(lane, drainLane);
-    return;
-  }
-  // An idle scoped lane may have been retired and recreated while an older
-  // task was finishing. Preserve the completion's captured state so its drain
-  // cannot retire a newer registry entry that it never owned.
-  drainLane(lane, Number.POSITIVE_INFINITY, completedState);
+  runInDetachedAsyncContext(() => {
+    if (getLaneGroup(lane)) {
+      drainCommandLaneGroup(lane, drainLane);
+      return;
+    }
+    // An older completion must not retire a recreated lane that it never owned.
+    drainLane(lane, Number.POSITIVE_INFINITY, completedState);
+  });
 }
 
 function updateLaneConcurrency(lane: string, maxConcurrent: number): LaneState[] {
@@ -466,10 +466,9 @@ export function publishLaneConfiguration(config: {
   clearGroups?: readonly string[];
 }): void {
   // Validate before mutation so a rejected group cannot leave widened lanes behind.
-  const validated: LaneGroupState[] = [];
-  for (const [group, spec] of Object.entries(config.groups ?? {})) {
-    validated.push(validateCommandLaneGroupSpec(group, spec));
-  }
+  const validated = Object.entries(config.groups ?? {}).map(([group, spec]) =>
+    validateCommandLaneGroupSpec(group, spec),
+  );
 
   const touched = new Set<string>();
   for (const [rawLane, maxConcurrent] of Object.entries(config.lanes ?? {})) {
@@ -536,6 +535,7 @@ export function enqueueCommandInLane<T>(
     return Promise.reject(new GatewayDrainingError());
   }
   const runInAsyncContext = AsyncLocalStorage.snapshot();
+  const { onWait, taskTimeoutProgressAtMs, taskTimeoutSubscribe } = opts ?? {};
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
@@ -556,12 +556,19 @@ export function enqueueCommandInLane<T>(
       taskIdentity: opts?.taskIdentity ? { ...opts.taskIdentity } : undefined,
       sessionTarget: opts?.sessionTarget ? { ...opts.sessionTarget } : undefined,
       taskTimeoutMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutMs),
-      taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
-      taskTimeoutSubscribe: opts?.taskTimeoutSubscribe,
+      taskTimeoutProgressAtMs: taskTimeoutProgressAtMs
+        ? () => runInAsyncContext(taskTimeoutProgressAtMs)
+        : undefined,
+      taskTimeoutSubscribe: taskTimeoutSubscribe
+        ? (onDeadline) => {
+            const unsubscribe = runInAsyncContext(taskTimeoutSubscribe, onDeadline);
+            return () => runInAsyncContext(unsubscribe);
+          }
+        : undefined,
       taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
       taskTimeoutAbortGraceMs: clampPositiveTimerTimeoutMs(opts?.taskTimeoutAbortGraceMs),
       taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
-      onWait: opts?.onWait,
+      onWait: onWait ? (...args) => runInAsyncContext(onWait, ...args) : undefined,
     };
     entry.queuedAheadAtEnqueue = enqueueLaneQueue(state.queue, entry);
     entry.activeAheadAtEnqueue = state.activeTaskIds.size;
@@ -621,11 +628,7 @@ export function getCommandLaneSnapshot(lane: string = CommandLane.Main): Command
 }
 
 /** Per-lane work totals for every live lane; diagnostics composition lives in command-lane-diagnostics.ts. */
-export function listCommandLaneTotals(): Array<{
-  lane: string;
-  activeCount: number;
-  queuedCount: number;
-}> {
+export function listCommandLaneTotals() {
   return [...getQueueState().lanes.values()].map((state) => ({
     lane: state.lane,
     activeCount: state.activeTaskIds.size,

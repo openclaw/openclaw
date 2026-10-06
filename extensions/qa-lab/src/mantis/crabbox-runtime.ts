@@ -3,7 +3,8 @@ import {
   ensureManagedCrabboxBinary,
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
-import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisCrabboxLeaseOptions = {
   idleTimeout?: string;
@@ -44,11 +45,7 @@ type CommandResult = {
   stdout: string;
 };
 
-export type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
+export type CommandRunner = typeof defaultCommandRunner;
 
 export type CrabboxInspect = {
   host?: string;
@@ -133,21 +130,6 @@ export function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  runner: CommandRunner;
-  stdio?: "inherit" | "pipe";
-}) {
-  return params.runner(params.command, params.args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: params.stdio ?? "pipe",
-  });
-}
-
 export function createMantisCrabboxSession(params: {
   crabboxBin: string;
   cwd: string;
@@ -158,8 +140,8 @@ export function createMantisCrabboxSession(params: {
 }) {
   let leaseId = params.leaseId;
   const createdLease = leaseId === undefined;
-  const run = (args: readonly string[], stdio?: "inherit" | "pipe") =>
-    runCommand({ ...params, command: params.crabboxBin, args, stdio });
+  const run = (args: readonly string[], stdio: "inherit" | "pipe" = "pipe") =>
+    params.runner(params.crabboxBin, args, { cwd: params.cwd, env: params.env, stdio });
   const requireLeaseId = () => {
     if (!leaseId) {
       throw new Error("Crabbox lease id is unavailable before acquisition.");
@@ -285,12 +267,10 @@ async function sshCommand(params: {
   for (const port of candidates) {
     const command = sshCommandForPort(params.inspect, port);
     try {
-      await runCommand({
-        args: command.probeArgs,
-        command: "ssh",
+      await params.runner("ssh", command.probeArgs, {
         cwd: params.cwd,
         env: params.env,
-        runner: params.runner,
+        stdio: "pipe",
       });
       return command.value;
     } catch (error) {
@@ -314,9 +294,9 @@ export async function copyCrabboxArtifacts(params: {
 }) {
   const { host, sshArgs, sshUser } = await sshCommand(params);
   const excludeArgs = params.exclude?.flatMap((pattern) => ["--exclude", pattern]) ?? [];
-  await runCommand({
-    command: "rsync",
-    args: [
+  await params.runner(
+    "rsync",
+    [
       "-az",
       "-e",
       sshArgs,
@@ -324,10 +304,12 @@ export async function copyCrabboxArtifacts(params: {
       `${sshUser}@${host}:${params.remoteOutputDir}/`,
       `${params.outputDir}/`,
     ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
+    {
+      cwd: params.cwd,
+      env: params.env,
+      stdio: "pipe",
+    },
+  );
 }
 
 export function renderMantisBrowserDiscoveryScript() {

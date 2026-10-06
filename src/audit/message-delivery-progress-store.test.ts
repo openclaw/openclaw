@@ -295,11 +295,6 @@ describe("outbound message progress companion", () => {
     // Only audit rows belong to this proof. Restore empty unrelated owner tables
     // for the immutable reader without inventing a production downgrade.
     expect(
-      projectedDatabase
-        .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
-        .get(),
-    ).toEqual({ count: 0 });
-    expect(
       projectedDatabase.prepare("SELECT COUNT(*) AS count FROM worker_environments").get(),
     ).toEqual({ count: 0 });
     removePreparedWorkerOwnershipColumns(projectedDatabase);
@@ -318,7 +313,14 @@ describe("outbound message progress companion", () => {
            AND type IN ('table', 'index') AND sql IS NOT NULL
          ORDER BY type = 'table' DESC, name`,
       );
-      for (const table of ["current_conversation_bindings", "skill_workshop_proposals"]) {
+      for (const table of [
+        "current_conversation_bindings",
+        "skill_workshop_proposals",
+        "cron_run_receipts",
+      ]) {
+        expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
+          count: 0,
+        });
         projectedDatabase.exec(`DROP TABLE ${table};`);
         for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
           projectedDatabase.exec(sql);

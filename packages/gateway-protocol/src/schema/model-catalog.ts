@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { ChatAccountSelectionSchema, ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import {
   GatewayAgentRuntimeSchema,
+  GatewayCompletionRouteSchema,
   GatewayContextWindowOptionSchema,
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
@@ -75,6 +76,15 @@ const ModelRuntimeProperties = {
   serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
+  /** Selected route can safely retry rejected service tiers before output. */
+  supportsServiceTierRecovery: Type.Optional(Type.Boolean()),
+  /** Recent fulfillment of a requested tier; never a capability restriction. */
+  serviceTierObservation: Type.Optional(
+    closedObject({
+      requestedTier: NonEmptyString,
+      responseTier: Type.Optional(NonEmptyString),
+    }),
+  ),
   supportsTools: Type.Optional(Type.Boolean()),
   input: Type.Optional(
     Type.Array(
@@ -175,6 +185,8 @@ export const ModelsListResultSchema = closedObject({
     closedObject({
       /** Auto preview from agents.defaults.model, even when utility routing is explicit or disabled. */
       automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
+      /** Route the utility model in effect (automatic or explicit) runs on; absent when disabled. */
+      utilityRuntime: Type.Optional(GatewayCompletionRouteSchema),
     }),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),

@@ -24,11 +24,7 @@ struct CameraPTZStatusResponse: Encodable, Equatable, Sendable {
     let canHome: Bool
 }
 
-struct CameraPTZState: Encodable, Equatable, Sendable {
-    let panDegrees: Double?
-    let tiltDegrees: Double?
-    let zoomPercent: Double?
-}
+typealias CameraPTZState = OpenClawCameraPTZAxisValues
 
 struct CameraPTZControlResponse: Encodable, Equatable, Sendable {
     let deviceId: String
@@ -64,11 +60,8 @@ enum CameraPTZError: LocalizedError, Equatable {
     private static func describe(_ state: CameraPTZState?) -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard let state,
-              let data = try? encoder.encode(state),
-              let json = String(data: data, encoding: .utf8)
-        else { return "unavailable" }
-        return json
+        guard let state, let data = try? encoder.encode(state) else { return "unavailable" }
+        return String(bytes: data, encoding: .utf8)!
     }
 }
 

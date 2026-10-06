@@ -70,7 +70,7 @@ export function recordChatSendTiming(
       sendState: item.sendState,
       ...extra,
     },
-    { console: false, maxBufferedEventsForType: 40 },
+    { maxBufferedEventsForType: 40 },
   );
 }
 
@@ -125,7 +125,7 @@ export function recordChatSendServerTiming(host: ChatSendTimingHost, payload: un
       ...identity,
       ...(slow ? { slow: true } : {}),
     },
-    { console: slow, warn: slow, maxBufferedEventsForType: 40 },
+    { warn: slow, maxBufferedEventsForType: 40 },
   );
 }
 
@@ -142,7 +142,6 @@ export function registerChatSendTiming(
     sendAttempts: item.sendAttempts ?? 0,
     sendState: item.sendState,
     submittedAtMs: item.sendSubmittedAtMs ?? requestStartedAtMs,
-    requestStartedAtMs,
   });
 }
 
@@ -161,12 +160,10 @@ export function updateChatSendAckTiming(
       sendAttempts: item.sendAttempts ?? 0,
       sendState: item.sendState,
       submittedAtMs,
-      requestStartedAtMs,
     }),
     runId: ack.runId,
     sessionKey: existing?.sessionKey ?? item.sessionKey,
     agentId: existing?.agentId ?? item.agentId,
-    ackAtMs: controlUiNowMs(),
     ackStatus: ack.status,
   };
   if (ack.runId !== requestedRunId) {

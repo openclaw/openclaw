@@ -2430,9 +2430,9 @@ SOFTWARE.
 Mermaid Parser
 ========================================================================
 
-Mermaid Parser 1.2.1 (@mermaid-js/parser)
+Mermaid Parser 2.0.0 (@mermaid-js/parser)
 
-Source: https://registry.npmjs.org/@mermaid-js/parser/-/parser-1.2.1.tgz
+Source: https://registry.npmjs.org/@mermaid-js/parser/-/parser-2.0.0.tgz
 
 The MIT License (MIT)
 

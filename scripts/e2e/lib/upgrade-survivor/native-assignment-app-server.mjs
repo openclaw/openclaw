@@ -149,10 +149,6 @@ function startThread(params, requestedId) {
   return { ...threadConfigurations.get(id).response, thread: thread(id) };
 }
 
-function subscribe(socket, threadId) {
-  subscriptions.get(socket).add(threadId);
-}
-
 function resumeChangesConfiguration(params, configured) {
   if (
     ["config", "baseInstructions", "developerInstructions", "permissions"].some(
@@ -225,7 +221,7 @@ function resumeThread(socket, phase, params) {
     threadConfigurations.set(params.threadId, { params: structuredClone(nextParams), response });
     loaded.add(params.threadId);
   }
-  subscribe(socket, params.threadId);
+  subscriptions.get(socket).add(params.threadId);
   return { ...threadConfigurations.get(params.threadId).response, thread: selected };
 }
 
@@ -418,7 +414,7 @@ function handle(socket, phase, message) {
       return result({ data: [], nextCursor: null });
     case "thread/start": {
       const response = startThread(params);
-      subscribe(socket, response.thread.id);
+      subscriptions.get(socket).add(response.thread.id);
       return result(response);
     }
     case "thread/resume":
@@ -469,7 +465,7 @@ function handle(socket, phase, message) {
     case "thread/subscribe":
       thread(params.threadId);
       loaded.add(params.threadId);
-      subscribe(socket, params.threadId);
+      subscriptions.get(socket).add(params.threadId);
       return result({});
     case "thread/unsubscribe": {
       if (!loaded.has(params.threadId)) {

@@ -21,6 +21,7 @@ import type {
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
+import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type {
   CatalogBackingSessionDisplay,
@@ -44,7 +45,9 @@ import type { SessionOrganizerController } from "./session-organizer-controller.
 import type { SessionOwnerOption } from "./session-owner-chip.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 import { renderSidebarSessionSubtitle } from "./session-row-subtitle.ts";
+import { sessionRunVisibility } from "./session-run-visibility.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
+import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
 import "./elapsed-time.ts";
 import "./tooltip.ts";
 
@@ -167,11 +170,12 @@ export function visibleSessionChildren(params: {
 }
 
 /** Compose independently owned session state and context indicators. */
-function renderSidebarSessionIndicators(
+export function renderSidebarSessionIndicators(
   host: SessionListHost,
   session: SidebarRecentSession,
   display?: CatalogBackingSessionDisplay,
   icon?: TemplateResult,
+  headerSummary?: Parameters<typeof renderTeamSessionSlots>,
 ) {
   const team = host.sidebarAgentsMode === "roster";
   const ownAttention = session.ownAttention ?? session.attention;
@@ -223,6 +227,14 @@ function renderSidebarSessionIndicators(
     settings: gateway?.connection,
     password: gateway?.connection.password,
   });
+  const runVisibility = sessionRunVisibility();
+  const teamSummary: Parameters<typeof renderTeamSessionSlots> = headerSummary ?? [
+    [session],
+    !childrenExpanded,
+    session.childSessionKeys.length,
+    0,
+    runVisibility,
+  ];
   const { running, leadingIndicator, renderedIdentities } = renderSessionLeadingState(
     session,
     leadingOwner,
@@ -231,9 +243,15 @@ function renderSidebarSessionIndicators(
     channelAvatarAuth,
     team,
     icon,
+    runVisibility,
   );
   const stateDescription = describeSessionState(session);
-  const hasTrail = session.isChild && (session.runtimeMs != null || session.startedAt != null);
+  const snoozed =
+    !session.isChild &&
+    (host.sessionsStatusFilter === "snoozed" || host.sessionsStatusFilter === "all") &&
+    isSessionSnoozed(session, Date.now());
+  const hasTrail =
+    snoozed || (session.isChild && (session.runtimeMs != null || session.startedAt != null));
   const metaId = hasTrail ? sidebarSessionMetaId(session.key) : undefined;
   const stateId = !team && stateDescription ? sidebarSessionStateId(session.key) : undefined;
   const persistentIndicator = html`<span class="sidebar-session-indicator"
@@ -250,16 +268,20 @@ function renderSidebarSessionIndicators(
   const trail = hasTrail
     ? html`<span class="session-row-trail" id=${metaId}
         >${
-          session.runtimeMs != null
-            ? session.hasActiveRun
-              ? html`<openclaw-elapsed-time
-                  .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+          snoozed
+            ? t("sessionsView.snoozeWakes", {
+                time: formatSessionSnoozeWakeTime(session.snoozedUntil!),
+              })
+            : session.runtimeMs != null
+              ? session.hasActiveRun
+                ? html`<openclaw-elapsed-time
+                    .startMs=${session.runtimeSampledAt! - session.runtimeMs}
+                  ></openclaw-elapsed-time>`
+                : (formatDurationCompact(session.runtimeMs) ?? "0ms")
+              : html`<openclaw-elapsed-time
+                  .startMs=${session.startedAt!}
+                  .endMs=${session.endedAt ?? null}
                 ></openclaw-elapsed-time>`
-              : (formatDurationCompact(session.runtimeMs) ?? "0ms")
-            : html`<openclaw-elapsed-time
-                .startMs=${session.startedAt!}
-                .endMs=${session.endedAt ?? null}
-              ></openclaw-elapsed-time>`
         }</span
       >`
     : nothing;
@@ -272,12 +294,13 @@ function renderSidebarSessionIndicators(
     originIndicators,
     childrenExpanded,
     content: html` <span class="sidebar-recent-session__details-endcap">
+      ${headerSummary && (leadingIndicator !== nothing || session.visibility === "draft") ? persistentIndicator : nothing}
       <openclaw-viewer-facepile
         .presencePayload=${host.sessionData.presencePayload}
         .selfUser=${host.sessionDataContext?.gateway.snapshot.selfUser}
         .selfInstanceId=${host.sessionData.presenceInstanceId}
         .sessionKey=${session.key}
-        .excludeIdentities=${renderedIdentities ?? []}
+        .excludeIdentities=${renderedIdentities ?? EMPTY_VIEWER_IDENTITIES}
         .maxVisible=${3}
         variant="session"
       ></openclaw-viewer-facepile>
@@ -301,12 +324,7 @@ function renderSidebarSessionIndicators(
             ? ownAttention.requests.some((request) => request.kind === "approval")
             : !team && ownAttention.kind === "approval",
       })}
-      ${team ? trail : nothing}
-      ${
-        team
-          ? renderTeamSessionSlots([session], !childrenExpanded, session.childSessionKeys.length)
-          : nothing
-      }
+      ${team ? trail : nothing} ${team ? renderTeamSessionSlots(...teamSummary) : nothing}
       ${!team && stateDescription ? html`<span class="sr-only" id=${stateId} aria-hidden="true">${stateDescription}</span>` : nothing}
       ${team ? nothing : trail}
     </span>`,

@@ -1,3 +1,4 @@
+export { supportsNativeOpenAIResponsesEndpoint } from "../transports/openai-responses-endpoint.js";
 export { OPENAI_RESPONSES_APIS } from "../transports/openai-responses-contracts.js";
 export {
   readOpenAIResponsesCompactionWindow,

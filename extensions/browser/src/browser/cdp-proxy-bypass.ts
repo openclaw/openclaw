@@ -23,15 +23,11 @@ const directHttpsAgent = new https.Agent();
  * so callers fall through to their default behaviour.
  */
 export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | undefined {
-  try {
-    const parsed = new URL(url);
-    if (isLoopbackHost(parsed.hostname)) {
-      return parsed.protocol === "https:" || parsed.protocol === "wss:"
-        ? directHttpsAgent
-        : directHttpAgent;
-    }
-  } catch {
-    // not a valid URL — let caller handle it
+  const parsed = URL.parse(url);
+  if (parsed && isLoopbackHost(parsed.hostname)) {
+    return parsed.protocol === "https:" || parsed.protocol === "wss:"
+      ? directHttpsAgent
+      : directHttpAgent;
   }
   return undefined;
 }
@@ -60,11 +56,7 @@ function appendLoopbackEntries(value: string | undefined): string {
 }
 
 function isLoopbackCdpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
+  return isLoopbackHost(URL.parse(url)?.hostname ?? "");
 }
 
 type NoProxySnapshot = {

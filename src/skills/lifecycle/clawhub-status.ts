@@ -152,7 +152,7 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       { ...originDetails, slug: trackedSlug, lockPath: lockRead.path },
     );
   }
-  const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+  const originRegistry = originRead.origin.registry;
   const lockedRegistry =
     locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
   const sourceUrl = normalizeOptionalStringValue(locked.sourceUrl);
@@ -192,22 +192,15 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       },
     );
   }
+  const { version: _version, ...origin } = originRead.origin;
   return {
+    ...origin,
     status: "linked",
     valid: true,
     registry: lockedRegistry,
     slug: trackedSlug,
-    ...(ownerHandle ? { ownerHandle } : {}),
-    ...(requestedReference ? { requestedReference } : {}),
-    ...(trustState ? { trustState } : {}),
-    installedVersion: locked.version,
-    installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
-    ...(sourceUrl ? { sourceUrl } : {}),
-    ...(artifact ? { artifact } : {}),
-    ...(skillFile ? { skillFile } : {}),
-    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
   };
 }
 
@@ -324,7 +317,7 @@ export async function resolveClawHubSkillVerificationTarget(
           error: `Skill "${trackedSlug}" has ClawHub origin metadata for "${originRead.origin.slug}". Reinstall it from ClawHub before verifying it as an installed ClawHub skill.`,
         };
       }
-      const originRegistry = normalizeStoredRegistry(originRead.origin.registry);
+      const originRegistry = originRead.origin.registry;
       const lockedRegistry =
         locked.registry === undefined ? originRegistry : normalizeStoredRegistry(locked.registry);
       const ownerHandle = normalizeOptionalStringValue(locked.ownerHandle);
@@ -414,12 +407,7 @@ export async function resolveClawHubSkillVerificationTarget(
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
-      slug: requestedRef.slug,
-      ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
-      ...(requestedRef.requestedReference
-        ? { requestedReference: requestedRef.requestedReference }
-        : {}),
-      ...(requestedRef.trustState ? { trustState: requestedRef.trustState } : {}),
+      ...requestedRef,
       baseUrl: registry,
       version,
       tag,

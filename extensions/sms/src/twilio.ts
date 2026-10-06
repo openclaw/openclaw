@@ -5,6 +5,7 @@ import {
   formatErrorMessage,
   PlatformMessageNotDispatchedError,
 } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import {
   readResponseTextPrefix,
@@ -12,7 +13,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
@@ -40,12 +41,6 @@ type ParsedTwilioApiError = {
   message?: string;
 };
 
-type TwilioApiResponse = {
-  ok: boolean;
-  status: number;
-  text: string;
-};
-
 type TwilioMessagePayload = {
   sid?: string;
   to?: string;
@@ -55,32 +50,9 @@ type TwilioMessagePayload = {
 
 const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
-export type TwilioIncomingPhoneNumber = {
-  sid: string;
-  phoneNumber: string;
-  smsUrl: string;
-  smsMethod: string;
-  voiceUrl: string;
-};
-
-export type TwilioMessageLogEntry = {
-  sid: string;
-  direction: string;
-  status: string;
-  to: string;
-  from: string;
-  errorCode: string;
-  body: string;
-  dateCreated: string;
-  dateSent: string;
-};
-
-export type TwilioMessagingService = {
-  sid: string;
-  inboundRequestUrl: string;
-  inboundMethod: string;
-  useInboundWebhookOnNumber: boolean;
-};
+export type TwilioIncomingPhoneNumber = ReturnType<typeof parseTwilioIncomingPhoneNumber>;
+export type TwilioMessageLogEntry = ReturnType<typeof parseTwilioMessageLogEntry>;
+export type TwilioMessagingService = ReturnType<typeof parseTwilioMessagingService>;
 
 function firstString(value: unknown): string {
   if (Array.isArray(value)) {
@@ -137,11 +109,7 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
 }
 
 function requestSearch(req: IncomingMessage): string {
-  try {
-    return new URL(req.url ?? "/", "http://localhost").search;
-  } catch {
-    return "";
-  }
+  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
 }
 
 function stripUrlFragment(url: string): string {
@@ -379,7 +347,7 @@ async function requestTwilioApi(params: {
   init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-}): Promise<TwilioApiResponse> {
+}) {
   const init = {
     ...params.init,
     headers: {
@@ -387,9 +355,12 @@ async function requestTwilioApi(params: {
       authorization: basicAuthHeader(params.account),
     },
   } satisfies RequestInit;
-  if (params.fetchImpl) {
-    assertTwilioRequestCredentialsAvailable(params.account);
-    const response = await params.fetchImpl(params.url, init);
+  const fetchImpl = params.fetchImpl;
+  if (fetchImpl) {
+    const response = await captureEffectAuthority().initiate(() => {
+      assertTwilioRequestCredentialsAvailable(params.account);
+      return fetchImpl(params.url, init);
+    });
     return {
       ok: response.ok,
       status: response.status,
@@ -426,9 +397,7 @@ async function requestTwilioApi(params: {
   }
 }
 
-function parseTwilioIncomingPhoneNumber(
-  record: Record<string, unknown>,
-): TwilioIncomingPhoneNumber {
+function parseTwilioIncomingPhoneNumber(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     phoneNumber: firstTrimmedString(record.phone_number ?? record.phoneNumber),
@@ -438,7 +407,7 @@ function parseTwilioIncomingPhoneNumber(
   };
 }
 
-function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMessageLogEntry {
+function parseTwilioMessageLogEntry(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     direction: firstTrimmedString(record.direction),
@@ -452,7 +421,7 @@ function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMess
   };
 }
 
-function parseTwilioMessagingService(record: Record<string, unknown>): TwilioMessagingService {
+function parseTwilioMessagingService(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     inboundRequestUrl: firstTrimmedString(record.inbound_request_url ?? record.inboundRequestUrl),
@@ -468,27 +437,11 @@ function parseTwilioListPayload<T>(
   key: string,
   parseEntry: (record: Record<string, unknown>) => T,
 ): T[] {
-  if (!text.trim()) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return [];
-  }
-  const items = (parsed as Record<string, unknown>)[key];
+  const items = asNullableObjectRecord(safeParseJson<unknown>(text))?.[key];
   if (!Array.isArray(items)) {
     return [];
   }
-  return items
-    .filter((item): item is Record<string, unknown> =>
-      Boolean(item && typeof item === "object" && !Array.isArray(item)),
-    )
-    .map(parseEntry);
+  return items.filter(isRecord).map(parseEntry);
 }
 
 export async function listTwilioIncomingPhoneNumbers(params: {
@@ -534,16 +487,11 @@ export async function retrieveTwilioMessagingService(params: {
   if (!response.ok) {
     throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch {
+  const parsed = safeParseJson<unknown>(response.text);
+  if (!isRecord(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
-  }
-  return parseTwilioMessagingService(parsed as Record<string, unknown>);
+  return parseTwilioMessagingService(parsed);
 }
 
 export async function listTwilioMessages(params: {

@@ -125,7 +125,7 @@ function renderTranscriptShell(
           routeLoading ? "chat-thread--route-loading" : ""
         } ${commentPins ? "chat-thread--comment-pins" : ""}"
         ${markdownBlocks(props.transcriptVisible ?? true)}
-        ${linkReaderPrefetch(props.sessionKey, (props.transcriptVisible ?? true) && !projection.showLoadingSkeleton, Boolean(props.gatewayClient?.connected))}
+        ${linkReaderPrefetch(props.sessionKey, projection.showLoadingSkeleton ? false : (props.transcriptVisible ?? true), Boolean(props.gatewayClient?.connected))}
         ${ref((element) => {
           if (element instanceof HTMLElement) {
             hydrateLinkFavicons(element, props.fetchLinkFavicon);

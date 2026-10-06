@@ -131,13 +131,10 @@ function createMSTeamsSendReceipt(params: {
 function createMSTeamsSendResult(params: {
   conversationId: string;
   messageId: string;
-  platformMessageIds?: readonly string[];
   kind: MessageReceiptPartKind;
   pendingUploadId?: string;
 }): SendMSTeamsMessageResult {
-  const platformMessageIds = (
-    params.platformMessageIds?.length ? [...params.platformMessageIds] : [params.messageId]
-  )
+  const platformMessageIds = [params.messageId]
     .map((messageId) => messageId.trim())
     .filter((messageId) => messageId && messageId !== "unknown");
   return {
@@ -162,16 +159,7 @@ type SendMSTeamsPollParams = {
   maxSelections?: number;
 } & MSTeamsSendHandoff;
 
-type SendMSTeamsPollResult = {
-  pollId: string;
-  messageId: string;
-  conversationId: string;
-};
-
-type SendMSTeamsCardParams = {
-  cfg: OpenClawConfig;
-  /** Conversation ID or user ID to send to */
-  to: string;
+type SendMSTeamsCardParams = Pick<SendMSTeamsMessageParams, "cfg" | "to"> & {
   card: Record<string, unknown>;
 } & MSTeamsSendOptions;
 
@@ -381,7 +369,6 @@ async function sendTextWithMedia(
       app,
       conversationRef: ref,
       messages,
-      retry: {},
       onRetry: (event) => {
         log.debug?.("retrying send", { conversationId, ...event });
       },
@@ -453,9 +440,7 @@ async function sendProactiveActivity(params: ProactiveActivityParams): Promise<s
   }
 }
 
-export async function sendPollMSTeams(
-  params: SendMSTeamsPollParams,
-): Promise<SendMSTeamsPollResult> {
+export async function sendPollMSTeams(params: SendMSTeamsPollParams) {
   assertMSTeamsSendHandoff(params);
   const { cfg, to, question, options, maxSelections } = params;
   const ctx = await resolveMSTeamsSendContext({
@@ -542,14 +527,8 @@ type MSTeamsMessageMutationParams = {
   activityId: string;
 };
 
-type MSTeamsMessageMutationResult = {
-  conversationId: string;
-};
-
-export async function editMessageMSTeams(
-  params: MSTeamsMessageMutationParams & { text: string },
-): Promise<MSTeamsMessageMutationResult> {
-  return updateMSTeamsMessageActivity({
+export async function editMessageMSTeams(params: MSTeamsMessageMutationParams & { text: string }) {
+  return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
       ...buildMSTeamsMessageActivity(
@@ -565,8 +544,8 @@ export async function editMessageMSTeams(
 
 export async function editAdaptiveCardMSTeams(
   params: MSTeamsMessageMutationParams & { card: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
-  return updateMSTeamsMessageActivity({
+) {
+  return mutateMSTeamsMessageActivity({
     ...params,
     activity: {
       ...buildMSTeamsAdaptiveCardActivity(params.card),
@@ -575,52 +554,38 @@ export async function editAdaptiveCardMSTeams(
   });
 }
 
-async function updateMSTeamsMessageActivity(
-  params: MSTeamsMessageMutationParams & { activity: Record<string, unknown> },
-): Promise<MSTeamsMessageMutationResult> {
+export async function deleteMessageMSTeams(params: MSTeamsMessageMutationParams) {
+  return mutateMSTeamsMessageActivity(params);
+}
+
+async function mutateMSTeamsMessageActivity(
+  params: MSTeamsMessageMutationParams & { activity?: Record<string, unknown> },
+) {
   const { cfg, to, activityId, activity } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
     to,
   });
 
-  log.debug?.("editing proactive message", { conversationId, activityId });
-
-  try {
-    const baseRef = buildConversationReference(ref);
-    await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, {
-      serviceUrlBoundary: sdkCloudOptions,
-    });
-  } catch (err) {
-    throw createMSTeamsSendError("msteams edit", err);
-  }
-
-  log.info("edited proactive message", { conversationId, activityId });
-
-  return { conversationId };
-}
-
-export async function deleteMessageMSTeams(
-  params: MSTeamsMessageMutationParams,
-): Promise<MSTeamsMessageMutationResult> {
-  const { cfg, to, activityId } = params;
-  const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
-    cfg,
-    to,
+  const operation = activity ? "edit" : "delete";
+  log.debug?.(`${activity ? "editing" : "deleting"} proactive message`, {
+    conversationId,
+    activityId,
   });
 
-  log.debug?.("deleting proactive message", { conversationId, activityId });
-
   try {
     const baseRef = buildConversationReference(ref);
-    await deleteMSTeamsActivityWithReference(app, baseRef, activityId, {
-      serviceUrlBoundary: sdkCloudOptions,
-    });
+    const options = { serviceUrlBoundary: sdkCloudOptions };
+    if (activity) {
+      await updateMSTeamsActivityWithReference(app, baseRef, activityId, activity, options);
+    } else {
+      await deleteMSTeamsActivityWithReference(app, baseRef, activityId, options);
+    }
   } catch (err) {
-    throw createMSTeamsSendError("msteams delete", err);
+    throw createMSTeamsSendError(`msteams ${operation}`, err);
   }
 
-  log.info("deleted proactive message", { conversationId, activityId });
+  log.info(`${activity ? "edited" : "deleted"} proactive message`, { conversationId, activityId });
 
   return { conversationId };
 }

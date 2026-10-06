@@ -51,7 +51,7 @@ export function createGatewayConnectionState(params: {
   // validate the live transport before publishing into a retired connection.
   const isConnectionActive = (connId: string) => {
     const client = clients.getByConnectionId(connId);
-    return Boolean(client && !client.invalidated);
+    return Boolean(client && !client.invalidated && !client.connectionSignal?.aborted);
   };
   const sessionEventSubscribers = createSessionEventSubscriberRegistry(
     isConnectionActive,
@@ -198,7 +198,7 @@ export function createGatewayConnectionState(params: {
   });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, import("./server-shared.js").DedupeEntry>();
-  const chatRunState = createChatRunState();
+  const chatRunState = createChatRunState(isConnectionActive);
   const chatRunRegistry = chatRunState.registry;
   const addChatRun = chatRunRegistry.add;
   const removeChatRun = chatRunRegistry.remove;

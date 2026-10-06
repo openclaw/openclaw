@@ -1,5 +1,7 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionEntryCandidateTarget, type SessionEntry } from "../../config/sessions.js";
+import { resolveSessionEntryCandidateTargetForRuntime } from "../../config/sessions/session-accessor.entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildAgentMainSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveInternalSessionKey } from "./sessions-helpers.js";
@@ -18,7 +20,7 @@ export function resolveSessionStatusEntry(params: {
   keyRaw: string;
   mainKey: string;
   requesterInternalKey?: string;
-}): ResolvedStatusSessionEntry | null {
+}): ResolvedStatusSessionEntry | null | Promise<ResolvedStatusSessionEntry | null> {
   const keyRaw = params.keyRaw.trim();
   if (!keyRaw) {
     return null;
@@ -27,7 +29,6 @@ export function resolveSessionStatusEntry(params: {
   const internal = resolveInternalSessionKey({
     key: keyRaw,
     alias: params.alias,
-    mainKey: params.mainKey,
     requesterInternalKey: params.requesterInternalKey,
   });
 
@@ -51,18 +52,20 @@ export function resolveSessionStatusEntry(params: {
     }
   }
 
-  const resolved = resolveSessionEntryCandidateTarget({
+  const resolved = resolveSessionEntryCandidateTargetForRuntime({
     agentId: params.agentId,
     candidateKeys: candidates,
     cfg: params.cfg,
   });
-  return resolved
-    ? {
-        entry: resolved.entry,
-        key: resolved.sessionKey,
-        persisted: resolved.persisted,
-      }
-    : null;
+  const project = (value: Awaited<typeof resolved>) =>
+    value
+      ? {
+          entry: value.entry,
+          key: value.sessionKey,
+          persisted: value.persisted,
+        }
+      : null;
+  return isPromiseLike(resolved) ? resolved.then(project) : project(resolved);
 }
 
 /** Maps requester keys into the currently selected agent store's legacy main key shape. */

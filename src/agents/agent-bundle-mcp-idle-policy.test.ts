@@ -33,13 +33,11 @@ afterEach(async () => {
 });
 
 it.each([undefined, 0] as const)(
-  "keeps session runtimes alive with TTL %s without scheduling idle maintenance",
+  "changes disabled idle policy %s on reuse and reload without replacing the runtime",
   async (sessionIdleTtlMs) => {
-    const manager = createSessionMcpRuntimeManager({
-      scheduler,
-    });
+    const manager = createSessionMcpRuntimeManager({ scheduler });
     const params: RuntimeParams = {
-      sessionId: "session-keep-alive",
+      sessionId: "session-policy",
       workspaceDir: "/workspace",
       cfg: idleConfig(sessionIdleTtlMs),
     };
@@ -48,41 +46,25 @@ it.each([undefined, 0] as const)(
       await clock.advanceBy(86_400_000);
       expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
       expect(scheduler.nextWakeAtMs).toBeNull();
+      params.cfg = idleConfig(120_000);
+      expect(await manager.getOrCreate(params)).toBe(runtime);
+      await clock.advanceBy(60_000);
+      expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+      await manager.reloadConfig({ cfg: idleConfig() });
+      // A turn prepared before publication must not restore its former idle policy.
+      expect(await manager.getOrCreate(params)).toBe(runtime);
+      expect(scheduler.nextWakeAtMs).toBeNull();
+      await clock.advanceBy(86_400_000);
+      expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
+      await manager.reloadConfig({ cfg: idleConfig(1_000) });
+      await clock.advanceBy(60_000);
+      expect(manager.listRuntimeKeys()).toEqual([]);
+      expect(scheduler.nextWakeAtMs).toBeNull();
     } finally {
       await manager.disposeAll();
     }
   },
 );
-
-it("changes idle policy on reuse and reload without replacing the runtime", async () => {
-  const manager = createSessionMcpRuntimeManager({
-    scheduler,
-  });
-  const params: RuntimeParams = {
-    sessionId: "session-policy",
-    workspaceDir: "/workspace",
-    cfg: idleConfig(),
-  };
-  try {
-    const runtime = await manager.getOrCreate(params);
-    params.cfg = idleConfig(120_000);
-    expect(await manager.getOrCreate(params)).toBe(runtime);
-    await clock.advanceBy(60_000);
-    expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
-    await manager.reloadConfig({ cfg: idleConfig() });
-    // A turn prepared before publication must not restore its former idle policy.
-    expect(await manager.getOrCreate(params)).toBe(runtime);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-    await clock.advanceBy(86_400_000);
-    expect(manager.peekSession({ sessionId: params.sessionId })).toBe(runtime);
-    await manager.reloadConfig({ cfg: idleConfig(1_000) });
-    await clock.advanceBy(60_000);
-    expect(manager.listRuntimeKeys()).toEqual([]);
-    expect(scheduler.nextWakeAtMs).toBeNull();
-  } finally {
-    await manager.disposeAll();
-  }
-});
 
 it("sweeps admitted runtimes only with an opt-in idle timer and stops maintenance after disposal", async () => {
   const manager = createSessionMcpRuntimeManager({ scheduler });

@@ -11,21 +11,14 @@ import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure } from "./failure-output.js";
 import { formatCliRequirements } from "./skills-hooks-cli.format.js";
 
-export type HooksListOptions = {
+export type HooksReportOptions = {
   agent?: string;
   json?: boolean;
+};
+
+export type HooksListOptions = HooksReportOptions & {
   eligible?: boolean;
   verbose?: boolean;
-};
-
-export type HookInfoOptions = {
-  agent?: string;
-  json?: boolean;
-};
-
-export type HooksCheckOptions = {
-  agent?: string;
-  json?: boolean;
 };
 
 function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
@@ -44,19 +37,6 @@ function formatHookStatus(hook: HookStatusEntry, detailed = false): string {
   return theme.error(
     `✗ ${detailed ? `${reason.charAt(0).toUpperCase()}${reason.slice(1)}` : reason}`,
   );
-}
-
-function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
-  const name = theme.command(hook.name);
-  return emoji ? `${emoji} ${name}` : name;
-}
-
-function formatHookSource(hook: HookStatusEntry): string {
-  if (!hook.managedByPlugin) {
-    return hook.source;
-  }
-  return `plugin:${hook.pluginId ?? "unknown"}`;
 }
 
 const HOOK_REQUIREMENT_GROUPS = [
@@ -122,13 +102,17 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
 
   const eligible = hooks.filter((h) => h.loadable);
   const tableWidth = getTerminalTableWidth();
-  const rows = hooks.map((hook) => ({
-    Status: formatHookStatus(hook),
-    Hook: formatHookName(hook),
-    Description: theme.muted(hook.description),
-    Source: formatHookSource(hook),
-    Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
-  }));
+  const rows = hooks.map((hook) => {
+    const emoji = hook.emoji ?? decorativeEmoji("🔗");
+    const name = theme.command(hook.name);
+    return {
+      Status: formatHookStatus(hook),
+      Hook: emoji ? `${emoji} ${name}` : name,
+      Description: theme.muted(hook.description),
+      Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+      Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
+    };
+  });
 
   const columns = [
     { key: "Status", header: "Status", minWidth: 10 },
@@ -153,7 +137,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
 export function formatHookInfo(
   hook: HookStatusEntry | undefined,
   hookName: string,
-  opts: HookInfoOptions,
+  opts: HooksReportOptions,
 ): string {
   if (!hook) {
     if (opts.json) {
@@ -211,7 +195,7 @@ export function formatHookInfo(
   return lines.join("\n");
 }
 
-export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptions): string {
+export function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): string {
   const eligible = report.hooks.filter((h) => h.loadable);
   const notEligible = report.hooks.filter((h) => !h.loadable);
   if (opts.json) {

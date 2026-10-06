@@ -22,6 +22,10 @@ import {
   updateCurrentConversationBindingRecord,
 } from "./current-conversation-bindings.js";
 import type { CurrentConversationBindingTouch } from "./current-conversation-bindings.worker-contract.js";
+import {
+  createAccountScopedBindingAdapter,
+  projectThreadBindingRecord,
+} from "./session-binding-adapter.js";
 import { SessionBindingError } from "./session-binding-errors.js";
 import {
   nativeSessionBindingSelection,
@@ -127,28 +131,15 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       idleExpiresAt != null && maxAgeExpiresAt != null
         ? Math.min(idleExpiresAt, maxAgeExpiresAt)
         : (idleExpiresAt ?? maxAgeExpiresAt);
-    return {
-      bindingId: `${record.accountId}:${record.conversationId}`,
-      targetSessionKey: record.targetSessionKey,
-      targetKind: params.toSessionBindingTargetKind(record.targetKind),
+    return projectThreadBindingRecord(record, {
       conversation: {
         channel: params.channel,
-        accountId: record.accountId,
         conversationId: record.conversationId,
       },
-      status: "active",
-      boundAt: record.boundAt,
-      expiresAt,
-      metadata: {
-        ...metadata,
-        agentId: record.agentId,
-        label: record.label,
-        boundBy: record.boundBy,
-        lastActivityAt: record.lastActivityAt,
-        idleTimeoutMs,
-        maxAgeMs,
-      },
-    };
+      targetKind: params.toSessionBindingTargetKind(record.targetKind),
+      lifecycle: { expiresAt, idleTimeoutMs, maxAgeMs },
+      metadata: (lifecycleMetadata) => ({ ...metadata, ...lifecycleMetadata }),
+    });
   };
   const conversationRef = (conversationId: string) =>
     normalizeConversationRef({
@@ -308,11 +299,33 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   const sessionBindingAdapter: SessionBindingAdapter &
     NativeSessionBindingSelection &
     NativeSessionBindingListing = {
-    channel: params.channel,
-    accountId,
-    capabilities: {
-      placements: ["current"],
-    },
+    ...createAccountScopedBindingAdapter<SessionBindingRecord>({
+      channel: params.channel,
+      accountId,
+      capabilities: { placements: ["current"] },
+      project: (record) => record,
+      listBySessionKey: (targetSessionKey) =>
+        listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
+      getByConversation: (ref) =>
+        resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId)),
+      touchConversation: manager.touchConversation,
+      unbindBySessionKey: (targetSessionKey) =>
+        deleteCurrentConversationBindingRecordsBySession(targetSessionKey.trim(), accountScope),
+      unbindConversation: (conversationId) =>
+        updateCurrentConversationBindingRecord(conversationRef(conversationId), () => null)
+          .previous,
+      bind: async (input) => {
+        if (input.conversation.channel !== params.channel || input.placement === "child") {
+          return null;
+        }
+        return bindConversationRecord({
+          conversationId: input.conversation.conversationId,
+          targetKind: input.targetKind,
+          targetSessionKey: input.targetSessionKey,
+          metadata: input.metadata,
+        });
+      },
+    }),
     [nativeSessionBindingSelection]: async (refs) => {
       const conversations = refs.map((ref) =>
         matchesAccount(ref) ? conversationRef(ref.conversationId) : null,
@@ -326,31 +339,12 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
       let index = 0;
       return conversations.map((ref) => (ref ? (records[index++] ?? null) : null));
     },
-    bind: async (input) => {
-      if (input.conversation.channel !== params.channel || input.placement === "child") {
-        return null;
-      }
-      return bindConversationRecord({
-        conversationId: input.conversation.conversationId,
-        targetKind: input.targetKind,
-        targetSessionKey: input.targetSessionKey,
-        metadata: input.metadata,
-      });
-    },
-    listBySession: (targetSessionKey) =>
-      listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope),
     [nativeSessionBindingListBySession]: (targetSessionKey) =>
       listCurrentConversationBindingRecordsBySessionAsync(
         targetSessionKey,
         accountScope,
         assertCurrent,
       ),
-    resolveByConversation: (ref) => {
-      if (ref.channel !== params.channel) {
-        return null;
-      }
-      return resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId));
-    },
     inspectByConversation: (ref) =>
       ref.channel === params.channel
         ? inspectCurrentConversationBindingRecord(conversationRef(ref.conversationId))
@@ -388,35 +382,6 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
           assertCurrent,
         );
       }
-    },
-    touch: (bindingId, at) => {
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId,
-      });
-      if (conversationId) {
-        manager.touchConversation(conversationId, at);
-      }
-    },
-    unbind: async (input) => {
-      if (input.targetSessionKey?.trim()) {
-        return deleteCurrentConversationBindingRecordsBySession(
-          input.targetSessionKey.trim(),
-          accountScope,
-        );
-      }
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId: input.bindingId,
-      });
-      if (!conversationId) {
-        return [];
-      }
-      const { previous } = updateCurrentConversationBindingRecord(
-        conversationRef(conversationId),
-        () => null,
-      );
-      return previous ? [previous] : [];
     },
   };
 

@@ -175,8 +175,11 @@ channel or account sets `*.streaming.block.enabled` explicitly. QQ Bot has no
 For Discord and Telegram, an explicitly configured non-`off` preview mode
 takes precedence over inherited `agents.defaults.blockStreamingDefault: "on"`.
 Set that channel's `streaming.block.enabled: true` when block replies should
-override its preview. If the preview is unavailable for a turn, inherited block
-delivery still applies.
+override its preview. For ordinary single-agent turns, if a reply-modifying
+hook prevents Telegram previews, completed blocks use normal hooked delivery
+unless block streaming is explicitly disabled globally or for Telegram.
+Configured multi-agent group-thread turns do not use this forced fallback; like
+other turns without a preview, they retain the configured block delivery policy.
 
 ## Preview streaming modes
 
@@ -257,7 +260,9 @@ Slack-only:
 - `progress` mode keeps tool progress in an editable status draft, materializes
   the status label when answer streaming is active but no tool line is
   available yet, clears the draft at completion, and sends the final answer
-  through normal delivery.
+  through normal delivery. When the parent yields to accepted subagents, the
+  same draft keeps updating until they settle; see
+  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 - Plan previews use native checkboxes when `channels.telegram.richMessages`
   is `true`; otherwise they use readable HTML checklists. Completed steps are
   checked, and the active step is marked "in progress".
@@ -277,7 +282,8 @@ Slack-only:
 ### Discord
 
 - Uses send + edit preview messages.
-- `block` mode uses draft chunking (`draftChunk`).
+- `block` mode updates the preview at chunk boundaries while preserving the
+  answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
@@ -285,13 +291,9 @@ Slack-only:
   command exits are hidden. The same default applies on
   other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
   the rolling tool log with its icons.
-- When a parent yields to accepted subagents, `progress` mode can transfer its
-  confirmed card to core. The same message keeps its checklist and receives
-  child activity and terminal updates; the final answer is separate. See
-  [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
-- Without that handoff, `progress` mode deletes the status draft once the final
-  answer is delivered, so busy channels keep no orphaned tool log above the
-  reply. Error finals keep the draft as the record of the failed turn.
+- `progress` mode deletes the status draft once the final answer is delivered,
+  so busy channels keep no orphaned tool log above the reply. Error finals keep
+  the draft as the record of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

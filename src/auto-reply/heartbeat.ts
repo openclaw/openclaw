@@ -40,12 +40,7 @@ function stripLeadingHtmlCommentScaffolding(
     }
 
     state.inHtmlComment = false;
-    if (searchText === remaining) {
-      remaining = remaining.slice(commentEnd + 3);
-    } else {
-      const leadingWidth = remaining.length - searchText.length;
-      remaining = remaining.slice(0, leadingWidth) + searchText.slice(commentEnd + 3);
-    }
+    remaining = searchText.slice(commentEnd + 3);
   }
   return remaining;
 }
@@ -178,11 +173,8 @@ export function stripHeartbeatToken(
   // (e.g., <b>HEARTBEAT_OK</b> or **HEARTBEAT_OK**) still strips.
   const stripMarkup = (text: string) =>
     text
-      // Drop HTML tags.
       .replace(/<[^>]*>/g, " ")
-      // Decode common nbsp variant.
       .replace(/&nbsp;/gi, " ")
-      // Remove markdown-ish wrappers at the edges.
       .replace(/^[*`~_]+/, "")
       .replace(/[*`~_]+$/, "");
 

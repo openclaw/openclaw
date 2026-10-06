@@ -1,6 +1,17 @@
 // Transcript mirroring turns outbound text/media notifications into compact transcript text.
 import path from "node:path";
 
+export type SessionTranscriptDeliveryMirror =
+  | {
+      kind: "channel-final";
+      sourceMessageId?: string;
+    }
+  | {
+      kind: "channel-final-suppressed";
+      reason: "stale-foreground";
+      sourceMessageId?: string;
+    };
+
 function extractFileNameFromMediaUrl(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -8,24 +19,20 @@ function extractFileNameFromMediaUrl(value: string): string | null {
   }
   // Media transcript mirrors use stable filenames instead of raw URLs with tokens/query strings.
   const cleaned = trimmed.split(/[?#]/u, 1)[0] ?? trimmed;
-  try {
-    const parsed = new URL(cleaned);
-    // Data URLs carry inline bytes, not a filename suitable for transcript text.
-    const base = parsed.protocol === "data:" ? "" : path.basename(parsed.pathname);
-    if (!base) {
-      return null;
-    }
-    try {
-      // Decode display names when possible, but tolerate malformed percent escapes from providers.
-      return decodeURIComponent(base);
-    } catch {
-      return base;
-    }
-  } catch {
+  const parsed = URL.parse(cleaned);
+  if (!parsed) {
     const base = path.basename(cleaned);
-    if (!base || base === "/" || base === ".") {
-      return null;
-    }
+    return base && base !== "/" && base !== "." ? base : null;
+  }
+  // Data URLs carry inline bytes, not a filename suitable for transcript text.
+  const base = parsed.protocol === "data:" ? "" : path.basename(parsed.pathname);
+  if (!base) {
+    return null;
+  }
+  try {
+    // Decode display names when possible, but tolerate malformed percent escapes from providers.
+    return decodeURIComponent(base);
+  } catch {
     return base;
   }
 }

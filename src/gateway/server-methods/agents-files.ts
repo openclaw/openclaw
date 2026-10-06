@@ -89,35 +89,6 @@ async function statWorkspaceFileSafely(
   }
 }
 
-async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
-  const access = getAgentWorkspaceAccess(workspaceDir);
-  const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
-  const names = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-  return await Promise.all(
-    names.map(async (name) => {
-      let meta: FileMeta | null;
-      if (access) {
-        const stat = await access.bridge.stat({ filePath: name });
-        if (getAgentWorkspaceAccess(workspaceDir) !== access) {
-          throw new Error("Workspace access changed while listing Agent documents");
-        }
-        meta =
-          stat?.type === "file" ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) } : null;
-      } else {
-        meta = await statWorkspaceFileSafely(workspaceRoot, name);
-      }
-      return Object.assign(
-        {
-          name,
-          path: path.join(workspaceDir, name),
-          missing: meta === null,
-        },
-        meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
-      );
-    }),
-  );
-}
-
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respond(
     false,
@@ -185,7 +156,6 @@ async function readWorkspaceFileContent(
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
@@ -246,7 +216,6 @@ async function readWorkspaceFileHash(
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return sha256Hex(safeRead.buffer);
   } catch (err) {
@@ -295,7 +264,34 @@ export const agentFileHandlers: Pick<
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
-    const files = await listAgentFiles(workspaceDir, { hideBootstrap });
+    const access = getAgentWorkspaceAccess(workspaceDir);
+    const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
+    const names = hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
+    const files = await Promise.all(
+      names.map(async (name) => {
+        let meta: FileMeta | null;
+        if (access) {
+          const stat = await access.bridge.stat({ filePath: name });
+          if (getAgentWorkspaceAccess(workspaceDir) !== access) {
+            throw new Error("Workspace access changed while listing Agent documents");
+          }
+          meta =
+            stat?.type === "file"
+              ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) }
+              : null;
+        } else {
+          meta = await statWorkspaceFileSafely(workspaceRoot, name);
+        }
+        return Object.assign(
+          {
+            name,
+            path: path.join(workspaceDir, name),
+            missing: meta === null,
+          },
+          meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
+        );
+      }),
+    );
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
   "agents.files.get": async ({ params, respond, context }) => {
@@ -345,7 +341,6 @@ export const agentFileHandlers: Pick<
         const workspaceRoot = await root(workspaceDir);
         safeRead = await workspaceRoot.read(name, {
           hardlinks: "reject",
-          nonBlockingRead: true,
         });
       } catch (err) {
         if (isMissingPathError(err)) {

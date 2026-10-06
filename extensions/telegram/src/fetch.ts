@@ -23,8 +23,10 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import * as proxyCaptureSdk from "openclaw/plugin-sdk/proxy-capture";
-import { resolveEffectiveDebugProxyUrl } from "openclaw/plugin-sdk/proxy-capture";
+import {
+  captureHttpExchangeAsync,
+  resolveEffectiveDebugProxyUrl,
+} from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -46,10 +48,6 @@ import {
 export { normalizeTelegramApiRoot as resolveTelegramApiBase } from "./api-root.js";
 
 const log = createSubsystemLogger("telegram/network");
-
-// The shipped 2026.9.6 host omits async capture; retire this check when the minimum advances.
-const captureSdk: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
-  proxyCaptureSdk;
 
 const TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 300;
 const TELEGRAM_API_HOSTNAME = "api.telegram.org";
@@ -135,12 +133,7 @@ const FALLBACK_RETRY_ERROR_CODES = [
   "UND_ERR_SOCKET",
 ] as const;
 
-function createDnsResultOrderLookup(
-  order: TelegramDnsResultOrder | null,
-): LookupFunction | undefined {
-  if (!order) {
-    return undefined;
-  }
+function createDnsResultOrderLookup(order: TelegramDnsResultOrder): LookupFunction {
   const lookup = dns.lookup as unknown as (
     hostname: string,
     options: LookupOptions,
@@ -165,41 +158,26 @@ function createDnsResultOrderLookup(
 const TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS = 30_000;
 
 function buildTelegramConnectOptions(params: {
-  autoSelectFamily: boolean | null;
-  dnsResultOrder: TelegramDnsResultOrder | null;
+  autoSelectFamily: boolean;
+  dnsResultOrder: TelegramDnsResultOrder;
   forceIpv4: boolean;
 }) {
-  const connect: {
-    autoSelectFamily?: boolean;
-    autoSelectFamilyAttemptTimeout?: number;
-    family?: number;
-    keepAlive?: boolean;
-    keepAliveInitialDelay?: number;
-    lookup?: LookupFunction;
-  } = {
+  return {
     keepAlive: true,
     keepAliveInitialDelay: TELEGRAM_KEEPALIVE_INITIAL_DELAY_MS,
+    ...(params.forceIpv4
+      ? { family: 4, autoSelectFamily: false }
+      : {
+          autoSelectFamily: params.autoSelectFamily,
+          autoSelectFamilyAttemptTimeout: TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
+        }),
+    lookup: createDnsResultOrderLookup(params.dnsResultOrder),
   };
-
-  if (params.forceIpv4) {
-    connect.family = 4;
-    connect.autoSelectFamily = false;
-  } else if (typeof params.autoSelectFamily === "boolean") {
-    connect.autoSelectFamily = params.autoSelectFamily;
-    connect.autoSelectFamilyAttemptTimeout = TELEGRAM_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS;
-  }
-
-  const lookup = createDnsResultOrderLookup(params.dnsResultOrder);
-  if (lookup) {
-    connect.lookup = lookup;
-  }
-
-  return connect;
 }
 
 function resolveTelegramDispatcherPolicy(params: {
-  autoSelectFamily: boolean | null;
-  dnsResultOrder: TelegramDnsResultOrder | null;
+  autoSelectFamily: boolean;
+  dnsResultOrder: TelegramDnsResultOrder;
   useEnvProxy: boolean;
   forceIpv4: boolean;
   proxyUrl?: string;
@@ -422,7 +400,6 @@ export type TelegramTransport = {
 
 function createTelegramTransportAttempts(params: {
   defaultDispatcher: ReturnType<typeof createTelegramDispatcher>;
-  allowFallback: boolean;
   fallbackPolicy?: PinnedDispatcherPolicy;
   ownedDispatchers: Set<TelegramDispatcher>;
 }): TelegramTransportAttempt[] {
@@ -453,7 +430,7 @@ function createTelegramTransportAttempts(params: {
   const attempts = [
     createAttempt(params.defaultDispatcher.effectivePolicy, params.defaultDispatcher.dispatcher),
   ];
-  if (!params.allowFallback || !params.fallbackPolicy) {
+  if (!params.fallbackPolicy) {
     return attempts;
   }
   attempts.push({
@@ -461,17 +438,15 @@ function createTelegramTransportAttempts(params: {
     logLevel: "debug",
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
   });
-  if (TELEGRAM_FALLBACK_IPS.length > 0) {
-    attempts.push({
-      ...createAttempt({
-        ...params.fallbackPolicy,
-        pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
-      }),
-      logLevel: "warn",
-      logMessage:
-        "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
-    });
-  }
+  attempts.push({
+    ...createAttempt({
+      ...params.fallbackPolicy,
+      pinnedHostname: { hostname: TELEGRAM_API_HOSTNAME, addresses: [...TELEGRAM_FALLBACK_IPS] },
+    }),
+    logLevel: "warn",
+    logMessage:
+      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
+  });
   return attempts;
 }
 
@@ -494,9 +469,7 @@ export function resolveTelegramTransport(
     ["autoSelectFamily", autoSelectDecision],
     ["dnsResultOrder", dnsDecision],
   ] as const) {
-    if (decision.value !== null) {
-      log.debug(`${name}=${decision.value}${decision.source ? ` (${decision.source})` : ""}`);
-    }
+    log.debug(`${name}=${decision.value} (${decision.source})`);
   }
 
   const effectiveProxyFetch =
@@ -555,7 +528,6 @@ export function resolveTelegramTransport(
   const ownedDispatchers = new Set<TelegramDispatcher>();
   const transportAttempts = createTelegramTransportAttempts({
     defaultDispatcher,
-    allowFallback: allowStickyFallback,
     fallbackPolicy: fallbackDispatcherPolicy,
     ownedDispatchers,
   });
@@ -703,20 +675,18 @@ export function resolveTelegramTransport(
     let err: unknown;
     const captureResponse = (response: Response, fallbackAttempt?: number): void => {
       // Finalization retains capture failures; observe the Promise returned by the SDK view.
-      void captureSdk
-        .captureHttpExchangeAsync?.({
-          url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: init?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta:
-            fallbackAttempt === undefined
-              ? { subsystem: "telegram-fetch" }
-              : { subsystem: "telegram-fetch", fallbackAttempt },
-        })
-        .catch(() => {});
+      void captureHttpExchangeAsync({
+        url: resolveRequestUrl(input),
+        method: init?.method ?? "GET",
+        requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+        requestBody: init?.body ?? null,
+        response,
+        flowId: randomUUID(),
+        meta:
+          fallbackAttempt === undefined
+            ? { subsystem: "telegram-fetch" }
+            : { subsystem: "telegram-fetch", fallbackAttempt },
+      }).catch(() => {});
     };
 
     if (callerProvidedDispatcher) {
@@ -811,5 +781,3 @@ export function resolveTelegramFetch(
 ): typeof fetch {
   return resolveTelegramTransport(proxyFetch, options).fetch;
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -20,6 +20,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import { resolveChildAdmission, type ChildAdmissionCap } from "./child-admission.js";
+import { resolveSenderRestrictedSpawnError } from "./spawn-requester-policy.js";
 import { countActiveRunsForSession } from "./subagents/registry/subagent-registry.js";
 import { resolveSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagents/spawn/subagent-depth.js";
@@ -260,6 +261,7 @@ export function prepareSpawnThreadBinding(params: {
 
 export function resolveSpawnAdmission(params: {
   cfg: OpenClawConfig;
+  inheritedToolPolicySource?: "sender";
   enabled?: boolean;
   collector?: {
     liveChildren: number;
@@ -273,6 +275,7 @@ export function resolveSpawnAdmission(params: {
   requestedAgentId?: string;
   configuredAgentIds: string[];
   additionalActiveChildren?: number;
+  countActiveRuns?: typeof countActiveRunsForSession;
 }):
   | {
       ok: true;
@@ -284,6 +287,10 @@ export function resolveSpawnAdmission(params: {
       };
     }
   | { ok: false; governingCap?: ChildAdmissionCap; error: string } {
+  const requesterPolicyError = resolveSenderRestrictedSpawnError(params);
+  if (requesterPolicyError) {
+    return { ok: false, error: requesterPolicyError };
+  }
   if (params.enabled === false) {
     return { ok: true };
   }
@@ -311,7 +318,7 @@ export function resolveSpawnAdmission(params: {
         maxSpawnDepth,
         collect: false,
         activeChildren:
-          countActiveRunsForSession(params.requesterSessionKey, {
+          (params.countActiveRuns ?? countActiveRunsForSession)(params.requesterSessionKey, {
             collect: false,
             requesterAgentId: params.requesterAgentId,
           }) + (params.additionalActiveChildren ?? 0),

@@ -10,7 +10,6 @@ import { resolveTelegramPlainCaption, splitTelegramCaption } from "./caption.js"
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import { isTelegramEmptyContentError, isTelegramHtmlParseError } from "./rich-plain-fallback.js";
 import type { TelegramApi } from "./send-context.js";
-import { isTelegramPhotoLimitError } from "./send-error-predicates.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramLoadedMedia = Awaited<ReturnType<typeof loadWebMedia>>;
@@ -26,18 +25,6 @@ const MEDIA_SEND_METHODS = {
 } as const;
 
 type TelegramOutboundMediaKind = keyof typeof MEDIA_SEND_METHODS;
-
-type TelegramOutboundMediaPlan = {
-  kind: MediaKind | undefined;
-  deliveryKind: MediaKind | undefined;
-  isGif: boolean;
-  isVideoNote: boolean;
-  fileName: string;
-  file: InputFile;
-  htmlCaption?: string;
-  plainCaption?: string;
-  followUpText?: string;
-};
 
 export type TelegramOutboundMediaSender = {
   label: TelegramOutboundMediaKind;
@@ -83,7 +70,7 @@ export function prepareTelegramOutboundMedia(params: {
   forceDocument?: boolean;
   asVideoNote?: boolean;
   preparedHtml?: boolean;
-}): TelegramOutboundMediaPlan {
+}) {
   const kind = kindFromMime(params.media.contentType ?? undefined);
   const isGif = isGifMedia({
     contentType: params.media.contentType,
@@ -137,7 +124,7 @@ export function resolveTelegramOutboundMediaSenders(params: {
   api: TelegramApi;
   chatId: string;
   media: TelegramLoadedMedia;
-  plan: TelegramOutboundMediaPlan;
+  plan: ReturnType<typeof prepareTelegramOutboundMedia>;
   forceDocument?: boolean;
   asVoice?: boolean;
   sendImageAsPhoto?: boolean;
@@ -251,25 +238,5 @@ export async function sendTelegramCaptionedMediaWithFallback<T>(params: {
       }
       return await sendCaptionless();
     }
-  }
-}
-
-export async function sendTelegramOutboundMediaWithPhotoFallback<T>(params: {
-  sender: TelegramOutboundMediaSender;
-  documentSender: TelegramOutboundMediaSender;
-  send: (sender: TelegramOutboundMediaSender) => Promise<T>;
-}): Promise<{ result: T; sender: TelegramOutboundMediaSender }> {
-  try {
-    return { result: await params.send(params.sender), sender: params.sender };
-  } catch (error) {
-    if (params.sender.label !== "photo" || !isTelegramPhotoLimitError(error)) {
-      throw error;
-    }
-    // Telegram is authoritative for photo limits; preserve the same bytes and
-    // accepted caption/topic/quote/keyboard when retrying as a document.
-    logVerbose(
-      `telegram sendPhoto exceeded photo limits; retrying as document: ${formatErrorMessage(error)}`,
-    );
-    return { result: await params.send(params.documentSender), sender: params.documentSender };
   }
 }

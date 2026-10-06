@@ -36,27 +36,18 @@ const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
 
-type FishAudioProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: FishAudioModel;
-  referenceId?: string;
-  latency: FishAudioLatency;
-  speed?: number;
-  temperature?: number;
-  topP?: number;
-  normalize?: boolean;
-};
-
-type FishAudioOverrides = Partial<Omit<FishAudioProviderConfig, "apiKey" | "baseUrl">>;
+type FishAudioOverrides = Partial<
+  Omit<ReturnType<typeof normalizeProviderConfig>, "apiKey" | "baseUrl">
+>;
 
 function normalizeModel(value: unknown): FishAudioModel {
   const model = trimToUndefined(value);
   if (!model) {
     return DEFAULT_MODEL;
   }
-  if (FISH_AUDIO_MODELS.some((candidate) => candidate === model)) {
-    return model as FishAudioModel;
+  const supported = FISH_AUDIO_MODELS.find((candidate) => candidate === model);
+  if (supported) {
+    return supported;
   }
   throw new Error(`invalid Fish Audio model "${model}"`);
 }
@@ -76,7 +67,7 @@ function resolveReferenceId(raw: Record<string, unknown> | undefined): string | 
   return trimToUndefined(raw?.speakerVoiceId ?? raw?.voiceId ?? raw?.referenceId);
 }
 
-function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioProviderConfig {
+function normalizeProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw =
     asOptionalRecord(providers?.["fish-audio"]) ?? asOptionalRecord(rawConfig["fish-audio"]);
@@ -96,7 +87,7 @@ function normalizeProviderConfig(rawConfig: Record<string, unknown>): FishAudioP
   };
 }
 
-function readProviderConfig(config: SpeechProviderConfig): FishAudioProviderConfig {
+function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeProviderConfig({
     "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) },
   });
@@ -223,10 +214,7 @@ function resolveFormat(target: SpeechSynthesisTarget): {
 }
 
 async function resolveSynthesisRequest(
-  req: Pick<
-    SpeechSynthesisRequest,
-    "cfg" | "providerConfig" | "providerOverrides" | "text" | "timeoutMs" | "target"
-  >,
+  req: SpeechSynthesisRequest,
 ): Promise<FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean }> {
   const config = readProviderConfig(req.providerConfig);
   const overrides = readOverrides(req.providerOverrides);

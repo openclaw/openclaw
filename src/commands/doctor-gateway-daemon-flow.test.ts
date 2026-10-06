@@ -8,6 +8,8 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import {
   createPrompter,
+  doctorSqliteDiagnostic,
+  mockDoctorRuntimeFacts,
   registerRunningBunFallbackTest,
   setPlatform,
 } from "./doctor-gateway-daemon-flow.test-support.js";
@@ -20,7 +22,7 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
-const runExec = vi.hoisted(() => vi.fn());
+const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
@@ -194,16 +196,8 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    runExec.mockReset().mockResolvedValue({
-      stdout: JSON.stringify({
-        nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
-        sqliteVersion: "3.53.4",
-        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
-      }),
-      stderr: "",
-    });
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
     findInstalledSystemdGatewayScope.mockReset().mockResolvedValue(null);
@@ -241,6 +235,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -714,7 +709,13 @@ describe("maybeRepairGatewayDaemon", () => {
     async ({ recorded, pinned, supported, choice }) => {
       const recordedPath = `/opt/recorded/bin/${recorded}`;
       if (!supported) {
-        runExec.mockRejectedValue(new Error("missing runtime"));
+        const probeRuntime = runExec.getMockImplementation()!;
+        runExec.mockImplementation((executable, ...args) => {
+          if (executable === recordedPath) {
+            return Promise.reject(new Error("missing runtime"));
+          }
+          return probeRuntime(executable, ...args);
+        });
       }
       const pin = pinned ? { runtime: "bun", path: "/opt/pinned/bun" } : undefined;
       const expected = { revision: "pin-version", stored: pinned, pin };
@@ -968,7 +969,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -993,7 +994,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
+      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -1067,7 +1068,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
   });

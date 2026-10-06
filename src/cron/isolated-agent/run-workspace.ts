@@ -28,10 +28,12 @@ export async function prepareCronSessionWorkspace(params: {
   sessionWorkAdmission: SessionWorkAdmissionLease;
   isFastTestEnv: boolean;
 }) {
+  const { sessionWorkAdmission, sessionKey } = params;
+  const abortSignal = params.input.abortSignal ?? params.input.signal;
   const assertCurrent = () => {
-    (params.input.abortSignal ?? params.input.signal)?.throwIfAborted();
-    if (!params.sessionWorkAdmission.isActive()) {
-      throw new CronSessionLifecycleClaimError(params.sessionKey);
+    abortSignal?.throwIfAborted();
+    if (!sessionWorkAdmission.isActive()) {
+      throw new CronSessionLifecycleClaimError(sessionKey);
     }
   };
   const selected = await resolveCronSessionWorkspace({
@@ -63,6 +65,7 @@ export async function prepareCronSessionWorkspace(params: {
       ensureBootstrapFiles: !params.agentCfg.skipBootstrap && !params.isFastTestEnv,
       skipOptionalBootstrapFiles: params.agentCfg.skipOptionalBootstrapFiles,
       provisioning,
+      guard: { assertHost: assertCurrent },
     });
     assertCurrent();
     return selected;

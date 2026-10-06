@@ -3,6 +3,7 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { text as consumeText } from "node:stream/consumers";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { coerceErrorMessage as errorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
@@ -17,18 +18,6 @@ const OP_READ_CONCURRENCY = 4;
 const OP_READ_TIMEOUT_MS = 7_000;
 const MAX_SECRET_REFS_PER_REQUEST = 32;
 const MAX_SECRET_VALUE_BYTES = 64 * 1024;
-
-function readStdin() {
-  return new Promise((resolve, reject) => {
-    let input = "";
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => {
-      input += String(chunk);
-    });
-    process.stdin.on("error", reject);
-    process.stdin.on("end", () => resolve(input));
-  });
-}
 
 function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
@@ -240,7 +229,7 @@ async function resolveFromOnePassword(ids) {
 }
 
 async function main() {
-  const input = await readStdin();
+  const input = await consumeText(process.stdin.setEncoding("utf8"));
   const request = parseRequest(input);
   writeResponse(await resolveFromOnePassword(request.ids));
 }

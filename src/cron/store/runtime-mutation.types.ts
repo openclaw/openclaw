@@ -73,7 +73,12 @@ export type CronRuntimeMutationContracts = {
     input: CronRuntimeMutationInputs["cron.mutateJobs"];
     facts: { deletionBlocked: boolean };
     preparation: { nowMs: number };
-    outcome: { store: CronStoreFile; jobsFingerprint: string; runtimeFingerprint: string };
+    outcome: {
+      store: CronStoreFile;
+      names: Map<string, string | undefined>;
+      jobsFingerprint: string;
+      runtimeFingerprint: string;
+    };
   };
   "cron.reserveRuns": {
     input: CronRuntimeMutationInputs["cron.reserveRuns"];
@@ -122,6 +127,12 @@ export type CronRuntimeMutationContracts = {
       notifications: DeferredCronNotifications;
       logs: CronRunRecoveryOutcome["logs"];
     };
+  };
+  "cron.markDeliveryStarted": {
+    input: CronRuntimeMutationInputs["cron.markDeliveryStarted"];
+    facts: { deletionBlocked: boolean };
+    preparation: { allowMissingJob: boolean; defaultAgentId?: string };
+    outcome: Record<string, never>;
   };
   "cron.finishReceipt": {
     input: CronRuntimeMutationInputs["cron.finishReceipt"];

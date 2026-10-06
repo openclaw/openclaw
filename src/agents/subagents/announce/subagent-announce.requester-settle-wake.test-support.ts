@@ -39,6 +39,7 @@ export const completeBatchSpy = vi.fn();
 export function transitionBatch(
   batch: readonly SubagentRunRecord[],
   state: RequesterSettleWakeBatchState,
+  onPublished: (entries: readonly SubagentRunRecord[]) => void,
 ): void {
   transitionBatchSpy(batch.map((entry) => entry.runId).toSorted(), state);
   for (const entry of batch) {
@@ -49,6 +50,7 @@ export function transitionBatch(
       };
     }
   }
+  onPublished(batch);
 }
 
 export function completeBatch(

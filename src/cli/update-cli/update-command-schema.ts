@@ -3,11 +3,11 @@ import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
-import { checkGlobalPackageUpdatePermissions } from "../../infra/package-update-manager-preflight.js";
+import { readPackageName } from "../../infra/package-json.js";
+import { checkGlobalPackageUpdateAdmission } from "../../infra/package-update-manager-preflight.js";
 import {
   readUpdateStateSchemaVersions,
   resolveUpdateStateContentVersion,
-  type UpdateStateSchemaVersion,
 } from "../../infra/update-candidate-state.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
@@ -29,6 +29,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import {
+  DEFAULT_PACKAGE_NAME,
   resolveGitInstallDir,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -40,11 +41,11 @@ import {
 } from "./update-command-dry-run.js";
 import type { RefuseUpdate } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type {
   ManagedServiceRootRedirect,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
-import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
 
 /** Render prepared preview facts without initializing runtime state. */
@@ -82,14 +83,21 @@ export async function previewUpdateCommand(params: {
       !target.packageAlreadyCurrent &&
       preflight.preflightFailures.length === 0
     ) {
-      const permissions = await checkGlobalPackageUpdatePermissions(target.packageInstallTarget);
-      if (permissions?.stderrTail) {
+      const admission = await checkGlobalPackageUpdateAdmission(
+        target.packageInstallTarget,
+        (await readPackageName(target.packageInstallTarget.packageRoot ?? target.root)) ??
+          DEFAULT_PACKAGE_NAME,
+      );
+      if (admission?.stderrTail) {
         preflight.preflightFailures.push({
-          reason: UPDATE_GLOBAL_PERMISSION_REASON,
-          message: permissions.stderrTail,
-          failureFacts: permissions.failureFacts,
+          reason:
+            admission.name === "package-permissions"
+              ? UPDATE_GLOBAL_PERMISSION_REASON
+              : admission.name,
+          message: admission.stderrTail,
+          failureFacts: admission.failureFacts,
         });
-        preflight.preflightNotes.push(`Would refuse update: ${permissions.stderrTail}`);
+        preflight.preflightNotes.push(`Would refuse update: ${admission.stderrTail}`);
       }
     }
     await printUpdateDryRun({
@@ -126,7 +134,7 @@ export async function preflightUpdateCommandSchemas(params: {
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageTargetVersion?: string;
   packageInstallSpec?: string | null;
-  packageRuntimeTarget?: { version: string; nodeEngine: string | null };
+  packageRuntimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
   packageAlreadyCurrent?: boolean;
   managedServiceNodeRunner?: string;
   expectedForeground?: true;
@@ -309,31 +317,6 @@ export async function preflightUpdateCommandSchemas(params: {
   return { packageSchemaPreflight, preflightNotes, preflightFailures, service };
 }
 
-function assertForegroundUpdateSchemaSupport(
-  run: UpdateCommandOptions["run"],
-  candidate: OpenClawSchemaVersions | undefined,
-  schemas: UpdateStateSchemaVersion[] | undefined,
-  gatewayRestartCompletion: boolean,
-): void {
-  if (run?.completionOwner !== "gateway-restart" || gatewayRestartCompletion || !candidate) {
-    return;
-  }
-  const sharedPath = resolveOpenClawStateSqlitePath(run.env);
-  if (
-    schemas?.some((entry) => {
-      const version = resolveUpdateStateContentVersion(entry);
-      return (
-        version !== null && version !== candidate[entry.path === sharedPath ? "state" : "agent"]
-      );
-    })
-  ) {
-    throw new UpdatePreMutationError(
-      "target-native-unsupported",
-      "Target runtime cannot preserve the foreground Gateway's completion owner after state migration; refusing activation.",
-    );
-  }
-}
-
 export async function captureUpdateActivationSchemas(params: {
   root: string;
   env: NodeJS.ProcessEnv;
@@ -354,11 +337,27 @@ export async function captureUpdateActivationSchemas(params: {
         timeoutMs: params.timeoutMs,
       })
     : undefined;
-  assertForegroundUpdateSchemaSupport(
-    params.run,
-    params.candidateSchemaVersions,
-    schemaVersions,
-    params.gatewayRestartCompletion,
-  );
+  const { run, candidateSchemaVersions, gatewayRestartCompletion } = params;
+  if (
+    run?.completionOwner === "gateway-restart" &&
+    !gatewayRestartCompletion &&
+    candidateSchemaVersions
+  ) {
+    const sharedPath = resolveOpenClawStateSqlitePath(run.env);
+    if (
+      schemaVersions?.some((entry) => {
+        const version = resolveUpdateStateContentVersion(entry);
+        return (
+          version !== null &&
+          version !== candidateSchemaVersions[entry.path === sharedPath ? "state" : "agent"]
+        );
+      })
+    ) {
+      throw new UpdatePreMutationError(
+        "target-native-unsupported",
+        "Target runtime cannot preserve the foreground Gateway's completion owner after state migration; refusing activation.",
+      );
+    }
+  }
   return { previousSchemaVersions, schemaVersions };
 }

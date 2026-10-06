@@ -14,10 +14,7 @@ import {
   isValidFileSecretRefId,
   resolveDefaultSecretProviderAlias,
 } from "../secrets/ref-contract.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-
-const secretResolveLoader = createLazyImportLoader(() => import("../secrets/resolve.js"));
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 
@@ -258,7 +255,7 @@ async function promptProviderSecretRefForSetup(params: {
   };
 
   try {
-    const { resolveSecretRefString } = await secretResolveLoader.load();
+    const { resolveSecretRefString } = await import("../secrets/resolve.js");
     const resolvedValue = await resolveSecretRefString(ref, {
       config: params.config,
       env: params.env ?? process.env,
@@ -346,7 +343,7 @@ export async function promptSecretRefForSetup(params: {
         }),
         id,
       };
-      const { resolveSecretRefString } = await secretResolveLoader.load();
+      const { resolveSecretRefString } = await import("../secrets/resolve.js");
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: params.env ?? process.env,

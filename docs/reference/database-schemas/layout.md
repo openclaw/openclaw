@@ -33,6 +33,35 @@ imports stay retired; [upgrading very old versions](/install/updating#upgrading-
 describes the bridge-release path. Run the current Doctor after a direct binary
 replacement before starting the new Gateway.
 
+### Linux database page cache
+
+After readiness, the Gateway samples Linux file-cache residency and checks it again
+every 15 minutes. The sample observes up to 256 file pages without reading their
+contents; it estimates whole-file residency, not the residency of every hot query.
+Other platforms do not run this maintenance.
+
+A cold sample (below 80%) or a slow bounded session-projection read starts background
+warming through an independent read-only SQLite worker. Shared state is read
+sequentially. Agent warming reads at most 4,096 session projections updated within
+seven days and bounded ranges of their history metadata indexes. Projection values
+larger than 256 KiB are skipped. After metadata, it warms the newest 32 active messages
+per session for sessions updated within 48 hours, newest sessions first. Payload
+reads use batches of eight and skip stored JSON or compressed values above 64 KiB;
+compressed messages are not decoded. Cold snapshot values and older transcript
+payloads are not scanned.
+Each bounded query finishes before yielding, so pacing holds no SQLite read transaction.
+Warming yields between chunks, targets 16 MiB/s, and stops at a 2 GiB pass budget
+or three minutes per database. A final chunk can exceed the byte budget slightly.
+Shutdown cancels and joins the worker; no page map or read snapshot survives a pass.
+
+The journal records `database page-cache residency`. Startup diagnostics include
+sample scope, progress, logical read bytes, disk bytes, warmed payload bytes and
+message counts, and bounded projection-query
+timings before and after warming. These timings do not measure the full
+`chat.history` request. Older history, oversized messages, and cold snapshots can
+still require disk reads.
+No schema, stored data, configuration, or update behavior changes.
+
 ### Session reactions
 
 The per-agent `session_reactions` table stores reaction rows as side data for
@@ -45,6 +74,30 @@ so reactions from a previous reset instance remain inert.
 The table is not secret storage. See the
 [same-version contract](/reference/database-schemas/versioning#versioning-contract).
 
+### Session run outcomes and liveness
+
+The canonical session entry's optional `status` stores only `done`, `failed`,
+`killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
+`GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
+run registry and queue owner rather than durable session metadata. Storage workers
+receive live session keys from their scheduling owner and revalidate protection
+before committing maintenance or cold-storage changes.
+
+Restart and crash recovery use the existing recovery claim, run-fence, reply-phase,
+and delivery fields. Eligible admissions arm their claim with the user-turn write,
+including turns without a channel route. An interrupted outcome alone does not
+authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
+
+Doctor and startup share a one-time normalization of legacy persisted `running`
+and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. Eligible
+legacy `running` entries acquire recovery custody if they lack a claim; existing
+claims, transcripts, and activity timestamps remain intact. This changes no table or schema
+version: the existing SQL status index still projects `interrupted` as `failed`;
+canonical entry JSON retains the distinct outcome. Older releases still infer
+activity from their persisted flag, so they cannot provide the new liveness or
+claim-only recovery behavior when reopened on these entries.
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
@@ -52,9 +105,12 @@ The table is not secret storage. See the
 Since [agent schema 24](/reference/database-schemas/agent-schema-history#session-hot-facts-and-snapshots),
 `session_nodes.entry_json` contains hot session facts. The separately keyed
 `session_entry_snapshots` rows own diff baselines, saved skills, and system-prompt
-reports. Metadata reads do not load these payloads; full-entry consumers acquire
-them in the same statement snapshot. The logical session node owns their
-retention and deletion.
+reports. Exact readers select only the snapshots their caller needs: metadata
+reads omit all three, usage context reads the system-prompt report, and session
+diff reads the diff baseline. Selected snapshots, entry metadata, and lifecycle
+facts remain in the same read transaction. Replacement and initialization reads
+retain complete entries so saved snapshots survive writeback. The logical
+session node owns their retention and deletion; no migration is required.
 
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
@@ -360,7 +416,7 @@ latest interrupted verification or correct its `abandoned` result to `succeeded`
 only after all recorded drivers are positively dead and fresh installed-build,
 serving-build, readiness, and generation checks agree. Recovery descriptors and
 recorded repair, failure, or rollback evidence prevent that correction. The transaction
-rechecks the complete row and latest-run identity after probing, then records the
+rechecks the complete row and latest-run identity after checking, then records the
 verification, outcome, and an explanatory warning together. Older rows without
 the target identity remain unchanged, and Doctor explains the missing evidence.
 This uses existing step and verification fields; schemas and rollback readers
@@ -506,3 +562,30 @@ and remain with their original recovery owner. A successful retirement retains
 one bounded completion receipt after the directory and helper are gone. Only a
 new original-store-admitted operation can replace that slot. Status reads do
 not grant admission or perform cleanup.
+
+## Immutable installation preparation
+
+The immutable adapter uses that same installation-sibling control database path,
+with one `immutable_installation` row instead of a package operation. The accepted
+[immutable update design](/reference/team-immutable-update-design#detect-and-adopt-an-immutable-installation)
+binds explicit adoption to the physical installation and current generation,
+system service and account, state/config/profile, pinned external runtime, and
+official source. Its strict version-1 descriptor is canonical adoption state;
+the revision and optional prepared-generation receipt record verified preparation.
+No pointer publication, service change, migration, or recovery authority is implied.
+
+Adoption refuses any existing control rather than migrating or replacing package
+journals. Existing package descriptors and permissions stay unchanged. Immutable
+controls are root-owned directories with mode `0755` and a root-owned `0644`
+database: the service account may read these non-secret facts, but only the
+updater may write. Runtime observations use the existing read-only worker;
+CLI adoption and preparation use synchronous, revision-checked transactions with
+current executor checks at admission and commit. The existing rollback-journal
+durability and directory-sync owners publish the completed adoption record.
+
+Slice 1 retains all release generations. A prepared receipt can be replaced only
+at the observed revision; this does not delete its previously referenced tree.
+Future collection protects current, previous, and journal-referenced generations.
+Older runtimes do not understand this descriptor and cannot update the adopted
+installation; rollback of runtime bytes does not authorize pointer or state
+changes. Activation and independent recovery remain a later slice.

@@ -68,10 +68,9 @@ export function continueStalledReplyTurn({
     );
     return true;
   }
-  // Source-bound reply owners (Web UI chat.send, group threads) deliver only the
-  // follow-ups they queued themselves and would drop a recovery run's answer.
-  // Leave the notice with the stalled turn's still-live dispatch.
-  if (followupRun.queuedFollowupReplyDisposition) {
+  // Group-thread participants declare no queued reply owner, so a recovery's
+  // answer would be dropped; leave the notice with the stalled turn's dispatch.
+  if (followupRun.queuedFollowupReplyDisposition?.kind === "drop") {
     return false;
   }
   const enqueued = enqueueFollowupRun(
@@ -219,8 +218,7 @@ export async function executePreparedReplyAgentRun(
     return returnWithQueuedFollowupDrain(undefined);
   }
   // Adoption marks run start and must never be spool-replayed (would re-run tools).
-  // Suppressed delivery persists only the user transcript; crashed suppressed runs die
-  // silently. Deliverable turns atomically persist transcript plus recovery ownership.
+  // New input and its recovery claim share admission; otherwise lifecycle start owns the claim.
   await turnAdoptionLifecycle?.onAdopted();
   const runOutcome = await withBeforeAgentReplyObserver(
     {
@@ -397,6 +395,7 @@ export function createReplyAgentRestartRecoveryController(
     agentId: followupRun.run.agentId,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
+    executionRunId: opts?.runId,
     getEntry: () =>
       sessionKey
         ? (activeSessionStore?.[sessionKey] ?? getActiveSessionEntry())

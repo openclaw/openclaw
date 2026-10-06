@@ -2,12 +2,12 @@ import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
   ensureCanonicalUserProfileForTailscaleIdentity,
 } from "../../../state/user-profile-writes.js";
-import type { GatewayAuthResult } from "../../auth.js";
 import { prepareGatewayRecipientProfile } from "../../expected-profile.js";
 import type { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
 import {
@@ -93,6 +93,10 @@ async function resolveAuthenticatedProfile(
   assertCurrent?: () => void,
 ) {
   assertCurrent?.();
+  if (hasGatewayOperatorAccessPolicies(getRuntimeConfig())) {
+    (await prepareUserProfileCatalog()).release();
+    assertCurrent?.();
+  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent?.();
   if (!authority?.isCurrent()) {
@@ -105,41 +109,10 @@ async function resolveAuthenticatedProfile(
     recipient: {
       profileId: authority.profileId,
       role: authority.role,
+      githubLogin: authority.githubLogin ?? null,
       aliases: new Set(authority.aliases),
     },
   };
-}
-
-async function resolveGatewayConnectUserProfile(params: {
-  ownerProfileExpected: boolean;
-  authenticatedUserId: string | undefined;
-  authResult: GatewayAuthResult;
-  resolveAuthenticatedGitHubIdentity: ReturnType<typeof createAuthenticatedGitHubIdentitySync>;
-  assertCurrent?: () => void;
-}) {
-  params.assertCurrent?.();
-  const options = { assertCurrent: params.assertCurrent };
-  const ownerDisplayName = params.ownerProfileExpected ? await resolveHostAccountName() : undefined;
-  params.assertCurrent?.();
-  const profile = params.ownerProfileExpected
-    ? await ensureCanonicalGatewayOwnerProfile(ownerDisplayName ?? null, options)
-    : params.resolveAuthenticatedGitHubIdentity
-      ? await params.resolveAuthenticatedGitHubIdentity()
-      : params.authResult.tailscaleIdentity
-        ? await ensureCanonicalUserProfileForTailscaleIdentity(
-            params.authResult.tailscaleIdentity,
-            options,
-          )
-        : await ensureCanonicalUserProfileForEmail(params.authenticatedUserId!, options);
-  params.assertCurrent?.();
-  const profileId = "profileId" in profile ? profile.profileId : profile.id;
-  const resolved = await resolveAuthenticatedProfile(
-    profileId,
-    profile.updatedAt,
-    params.assertCurrent,
-  );
-  params.assertCurrent?.();
-  return resolved;
 }
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
@@ -165,13 +138,26 @@ export async function resolveGatewayConnectProfileAdmission(params: {
     return { ok: true };
   }
   try {
-    const prepared = await resolveGatewayConnectUserProfile({
-      ownerProfileExpected,
-      authenticatedUserId,
-      authResult: state.authResult,
-      resolveAuthenticatedGitHubIdentity: params.resolveAuthenticatedGitHubIdentity,
-      assertCurrent: params.assertCurrent,
-    });
+    params.assertCurrent?.();
+    const options = { assertCurrent: params.assertCurrent };
+    const ownerDisplayName = ownerProfileExpected ? await resolveHostAccountName() : undefined;
+    params.assertCurrent?.();
+    const profile = ownerProfileExpected
+      ? await ensureCanonicalGatewayOwnerProfile(ownerDisplayName ?? null, options)
+      : params.resolveAuthenticatedGitHubIdentity
+        ? await params.resolveAuthenticatedGitHubIdentity()
+        : state.authResult.tailscaleIdentity
+          ? await ensureCanonicalUserProfileForTailscaleIdentity(
+              state.authResult.tailscaleIdentity,
+              options,
+            )
+          : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
+    params.assertCurrent?.();
+    const prepared = await resolveAuthenticatedProfile(
+      "profileId" in profile ? profile.profileId : profile.id,
+      profile.updatedAt,
+      params.assertCurrent,
+    );
     params.assertCurrent?.();
     if (!prepared.authority.isCurrent()) {
       throw new Error("Gateway profile changed during acquisition");

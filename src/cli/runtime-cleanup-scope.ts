@@ -60,6 +60,12 @@ export async function withCliCommandCleanup<T>(
     return run();
   }
   const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
+  // A command can replace its own package. Retain cleanup before it can remove
+  // the files; another importer's module cache does not preserve this resolution.
+  const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
+  const { closeDefaultRetainedNativeWorkerSource } =
+    await import("../infra/worker-native-lifecycle.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
@@ -74,7 +80,19 @@ export async function withCliCommandCleanup<T>(
     registries: new Set(),
     pluginResources,
   };
-  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
+  return sdkResourceHost.run(() =>
+    scope.run(cleanup, async () => {
+      try {
+        return await run(cleanup);
+      } finally {
+        // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+        await runCliDisposerAfterPending("shared-state", async () => {
+          await closeOpenClawStateDatabaseAsync();
+          await closeDefaultRetainedNativeWorkerSource();
+        });
+      }
+    }),
+  );
 }
 
 export function retainCliRegistryHarnesses(

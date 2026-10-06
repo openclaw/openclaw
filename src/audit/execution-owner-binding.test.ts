@@ -61,48 +61,42 @@ describe("execution owner binding settlement", () => {
     },
   );
 
-  it("shares post-admission persistence failure with concurrent retries", async () => {
-    const durable = createDeferred();
-    const entered = createDeferred();
-    const source = prepareSource("binding-failure");
-    const bind = vi.fn(async () => {
-      entered.resolve();
-      await durable.promise;
-    });
-    const owner = withPostAdmissionExecutionOwnerBinding(source, bind);
-    try {
-      const first = owner.admit("gateway");
-      await entered.promise;
-      const second = owner.admit("gateway");
-      const settled = Promise.allSettled([first, second]);
-      const failure = new Error("binding persistence failed");
-      durable.reject(failure);
-      expect(await settled).toEqual([
-        { status: "rejected", reason: failure },
-        { status: "rejected", reason: failure },
-      ]);
-      expect(bind).toHaveBeenCalledOnce();
-    } finally {
-      source.close();
-    }
-  });
-
-  it("rejects admission when the owner closes during binding persistence", async () => {
-    const source = prepareSource("binding-close");
-    const entered = createDeferred();
-    const durable = createDeferred();
-    const owner = withPostAdmissionExecutionOwnerBinding(source, async () => {
-      entered.resolve();
-      await durable.promise;
-    });
-    try {
-      const pending = owner.admit("gateway");
-      await entered.promise;
-      owner.close();
-      durable.resolve();
-      await expect(pending).rejects.toThrow("authority is no longer active");
-    } finally {
-      source.close();
-    }
-  });
+  it.each(["persistence failure", "owner closed"] as const)(
+    "rejects admissions after %s during binding",
+    async (outcome) => {
+      const durable = createDeferred();
+      const entered = createDeferred();
+      const source = prepareSource("binding-rejection");
+      const bind = vi.fn(async () => {
+        entered.resolve();
+        await durable.promise;
+      });
+      const owner = withPostAdmissionExecutionOwnerBinding(source, bind);
+      try {
+        const first = owner.admit("gateway");
+        await entered.promise;
+        const attempts = [first];
+        if (outcome === "persistence failure") {
+          attempts.push(owner.admit("gateway"));
+        }
+        const settled = Promise.allSettled(attempts);
+        const failure = new Error("binding persistence failed");
+        if (outcome === "persistence failure") {
+          durable.reject(failure);
+          expect(await settled).toEqual([
+            { status: "rejected", reason: failure },
+            { status: "rejected", reason: failure },
+          ]);
+        } else {
+          owner.close();
+          durable.resolve();
+          await expect(first).rejects.toThrow("authority is no longer active");
+          await settled;
+        }
+        expect(bind).toHaveBeenCalledOnce();
+      } finally {
+        source.close();
+      }
+    },
+  );
 });

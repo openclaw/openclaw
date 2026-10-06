@@ -102,77 +102,77 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
         );
   const renderDraftText = (text: string): TelegramDraftPreview => renderStreamText(params, text);
 
-  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    const stream = enabled
-      ? (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
-          api: params.bot.api,
+  const createLaneStream = (laneName: LaneName) =>
+    (params.telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+      api: params.bot.api,
+      chatId: params.context.chatId,
+      maxChars: draftMaxChars,
+      thread: params.context.threadSpec,
+      replyToMessageId: params.draftReplyToMessageId,
+      replyToMode: params.replyToMode,
+      replyQuote:
+        params.draftReplyToMessageId != null
+          ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
+          : undefined,
+      richMessages: params.richMessages,
+      linkPreview: params.telegramCfg.linkPreview,
+      minInitialChars: DRAFT_MIN_INITIAL_CHARS,
+      renderText: renderDraftText,
+      onRetainedPage: (page) => {
+        lanes[laneName].retainedPromptContextPages.push({
+          messageId: page.messageId,
+          text: page.textSnapshot,
+        });
+      },
+      ...(params.context.threadSpec.id !== undefined
+        ? {
+            validateProviderMessage: async (message) => {
+              await reportTelegramProviderDelivery({
+                message,
+                messageId: message.message_id,
+                fallbackChatId: params.context.chatId,
+                successfulSendThread: params.context.threadSpec,
+              });
+            },
+          }
+        : {}),
+      onProviderMessage: async (message) => {
+        await recordSentMessage(params.context.chatId, message.message_id, params.cfg, {
+          accountId: params.context.route.accountId,
+          agentId: params.opts.ownerAgentId,
+        });
+        await (
+          params.telegramDeps.recordOutboundMessageForPromptContext ??
+          recordOutboundMessageForPromptContext
+        )({
+          cfg: params.cfg,
+          ownerAgentId: params.opts.ownerAgentId,
+          account: {
+            accountId: params.context.route.accountId,
+            ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
+          },
           chatId: params.context.chatId,
-          maxChars: draftMaxChars,
-          thread: params.context.threadSpec,
-          replyToMessageId: params.draftReplyToMessageId,
-          replyToMode: params.replyToMode,
-          replyQuote:
-            params.draftReplyToMessageId != null
-              ? params.replyQuoteByMessageId[String(params.draftReplyToMessageId)]
-              : undefined,
-          richMessages: params.richMessages,
-          linkPreview: params.telegramCfg.linkPreview,
-          minInitialChars: DRAFT_MIN_INITIAL_CHARS,
-          renderText: renderDraftText,
-          onRetainedPage: (page) => {
-            lanes[laneName].retainedPromptContextPages.push({
-              messageId: page.messageId,
-              text: page.textSnapshot,
-            });
-          },
+          message,
+          messageId: message.message_id,
           ...(params.context.threadSpec.id !== undefined
-            ? {
-                validateProviderMessage: async (message) => {
-                  await reportTelegramProviderDelivery({
-                    message,
-                    messageId: message.message_id,
-                    fallbackChatId: params.context.chatId,
-                    successfulSendThread: params.context.threadSpec,
-                  });
-                },
-              }
+            ? { messageThreadId: params.context.threadSpec.id }
             : {}),
-          onProviderMessage: async (message) => {
-            await recordSentMessage(params.context.chatId, message.message_id, params.cfg, {
-              accountId: params.context.route.accountId,
-              agentId: params.opts.ownerAgentId,
-            });
-            await (
-              params.telegramDeps.recordOutboundMessageForPromptContext ??
-              recordOutboundMessageForPromptContext
-            )({
-              cfg: params.cfg,
-              ownerAgentId: params.opts.ownerAgentId,
-              account: {
-                accountId: params.context.route.accountId,
-                ...(params.telegramCfg.name !== undefined ? { name: params.telegramCfg.name } : {}),
-              },
-              chatId: params.context.chatId,
-              message,
-              messageId: message.message_id,
-              ...(params.context.threadSpec.id !== undefined
-                ? { messageThreadId: params.context.threadSpec.id }
-                : {}),
-              successfulSendThread: params.context.threadSpec,
-            });
-          },
-          log: logVerbose,
-          // Draft delivery failures must stay operator-visible: verbose-only
-          // logging hid preview send/edit/cleanup errors, so a dead progress
-          // stream looked like the bot silently ignoring the user.
-          warn: (message) =>
-            draftLogger.warn(message, {
-              lane: laneName,
-              chatId: params.context.chatId,
-              threadId: params.context.threadSpec.id,
-            }),
-        })
-      : undefined;
+          successfulSendThread: params.context.threadSpec,
+        });
+      },
+      log: logVerbose,
+      // Draft delivery failures must stay operator-visible: verbose-only
+      // logging hid preview send/edit/cleanup errors, so a dead progress
+      // stream looked like the bot silently ignoring the user.
+      warn: (message) =>
+        draftLogger.warn(message, {
+          lane: laneName,
+          chatId: params.context.chatId,
+          threadId: params.context.threadSpec.id,
+        }),
+    });
+  const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
+    const stream = enabled ? createLaneStream(laneName) : undefined;
     return {
       stream,
       lastPartialText: "",
@@ -192,14 +192,19 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       ? false
       : typeof resolvedBlockStreamingEnabled === "boolean"
         ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+        : !params.allowProviderPreview && !params.context.ctxPayload.GroupThread
+          ? // Hooked blocks replace gated drafts, but preserve an explicit global opt-out.
+            params.cfg.agents?.defaults?.blockStreamingDefault === "off"
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   return {
     answerLane: lanes.answer,
     reasoningLane: lanes.reasoning,
     lanes,
+    // A queued turn needs its own answer stream after an earlier turn handed its draft off.
+    createAnswerStream: () => createLaneStream("answer"),
     streamDeliveryEnabled,
     streamReasoningInProgressDraft,
     disableBlockStreaming,
@@ -219,13 +224,11 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
 
 export function resetLaneState(turn: Turn, lane: DraftLaneState): void {
   lane.lastPartialText = "";
-  if (lane === turn.answerLane) {
-    turn.lastAnswerPartialText = "";
-  }
   lane.hasStreamedMessage = false;
   lane.finalized = false;
   lane.retainedPromptContextPages = [];
   if (lane === turn.answerLane) {
+    turn.lastAnswerPartialText = "";
     turn.activeAnswerDraftIsToolProgressOnly = false;
     turn.pendingAnswerBlockAssistantMessageIndex = undefined;
     turn.activeAnswerBlockDelivery = undefined;
@@ -240,14 +243,12 @@ export function repositionLaneForNewMessage(turn: Turn, lane: DraftLaneState): v
 }
 
 export async function rotateLaneForNewMessage(turn: Turn, lane: DraftLaneState): Promise<void> {
-  if (!lane.hasStreamedMessage && typeof lane.stream?.messageId() !== "number") {
-    resetLaneState(turn, lane);
-    return;
+  if (lane.hasStreamedMessage || typeof lane.stream?.messageId() === "number") {
+    // Settle pending edits before changing stream identity; reset only after the
+    // new Telegram message is selected or delivery state can describe the old one.
+    await lane.stream?.stop();
+    lane.stream?.forceNewMessage();
   }
-  // Settle pending edits before changing stream identity; reset only after the
-  // new Telegram message is selected or delivery state can describe the old one.
-  await lane.stream?.stop();
-  lane.stream?.forceNewMessage();
   resetLaneState(turn, lane);
 }
 
@@ -302,10 +303,10 @@ export async function prepareAnswerLaneForText(turn: Turn): Promise<boolean> {
   if (turn.streamMode === "progress") {
     return false;
   }
-  if (await rotateAnswerLaneAfterToolProgress(turn)) {
-    return true;
-  }
-  if (await rotateAnswerLaneAfterQueuedBlocksSettle(turn)) {
+  if (
+    (await rotateAnswerLaneAfterToolProgress(turn)) ||
+    (await rotateAnswerLaneAfterQueuedBlocksSettle(turn))
+  ) {
     return true;
   }
   if (!turn.answerLane.finalized) {
@@ -591,6 +592,9 @@ export function isQueuedAnswerBlock(
 }
 
 export function beginDraftQueuedFollowup(turn: Turn): void {
+  if (turn.progressContinuationAdopted) {
+    turn.answerLane.stream = turn.createAnswerStream();
+  }
   turn.progressContinuationAdopted = false;
   for (const lane of [turn.answerLane, turn.reasoningLane]) {
     if (!lane.stream) {

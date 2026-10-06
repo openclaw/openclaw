@@ -32,8 +32,8 @@ import {
   reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
-  type OpenClawStateLeaseIdentity,
 } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 function takeLeaseExpiryObservation(identity: OpenClawStateLeaseIdentity): BigInt64Array {
   const attachment = takeSqliteWorkerOperationAdmissionAttachment();
@@ -173,7 +173,7 @@ export function acquireOpenClawStateLeaseInWorker(
           env: getSqliteWorkerStateContext().environment,
         },
       },
-      operationLabel,
+      operationLabel === "state.lease" ? "state.lease.acquire" : operationLabel,
       (db) => {
         const facts = { kind: "state-lease-acquire", identity };
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
@@ -247,7 +247,15 @@ export function executeOpenClawStateLeaseCommand(
         return undefined;
       },
       { database, path: database.path, env: getSqliteWorkerStateContext().environment },
-      { busyTimeoutMs: 0, operationLabel: command.input.operationLabel },
+      {
+        busyTimeoutMs: 0,
+        operationLabel:
+          command.input.operationLabel !== "state.lease"
+            ? command.input.operationLabel
+            : command.type === "stateLease.renew"
+              ? "state.lease.renew"
+              : "state.lease.release",
+      },
     ),
   );
 }

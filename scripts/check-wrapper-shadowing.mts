@@ -8,6 +8,7 @@ import {
   type ModuleExports,
   type SourceModule,
 } from "./check-export-name-collisions.mts";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
@@ -19,8 +20,6 @@ export type WrapperShadowingViolation = {
   wrapper: string;
   via?: string;
 };
-
-const failurePrefix = "check-wrapper-shadowing";
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -134,10 +133,7 @@ export function findWrapperShadowingViolations(modules: SourceModule[]) {
     for (const [index, sourceFile] of sourceFiles.entries()) {
       const sourceModule = batch[index]!;
       const modulePath = normalizeRelativePath(sourceModule.path);
-      modulesByPath.set(
-        modulePath,
-        collectModuleExportNames(sourceModule.content, modulePath, sourceFile),
-      );
+      modulesByPath.set(modulePath, collectModuleExportNames(modulePath, sourceFile));
     }
   }
 
@@ -208,15 +204,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-wrapper-shadowing", async () => {
+    process.exitCode = await main();
+  }),
+);

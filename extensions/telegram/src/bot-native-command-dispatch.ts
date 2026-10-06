@@ -26,7 +26,6 @@ import {
   resolveTelegramGroupAllowFromContext,
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
-import type { TelegramGetChat } from "./bot/types.js";
 import {
   inspectTelegramConversationRoute,
   resolveTelegramTargetSession,
@@ -110,10 +109,6 @@ export async function resolveTelegramNativeCommandThreadContext(params: {
   const { msg, bot } = params;
   const chatId = msg.chat.id;
   const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
-  const getChat =
-    typeof bot.api.getChat === "function"
-      ? (bot.api.getChat.bind(bot.api) as TelegramGetChat)
-      : undefined;
   const isForum =
     msg.chat.is_direct_messages === true
       ? false
@@ -123,7 +118,7 @@ export async function resolveTelegramNativeCommandThreadContext(params: {
           isGroup,
           isForum: extractTelegramForumFlag(msg.chat),
           isTopicMessage: msg.is_topic_message,
-          getChat,
+          getChat: (id) => bot.api.getChat(id),
         });
   const threadSpec = resolveTelegramMessageThreadSpec(msg, isForum);
   return {
@@ -245,13 +240,11 @@ async function resolveTelegramCommandAuth(params: {
   };
 
   const baseAccess = evaluateTelegramGroupBaseAccess({
-    isGroup,
     groupConfig,
     topicConfig,
     hasGroupAllowOverride,
     effectiveGroupAllow,
     senderId,
-    senderUsername,
     enforceAllowOverride: requireAuth,
     requireSenderForAllowOverride: true,
   });
@@ -278,13 +271,9 @@ async function resolveTelegramCommandAuth(params: {
     groupConfig,
     effectiveGroupAllow,
     senderId,
-    senderUsername,
     resolveGroupPolicy: params.resolveGroupPolicy,
-    enforcePolicy: true,
     enforceAllowlistAuthorization: requireAuth && !preContextCommandAccess.authorizedByConfig,
     allowEmptyAllowlistEntries: true,
-    requireSenderForAllowlistAuthorization: true,
-    checkChatAllowlist: true,
   });
   if (!policyAccess.allowed) {
     if (policyAccess.reason === "group-policy-disabled") {

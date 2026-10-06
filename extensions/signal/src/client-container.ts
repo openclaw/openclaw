@@ -1,5 +1,5 @@
 import { coerceErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
+import { captureEffectAuthority, resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import {
   detectMime,
   extractOriginalFilename,
@@ -104,71 +104,8 @@ async function withSignalRestDeadline<T>(
   }
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
-  const fetchImpl = resolveFetch();
-  if (!fetchImpl) {
-    throw new Error("fetch is not available");
-  }
-  return await withSignalRestDeadline(timeoutMs, async ({ signal }) =>
-    fetchImpl(url, { ...init, signal }),
-  );
-}
-
 function signalRestIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
   return new Error(`Signal REST response body stalled after ${chunkTimeoutMs}ms`);
-}
-
-function signalAttachmentIdleTimeoutError({ chunkTimeoutMs }: { chunkTimeoutMs: number }): Error {
-  return new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`);
-}
-
-async function readSignalRestText(
-  res: Response,
-  bodyIdleTimeoutMs: number,
-  bodyTimeoutMs: () => number,
-): Promise<string> {
-  const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
-    chunkTimeoutMs: bodyIdleTimeoutMs,
-    onIdleTimeout: signalRestIdleTimeoutError,
-    timeoutMs: bodyTimeoutMs,
-    onTimeout: signalRestRequestTimeoutError,
-    onOverflow: ({ maxBytes }) => new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
-  });
-  return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-}
-
-async function readSignalRestErrorText(
-  res: Response,
-  bodyIdleTimeoutMs: number,
-  bodyTimeoutMs: () => number,
-): Promise<string> {
-  return (
-    await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
-      chunkTimeoutMs: bodyIdleTimeoutMs,
-      onIdleTimeout: signalRestIdleTimeoutError,
-      timeoutMs: bodyTimeoutMs,
-      onTimeout: signalRestRequestTimeoutError,
-    })
-  ).text;
-}
-
-async function readCappedResponseBuffer(
-  res: Response,
-  maxResponseBytes: number,
-  bodyIdleTimeoutMs: number,
-  bodyTimeoutMs: () => number,
-): Promise<Buffer> {
-  const contentLength = parseMediaContentLength(res.headers?.get("content-length") ?? null);
-  if (contentLength !== null && contentLength > maxResponseBytes) {
-    throw new Error("Signal REST attachment exceeded size limit");
-  }
-  return await readResponseWithLimit(res, maxResponseBytes, {
-    chunkTimeoutMs: bodyIdleTimeoutMs,
-    onIdleTimeout: signalAttachmentIdleTimeoutError,
-    timeoutMs: bodyTimeoutMs,
-    onTimeout: signalRestRequestTimeoutError,
-    onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
-  });
 }
 
 async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
@@ -185,7 +122,13 @@ export async function containerCheck(
   const normalized = normalizeBaseUrl(baseUrl);
   let res: Response | undefined;
   try {
-    res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
+    const fetchImpl = resolveFetch();
+    if (!fetchImpl) {
+      throw new Error("fetch is not available");
+    }
+    res = await withSignalRestDeadline(timeoutMs, ({ signal }) =>
+      fetchImpl(`${normalized}/v1/about`, { method: "GET", signal }),
+    );
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -276,6 +219,7 @@ async function containerRestRequest<T = unknown>(
   method: "GET" | "POST" | "PUT" | "DELETE" = "GET",
   body?: unknown,
 ): Promise<T> {
+  const effect = captureEffectAuthority();
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}${endpoint}`;
 
@@ -296,8 +240,10 @@ async function containerRestRequest<T = unknown>(
   }
 
   return await withSignalRestDeadline(timeoutMs, async ({ signal, timeoutMs: bodyTimeoutMs }) => {
-    opts.assertDirectAdapterHandoff?.();
-    const res = await fetchImpl(url, { ...init, signal });
+    const res = await effect.initiate(() => {
+      opts.assertDirectAdapterHandoff?.();
+      return fetchImpl(url, { ...init, signal });
+    });
     if (res.status === 204) {
       return undefined as T;
     }
@@ -307,7 +253,14 @@ async function containerRestRequest<T = unknown>(
       // and a hostile/buggy response must not let an error path buffer an unbounded body.
       let errorText = "";
       try {
-        errorText = await readSignalRestErrorText(res, bodyIdleTimeoutMs, bodyTimeoutMs);
+        errorText = (
+          await readResponseTextPrefix(res, SIGNAL_REST_ERROR_RESPONSE_MAX_BYTES, {
+            chunkTimeoutMs: bodyIdleTimeoutMs,
+            onIdleTimeout: signalRestIdleTimeoutError,
+            timeoutMs: bodyTimeoutMs,
+            onTimeout: signalRestRequestTimeoutError,
+          })
+        ).text;
       } catch (error) {
         if (error instanceof SignalRestTimeoutError) {
           throw error;
@@ -321,7 +274,15 @@ async function containerRestRequest<T = unknown>(
     // funnel through here). timeoutMs stays a total request+body deadline (localhost
     // container, 10s default), so a slow-drip body cannot outlive it even while the idle
     // chunk guard keeps resetting.
-    const text = await readSignalRestText(res, bodyIdleTimeoutMs, bodyTimeoutMs);
+    const bytes = await readResponseWithLimit(res, SIGNAL_REST_SUCCESS_RESPONSE_MAX_BYTES, {
+      chunkTimeoutMs: bodyIdleTimeoutMs,
+      onIdleTimeout: signalRestIdleTimeoutError,
+      timeoutMs: bodyTimeoutMs,
+      onTimeout: signalRestRequestTimeoutError,
+      onOverflow: ({ maxBytes }) =>
+        new Error(`Signal REST: text response exceeds ${maxBytes} bytes`),
+    });
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     if (!text) {
       return undefined as T;
     }
@@ -357,14 +318,21 @@ async function containerFetchAttachment(
         return null;
       }
 
-      return await readCappedResponseBuffer(
-        fetched,
-        Math.floor(
-          asPositiveFiniteNumber(opts.maxResponseBytes) ?? DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES,
-        ),
-        bodyIdleTimeoutMs,
-        bodyTimeoutMs,
+      const maxResponseBytes = Math.floor(
+        asPositiveFiniteNumber(opts.maxResponseBytes) ?? DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES,
       );
+      const contentLength = parseMediaContentLength(fetched.headers?.get("content-length") ?? null);
+      if (contentLength !== null && contentLength > maxResponseBytes) {
+        throw new Error("Signal REST attachment exceeded size limit");
+      }
+      return await readResponseWithLimit(fetched, maxResponseBytes, {
+        chunkTimeoutMs: bodyIdleTimeoutMs,
+        onIdleTimeout: ({ chunkTimeoutMs }) =>
+          new Error(`Signal REST attachment response body stalled after ${chunkTimeoutMs}ms`),
+        timeoutMs: bodyTimeoutMs,
+        onTimeout: signalRestRequestTimeoutError,
+        onOverflow: () => new Error("Signal REST attachment exceeded size limit"),
+      });
     } finally {
       await releaseUnreadResponseBody(res);
     }
@@ -748,7 +716,6 @@ export async function containerRpcRequest<T = unknown>(
         timeoutMs: opts.timeoutMs,
         maxResponseBytes: opts.maxResponseBytes,
       });
-      // Convert to native format: { data: base64String }
       if (!buffer) {
         return { data: undefined } as T;
       }

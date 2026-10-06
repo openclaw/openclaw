@@ -15,18 +15,6 @@ struct ExecApprovalPromptRequest: Codable {
     var sessionKey: String?
     var allowedDecisions: [ExecApprovalDecision]?
 
-    private enum CodingKeys: String, CodingKey {
-        case command
-        case cwd
-        case host
-        case security
-        case ask
-        case agentId
-        case resolvedPath
-        case sessionKey
-        case allowedDecisions
-    }
-
     static func allowedDecisions(
         forAsk ask: String?,
         allowAlwaysEligible: Bool = true) -> [ExecApprovalDecision]

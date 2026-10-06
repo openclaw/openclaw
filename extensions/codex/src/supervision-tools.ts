@@ -28,14 +28,8 @@ import {
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
-import {
-  CodexSupervisionPolicyError,
-  requireOwnerAccess,
-  requireRawTranscriptAccess,
-  requireSupervisionEnabled,
-  requireWriteAccess,
-  resolveToolPolicy,
-} from "./supervision-tool-policy.js";
+
+class CodexSupervisionPolicyError extends Error {}
 
 /** Legacy endpoint env retained for the shipped Supervisor tool contract. */
 const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
@@ -119,18 +113,7 @@ type ResolvedSupervisionEndpoint = NormalizedSupervisionEndpoint & {
   connectionKey: string;
 };
 
-type CodexSupervisorSession = {
-  endpointId: string;
-  threadId: string;
-  sessionId?: string;
-  cwd?: string;
-  preview?: string;
-  name?: string | null;
-  source?: string;
-  status: string;
-  updatedAt?: number;
-  humanAttached?: boolean;
-};
+type CodexSupervisorSession = NonNullable<ReturnType<typeof toSession>>;
 
 type CodexSupervisorEndpointHealth = {
   endpointId: string;
@@ -366,10 +349,8 @@ function resolveEndpoints(
   const normalized = endpoints
     ? requireUniqueEndpointIds(endpoints.map(normalizeConfiguredEndpoint))
     : [{ id: "local", label: "local Codex app-server" }];
-  const resolved: ResolvedSupervisionEndpoint[] = [];
-  for (const endpoint of normalized) {
-    resolved.push({
-      ...endpoint,
+  return normalized.map((endpoint) =>
+    Object.assign({}, endpoint, {
       connectionKey: supervisionEndpointConnectionKey({
         endpoint,
         pluginConfig,
@@ -378,9 +359,8 @@ function resolveEndpoints(
         resolveAuthProfileId,
         resolveRuntimeOptions,
       }),
-    });
-  }
-  return resolved;
+    }),
+  );
 }
 
 function resolveEndpointStartOptions(params: {
@@ -519,11 +499,7 @@ function sourceLabel(value: unknown): string | undefined {
   return Object.keys(value).toSorted()[0];
 }
 
-function toSession(
-  endpointId: string,
-  thread: Record<string, unknown>,
-  humanAttached?: boolean,
-): CodexSupervisorSession | undefined {
+function toSession(endpointId: string, thread: Record<string, unknown>, humanAttached?: boolean) {
   if (typeof thread.id !== "string") {
     return undefined;
   }
@@ -802,17 +778,16 @@ function redactEndpointUrl(value: string): string {
   if (value.startsWith("unix://")) {
     return "unix://";
   }
-  try {
-    const url = new URL(value);
-    url.username = "";
-    url.password = "";
-    if (url.search) {
-      url.search = "?[redacted]";
-    }
-    return url.toString();
-  } catch {
+  const url = URL.parse(value);
+  if (!url) {
     return "[redacted]";
   }
+  url.username = "";
+  url.password = "";
+  if (url.search) {
+    url.search = "?[redacted]";
+  }
+  return url.toString();
 }
 
 function endpointResult(
@@ -859,14 +834,14 @@ function requireLiveToolPolicy(
   options: CodexSupervisionToolsOptions,
   policy: CodexSupervisionRequestPolicy,
 ): { pluginConfig: unknown; endpoints: ResolvedSupervisionEndpoint[] } {
-  requireOwnerAccess(options);
-  const pluginConfig = options.getPluginConfig();
-  requireSupervisionEnabled(pluginConfig);
-  if (policy === "raw-transcripts") {
-    requireRawTranscriptAccess(pluginConfig);
-  } else if (policy === "write-controls") {
-    requireWriteAccess(pluginConfig);
+  options.assertInvocationCurrent?.();
+  if (!options.senderIsOwner) {
+    throw new CodexSupervisionPolicyError(
+      "Codex supervision compatibility tools require an owner-authorized sender.",
+    );
   }
+  const pluginConfig = options.getPluginConfig();
+  requireToolPolicy(pluginConfig, policy);
   return {
     pluginConfig,
     endpoints: resolveEndpoints(
@@ -877,6 +852,21 @@ function requireLiveToolPolicy(
       options.resolveRuntimeOptions,
     ),
   };
+}
+
+function requireToolPolicy(pluginConfig: unknown, policy: CodexSupervisionRequestPolicy): void {
+  const config = readCodexPluginConfig(pluginConfig).supervision;
+  const error =
+    config?.enabled !== true
+      ? "Codex supervision is disabled in the codex plugin config."
+      : policy === "raw-transcripts" && config.allowRawTranscripts !== true
+        ? "Codex session reads are disabled for this codex plugin supervision config."
+        : policy === "write-controls" && config.allowWriteControls !== true
+          ? "Codex write controls are disabled for this codex plugin supervision config."
+          : undefined;
+  if (error) {
+    throw new CodexSupervisionPolicyError(error);
+  }
 }
 
 function requireCurrentEndpoint(
@@ -1005,7 +995,10 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
         const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
         return jsonResult({
           summary: `codex sessions: ${result.sessions.length}`,
-          ...sanitizeSessionListResult(result, resolveToolPolicy(pluginConfig).allowRawTranscripts),
+          ...sanitizeSessionListResult(
+            result,
+            readCodexPluginConfig(pluginConfig).supervision?.allowRawTranscripts === true,
+          ),
         });
       },
     },
@@ -1016,7 +1009,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionReadParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireRawTranscriptAccess(pluginConfig);
+        requireToolPolicy(pluginConfig, "raw-transcripts");
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const endpoint = await resolveEndpointForThread({
@@ -1046,7 +1039,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionSendParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireWriteAccess(pluginConfig);
+        requireToolPolicy(pluginConfig, "write-controls");
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const text = readStringParam(params, "text", { required: true, allowEmpty: false });
@@ -1082,7 +1075,7 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
       parameters: SessionInterruptParamsSchema,
       execute: async (_toolCallId, rawParams) => {
         const { endpoints, pluginConfig } = current();
-        requireWriteAccess(pluginConfig);
+        requireToolPolicy(pluginConfig, "write-controls");
         const params = isRecord(rawParams) ? rawParams : {};
         const threadId = readStringParam(params, "thread_id", { required: true });
         const { endpoint, thread } = await readActiveThread(

@@ -7,13 +7,11 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
-  type ConfigSnapshotForInstallPersist,
 } from "../../plugins/install-config-mutation.js";
 import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
-import type { PluginRecord } from "../../plugins/registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   buildAllPluginInspectReports,
@@ -58,13 +56,6 @@ function buildPluginInspectJson(
   };
 }
 
-function formatPluginLabel(plugin: PluginRecord): string {
-  if (!plugin.name || plugin.name === plugin.id) {
-    return plugin.id;
-  }
-  return `${plugin.name} (${plugin.id})`;
-}
-
 function formatPluginsList(report: PluginStatusReport): string {
   if (report.plugins.length === 0) {
     return `🔌 No plugins found for workspace ${report.workspaceDir ?? "(unknown workspace)"}.`;
@@ -77,78 +68,16 @@ function formatPluginsList(report: PluginStatusReport): string {
       const format = plugin.bundleFormat
         ? `${plugin.format ?? "openclaw"}/${plugin.bundleFormat}`
         : (plugin.format ?? "openclaw");
-      return `- ${formatPluginLabel(plugin)} [${plugin.status}] ${format}`;
+      const label =
+        !plugin.name || plugin.name === plugin.id ? plugin.id : `${plugin.name} (${plugin.id})`;
+      return `- ${label} [${plugin.status}] ${format}`;
     }),
   ];
   return lines.join("\n");
 }
 
-function isPluginsWriteAction(action: string): boolean {
-  return action === "install" || action === "enable" || action === "disable";
-}
-
 function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
   return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
-}
-
-function rejectNixModePluginWrite(): {
-  shouldContinue: false;
-  reply: { text: string };
-} | null {
-  try {
-    assertConfigWriteAllowedInCurrentMode();
-    return null;
-  } catch (error) {
-    return {
-      shouldContinue: false,
-      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
-    };
-  }
-}
-
-function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = normalizeOptionalLowercaseString(rawName);
-  if (!target) {
-    return undefined;
-  }
-  return report.plugins.find(
-    (plugin) =>
-      normalizeOptionalLowercaseString(plugin.id) === target ||
-      normalizeOptionalLowercaseString(plugin.name) === target,
-  );
-}
-
-async function loadPluginCommandConfig(): Promise<
-  { ok: true; snapshot: ConfigSnapshotForInstallPersist } | { ok: false; error: string }
-> {
-  const prepared = await readConfigFileSnapshotForWrite();
-  const snapshot = prepared.snapshot;
-  if (!snapshot.valid) {
-    return {
-      ok: false,
-      error: "Config file is invalid; fix it before using /plugins.",
-    };
-  }
-  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
-  const { pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
-    snapshotPath: snapshot.path,
-    writeOptions,
-  });
-  if (pluginMutation.mode === "blocked") {
-    return {
-      ok: false,
-      error: pluginMutation.reason,
-    };
-  }
-  return {
-    ok: true,
-    snapshot: {
-      config: structuredClone(snapshot.sourceConfig),
-      baseHash: snapshot.hash,
-      writeOptions,
-    },
-  };
 }
 
 export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -165,7 +94,11 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(`⚠️ ${pluginsCommand.message}`);
     }
 
-    if (isPluginsWriteAction(pluginsCommand.action)) {
+    if (
+      pluginsCommand.action === "install" ||
+      pluginsCommand.action === "enable" ||
+      pluginsCommand.action === "disable"
+    ) {
       const missingAdminScope = requireGatewayClientScope(params, {
         label: "/plugins write",
         allowedScopes: ["operator.admin"],
@@ -181,9 +114,10 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           return nonOwner;
         }
       }
-      const nixModeWrite = rejectNixModePluginWrite();
-      if (nixModeWrite) {
-        return nixModeWrite;
+      try {
+        assertConfigWriteAllowedInCurrentMode();
+      } catch (error) {
+        return commandReply(`⚠️ ${formatErrorMessage(error)}`);
       }
     }
 
@@ -204,15 +138,29 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       };
       assertInvokerOwned();
       return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
-        const loadedConfig = await loadPluginCommandConfig();
-        if (!loadedConfig.ok) {
-          return commandReply(`⚠️ ${loadedConfig.error}`);
+        const prepared = await readConfigFileSnapshotForWrite();
+        const snapshot = prepared.snapshot;
+        if (!snapshot.valid) {
+          return commandReply("⚠️ Config file is invalid; fix it before using /plugins.");
+        }
+        const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+        const { pluginMutation } = resolveInstallConfigMutationPreflights({
+          parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+          snapshotPath: snapshot.path,
+          writeOptions,
+        });
+        if (pluginMutation.mode === "blocked") {
+          return commandReply(`⚠️ ${pluginMutation.reason}`);
         }
         const installed = await installPluginFromPluginsCommand({
           raw: pluginsCommand.spec,
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
-          snapshot: loadedConfig.snapshot,
+          snapshot: {
+            config: structuredClone(snapshot.sourceConfig),
+            baseHash: snapshot.hash,
+            writeOptions,
+          },
           applyRuntime: context?.applyPluginLifecycleChange,
           beforePersistentApply: assertInvokerOwned,
           signal: params.opts?.abortSignal,
@@ -280,7 +228,14 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       if (pluginsCommand.action === "list") {
         return commandReply(formatPluginsList(report));
       }
-      const plugin = findPlugin(report, pluginsCommand.name);
+      const target = normalizeOptionalLowercaseString(pluginsCommand.name);
+      const plugin = target
+        ? report.plugins.find(
+            (entry) =>
+              normalizeOptionalLowercaseString(entry.id) === target ||
+              normalizeOptionalLowercaseString(entry.name) === target,
+          )
+        : undefined;
       if (!plugin) {
         return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
       }

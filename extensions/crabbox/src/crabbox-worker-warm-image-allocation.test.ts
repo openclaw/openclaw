@@ -102,6 +102,89 @@ function fixture(
 }
 
 describe("Crabbox durable allocation admission", () => {
+  it.each(["allocation", "capture"] as const)(
+    "leaves unrelated expired generations for maintenance during %s",
+    async (phase) => {
+      const { manager, context, calls } = fixture();
+      const owner = manager();
+      const source = context("cbx_source");
+      await owner.allocate(source);
+      await owner.markEnrolled(source.id);
+      await owner.capture(source);
+      await owner.release(source);
+      const next = context("cbx_next");
+      if (phase === "capture") {
+        await owner.allocate(next);
+        await owner.markEnrolled(next.id);
+      }
+      const store = openWarmImageStore();
+      const image = store.entries()[0]!.value.image!;
+      const expired = {
+        ...image,
+        checkpointId: "chk_unrelated",
+        lastDemandAtMs: Date.now() - 14 * 86_400_000,
+      };
+      const unrelated: WarmProfileRecord = {
+        version: 3,
+        allocations: {},
+        image: expired,
+        previous: { ...expired, checkpointId: "chk_unrelated_previous" },
+      };
+      store.register("unrelated", unrelated);
+      calls.length = 0;
+
+      if (phase === "allocation") {
+        await owner.allocate(next);
+      } else {
+        await owner.capture(next);
+      }
+
+      expect(calls.map((argv) => argv.slice(1, 3))).toEqual([
+        ["checkpoint", phase === "allocation" ? "fork" : "inspect"],
+      ]);
+      expect(store.lookup("unrelated")).toEqual(unrelated);
+      calls.length = 0;
+      await owner.maintain({ binaries: ["crabbox"] });
+      expect(calls.map((argv) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_unrelated_previous"],
+        ["checkpoint", "delete", "chk_unrelated"],
+      ]);
+      expect(store.lookup("unrelated")).toBeUndefined();
+    },
+  );
+
+  it.each([false, true])(
+    "retires only unpinned selected generations on allocation (pinned=%s)",
+    async (pinned) => {
+      const { manager, context, calls } = fixture();
+      const owner = manager();
+      const source = context("cbx_source");
+      await owner.allocate(source);
+      await owner.markEnrolled(source.id);
+      await owner.capture(source);
+      await owner.release(source);
+      const store = openWarmImageStore();
+      const entry = store.entries()[0]!;
+      const expired = {
+        ...entry.value.image!,
+        lastDemandAtMs: Date.now() - 14 * 86_400_000,
+        ...(pinned ? { pinned: { atMs: Date.now() } } : {}),
+      };
+      store.register(entry.key, {
+        ...entry.value,
+        image: expired,
+        previous: { ...expired, checkpointId: "chk_selected_previous" },
+      });
+      calls.length = 0;
+      expect(await owner.allocate(context("cbx_next"))).toEqual(
+        pinned ? { kind: "checkpoint", checkpointId: CHECKPOINT_ID } : { kind: "cold" },
+      );
+      expect(calls.filter((argv) => argv[2] === "delete").map((argv) => argv[3])).toEqual(
+        pinned ? [] : ["chk_selected_previous", CHECKPOINT_ID],
+      );
+    },
+  );
+
   it("returns false and permits enrollment only after an unsupported capture receipt settles its claim", async () => {
     const { manager, context } = fixture(false, (argv) =>
       argv[2] === "create"

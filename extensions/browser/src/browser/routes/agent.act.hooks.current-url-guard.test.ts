@@ -1,6 +1,5 @@
 // Browser tests cover agent.act hook current-tab navigation guard behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
 const chromeMcpMocks = vi.hoisted(() => ({
@@ -65,7 +64,6 @@ function createRouteContext(
 ) {
   return {
     forProfile: () => profileCtx,
-    mapTabError: vi.fn(toBrowserErrorResponse),
     state: () => ({
       resolved: {
         actionTimeoutMs: 60_000,

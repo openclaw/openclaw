@@ -155,7 +155,7 @@ export function registerMeetingPluginCli(options: MeetingCliOptions): void {
     ["test-listen", "testListen", options.descriptions.testListen],
   ] as const) {
     addJoinOptions(command(`${name} <url>`, description))
-      .option("--timeout-ms <ms>", "probe timeout in milliseconds")
+      .option("--timeout-ms <ms>", "check timeout in milliseconds")
       .action(async (url: string, joinOptions: JoinOptions) => {
         await call(method(action), joinPayload(url, joinOptions));
       });

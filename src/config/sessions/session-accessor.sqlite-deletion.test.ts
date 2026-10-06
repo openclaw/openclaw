@@ -62,7 +62,6 @@ import {
 } from "./session-accessor.sqlite-deletion.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { applySessionStoreProjection } from "./session-accessor.sqlite-projection.js";
 import { resolveSqliteScope } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
@@ -418,7 +417,12 @@ describe("session deletion and native owner state", () => {
               deleteWindows ? { removedSessionKeys: [sessionKey] } : { deleted: true },
             );
           }
-          expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          if (deleteWindows) {
+            // Admitted schema facts already own the node artifact inventory.
+            expect.soft(counter.counts.inventory).toBe(0);
+          } else {
+            expect.soft(counter.counts.inventory).toBeGreaterThan(0);
+          }
           // Successful public deletion also inventories board cleanup after the node artifacts.
           const inventoryBudget = !deleteWindows && !rejectSuggestions ? 2 : 1;
           expect.soft(counter.counts.inventory).toBeLessThanOrEqual(inventoryBudget);
@@ -769,14 +773,10 @@ describe("session deletion and native owner state", () => {
       },
     });
     const deletion = owner.run(() =>
-      applySessionStoreProjection({
+      applySessionEntryLifecycleMutation({
         storePath,
         skipMaintenance: true,
-        update: (store) => {
-          delete store[baseKey];
-          delete store[sessionKey];
-          return { persist: true, result: undefined };
-        },
+        removals: [{ sessionKey: baseKey }, { sessionKey }],
       }),
     );
     await expect(deletion).rejects.toMatchObject({
@@ -930,7 +930,7 @@ describe("session deletion and native owner state", () => {
     ]);
   });
 
-  it.each(["entry replacement", "whole-store projection", "maintenance"] as const)(
+  it.each(["entry replacement", "lifecycle removal", "maintenance"] as const)(
     "preserves successor bindings and removes deleted keys through %s",
     async (surface) => {
       await seed();
@@ -951,14 +951,11 @@ describe("session deletion and native owner state", () => {
           });
           return;
         }
-        if (surface === "whole-store projection") {
-          await applySessionStoreProjection({
+        if (surface === "lifecycle removal") {
+          await applySessionEntryLifecycleMutation({
             storePath,
             skipMaintenance: true,
-            update: (store) => {
-              delete store[sessionKey];
-              return { persist: true, result: undefined };
-            },
+            removals: [{ sessionKey }],
           });
           return;
         }

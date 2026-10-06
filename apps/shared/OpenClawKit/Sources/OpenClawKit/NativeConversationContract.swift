@@ -5,7 +5,9 @@ public enum NativeConversationContract {
     public static let handlerName = "openclawConversation"
     public static let hostScript = """
     window.__OPENCLAW_NATIVE_EMBED__ = { platform: "macos", formFactor: "desktop", surface: "conversation" };
-    window.__OPENCLAW_NATIVE_CONVERSATION__ = { contract: 1 };
+    window.__OPENCLAW_NATIVE_CONVERSATION__ = {
+      contract: 1, features: ["session-facts-v1", "session-actions-v1"]
+    };
     """
     public static let documentProbe = "window.__OPENCLAW_NATIVE_CONVERSATION_DOCUMENT__?.documentId"
 
@@ -29,7 +31,7 @@ public enum NativeConversationContract {
     }
 }
 
-public struct NativeConversationContext: Codable, Equatable, Sendable {
+public struct NativeConversationContext: Codable, Hashable, Sendable {
     public let agentId: String
     public let sessionKey: String
 
@@ -54,28 +56,13 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
         case navigate(NativeConversationContext)
         case presentation(NativeConversationPresentation)
         case focusComposer
+        case openSessionActions(NativeConversationContext)
     }
 
     private enum Kind: String, Codable {
         case navigate, presentation
         case focusComposer = "focus-composer"
-    }
-
-    private struct Empty: Codable {
-        init() {}
-
-        init(from decoder: any Decoder) throws {
-            let fields = try [String: String](from: decoder)
-            guard fields.isEmpty else {
-                throw DecodingError.dataCorrupted(.init(
-                    codingPath: decoder.codingPath,
-                    debugDescription: "Expected empty payload"))
-            }
-        }
-
-        func encode(to encoder: any Encoder) throws {
-            try [String: String]().encode(to: encoder)
-        }
+        case openSessionActions = "open-session-actions"
     }
 
     public let documentId: String
@@ -97,8 +84,13 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
         case .presentation:
             self.action = try .presentation(container.decode(NativeConversationPresentation.self, forKey: .payload))
         case .focusComposer:
-            _ = try container.decode(Empty.self, forKey: .payload)
+            guard try container.decode([String: String].self, forKey: .payload).isEmpty else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: .payload, in: container, debugDescription: "Expected empty payload")
+            }
             self.action = .focusComposer
+        case .openSessionActions:
+            self.action = try .openSessionActions(container.decode(NativeConversationContext.self, forKey: .payload))
         }
     }
 
@@ -117,15 +109,16 @@ public struct NativeConversationCommand: Codable, Equatable, Sendable {
             try container.encode(payload, forKey: .payload)
         case .focusComposer:
             kind = .focusComposer
-            try container.encode(Empty(), forKey: .payload)
+            try container.encode([String: String](), forKey: .payload)
+        case let .openSessionActions(payload):
+            kind = .openSessionActions
+            try container.encode(payload, forKey: .payload)
         }
         try container.encode(kind, forKey: .type)
     }
 
     public func javaScript() throws -> String {
-        guard let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8) else {
-            throw EncodingError.invalidValue(self, .init(codingPath: [], debugDescription: "Invalid UTF-8 JSON"))
-        }
+        let json = try String(bytes: JSONEncoder().encode(self), encoding: .utf8)!
         // A replacement can commit after native queues evaluation.
         return """
         (() => {
@@ -156,6 +149,51 @@ public struct NativeConversationState: Codable, Equatable, Sendable {
     public let title: String
     public let run: Run
     public let connection: Connection
+}
+
+/// A complete, bounded projection of the current web sidebar's composer badges.
+public struct NativeConversationSessionFacts: Codable, Equatable, Sendable {
+    public static let maximumBytes = 65536
+    public struct Session: Codable, Equatable, Sendable {
+        public let agentId: String
+        public let sessionKey: String
+        public let hasComposerDraft: Bool
+        public let outboxAttentionCount: UInt64
+
+        public var context: NativeConversationContext {
+            .init(agentId: self.agentId, sessionKey: self.sessionKey)
+        }
+    }
+
+    public let revision: UInt64
+    /// Nil means unavailable; an empty array is a known empty projection.
+    public let sessions: [Session]?
+    private enum CodingKeys: String, CodingKey { case revision, sessions }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.revision = try container.decode(UInt64.self, forKey: .revision)
+        self.sessions = try container.decode([Session]?.self, forKey: .sessions)
+        let rows = self.sessions ?? []
+        guard (1...9_007_199_254_740_991).contains(self.revision), rows.count <= 64,
+              Set(rows.map(\.context)).count == rows.count,
+              rows.allSatisfy({ row in
+                  !row.agentId.isEmpty && row.agentId.utf8.count <= 4096 &&
+                      !row.sessionKey.isEmpty && row.sessionKey.utf8.count <= 4096 &&
+                      row.outboxAttentionCount <= 9_007_199_254_740_991
+              })
+        else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: decoder.codingPath,
+                debugDescription: "invalid-session-facts"))
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.revision, forKey: .revision)
+        try container.encode(self.sessions, forKey: .sessions)
+    }
 }
 
 public struct NativeConversationResult: Codable, Equatable, Sendable {
@@ -189,6 +227,7 @@ public struct NativeConversationMessage: Codable, Equatable, Sendable {
         case commandResult(NativeConversationResult)
         case routeChanged(NativeConversationRouteChanged)
         case openDashboard(NativeConversationDashboardRoute)
+        case sessionFacts(NativeConversationSessionFacts)
     }
 
     private enum Kind: String, Codable {
@@ -196,6 +235,7 @@ public struct NativeConversationMessage: Codable, Equatable, Sendable {
         case commandResult = "command-result"
         case routeChanged = "route-changed"
         case openDashboard = "open-dashboard"
+        case sessionFacts = "session-facts"
     }
 
     public let documentId: String
@@ -215,6 +255,7 @@ public struct NativeConversationMessage: Codable, Equatable, Sendable {
         case .commandResult: self.body = try .commandResult(NativeConversationResult(from: decoder))
         case .routeChanged: self.body = try .routeChanged(NativeConversationRouteChanged(from: decoder))
         case .openDashboard: self.body = try .openDashboard(NativeConversationDashboardRoute(from: decoder))
+        case .sessionFacts: self.body = try .sessionFacts(NativeConversationSessionFacts(from: decoder))
         }
     }
 
@@ -238,6 +279,9 @@ public struct NativeConversationMessage: Codable, Equatable, Sendable {
             try payload.encode(to: encoder)
         case let .openDashboard(payload):
             kind = .openDashboard
+            try payload.encode(to: encoder)
+        case let .sessionFacts(payload):
+            kind = .sessionFacts
             try payload.encode(to: encoder)
         }
         try container.encode(kind, forKey: .type)

@@ -1,9 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../../agent-run-terminal-outcome.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000;
@@ -12,6 +14,7 @@ type PendingLifecycleKind = "error" | "timeout";
 
 type PendingLifecycleParams = {
   runId: string;
+  expectedEntry: SubagentRunRecord;
   endedAt: number;
   startedAt?: number;
   cancellation?: true;
@@ -44,7 +47,22 @@ export function createPendingLifecycleScheduler(params: {
     pendingByRunId.clear();
   }
 
+  const canComplete = (
+    kind: PendingLifecycleKind,
+    entry: SubagentRunRecord,
+    expected: SubagentRunRecord,
+  ) =>
+    entry.execution.startedAt === expected.execution.startedAt &&
+    entry.pauseReason !== "sessions_yield" &&
+    entry.execution.outcome?.status !== "ok" &&
+    (kind !== "error" || entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE);
+
   function schedule(kind: PendingLifecycleKind, scheduleParams: PendingLifecycleParams) {
+    const selected = scheduleParams.expectedEntry;
+    const currentAtSchedule = getCurrentSubagentRunOwner(params.runs, selected);
+    if (!currentAtSchedule || !canComplete(kind, currentAtSchedule, selected)) {
+      return;
+    }
     clearKind(scheduleParams.runId);
     const timer = setTimeout(() => {
       const pending = pendingByRunId.get(scheduleParams.runId);
@@ -52,21 +70,35 @@ export function createPendingLifecycleScheduler(params: {
         return;
       }
       pendingByRunId.delete(scheduleParams.runId);
-      const entry = params.runs.get(scheduleParams.runId);
-      if (!entry) {
+      const entry = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
+      if (!entry || !canComplete(kind, entry, pending.expectedEntry)) {
         return;
       }
-      if (
-        kind === "error"
-          ? entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE ||
-            entry.execution.outcome?.status === "ok"
-          : entry.execution.outcome?.status === "ok" || entry.pauseReason === "sessions_yield"
-      ) {
-        return;
-      }
+      let publication: Pick<SubagentRunRecord, "execution" | "endedReason"> | undefined;
+      const isCurrent = () => {
+        const current = getCurrentSubagentRunOwner(params.runs, pending.expectedEntry);
+        return (
+          current !== undefined &&
+          current.pauseReason !== "sessions_yield" &&
+          (publication
+            ? current.endedReason === publication.endedReason &&
+              isDeepStrictEqual(current.execution, publication.execution)
+            : canComplete(kind, current, pending.expectedEntry))
+        );
+      };
       params.completeInBackground(
         {
-          runId: scheduleParams.runId,
+          runId: entry.runId,
+          expectedEntry: entry,
+          // Yield or retry-start can commit after this timer fires, before terminal admission.
+          recoveryCurrent: {
+            prepare: async () => isCurrent(),
+            isHostCurrent: isCurrent,
+            onPublished: ({ execution, endedReason }) => {
+              // Deadline normalization can change a cancellation into this owner's timeout.
+              publication = { execution, endedReason };
+            },
+          },
           endedAt: pending.endedAt,
           outcome:
             kind === "timeout"
@@ -95,6 +127,17 @@ export function createPendingLifecycleScheduler(params: {
 
   return {
     clear: clearKind,
+    clearPriorAttempt: (runId: string) => {
+      const pending = pendingByRunId.get(runId);
+      const current = params.runs.get(runId);
+      if (
+        pending &&
+        current &&
+        pending.expectedEntry.execution.startedAt !== current.execution.startedAt
+      ) {
+        clearKind(runId);
+      }
+    },
     clearError: (runId: string) => clearKind(runId, "error"),
     clearTimeout: (runId: string) => clearKind(runId, "timeout"),
     clearAll,

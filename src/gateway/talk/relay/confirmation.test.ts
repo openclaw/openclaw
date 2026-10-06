@@ -19,8 +19,8 @@ import {
 import type { TalkAgentConsultLifecycleMethods } from "../client-agent-consult.types.js";
 import { controlBridge, controlContext } from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
-import { createTalkRealtimeRelaySession, stopTalkRealtimeRelaySession } from "./index.js";
-import { closeRelaySession } from "./operations.js";
+import { closeRelaySession, stopTalkRealtimeRelaySession } from "./operations.js";
+import { createTalkRealtimeRelaySession } from "./session-create.js";
 import { relaySessions, type RelaySession } from "./state.js";
 
 const mocks = vi.hoisted(() => ({ run: vi.fn(), steer: vi.fn() }));
@@ -38,7 +38,6 @@ vi.mock("../client-agent-consult.js", () => ({
 
 describe("native relay confirmation transcript admission", () => {
   let state: OpenClawTestState;
-  let relaySessionId: string | undefined;
   let ownedRelay: RelaySession | undefined;
   const connId = "relay-confirmation-client";
 
@@ -60,7 +59,7 @@ describe("native relay confirmation transcript admission", () => {
   });
 
   function createHarness(challenge = true) {
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     let request: RealtimeVoiceBridgeCreateRequest | undefined;
     const session = createTalkRealtimeRelaySession({
       cfg,
@@ -81,7 +80,7 @@ describe("native relay confirmation transcript admission", () => {
       instructions: "Answer briefly.",
       tools: [],
     });
-    relaySessionId = session.relaySessionId;
+    const { relaySessionId } = session;
     const relay = relaySessions.get(relaySessionId);
     const run: (RealtimeVoiceAgentConsultRunner & TalkAgentConsultLifecycleMethods) | undefined =
       request?.runAgentConsult;
@@ -241,7 +240,6 @@ describe("native relay confirmation transcript admission", () => {
     const pending = h.run({ prompt: "The user confirmed" });
     const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
     await stopTalkRealtimeRelaySession({ relaySessionId: h.relay.id, connId });
-    relaySessionId = undefined;
     await rejected;
     expect(mocks.run).not.toHaveBeenCalled();
   });

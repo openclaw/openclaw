@@ -81,6 +81,13 @@ describe("diagnostic stability recorder", () => {
       count: 2,
       intervalMs: 60_000,
     });
+    emitDiagnosticEvent({
+      type: "worker.request",
+      kind: "sessionTranscript",
+      requestClass: "task",
+      phase: "queued",
+      queueDepth: 1,
+    });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
@@ -1022,6 +1029,21 @@ describe("diagnostic stability recorder", () => {
     );
     expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: -1 })).toThrow(
       "sinceSeq must be a non-negative integer",
+    );
+  });
+
+  it("rejects blank stability query limit, sinceSeq, and type", () => {
+    expect(() => normalizeDiagnosticStabilityQuery({ limit: "" })).toThrow(
+      "limit must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ sinceSeq: "" })).toThrow(
+      "sinceSeq must be a non-negative integer",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "" })).toThrow(
+      "type must be a non-empty string",
+    );
+    expect(() => normalizeDiagnosticStabilityQuery({ type: "   " })).toThrow(
+      "type must be a non-empty string",
     );
   });
 

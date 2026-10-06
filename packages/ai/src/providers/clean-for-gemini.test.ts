@@ -321,6 +321,23 @@ describe("cleanSchemaForGemini", () => {
     expect(cleaned.enum).toBeUndefined();
   });
 
+  it.each([
+    ["Partial<Filter>", "#/$defs/Partial<Filter>"],
+    ["Partial<Filter>", "#/$defs/Partial%3CFilter%3E"],
+    ["Partial<Filter>", "#%2F%24defs%2FPartial%3CFilter%3E"],
+    ["Filter/value~", "#%2F%24defs%2FFilter%7E1value%7E0"],
+    ["Filter%2Fvalue", "#/$defs/Filter%252Fvalue"],
+  ])("preserves the type of %s referenced by %s", (name, ref) => {
+    const filter = { type: "object", properties: { limit: { type: "number" } } };
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { [name]: filter },
+        properties: { filter: { $ref: ref } },
+      }),
+    ).toStrictEqual({ type: "object", properties: { filter } });
+  });
+
   it("preserves shared definitions across inline and reference traversal", () => {
     const node = {
       type: "object",

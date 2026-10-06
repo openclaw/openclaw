@@ -1,5 +1,10 @@
 import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
+import {
+  getPreparedModelRuntimePluginGeneration,
+  withPreparedModelRuntimePluginGenerationScope,
+} from "../agents/prepared-model-runtime-generation-scope.js";
+import type { PreparedModelRuntimePluginGeneration } from "../agents/prepared-model-runtime.types.js";
 import type { SystemAgentSession } from "./agent-turn.js";
 import type { SystemAgentTurnDeps } from "./agent-turn.test-support.js";
 import {
@@ -15,9 +20,58 @@ import {
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
-import { loadSystemAgentOverview } from "./overview.js";
 
 describe("SystemAgentChatEngine facade", () => {
+  it.each(["requester", "alternate"])("preserves runtime ownership for %s", async (requester) => {
+    useTempStateDir();
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: { model: "openai/gpt-5.5" },
+        entries: { alternate: { model: "openai/gpt-5.5" } },
+      },
+    };
+    const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
+    expect(inference.binding.execution.agentId).toBe("alternate");
+    const inheritedGeneration = {} as PreparedModelRuntimePluginGeneration;
+    const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
+    const runEmbeddedAgent = vi.fn(async () => {
+      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+      return { meta: { finalAssistantVisibleText: "ready" } };
+    });
+    const planGreeting = vi.fn(async () => {
+      observedGenerations.push(getPreparedModelRuntimePluginGeneration());
+      return null;
+    });
+    const engine = new SystemAgentChatEngine({
+      requesterAgentId: requester,
+      verifiedInference: inference.binding,
+      planGreeting,
+      runAgentTurn: (params) =>
+        runSystemAgentTurnWithDeps(params, {
+          ...inference.deps,
+          readConfigFileSnapshot: async () => configSnapshot(config),
+          runEmbeddedAgent: runEmbeddedAgent as never,
+        }),
+      deps: {
+        ...inference.deps,
+        readConfigFileSnapshot: async () => configSnapshot(config),
+        loadOverview: fakeOverviewLoader(),
+      },
+    });
+    try {
+      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+        engine.handle("continue setup"),
+      );
+      await withPreparedModelRuntimePluginGenerationScope(inheritedGeneration, () =>
+        engine.planGreeting({ overview: {} as never, facts: {} as never, timeoutMs: 10 }),
+      );
+      const expectedGeneration = requester === "alternate" ? inheritedGeneration : undefined;
+      expect(observedGenerations).toEqual([expectedGeneration, expectedGeneration]);
+    } finally {
+      await engine.dispose();
+    }
+  });
+
   it("ends a partial timed-out agent turn without starting a second planner inference", async () => {
     useTempStateDir();
     const config: OpenClawConfig = {
@@ -76,41 +130,6 @@ describe("SystemAgentChatEngine facade", () => {
       expect(planner).not.toHaveBeenCalled();
     } finally {
       planner.mockRestore();
-      await engine.dispose();
-    }
-  });
-
-  it("uses the verified inference owner for a delegated fleet overview", async () => {
-    useTempStateDir();
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: { model: "openai/gpt-5.6-luna" }, work: {} },
-      },
-      gateway: { port: 1 },
-    };
-    const engine = new SystemAgentChatEngine({
-      requesterAgentId: "main",
-      deps: {
-        loadOverview: async (options?: { agentId?: string }) =>
-          loadSystemAgentOverview({
-            ...options,
-            deps: {
-              readConfigFileSnapshot: async () => configSnapshot(config),
-              probeLocalCommand: async (command) => ({ command, found: false }),
-              probeGatewayUrl: async (url) => ({ url, reachable: false }),
-            },
-          }),
-      },
-    });
-    try {
-      const overview = await engine.loadOverview();
-      expect(overview.defaultAgentId).toBe("main");
-      expect(overview.agents.map(({ id, isDefault }) => ({ id, isDefault }))).toEqual([
-        { id: "main", isDefault: true },
-        { id: "work", isDefault: false },
-      ]);
-    } finally {
       await engine.dispose();
     }
   });

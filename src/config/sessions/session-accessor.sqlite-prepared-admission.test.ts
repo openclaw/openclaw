@@ -5,6 +5,7 @@ import type { WorkerOptions } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -20,7 +21,6 @@ import {
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -55,7 +55,6 @@ import {
 import {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
-  applySessionStoreProjection,
 } from "./session-accessor.sqlite-projection.js";
 import {
   resolveSqliteScope,
@@ -63,6 +62,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 
 const hooks = vi.hoisted((): PreparedAdmissionHooks => ({}));
 vi.mock("node:worker_threads", async (importOriginal) => {
@@ -196,14 +196,25 @@ function fixture() {
 
 type Fixture = ReturnType<typeof fixture>;
 
-function closeForIntegrityAdmission(f: Fixture) {
-  expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
+async function closeForIntegrityAdmission(f: Fixture) {
+  expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
 
 async function closeWorkerForIntegrityAdmission(f: Fixture) {
   await closeOpenClawAgentDatabaseByPathAsync(f.databasePath);
+  invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+  clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
+}
+
+function evictCachedHandleForIntegrityAdmission(f: Fixture) {
+  const database = getOpenClawAgentDatabaseIfOpen(f.options);
+  if (!database) {
+    throw new Error("Fixture lost its cached handle before eviction");
+  }
+  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  expect(database.db.isOpen).toBe(false);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
   clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
 }
@@ -223,7 +234,7 @@ function observeWorkerAdmission(databasePath: string, mode: "warm" | "cold") {
   });
 }
 
-const cases = (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
+const cases = (["lifecycle", "replacement"] as const).flatMap((owner) =>
   (["warm", "cold-preparation", "cold-commit"] as const).map((mode) => ({ owner, mode })),
 );
 
@@ -232,9 +243,19 @@ it.each(cases)(
   async ({ owner, mode }) => {
     const f = fixture();
     if (mode === "cold-preparation") {
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
     }
     const probe = observeAdmission(f.databasePath);
+    const workerProbe =
+      owner === "lifecycle"
+        ? observePreparedWorkerAdmission({
+            databasePath: f.databasePath,
+            mode: "warm",
+            hooks,
+            releases,
+            expectParentHealthy: () => probe.expectHealthy(0),
+          })
+        : undefined;
     const entered = createDeferred();
     const release = createDeferred();
     releases.push(() => release.resolve());
@@ -246,58 +267,48 @@ it.each(cases)(
       entered.resolve();
       await release.promise;
       if (mode === "cold-commit") {
-        if (owner !== "whole-store") {
-          await closeWorkerForIntegrityAdmission(f);
+        if (owner === "lifecycle") {
+          evictCachedHandleForIntegrityAdmission(f);
         } else {
-          closeForIntegrityAdmission(f);
+          await closeWorkerForIntegrityAdmission(f);
         }
       }
     };
     const operation = own<string | SessionEntryLifecycleMutationResult>(
-      owner === "whole-store"
-        ? applySessionStoreProjection({
+      owner === "replacement"
+        ? applySessionEntryReplacements({
             storePath: f.databasePath,
+            sessionKeys: [f.input.sessionKey],
             skipMaintenance: true,
-            update: async (store) => {
+            update: async (entries) => {
               await update();
-              store[f.input.sessionKey]!.label = "updated";
-              return { persist: true, result: "done" };
+              return {
+                replacements: entries.map(({ sessionKey, entry }) => ({
+                  sessionKey,
+                  entry: { ...entry, label: "updated" },
+                })),
+                result: "done",
+              };
             },
           })
-        : owner === "replacement"
-          ? applySessionEntryReplacements({
-              storePath: f.databasePath,
-              sessionKeys: [f.input.sessionKey],
-              skipMaintenance: true,
-              update: async (entries) => {
-                await update();
-                return {
-                  replacements: entries.map(({ sessionKey, entry }) => ({
-                    sessionKey,
-                    entry: { ...entry, label: "updated" },
-                  })),
-                  result: "done",
-                };
-              },
-            })
-          : applySessionEntryLifecycleMutation({
-              storePath: f.databasePath,
-              skipMaintenance: true,
-              upserts: [
-                {
-                  sessionKey: f.input.sessionKey,
-                  buildEntry: async ({ currentEntry }) => {
-                    await update();
-                    if (!currentEntry) {
-                      throw new Error("fixture entry missing");
-                    }
-                    return { ...currentEntry, label: "updated" };
-                  },
+        : applySessionEntryLifecycleMutation({
+            storePath: f.databasePath,
+            skipMaintenance: true,
+            upserts: [
+              {
+                sessionKey: f.input.sessionKey,
+                buildEntry: async ({ currentEntry }) => {
+                  await update();
+                  if (!currentEntry) {
+                    throw new Error("fixture entry missing");
+                  }
+                  return { ...currentEntry, label: "updated" };
                 },
-              ],
-            }),
+              },
+            ],
+          }),
     );
-    expect(callbacks).toBe(owner === "whole-store" && mode !== "cold-preparation" ? 1 : 0);
+    expect(callbacks).toBe(0);
     const later = own(
       runExclusiveSqliteSessionWrite(
         f.scope,
@@ -320,95 +331,74 @@ it.each(cases)(
     });
     expect(callbacks).toBe(1);
     expect(order).toEqual(["update", "later"]);
-    probe.expectHealthy(owner === "replacement" || mode === "warm" ? 0 : 1);
+    if (workerProbe) {
+      await workerProbe.expectHealthy({
+        executor: mode === "warm" ? 0 : 1,
+        reclamation: 0,
+        other: 0,
+      });
+    } else {
+      probe.expectHealthy(0);
+    }
   },
 );
 
-it.each(["persist-false", "unchanged", "empty-replacements", "missing-replacement"] as const)(
-  "does not reopen a disposed handle for a $0 result-only commit",
-  async (mode) => {
-    const f = fixture();
-    const probe = observeAdmission(f.databasePath);
-    let callbacks = 0;
-    const close = async () => {
-      callbacks += 1;
-      expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+it("does not reopen a disposed handle for a missing replacement's result-only commit", async () => {
+  const f = fixture();
+  const probe = observeAdmission(f.databasePath);
+  const update = vi.fn(async () => {
+    expect(await closeOpenClawAgentDatabaseByPathAsync(f.databasePath)).toBe(true);
+    return {
+      result: "no-op",
+      replacements: [
+        { sessionKey: "agent:main:missing", entry: { sessionId: "missing", updatedAt: 1 } },
+      ],
     };
-    const operation =
-      mode === "persist-false" || mode === "unchanged"
-        ? applySessionStoreProjection({
-            storePath: f.databasePath,
-            skipMaintenance: true,
-            update: async (store) => {
-              await close();
-              if (mode === "persist-false") {
-                delete store[f.input.sessionKey];
-              }
-              return { persist: mode !== "persist-false", result: "no-op" };
-            },
-          })
-        : applySessionEntryReplacements({
-            storePath: f.databasePath,
-            sessionKeys: [
-              mode === "missing-replacement" ? "agent:main:missing" : f.input.sessionKey,
-            ],
-            skipMaintenance: true,
-            update: async () => {
-              await close();
-              return {
-                result: "no-op",
-                ...(mode === "missing-replacement"
-                  ? {
-                      replacements: [
-                        {
-                          sessionKey: "agent:main:missing",
-                          entry: { sessionId: "missing", updatedAt: 1 },
-                        },
-                      ],
-                    }
-                  : {}),
-              };
-            },
-          });
-    await expect(own(operation)).resolves.toBe("no-op");
-    expect(callbacks).toBe(1);
-    expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
-    probe.expectHealthy(0);
-    expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
-  },
-);
+  });
+  await expect(
+    own(
+      applySessionEntryReplacements({
+        storePath: f.databasePath,
+        sessionKeys: ["agent:main:missing"],
+        skipMaintenance: true,
+        update,
+      }),
+    ),
+  ).resolves.toBe("no-op");
+  expect(update).toHaveBeenCalledOnce();
+  expect(getOpenClawAgentDatabaseIfOpen(f.options)).toBeUndefined();
+  probe.expectHealthy(0);
+  expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe("original");
+});
 
-it.each(["selection", "stale", "denied"] as const)(
-  "refuses replacement $0 before an unauthorized worker commit",
-  async (mode) => {
-    const f = fixture();
-    const probe = observeAdmission(f.databasePath);
-    const denied = new Error("synthetic replacement denied");
-    const guard = vi.fn(() => {
-      throw denied;
-    });
-    const update = vi.fn(
-      async (
-        entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
-      ) => {
-        if (mode === "stale") {
-          replaceSessionEntrySync(f.input, {
-            sessionId: "original",
-            label: "newer",
-            updatedAt: Date.now(),
-          });
-        }
-        await closeWorkerForIntegrityAdmission(f);
-        return {
-          result: undefined,
-          replacements: entries.map(({ entry, sessionKey }) => ({
-            sessionKey: mode === "selection" ? "agent:main:outside-selection" : sessionKey,
-            entry: { ...entry, label: "uncommitted" },
-          })),
-        };
-      },
-    );
-    const work = own(
+it("checks replacement commit authority before stale rows or worker admission", async () => {
+  const f = fixture();
+  const probe = observeAdmission(f.databasePath);
+  const denied = new Error("synthetic replacement denied");
+  const guard = vi.fn(() => {
+    throw denied;
+  });
+  const update = vi.fn(
+    async (
+      entries: Parameters<Parameters<typeof applySessionEntryReplacements>[0]["update"]>[0],
+    ) => {
+      replaceSessionEntrySync(f.input, {
+        sessionId: "original",
+        label: "newer",
+        updatedAt: Date.now(),
+      });
+      await closeWorkerForIntegrityAdmission(f);
+      return {
+        result: undefined,
+        replacements: entries.map(({ entry, sessionKey }) => ({
+          sessionKey,
+          entry: { ...entry, label: "uncommitted" },
+        })),
+      };
+    },
+  );
+  await expect(
+    own(
       applySessionEntryReplacements({
         storePath: f.databasePath,
         sessionKeys: [f.input.sessionKey],
@@ -416,35 +406,30 @@ it.each(["selection", "stale", "denied"] as const)(
         assertCommitAllowed: guard,
         update,
       }),
-    );
-    if (mode === "selection") {
-      await expect(work).rejects.toThrow("outside the selected key set");
-    } else {
-      await expect(work).rejects.toBe(denied);
-    }
-    expect(update).toHaveBeenCalledOnce();
-    expect(guard).toHaveBeenCalledTimes(mode === "selection" ? 0 : 1);
-    probe.expectHealthy(0);
-    expect(loadSessionEntryReadOnly(f.input)?.label).toBe(mode === "stale" ? "newer" : undefined);
-  },
-);
+    ),
+  ).rejects.toBe(denied);
+  expect(update).toHaveBeenCalledOnce();
+  expect(guard).toHaveBeenCalledOnce();
+  probe.expectHealthy(0);
+  expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
+});
 
 it("keeps lifecycle commit denial before its stale-row check after admission", async () => {
   const f = fixture();
-  const probe = observeAdmission(f.databasePath);
+  const probe = observeWorkerAdmission(f.databasePath, "warm");
   const denied = new Error("synthetic lifecycle denied");
   const guard = vi.fn(() => {
     throw denied;
   });
   const committed = vi.fn();
   const buildEntry = vi.fn(
-    ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
+    async ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
       replaceSessionEntrySync(f.input, {
         sessionId: "original",
         label: "newer",
         updatedAt: Date.now(),
       });
-      closeForIntegrityAdmission(f);
+      await closeForIntegrityAdmission(f);
       return { ...currentEntry!, label: "uncommitted" };
     },
   );
@@ -461,7 +446,7 @@ it("keeps lifecycle commit denial before its stale-row check after admission", a
   expect(buildEntry).toHaveBeenCalledOnce();
   expect(guard).toHaveBeenCalledOnce();
   expect(committed).not.toHaveBeenCalled();
-  probe.expectHealthy(1);
+  await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
   expect(loadSessionEntryReadOnly(f.input)?.label).toBe("newer");
 });
 
@@ -478,9 +463,11 @@ it("reacquires post-builder references before planning lifecycle transcript dele
   const survivor = { ...f.input, sessionKey: "agent:main:surviving-reference" };
   replaceSessionEntrySync(survivor, { sessionId: "survivor", updatedAt: Date.now() });
   const probe = observeAdmission(f.databasePath);
+  let sql: ReturnType<typeof observeHostDataSql> | undefined;
   const builder = vi.fn(
     ({ currentEntry }: { currentEntry?: import("./types.js").SessionEntry }) => {
-      closeForIntegrityAdmission(f);
+      evictCachedHandleForIntegrityAdmission(f);
+      sql = observeHostDataSql();
       return { ...currentEntry!, usageFamilySessionIds: ["original"] };
     },
   );
@@ -492,10 +479,11 @@ it("reacquires post-builder references before planning lifecycle transcript dele
         removals: [{ sessionKey: f.input.sessionKey, archiveRemovedTranscript: true }],
         upserts: [{ sessionKey: survivor.sessionKey, buildEntry: builder }],
       }),
-    ),
+    ).finally(() => sql?.restore()),
   ).resolves.toMatchObject({ removedEntries: 1, archivedTranscriptDirectories: [] });
   expect(builder).toHaveBeenCalledOnce();
-  probe.expectHealthy(1);
+  probe.expectHealthy(0);
+  expect(sql?.queries, "post-builder reference planning stays off the caller thread").toEqual([]);
   expect(loadSessionEntryReadOnly(f.input)).toBeUndefined();
   expect(loadSessionEntryReadOnly(survivor)?.usageFamilySessionIds).toEqual(["original"]);
   expect(loadTranscriptEventsSync(transcript.scope)).toEqual(transcript.events);
@@ -587,7 +575,15 @@ it.each([false, true])(
         },
         "session.transcript.batch",
       );
-      closeForIntegrityAdmission(f);
+      const cached = getOpenClawAgentDatabaseIfOpen(f.options);
+      if (!cached) {
+        throw new Error("Fixture lost its cached handle before native deletion preparation");
+      }
+      // Evict the handle without revoking the lifecycle operation's captured execution owner.
+      closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+      expect(cached.db.isOpen).toBe(false);
+      invalidateOpenClawAgentDatabaseValidation(f.databasePath);
+      clearOpenClawAgentIntegrityVerification(f.databasePath, f.input.env);
     });
     const harness: AgentHarness = {
       id: "prepared-native",
@@ -606,16 +602,13 @@ it.each([false, true])(
     registry.plugins.push(record);
     registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
     markPluginRegistryActive(registry);
-    const probe = observeAdmission(f.databasePath, true);
+    const probe = observeWorkerAdmission(f.databasePath, "cold");
     const work = own(
       withPluginRuntimeRegistryScope(registry, () =>
-        applySessionStoreProjection({
+        applySessionEntryLifecycleMutation({
           storePath: f.databasePath,
           skipMaintenance: true,
-          update: (store) => {
-            delete store[f.input.sessionKey];
-            return { persist: true, result: "deleted" };
-          },
+          removals: [{ sessionKey: f.input.sessionKey }],
         }),
       ),
     );
@@ -641,13 +634,13 @@ it.each([false, true])(
     if (revoked) {
       await expect(work).rejects.toThrow("harness owner changed");
     } else {
-      await expect(work).resolves.toBe("deleted");
+      await expect(work).resolves.toMatchObject({ removedSessionKeys: [f.input.sessionKey] });
     }
     await later;
     expect(prepare).toHaveBeenCalledOnce();
     expect(commit).toHaveBeenCalledTimes(revoked ? 0 : 1);
     expect(rollback).not.toHaveBeenCalled();
-    probe.expectHealthy(1);
+    await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
     expect(loadSessionEntryReadOnly(f.input)?.sessionId).toBe(revoked ? "original" : undefined);
   },
 );
@@ -687,7 +680,7 @@ function expectMaintenanceArchived(f: ReturnType<typeof maintenanceFixture>) {
 }
 
 it.each(
-  (["whole-store", "lifecycle", "replacement"] as const).flatMap((owner) =>
+  (["lifecycle", "replacement"] as const).flatMap((owner) =>
     ([false, true] as const).map((cold) => ({ owner, cold })),
   ),
 )(
@@ -705,44 +698,36 @@ it.each(
         "session.transcript.batch",
       );
       if (cold) {
-        if (owner !== "whole-store") {
-          await closeWorkerForIntegrityAdmission(f);
+        if (owner === "lifecycle") {
+          evictCachedHandleForIntegrityAdmission(f);
         } else {
-          closeForIntegrityAdmission(f);
+          await closeWorkerForIntegrityAdmission(f);
         }
       }
     };
     const work = own<void | SessionEntryLifecycleMutationResult>(
-      owner === "whole-store"
-        ? applySessionStoreProjection({
+      owner === "replacement"
+        ? applySessionEntryReplacements({
             storePath: f.databasePath,
-            update: (store) => {
-              store[f.input.sessionKey]!.label = "kept";
-              return { persist: true, result: undefined };
-            },
-          })
-        : owner === "replacement"
-          ? applySessionEntryReplacements({
-              storePath: f.databasePath,
-              sessionKeys: [f.input.sessionKey],
-              skipMaintenance: false,
-              update: (entries) => ({
-                result: undefined,
-                replacements: entries.map(({ entry, sessionKey }) => ({
-                  sessionKey,
-                  entry: { ...entry, label: "kept" },
-                })),
-              }),
-            })
-          : applySessionEntryLifecycleMutation({
-              storePath: f.databasePath,
-              upserts: [
-                {
-                  sessionKey: f.input.sessionKey,
-                  buildEntry: ({ currentEntry }) => ({ ...currentEntry!, label: "kept" }),
-                },
-              ],
+            sessionKeys: [f.input.sessionKey],
+            skipMaintenance: false,
+            update: (entries) => ({
+              result: undefined,
+              replacements: entries.map(({ entry, sessionKey }) => ({
+                sessionKey,
+                entry: { ...entry, label: "kept" },
+              })),
             }),
+          })
+        : applySessionEntryLifecycleMutation({
+            storePath: f.databasePath,
+            upserts: [
+              {
+                sessionKey: f.input.sessionKey,
+                buildEntry: ({ currentEntry }) => ({ ...currentEntry!, label: "kept" }),
+              },
+            ],
+          }),
     );
     if (cold) {
       expect(await probe.expectPending(work), "cold validation owner").toBe("reclamation");
@@ -775,25 +760,35 @@ it.each(
     expect(preparationWriterRan).toBe(true);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe(cold ? "foreground" : "kept");
     expectMaintenanceArchived(f);
-    await probe.expectHealthy({ executor: cold ? 1 : 0, reclamation: cold ? 1 : 0, other: 0 });
+    await probe.expectHealthy({
+      executor: cold && owner === "replacement" ? 1 : 0,
+      reclamation: cold ? 1 : 0,
+      other: 0,
+    });
   },
 );
 
-function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
-  return runOpenClawAgentWriteTransaction(
-    (database) =>
-      applySessionEntryMaintenance(database, {
-        activeSessionKey: f.input.sessionKey,
-        archiveDirectory: f.archiveDirectory,
-        storePath: f.databasePath,
-      }),
-    f.options,
-  );
+async function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
+  const preservation = await prepareSessionMaintenancePreservation(f.databasePath);
+  try {
+    return runOpenClawAgentWriteTransaction(
+      (database) =>
+        applySessionEntryMaintenance(database, {
+          preservation: preservation.capture,
+          activeSessionKey: f.input.sessionKey,
+          archiveDirectory: f.archiveDirectory,
+          storePath: f.databasePath,
+        }),
+      f.options,
+    );
+  } finally {
+    preservation.dispose();
+  }
 }
 
 it("revalidates expired proof before the maintenance finalizer commits", async () => {
   const f = maintenanceFixture();
-  const plan = maintenancePlan(f);
+  const plan = await maintenancePlan(f);
   const database = openOpenClawAgentDatabase(f.options);
   const retained = observeRetainedMaintenanceFinalizer(f.databasePath);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
@@ -836,10 +831,10 @@ it("revalidates expired proof before the maintenance finalizer commits", async (
 
 it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const f = maintenanceFixture();
-  const plan = maintenancePlan(f);
+  const plan = await maintenancePlan(f);
   const probe = observeWorkerAdmission(f.databasePath, "cold");
   hooks.afterMaterialize = async () => {
-    closeForIntegrityAdmission(f);
+    await closeForIntegrityAdmission(f);
   };
   let current = true;
   const work = own(
@@ -861,7 +856,7 @@ it.each([false, true])(
   "rechecks native deletion ownership after cold maintenance admission (revoked: %s)",
   async (revoked) => {
     const f = maintenanceFixture(true);
-    const plan = maintenancePlan(f);
+    const plan = await maintenancePlan(f);
     const registry = createEmptyPluginRegistry();
     const commit = vi.fn();
     const rollback = vi.fn();
@@ -873,7 +868,7 @@ it.each([false, true])(
         throw new Error("unused test harness");
       },
       withSessionDeletion: async (params, run) => {
-        closeForIntegrityAdmission(f);
+        await closeForIntegrityAdmission(f);
         params.assertCurrent();
         return await run({ commit, rollback });
       },
@@ -882,7 +877,7 @@ it.each([false, true])(
     registry.plugins.push(record);
     registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
     markPluginRegistryActive(registry);
-    const probe = observeAdmission(f.databasePath, true);
+    const probe = observeWorkerAdmission(f.databasePath, "cold");
     const work = own(
       withPluginRuntimeRegistryScope(registry, () =>
         finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(f.scope, [plan]),
@@ -897,7 +892,7 @@ it.each([false, true])(
     await expect(work).resolves.toMatchObject({ capped: revoked ? 0 : 1 });
     expect(commit).toHaveBeenCalledTimes(revoked ? 0 : 1);
     expect(rollback).not.toHaveBeenCalled();
-    probe.expectHealthy(1);
+    await probe.expectHealthy({ executor: 1, reclamation: 0, other: 0 });
     if (revoked) {
       expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
       expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);

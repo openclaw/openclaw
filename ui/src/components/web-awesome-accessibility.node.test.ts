@@ -25,12 +25,12 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
     await server?.close();
   });
 
-  async function withPopover(
-    initialOpen: boolean,
+  async function withAccessibility(
+    fixture: string,
     run: (page: Page, accessibility: CDPSession) => Promise<void>,
   ) {
     await withBrowserPage(browser.newPage(), async (page) => {
-      const url = new URL("popover-name-fixture", server.baseUrl).href;
+      const url = new URL("accessibility-fixture", server.baseUrl).href;
       await page.route(url, (route) =>
         route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
       );
@@ -38,23 +38,9 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
       await page.addScriptTag({
         content: `
           window.accessibilityFixtureReady = (async () => {
-          const { syncPopoverLabel } = await import(${JSON.stringify(new URL("src/components/web-awesome-popover.ts", server.baseUrl).href)});
           const host = document.body.appendChild(document.createElement("div"));
           const root = host.attachShadow({ mode: "open" });
-          root.innerHTML = \`<h2 id="heading">Project details</h2>
-            <span id="context">Current</span>
-            <button id="trigger" aria-label="Open choices">Choices<span aria-hidden="true"> decoration</span></button>
-            <wa-popover for="trigger" aria-label="Choose project">
-              <button>Save</button>
-            </wa-popover>\`;
-          const popover = root.querySelector("wa-popover");
-          popover.open = ${initialOpen};
-          syncPopoverLabel(popover);
-          await popover.updateComplete;
-          if (!${initialOpen}) {
-            await popover.show();
-          }
-          await popover.popup.updateComplete;
+          ${fixture}
           })();
         `,
       });
@@ -68,6 +54,30 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
         await accessibility.detach();
       }
     });
+  }
+
+  async function withPopover(
+    initialOpen: boolean,
+    run: (page: Page, accessibility: CDPSession) => Promise<void>,
+  ) {
+    await withAccessibility(
+      `
+        const { syncPopoverLabel } = await import(${JSON.stringify(new URL("src/components/web-awesome-popover.ts", server.baseUrl).href)});
+        root.innerHTML = \`<h2 id="heading">Project details</h2>
+          <span id="context">Current</span>
+          <button id="trigger" aria-label="Open choices">Choices<span aria-hidden="true"> decoration</span></button>
+          <wa-popover for="trigger" aria-label="Choose project"><button>Save</button></wa-popover>\`;
+        const popover = root.querySelector("wa-popover");
+        popover.open = ${initialOpen};
+        syncPopoverLabel(popover);
+        await popover.updateComplete;
+        if (!${initialOpen}) {
+          await popover.show();
+        }
+        await popover.popup.updateComplete;
+      `,
+      run,
+    );
   }
 
   async function dialogNames(accessibility: CDPSession) {
@@ -139,35 +149,18 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
   });
 
   it("keeps panel actions outside the tablist in the accessibility tree", async () => {
-    await withBrowserPage(browser.newPage(), async (page) => {
-      const url = new URL("panel-tabs-fixture", server.baseUrl).href;
-      await page.route(url, (route) =>
-        route.fulfill({ contentType: "text/html", body: "<!doctype html><body></body>" }),
-      );
-      await page.goto(url);
-      await page.addScriptTag({
-        content: `
-        window.accessibilityFixtureReady = (async () => {
+    await withAccessibility(
+      `
         const { render } = await import(${JSON.stringify(new URL(`/@fs${new URL(import.meta.resolve("lit")).pathname}`, server.baseUrl).href)});
         const { renderPanelTabStrip } = await import(${JSON.stringify(new URL("src/components/panel-tab-strip.ts", server.baseUrl).href)});
-        const host = document.body.appendChild(document.createElement("div"));
-        const root = host.attachShadow({ mode: "open" });
         render(
           renderPanelTabStrip({
-            tabs: [
-              {
-                id: "first",
-                domId: "first-tab",
-                label: "First tab",
-                closeLabel: "Close first tab",
-              },
-              {
-                id: "second",
-                domId: "second-tab",
-                label: "Second tab",
-                closeLabel: "Close second tab",
-              },
-            ],
+            tabs: ["first", "second"].map((id) => ({
+              id,
+              domId: id + "-tab",
+              label: id + " tab",
+              closeLabel: "Close " + id + " tab",
+            })),
             activeId: "first",
             ariaControls: "panel",
             onSelect: () => {},
@@ -178,12 +171,8 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
           root,
         );
         await root.querySelector("wa-tab-group").updateComplete;
-        })();
-        `,
-      });
-      await page.evaluate("window.accessibilityFixtureReady");
-      const accessibility = await page.context().newCDPSession(page);
-      try {
+      `,
+      async (_page, accessibility) => {
         const { nodes } = await accessibility.send("Accessibility.getFullAXTree");
         const byId = new Map(nodes.map((node) => [node.nodeId, node]));
         const visibleChildren = (id: string): typeof nodes => {
@@ -204,9 +193,7 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Web Awesome accessibil
         expect(
           (actions!.childIds ?? []).flatMap(visibleChildren).map((node) => node.name?.value),
         ).toEqual(["Close first tab", "Close second tab", "New tab"]);
-      } finally {
-        await accessibility.detach();
-      }
-    });
+      },
+    );
   });
 });

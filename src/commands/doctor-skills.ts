@@ -25,12 +25,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
     fileExists: existsSync,
   };
   const githubSkill = skills.find((skill) => skill.name === "github");
-  if (
-    !githubSkill?.eligible ||
-    githubSkill.blockedByAgentFilter ||
-    githubSkill.disabled ||
-    githubSkill.blockedByAllowlist
-  ) {
+  if (!githubSkill?.eligible || githubSkill.blockedByAgentFilter) {
     return [];
   }
   const result = detectGhConfigDirMismatch(discoveryInput);
@@ -42,7 +37,7 @@ function describeGhConfigDirHint(skills: SkillStatusEntry[]): string[] {
 
 function formatUnavailableSkillDoctorLines(
   skills: SkillStatusEntry[],
-  includeDisableHint = true,
+  includeDisableHint: boolean,
 ): string[] {
   const count = skills.length;
   const lines = [

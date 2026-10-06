@@ -274,11 +274,11 @@ If the model loads cleanly but full agent turns misbehave, check transport first
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Check Tool Search** if both probes pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
+3. **Check Tool Search** if both checks pass but real agent turns fail with malformed tool calls or oversized prompts. Local Ollama models, LM Studio, and managed local services automatically use structured [Tool Search](/tools/tool-search) when `tools.toolSearch` is unset. Other backends can enable it with `tools.toolSearch: { mode: "tools" }`. This defers schemas while preserving policy-approved capabilities. Leave `localModelLean` unset or set it to `false` so optional tools remain available. Check the server's actual context allocation and memory use as well.
 
 4. **Disable tools entirely as a last resort** by setting `models.providers.<provider>.models[].compat.supportsTools: false` for that model - the agent then runs without tool calls.
 
-5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only probe does not prove that the model can reliably complete a multi-step agent task.
+5. **Inspect the failing request and server logs.** Check the chat template, context window, memory pressure, and server errors. A successful text-only check does not prove that the model can reliably complete a multi-step agent task.
 
 ## Troubleshooting
 
@@ -351,7 +351,6 @@ For one agent only:
   agents: {
     entries: {
       local: {
-        default: true,
         model: "lmstudio/gemma-4-e4b-it",
         experimental: {
           localModelLean: true,

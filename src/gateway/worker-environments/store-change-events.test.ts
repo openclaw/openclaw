@@ -66,6 +66,7 @@ it.each(["reopening the store", "reconciling an unchanged host"] as const)(
       const request = { limit: 1, archived: "all" as const };
       const initial = await listSessions({ context, client, request });
       const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
       const before = projection.materializedCount;
       const environment = store.get(environmentId);
       if (operation === "reopening the store") {
@@ -164,7 +165,7 @@ describe("worker store session change publications", () => {
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      active = store.transition({
+      active = await store.transition({
         sessionId: SESSION.sessionId,
         from: active.state,
         expectedGeneration: active.generation,
@@ -174,7 +175,7 @@ describe("worker store session change publications", () => {
     if (active.state !== "active") {
       throw new Error("expected active worker placement");
     }
-    const claim = store.claimWorkspaceMutationResult({
+    const claim = await store.claimWorkspaceMutationResult({
       ...SESSION,
       owner: {
         kind: "local",
@@ -184,7 +185,10 @@ describe("worker store session change publications", () => {
       claimId: "pending-row-change",
     });
     const authority = await store.prepareTurnClaimAuthority(claim);
+    const previousObservation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
     const observation = await store.prepareRuntimeRefresh(claim.sessionId);
+    previousObservation.release();
     onTestFinished(authority.release);
     onTestFinished(observation.release);
     const observed: Array<{ reconciling: boolean; conflict: boolean; transaction: boolean }> = [];
@@ -196,9 +200,7 @@ describe("worker store session change publications", () => {
           change.agentId === SESSION.agentId
         ) {
           observed.push({
-            reconciling: store
-              .getWorkspaceResultReconcilingSessionIds([SESSION.sessionId])
-              .has(SESSION.sessionId),
+            reconciling: Boolean(store.preparedWorkspaceResult(claim)?.stagedResultRef),
             conflict: Boolean(store.get(SESSION.sessionId)?.workspaceResultConflict),
             transaction: database.db.isTransaction,
           });
@@ -240,7 +242,9 @@ describe("worker store session change publications", () => {
     }
     expect(refused).toBe(1);
     expect(observed).toEqual([]);
-    expect(store.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { stagedResultRef: null },
+    ]);
     expect(authority.isCurrent()).toBe(true);
     expect(() => observation.assertCurrent()).not.toThrow();
     let commitGrants = 0;
@@ -277,8 +281,8 @@ describe("worker store session change publications", () => {
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: true, transaction: false });
     store.recordWorkspaceResultConflict(claim, undefined);
     expect(observed.at(-1)).toEqual({ reconciling: true, conflict: false, transaction: false });
-    store.acceptWorkspaceResult(claim);
-    store.completeWorkspaceResultAndReleaseTurn(claim);
+    await store.acceptWorkspaceResult(claim);
+    await store.completeWorkspaceResultAndReleaseTurn(claim);
     expect(observed.at(-1)).toEqual({ reconciling: false, conflict: false, transaction: false });
   });
 });

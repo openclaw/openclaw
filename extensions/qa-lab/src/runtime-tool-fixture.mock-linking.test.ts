@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   mockToolRequests,
@@ -8,7 +8,7 @@ import {
   simulateRuntimePatchHappyTurn,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(cleanupRuntimeToolFixtureTempRoots);
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture mock request linking", () => {
   it("rejects unrelated tool output after a planned mock runtime tool call", async () => {
@@ -53,30 +53,61 @@ describe("runtime tool fixture mock request linking", () => {
   );
 
   it("rejects mismatched planned and output call ids on the same mock request", async () => {
-    const requests = [
-      {
-        allInputText: "target=read",
-        plannedToolCallId: "call-read-happy",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "README.md" },
-        toolOutputCallId: "call-write-previous",
-        toolOutput: "previous write output",
-      },
-      {
-        allInputText: "failure target=read",
-        plannedToolCallId: "call-read-failure",
-        plannedToolName: "read",
-        plannedToolArgs: { path: "/missing" },
-      },
-      {
-        allInputText: "failure target=read",
-        toolOutputCallId: "call-read-failure",
-        toolOutput: "ENOENT: no such file or directory",
-      },
-    ];
-
-    await expect(runMockRuntimeToolFixture({ requests })).rejects.toThrow(
-      "expected mock happy-path tool output for read",
-    );
+    const requests = mockToolRequests({});
+    await expect(
+      runMockRuntimeToolFixture({
+        requests: [
+          {
+            ...requests[0],
+            toolOutputCallId: "call-write-previous",
+            toolOutput: "previous write output",
+          },
+          ...requests.slice(2),
+        ],
+      }),
+    ).rejects.toThrow("expected mock happy-path tool output for read");
   });
+  it.each([
+    ["happy-path file", runtimePatchAddInput("runtime-tool-fixture-wrong.txt"), undefined],
+    ["failure-path file", undefined, runtimePatchUpdateInput("../runtime-tool-fixture-wrong.txt")],
+    [
+      "failure-path context",
+      undefined,
+      runtimePatchUpdateInput("../runtime-tool-fixture-denied.txt", "context-that-does-not-exist"),
+    ],
+    [
+      "failure-path operation",
+      undefined,
+      runtimePatchUpdateInput().replace("*** Update File:", "*** Add File:"),
+    ],
+    [
+      "failure-path replacement",
+      undefined,
+      runtimePatchUpdateInput().replace(
+        "+runtime patch outside the workspace",
+        "+incorrect replacement",
+      ),
+    ],
+  ])(
+    "rejects linked mock patch evidence for the wrong %s",
+    async (_label, happyInput, failureInput) => {
+      await expect(
+        runMockRuntimeToolFixture({
+          toolName: "apply_patch",
+          requests: mockToolRequests({
+            toolName: "apply_patch",
+            happyArgs: { input: happyInput ?? runtimePatchAddInput() },
+            failureArgs: { input: failureInput ?? runtimePatchUpdateInput() },
+            happyOutput: "Successfully applied patch",
+            failureOutput: "Error: Path escapes sandbox root",
+          }),
+          runAgentPrompt: vi.fn(simulateRuntimePatchHappyTurn),
+        }),
+      ).rejects.toThrow(
+        happyInput
+          ? "expected linked mock apply_patch to add runtime-tool-fixture-patch.txt"
+          : "expected linked mock apply_patch to update ../runtime-tool-fixture-denied.txt",
+      );
+    },
+  );
 });

@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine
 import { encodeMemoryEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { deleteSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -54,6 +57,48 @@ describe("memory forget", () => {
 
   afterEach(async () => {
     await fixture.cleanup();
+  });
+
+  it("previews an unresolved session without creating the absent agent store", async () => {
+    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    const report = await forgetMemoryEntries({
+      cfg,
+      agentId: "main",
+      sessionIds: ["missing"],
+      dryRun: true,
+    });
+    expect(report).toEqual({
+      agentId: "main",
+      dryRun: true,
+      sessionIds: ["missing"],
+      participantMatches: [],
+      sessionResolutions: [{ sessionId: "missing", source: "unresolved" }],
+      entryKeys: [],
+      mixedLineageEntryKeys: [],
+      untargetableEntryKeys: [],
+      curatedWrites: [],
+      artifacts: {
+        memoryFiles: 0,
+        memoryEntries: 0,
+        memoryLines: 0,
+        sessionCorpusFiles: 0,
+        sessionCorpusLines: 0,
+        indexChunks: 0,
+        indexSources: 0,
+        ftsRows: 0,
+        vectorRows: 0,
+        embeddingCacheRows: 0,
+        shortTermEntries: 0,
+        seenHashScopes: 0,
+        backups: 0,
+        originRows: 0,
+      },
+      refusals: [],
+    });
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${databasePath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${databasePath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("previews and forgets sessions without fetching unrelated session bodies", async () => {

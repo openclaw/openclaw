@@ -4,10 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { getMediaDir } from "../media/store.js";
 import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
-import {
-  projectChatDisplayMessages,
-  sanitizeChatHistoryMessages,
-} from "./chat-display-projection.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.sanitize.js";
 import { CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES } from "./server-methods/chat-history-budget.js";
 import { SessionHistorySseState } from "./session-history-state.js";
 
@@ -96,7 +94,7 @@ describe("multimodal display privacy", () => {
     );
   });
 
-  it("keeps sanitized legacy media in projection and incremental SSE", () => {
+  it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
     const rawMessage = {
       role: "user",
@@ -145,7 +143,8 @@ describe("multimodal display privacy", () => {
     });
     for (const message of [
       projectChatDisplayMessages([rawMessage])[0],
-      state.appendInlineMessage({ message: rawMessage, messageId: "media-message" })?.message,
+      (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
+        ?.message,
     ]) {
       expect(message?.role).toBe("user");
       expect(JSON.stringify(message)).not.toContain(data);
@@ -281,11 +280,14 @@ describe("transcript display metadata", () => {
     },
   );
 
-  it("marks capped diffs on standalone and nested tool results", () => {
+  it.each([
+    { changed: true, diff: "+line\n".repeat(40) },
+    { cwd: "/workspace/".repeat(40), diff: "+short" },
+  ])("marks capped details on standalone and nested tool results (%j)", (details) => {
     const result = {
       type: "toolResult",
       toolName: "edit",
-      details: { changed: true, diff: "+line\n".repeat(40) },
+      details,
     };
     for (const projected of sanitizeChatHistoryMessages(
       [
@@ -583,6 +585,39 @@ it("keeps authoritative write booleans and strips unrelated details", () => {
     result({ changed: true, created: false, diff: "-1 old\n+1 new" }),
     result({ changed: true, created: true }),
     { role: "toolResult", toolName: "write", content: [{ type: "text", text: "ok" }] },
+  ]);
+});
+
+it.each([
+  { toolName: "exec", details: { exitCode: 0, durationMs: 0, cwd: "/workspace", ok: true } },
+  { toolName: "exec", details: { exitCode: 7, durationMs: 12.5, cwd: "/workspace", ok: false } },
+  { toolName: "sessions_spawn", details: { ok: true, sessionKey: "agent:helper:main" } },
+])("retains $toolName status in standalone and nested history", ({ toolName, details }) => {
+  const result = { type: "toolResult", toolName, content: "done", details };
+  const messages = [
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
+  ];
+  expect(sanitizeChatHistoryMessages(messages)).toEqual(messages);
+});
+
+it.each([
+  { exitCode: Number.NaN, durationMs: Infinity, sessionKey: " padded ", ok: "true" },
+  { exitCode: "0", durationMs: -Infinity, sessionKey: "s".repeat(33), ok: 1 },
+  { exitCode: null, durationMs: "12", sessionKey: "", ok: null },
+])("keeps malformed status metadata out of display history (%j)", (details) => {
+  const result = { type: "toolResult", toolName: "exec", details: { changed: true } };
+  expect(
+    sanitizeChatHistoryMessages(
+      [
+        { ...result, role: "toolResult", details: { ...details, changed: true } },
+        { role: "assistant", content: [{ ...result, details: { ...details, changed: true } }] },
+      ],
+      32,
+    ),
+  ).toEqual([
+    { ...result, role: "toolResult" },
+    { role: "assistant", content: [result] },
   ]);
 });
 

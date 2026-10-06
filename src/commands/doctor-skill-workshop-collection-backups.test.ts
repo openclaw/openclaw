@@ -147,7 +147,7 @@ async function seedOwnedLegacyCollectionBackup(name = "owned-legacy-backup") {
     resultContent,
   });
   const config = {
-    agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    agents: { entries: { main: { workspace: workspaceDir } } },
   };
   const sourceBackupDir = path.join(legacyRoot, backupId);
   const sourceMetadata = path.join(sourceBackupDir, "workspace", "skills", name, ".openclaw");
@@ -218,7 +218,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
         resultContent,
       });
       const config = {
-        agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
       };
       const sourceBackupDir = path.join(legacyRoot, backupId);
       const sourceManifest = await fs.readFile(path.join(sourceBackupDir, "manifest.json"), "utf8");
@@ -303,7 +303,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
         await fs.writeFile(manifestPath, JSON.stringify(manifest));
       }
       const retiredConfig = {
-        agents: { list: [{ id: "main", default: true, workspace: testState.workspaceDir }] },
+        agents: { entries: { main: { workspace: testState.workspaceDir } } },
       };
       const rerun = await migrateLegacySkillWorkshopProposals({
         config: retiredConfig,
@@ -422,7 +422,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
         legacy.close();
       }
       const config = {
-        agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+        agents: { entries: { main: { workspace: workspaceDir } } },
       };
 
       const migration = await migrateLegacySkillWorkshopProposals({
@@ -491,7 +491,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
       });
     }
     const config = {
-      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+      agents: { entries: { main: { workspace: workspaceDir } } },
     };
     const backupSources = new Set(
       backups.map((backup) => path.join(legacyRoot, backup.id, "workspace")),
@@ -523,7 +523,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
 
     const retired = await migrateLegacySkillWorkshopProposals({
       config: {
-        agents: { list: [{ id: "main", workspace: path.join(workspaceDir, "replacement") }] },
+        agents: { entries: { main: { workspace: path.join(workspaceDir, "replacement") } } },
       },
       env: testState.env,
     });
@@ -540,7 +540,7 @@ describe("doctor Skill Workshop collection backup migration", () => {
       JSON.stringify({ ...JSON.parse(pendingManifestText), workspaceDir: replacementWorkspace }),
     );
     const mixedWorkspaces = await migrateLegacySkillWorkshopProposals({
-      config: { agents: { list: [{ id: "main", workspace: replacementWorkspace }] } },
+      config: { agents: { entries: { main: { workspace: replacementWorkspace } } } },
       env: testState.env,
     });
     expect(mixedWorkspaces.warnings).toEqual([
@@ -908,10 +908,10 @@ describe("doctor Skill Workshop collection backup migration", () => {
     });
     const config = {
       agents: {
-        list: [
-          { id: "alpha", default: true, workspace: workspaceDir },
-          { id: "beta", workspace: workspaceDir },
-        ],
+        entries: {
+          alpha: { workspace: workspaceDir },
+          beta: { workspace: workspaceDir },
+        },
       },
     };
 

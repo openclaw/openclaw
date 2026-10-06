@@ -63,13 +63,11 @@ function collectPluginRegistryState(
       .flatMap((entry) => resolveOfficialExternalPluginLookupIds(entry).map(normalizePluginId))
       .filter(Boolean),
   );
-  const installedIds = new Set<string>();
-  for (const pluginId of Object.keys(cfg.plugins?.installs ?? {})) {
-    const normalized = normalizePluginId(pluginId);
-    if (normalized) {
-      installedIds.add(normalized);
-    }
-  }
+  const installedIds = new Set(
+    Object.keys(cfg.plugins?.installs ?? {})
+      .map(normalizePluginId)
+      .filter(Boolean),
+  );
   try {
     for (const pluginId of Object.keys(
       loadInstalledPluginIndexInstallRecordsSync({ env: environment }),
@@ -82,15 +80,11 @@ function collectPluginRegistryState(
   } catch {
     // Missing/corrupt install-record state must not block normal doctor scans.
   }
-  const knownChannelIds = new Set(CHANNEL_IDS.map((channelId) => normalizePluginId(channelId)));
-  for (const plugin of registry.plugins) {
-    for (const channelId of plugin.channels) {
-      const normalized = normalizePluginId(channelId);
-      if (normalized) {
-        knownChannelIds.add(normalized);
-      }
-    }
-  }
+  const knownChannelIds = new Set(
+    [...CHANNEL_IDS, ...registry.plugins.flatMap((plugin) => plugin.channels)]
+      .map(normalizePluginId)
+      .filter(Boolean),
+  );
   return {
     plugins: registry.plugins,
     knownIds,
@@ -129,7 +123,12 @@ function scanStalePluginConfigWithState(
   registryState: StalePluginRegistryState,
 ): StalePluginConfigHit[] {
   const plugins = asNullableRecord(cfg.plugins);
-  const { knownIds, officialLookupIds } = registryState;
+  const { knownIds, officialLookupIds, knownChannelIds } = registryState;
+  const isMissingPolicyOwner = (pluginId: string) =>
+    pluginId &&
+    !knownIds.has(pluginId) &&
+    !officialLookupIds.has(pluginId) &&
+    !knownChannelIds.has(pluginId);
   const hits: StalePluginConfigHit[] = [];
   const staleEvidenceIds = new Set(registryState.missingInstalledIds);
 
@@ -140,12 +139,7 @@ function scanStalePluginConfigWithState(
         continue;
       }
       const pluginId = normalizePluginId(rawPluginId);
-      if (
-        !pluginId ||
-        knownIds.has(pluginId) ||
-        officialLookupIds.has(pluginId) ||
-        registryState.knownChannelIds.has(pluginId)
-      ) {
+      if (!isMissingPolicyOwner(pluginId)) {
         continue;
       }
       hits.push({ pluginId: rawPluginId, pathLabel: `plugins.${surface}`, surface });
@@ -158,11 +152,8 @@ function scanStalePluginConfigWithState(
     for (const [rawPluginId, entry] of Object.entries(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
       if (
-        !pluginId ||
-        (isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId)) ||
-        knownIds.has(pluginId) ||
-        officialLookupIds.has(pluginId) ||
-        registryState.knownChannelIds.has(pluginId)
+        !isMissingPolicyOwner(pluginId) ||
+        (isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId))
       ) {
         continue;
       }
@@ -213,9 +204,7 @@ function scanStalePluginConfigWithState(
       surface: "channel",
     });
   }
-  for (const hit of collectDependentChannelConfigHits(cfg, staleChannelIds)) {
-    hits.push(hit);
-  }
+  hits.push(...collectDependentChannelConfigHits(cfg, staleChannelIds));
 
   return hits;
 }
@@ -259,16 +248,11 @@ function collectDependentChannelConfigHits(
   }
   const staleChannelIds = new Set(channelIds.map((channelId) => normalizePluginId(channelId)));
   const hits: StalePluginConfigHit[] = [];
-  const defaultTarget = cfg.agents?.defaults?.heartbeat?.target;
-  if (typeof defaultTarget === "string" && staleChannelIds.has(normalizePluginId(defaultTarget))) {
-    hits.push({
-      pluginId: defaultTarget,
-      pathLabel: "agents.defaults.heartbeat.target",
-      surface: "heartbeat",
-    });
-  }
-  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
-    const heartbeat = asNullableRecord(agent.heartbeat);
+  for (const { agent, path } of [
+    { agent: cfg.agents?.defaults, path: "agents.defaults" },
+    ...listMutableCodexRouteAgentEntries(cfg),
+  ]) {
+    const heartbeat = asNullableRecord(agent?.heartbeat);
     const target = heartbeat?.target;
     if (typeof target !== "string" || !staleChannelIds.has(normalizePluginId(target))) {
       continue;
@@ -562,16 +546,11 @@ function removeDanglingChannelReferences(config: OpenClawConfig, channelIds: rea
     }
   }
 
-  const defaultsHeartbeat = config.agents?.defaults?.heartbeat;
-  if (
-    defaultsHeartbeat &&
-    typeof defaultsHeartbeat.target === "string" &&
-    staleChannelIds.has(normalizePluginId(defaultsHeartbeat.target))
-  ) {
-    delete defaultsHeartbeat.target;
-  }
-  for (const { agent } of listMutableCodexRouteAgentEntries(config)) {
-    const heartbeat = asNullableRecord(agent.heartbeat);
+  for (const agent of [
+    config.agents?.defaults,
+    ...listMutableCodexRouteAgentEntries(config).map((entry) => entry.agent),
+  ]) {
+    const heartbeat = asNullableRecord(agent?.heartbeat);
     if (
       heartbeat &&
       typeof heartbeat.target === "string" &&

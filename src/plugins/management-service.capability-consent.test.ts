@@ -29,7 +29,7 @@ const mocks = vi.hoisted(() => ({
   records: {} as Record<string, import("../config/types.plugins.js").PluginInstallRecord>,
   replaceConfig: vi.fn(),
   writeRecords: vi.fn(),
-  slotSelection: vi.fn((config) => ({ config, warnings: [] })),
+  slotSelection: vi.fn((config) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -553,7 +553,7 @@ describe("managed plugin capability consent", () => {
           config,
           env,
           pluginId: inspection.plugin.id,
-          acknowledge: { reviewToken: inspection.reviewToken },
+          acknowledge: { reviewToken },
         }),
       ).resolves.toBeUndefined();
     }

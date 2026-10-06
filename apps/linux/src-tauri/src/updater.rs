@@ -197,16 +197,17 @@ impl<T> UpdateLifecycle<T> {
         if self.operation_in_progress {
             return ClaimedAction::None;
         }
-        if relaunch || self.action() == UpdateAction::RestartToUpdate {
+        if relaunch || self.ready.is_some() {
             self.operation_in_progress = true;
             return match self.ready.take() {
                 Some(ReadyUpdate::Deferred(deferred)) => ClaimedAction::Install(deferred),
                 Some(ReadyUpdate::Installed) | None => ClaimedAction::Restart,
             };
         }
-        match self.action() {
-            UpdateAction::OpenDownloadPage => ClaimedAction::OpenDownloadPage,
-            _ => ClaimedAction::None,
+        if self.download_available {
+            ClaimedAction::OpenDownloadPage
+        } else {
+            ClaimedAction::None
         }
     }
 
@@ -256,8 +257,8 @@ struct UpdateInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ManualUpdateInfo {
-    version: String,
-    notes: Option<String>,
+    #[serde(flatten)]
+    update: UpdateInfo,
     release_url: &'static str,
 }
 
@@ -435,8 +436,7 @@ async fn run_check(app: AppHandle, manual: bool) {
             TerminalResultKind::PackageUpdateAvailable,
             AVAILABLE_MANUAL_EVENT,
             ManualUpdateInfo {
-                version: info.version,
-                notes: info.notes,
+                update: info,
                 release_url: RELEASE_URL,
             },
             &notification_body,
@@ -582,10 +582,6 @@ fn install_kind_from_appimage_env(appimage: Option<OsString>, platform: Platform
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<Webview> {
-    app.get_webview("main")
-}
-
 fn main_content_is_remote(app: &AppHandle, window: Option<&Webview>) -> bool {
     !window.is_some_and(|window| {
         app.state::<crate::DesktopState>()
@@ -602,7 +598,7 @@ fn progress_callback(app: AppHandle) -> impl FnMut(usize, Option<u64>) {
 }
 
 fn emit<S: Serialize + Clone>(app: &AppHandle, event: &str, payload: S) {
-    if let Some(window) = main_window(app) {
+    if let Some(window) = app.get_webview("main") {
         if !main_content_is_remote(app, Some(&window)) {
             let _ = window.emit(event, payload);
         }
@@ -623,7 +619,7 @@ fn deliver_result<S: Serialize + Clone>(
         .expect("updater lifecycle lock poisoned")
         .record_result(result);
     refresh_action(app);
-    let window = main_window(app);
+    let window = app.get_webview("main");
     let destination = result_delivery(manual, main_content_is_remote(app, window.as_ref()), result);
     if matches!(
         destination,

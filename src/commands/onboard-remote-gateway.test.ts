@@ -15,6 +15,26 @@ import { WizardSession } from "../wizard/session.js";
 import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 import { runRemoteGatewayInferenceOnboarding } from "./onboard-remote-gateway.js";
 
+const mocks = vi.hoisted(() => ({
+  callGateway: vi.fn<typeof import("../gateway/call.js").callGatewayCli>(),
+  createPrompter: vi.fn<typeof import("../wizard/clack-prompter.js").createClackPrompter>(),
+  runGuidedOnboarding: vi.fn<typeof import("./onboard-guided.js").runGuidedOnboarding>(),
+  runTui: vi.fn<typeof import("../tui/tui.js").runTui>(),
+}));
+
+vi.mock("../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/call.js")>()),
+  callGatewayCli: mocks.callGateway,
+}));
+vi.mock("../wizard/clack-prompter.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../wizard/clack-prompter.js")>()),
+  createClackPrompter: mocks.createPrompter,
+}));
+// mock-isolation: Exercise remote RPC adapters without initializing the local setup and config owners.
+vi.mock("./onboard-guided.js", () => ({ runGuidedOnboarding: mocks.runGuidedOnboarding }));
+// mock-isolation: Remote onboarding records its handoff without loading the local terminal runtime.
+vi.mock("../tui/tui.js", () => ({ runTui: mocks.runTui }));
+
 vi.mock("../infra/device-identity.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/device-identity.js")>()),
   loadOrCreateDeviceIdentity: vi.fn(() => ({
@@ -25,12 +45,30 @@ vi.mock("../infra/device-identity.js", async (importOriginal) => ({
 }));
 
 type RemoteGatewayInferenceTarget = Parameters<typeof runRemoteGatewayInferenceOnboarding>[0];
-type RemoteGatewayInferenceOnboardingDeps = NonNullable<
-  Parameters<typeof runRemoteGatewayInferenceOnboarding>[2]
->;
+type GatewayCall = typeof import("../gateway/call.js").callGatewayCli;
+type RunGuidedOnboarding = typeof import("./onboard-guided.js").runGuidedOnboarding;
 
-type GatewayCall = NonNullable<RemoteGatewayInferenceOnboardingDeps["callGateway"]>;
-type RunGuidedOnboarding = NonNullable<RemoteGatewayInferenceOnboardingDeps["runGuidedOnboarding"]>;
+function runWithGatewayMocks(
+  target: RemoteGatewayInferenceTarget,
+  runtime: RuntimeEnv,
+  dependencies: {
+    callGateway: GatewayCall;
+    createPrompter?: typeof import("../wizard/clack-prompter.js").createClackPrompter;
+    runGuidedOnboarding: RunGuidedOnboarding;
+    runTui?: typeof import("../tui/tui.js").runTui;
+  },
+) {
+  mocks.callGateway.mockImplementation(dependencies.callGateway);
+  mocks.createPrompter.mockImplementation(
+    dependencies.createPrompter ?? (() => createWizardPrompter()),
+  );
+  mocks.runGuidedOnboarding.mockImplementation(dependencies.runGuidedOnboarding);
+  mocks.runTui.mockReset();
+  if (dependencies.runTui) {
+    mocks.runTui.mockImplementation(dependencies.runTui);
+  }
+  return runRemoteGatewayInferenceOnboarding(target, runtime);
+}
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -202,7 +240,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
         }
         throw new Error(`Unexpected request: ${options.method}`);
       });
-      const work = runRemoteGatewayInferenceOnboarding(
+      const work = runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "synthetic-token" }),
         makeRuntime(),
         {
@@ -317,7 +355,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
             : { ok: false, status: "unavailable" },
         );
       };
-      const onboarding = runRemoteGatewayInferenceOnboarding(
+      const onboarding = runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         { callGateway: asGatewayCall(callGatewayMock), runGuidedOnboarding },
@@ -453,7 +491,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       const prompter = createWizardPrompter({ text });
       const runtime = makeRuntime();
 
-      await runRemoteGatewayInferenceOnboarding(
+      await runWithGatewayMocks(
         { ...makeTarget(localConfig, auth), gatewayUrl, configuredRemote },
         runtime,
         {
@@ -549,7 +587,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       expect(activation).toMatchObject({ ok: true, gatewayRestartRequired: true });
     };
 
-    await runRemoteGatewayInferenceOnboarding(
+    await runWithGatewayMocks(
       makeTarget(makeLocalConfig(), { token: "selected-token" }),
       makeRuntime(),
       {
@@ -624,7 +662,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       throw new Error(`unexpected Gateway method ${options.method}`);
     });
 
-    const onboarding = runRemoteGatewayInferenceOnboarding(
+    const onboarding = runWithGatewayMocks(
       makeTarget(makeLocalConfig(), { token: "selected-token" }),
       makeRuntime(),
       {
@@ -698,7 +736,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     };
 
     try {
-      await runRemoteGatewayInferenceOnboarding(
+      await runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {
@@ -750,7 +788,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     });
     const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
 
-    await runRemoteGatewayInferenceOnboarding(makeTarget(makeLocalConfig(), {}), makeRuntime(), {
+    await runWithGatewayMocks(makeTarget(makeLocalConfig(), {}), makeRuntime(), {
       callGateway: asGatewayCall(callGatewayMock),
       createPrompter: () => createWizardPrompter(),
       runGuidedOnboarding: exerciseGuidedAdapters(),
@@ -813,16 +851,12 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     const runTui = vi.fn();
 
     await expect(
-      runRemoteGatewayInferenceOnboarding(
-        makeTarget(localConfig, { token: "selected-token" }),
-        makeRuntime(),
-        {
-          callGateway: asGatewayCall(callGatewayMock),
-          createPrompter: () => createWizardPrompter(),
-          runGuidedOnboarding: exerciseGuidedAdapters(),
-          runTui,
-        },
-      ),
+      runWithGatewayMocks(makeTarget(localConfig, { token: "selected-token" }), makeRuntime(), {
+        callGateway: asGatewayCall(callGatewayMock),
+        createPrompter: () => createWizardPrompter(),
+        runGuidedOnboarding: exerciseGuidedAdapters(),
+        runTui,
+      }),
     ).rejects.toThrow(error);
 
     expect(methods).toEqual([
@@ -854,7 +888,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
     const runTui = vi.fn();
 
     await expect(
-      runRemoteGatewayInferenceOnboarding(
+      runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {
@@ -935,7 +969,7 @@ describe("runRemoteGatewayInferenceOnboarding", () => {
       });
       const runTui = vi.fn();
 
-      await runRemoteGatewayInferenceOnboarding(
+      await runWithGatewayMocks(
         makeTarget(makeLocalConfig(), { token: "selected-token" }),
         makeRuntime(),
         {

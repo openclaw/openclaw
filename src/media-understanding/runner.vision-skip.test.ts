@@ -475,33 +475,6 @@ describe("runCapability image skip", () => {
     expectImageOutput(result, "minimax-portal", "MiniMax-VL-01");
   });
 
-  it("preserves MiniMax CN aliases from configured provider routing", async () => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "minimax-cn": {
-            apiKey: "test-minimax-key",
-            baseUrl: "https://api.minimaxi.com/anthropic",
-            models: [],
-          },
-        },
-      },
-    };
-    const seenProviders: string[] = [];
-    const providerRegistry = activateProvider(cfg, {
-      id: "minimax",
-      capabilities: ["image"],
-      defaultModels: { image: "MiniMax-VL-01" },
-      describeImage: async ({ provider, model }) => {
-        seenProviders.push(provider);
-        return { text: "cn vlm ok", model };
-      },
-    });
-    const result = await runImage({ cfg, providerRegistry });
-    expect(seenProviders).toEqual(["minimax-cn"]);
-    expectImageOutput(result, "minimax-cn", "MiniMax-VL-01", "cn vlm ok");
-  });
-
   it("passes workspace and agent context to auth and writable catalog reads", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);

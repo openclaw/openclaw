@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { repairUnownedChannelAccountBindings } from "../../commands/doctor/shared/legacy-config-binding-repair.js";
 import { createDoctorPluginMetadataSnapshotScope } from "../../commands/doctor/shared/plugin-metadata-snapshot-scope.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import {
@@ -92,7 +93,7 @@ describe("prepared channel account policy entry points", () => {
       const scope = createDoctorPluginMetadataSnapshotScope({});
       const sourceConfigBeforeMigrations = {
         agents: { list: [{ id: "ops" }, { id: "research" }] },
-      };
+      } satisfies OpenClawConfigWithLegacyRoster;
       const repair = (config: OpenClawConfig) =>
         scope.run({ config }, () =>
           repairUnownedChannelAccountBindings({ config, sourceConfigBeforeMigrations }),
