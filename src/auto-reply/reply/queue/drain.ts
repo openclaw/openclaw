@@ -40,6 +40,7 @@ import {
 import { isRoutableChannel } from "../route-reply.js";
 import { resolveCollectedRun } from "./collected-run.js";
 import {
+  assertSingleAdmissionOwner,
   collectRuntimeMetadata,
   createOverflowSummaryRetrySource,
   hasExclusiveTurnAdmission,
@@ -96,17 +97,6 @@ function bindFollowupRestartDrainSignal(): void {
     },
     { once: true },
   );
-}
-
-function assertSingleAdmissionOwner(items: readonly FollowupRun[]): void {
-  const owners = new Set(
-    items.flatMap((item) =>
-      hasExclusiveTurnAdmission(item.turnAdoptionLifecycle) ? [item.turnAdoptionLifecycle] : [],
-    ),
-  );
-  if (owners.size > 1) {
-    throw new Error("followup queue cannot aggregate distinct admission lifecycles");
-  }
 }
 
 export function rememberFollowupDrainCallback(
