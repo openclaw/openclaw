@@ -385,4 +385,49 @@ describe("buildActiveSubagentRuntimeContext", () => {
     expect(laterParentTurn).toContain("run-later-parent-turn");
     expect(laterParentTurn).toContain('taskName_json="summarize_inbox"');
   });
+  it.each(["delivered", "failed", "discarded"] as const)(
+    "does not list a finished child awaiting delivery once its delivery is %s, even with a retained settle marker",
+    async (status) => {
+      const endedAt = Date.now() - 6 * 60 * 60_000;
+      seedSubagentRunForReadTest({
+        runId: `run-closed-${status}`,
+        childSessionKey: `agent:main:subagent:closed-${status}`,
+        controllerSessionKey: "agent:main:main",
+        requesterSessionKey: "agent:main:main",
+        task: "closed delivery task",
+        expectsCompletionMessage: true,
+        execution: { status: "terminal", endedAt },
+        completion: { required: true, resultText: "closed delivery result" },
+        delivery: { status },
+        requesterSettleWake: { status: "pending", attemptCount: 0 },
+      });
+      const prompt = await buildActiveSubagentRuntimeContext({
+        cfg: {} as OpenClawConfig,
+        controllerSessionKey: "agent:main:main",
+      });
+      expect(prompt ?? "").not.toContain("## Child results awaiting delivery");
+      expect(prompt ?? "").not.toContain("closed delivery result");
+    },
+  );
+
+  it("still lists a finished child whose delivery is pending while it carries a settle marker", async () => {
+    seedSubagentRunForReadTest({
+      runId: "run-open-pending",
+      childSessionKey: "agent:main:subagent:open-pending",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      task: "open delivery task",
+      expectsCompletionMessage: true,
+      execution: { status: "terminal", endedAt: Date.now() },
+      completion: { required: true, resultText: "open delivery result" },
+      delivery: { status: "pending" },
+      requesterSettleWake: { status: "pending", attemptCount: 0 },
+    });
+    const prompt = await buildActiveSubagentRuntimeContext({
+      cfg: {} as OpenClawConfig,
+      controllerSessionKey: "agent:main:main",
+    });
+    expect(prompt).toContain("## Child results awaiting delivery");
+    expect(prompt).toContain("open delivery result");
+  });
 });
