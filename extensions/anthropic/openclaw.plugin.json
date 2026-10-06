@@ -394,6 +394,12 @@
       "title": "Native sessions",
       "order": 10,
       "properties": ["sessionCatalog"]
+    },
+    {
+      "id": "claude-cli",
+      "title": "Claude CLI",
+      "order": 20,
+      "properties": ["claudeCli"]
     }
   ],
   "configSchema": {
@@ -406,6 +412,13 @@
         "properties": {
           "enabled": { "type": "boolean", "default": true }
         }
+      },
+      "claudeCli": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludeNativeMemory": { "type": "boolean", "default": false }
+        }
       }
     }
   },
@@ -417,6 +430,14 @@
     "sessionCatalog.enabled": {
       "label": "Discover Claude Code Sessions",
       "help": "List native Claude Code sessions in the sidebar from this Gateway and eligible paired nodes."
+    },
+    "claudeCli": {
+      "label": "Claude CLI Runs",
+      "help": "Settings for agent turns that OpenClaw runs through the claude-cli backend."
+    },
+    "claudeCli.excludeNativeMemory": {
+      "label": "Exclude Claude Code Memory",
+      "help": "Keep Claude Code's own CLAUDE.md, CLAUDE.local.md and .claude/rules files and its auto memory out of claude-cli agent turns on this Gateway. Off by default. Sessions started before enabling it keep the memory already in their history until /reset. Admin-managed CLAUDE.md still applies, and runs placed on a paired node keep that node's Claude Code memory."
     }
   }
 }

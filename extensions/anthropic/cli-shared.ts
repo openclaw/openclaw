@@ -9,7 +9,9 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
+  asOptionalRecord,
   normalizeOptionalLowercaseString,
   normalizeSortedUniqueTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -38,8 +40,18 @@ const CLAUDE_MAX_TURNS_ARG = "--max-turns";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
-const CLAUDE_RESTRICTED_SETTINGS =
-  '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
+// Claude Code's own instruction files and auto memory. Restricted runs and the
+// opt-in ordinary-run exclusion share these fields so the two cannot drift.
+const CLAUDE_NATIVE_MEMORY_EXCLUSION = {
+  autoMemoryEnabled: false,
+  claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+};
+const CLAUDE_NATIVE_MEMORY_EXCLUSION_SETTINGS = JSON.stringify(CLAUDE_NATIVE_MEMORY_EXCLUSION);
+const CLAUDE_RESTRICTED_SETTINGS = JSON.stringify({
+  disableAllHooks: true,
+  enabledPlugins: {},
+  ...CLAUDE_NATIVE_MEMORY_EXCLUSION,
+});
 
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
@@ -439,6 +451,13 @@ function resolveClaudeCliRestrictedExecutionArgs(
   return normalized;
 }
 
+function excludesClaudeNativeMemory(
+  config: CliBackendResolveExecutionArgsContext["config"],
+): boolean {
+  const claudeCli = asOptionalRecord(resolvePluginConfigObject(config, "anthropic")?.claudeCli);
+  return claudeCli?.excludeNativeMemory === true;
+}
+
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
@@ -456,9 +475,12 @@ export function resolveClaudeCliExecutionArgs(
     context.executionMode === "side-question"
       ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
       : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
+  // Restricted runs already carry the memory exclusion; side questions use --safe-mode.
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
-    : executionArgs;
+    : context.executionMode !== "side-question" && excludesClaudeNativeMemory(context.config)
+      ? [...executionArgs, CLAUDE_SETTINGS_ARG, CLAUDE_NATIVE_MEMORY_EXCLUSION_SETTINGS]
+      : executionArgs;
   return options.excludeDynamicSystemPromptSections && context.executionMode !== "side-question"
     ? [...resolvedArgs, CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_ARG]
     : resolvedArgs;

@@ -268,6 +268,48 @@ when that exact live session is replaced, and never apply to Bash. Policies
 that never prompt keep their existing behavior: `security: "deny"` rejects
 every request, and ask `off` with less than full security denies without asking.
 
+### Claude Code memory
+
+By default, ordinary `claude-cli` turns also load Claude Code's own user-level
+memory next to OpenClaw's system prompt: `~/.claude/CLAUDE.md`,
+`~/.claude/rules/`, and Claude Code's auto memory for the workspace under
+`~/.claude/projects/`. Auto memory also prompts the agent to save notes there
+instead of in the workspace memory files. Project-level `CLAUDE.md` files are
+not loaded, because OpenClaw limits Claude Code to user settings.
+
+To keep this memory out of agent turns, enable the Anthropic plugin setting:
+
+```json5
+{
+  plugins: {
+    entries: {
+      anthropic: {
+        config: {
+          claudeCli: { excludeNativeMemory: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Fresh and resumed turns then pass Claude Code `--settings` with
+`autoMemoryEnabled: false` and `claudeMdExcludes` patterns for `CLAUDE.md`,
+`CLAUDE.local.md`, and `.claude/rules/`, the same fields restricted runs use.
+The change applies on the next turn without a Gateway restart. The setting is
+off by default, so existing agents keep their instructions.
+
+Claude Code stores the memory it loaded at the start of a session in that
+session's history, so a session started before you enabled the setting keeps
+that memory when it resumes. Use `/reset` to start a clean session.
+
+Admin-managed `CLAUDE.md` still applies because Claude Code does not allow
+excluding it. Side questions already start Claude Code in safe mode, and
+restricted runs keep their stricter settings. Runs placed on a paired node keep
+that node's own Claude Code memory, because the node does not accept Gateway
+settings. To copy existing auto memory into the workspace, see
+[Import from coding assistants](/concepts/memory#import-from-coding-assistants).
+
 ### Native Bash and the exec allowlist
 
 When a run retains native `Bash`, `ask: "on-miss"` makes the `claude-cli` backend check commands
