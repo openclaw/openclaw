@@ -114,16 +114,14 @@ class ChatOutboxRecovery extends LitElement {
       }
       this.entries = recovery?.entries ?? [];
       this.error = retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : "");
-      if (owner) {
-        const result = await (await draftStore).prepareDurableComposerRecovery(owner);
-        if (generation !== this.generation || !this.isConnected) {
-          return;
-        }
-        if (result.status === "storage-failed") {
-          throw new Error("storage-failed");
-        }
-        this.drafts = result.entries;
+      const result = await (await draftStore).prepareDurableComposerRecovery(owner);
+      if (generation !== this.generation || !this.isConnected) {
+        return;
       }
+      if (result.status === "storage-failed") {
+        throw new Error("storage-failed");
+      }
+      this.drafts = result.entries;
     } catch {
       if (generation !== this.generation || !this.isConnected) {
         return;

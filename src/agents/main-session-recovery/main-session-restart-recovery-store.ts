@@ -1,15 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  resolveSessionWorkStartError,
-  type InternalSessionEntry as SessionEntry,
-} from "../../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import {
   listSessionEntriesByStatus,
   loadExactSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentSessionWorkStartError } from "../../gateway/agent-turn/agent-handler-helpers.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -247,7 +245,7 @@ export async function recoverStore(params: {
         skip("not_main_session");
         continue;
       }
-      if (resolveSessionWorkStartError(sessionKey, entry)) {
+      if (resolveAgentSessionWorkStartError(sessionKey, entry)) {
         skip("work_start_blocked");
         continue;
       }

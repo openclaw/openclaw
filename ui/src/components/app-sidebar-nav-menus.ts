@@ -75,7 +75,6 @@ export function isSidebarRouteActive(
   return activeRouteId === routeId;
 }
 
-/** Stable ordering for plugin-provided sidebar tabs. */
 export function sidebarPluginTabs(
   tabs: readonly GatewayControlUiPluginTab[] | undefined,
 ): GatewayControlUiPluginTab[] {

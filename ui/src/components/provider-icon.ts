@@ -1,5 +1,3 @@
-// Shared model-provider brand icon resolution and rendering for surfaces
-// that show provider rows (chat model picker, model providers settings page).
 // Icon assets live in ui/public/provider-icons/ProviderIcon-<name>.svg;
 // shared styles live under .provider-brand-icon in styles/components.css.
 import { html } from "lit";
@@ -176,7 +174,6 @@ function resolveProviderIconName(provider: string): string | null {
   return PROVIDER_ICON_NAMES.has(icon) ? icon : null;
 }
 
-/** Whether a provider identity has a bundled brand mark. */
 export function hasProviderBrandIcon(provider: string): boolean {
   return resolveProviderIconName(provider) !== null;
 }
@@ -265,10 +262,6 @@ export function renderProviderFallbackIcon(label: string, options?: { className?
   `;
 }
 
-/**
- * Brand icon span for a provider id; falls back to a lettered badge when no
- * brand mark ships. `className` lets surfaces attach their sizing class.
- */
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {
   const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);

@@ -268,6 +268,28 @@ export function toggleSidebarPanelExpanded(layout: SidebarLayout, panelId: strin
   return next;
 }
 
+const narrowPresentations = new WeakMap<SidebarLayout, SidebarLayout>();
+
+/**
+ * How a narrow pane shows a layout. It can only stack its side panel under the
+ * main view, which leaves a list-and-detail panel too little room, so an open
+ * Subagents or Processes panel is shown focused in place. The layout itself is
+ * unchanged: a wider pane shows that panel beside the main view again.
+ */
+export function presentNarrowSidebarLayout(layout: SidebarLayout): SidebarLayout {
+  const slot =
+    layout.open === true && !layout.expanded ? sidebarActivePanel(layout)?.slot : undefined;
+  if (slot !== "subagents" && slot !== "processes") {
+    return layout;
+  }
+  let presented = narrowPresentations.get(layout);
+  if (!presented) {
+    presented = { ...layout, expanded: true, expandedSide: true };
+    narrowPresentations.set(layout, presented);
+  }
+  return presented;
+}
+
 export function setSidebarDock(layout: SidebarLayout, dock: SidebarDock): SidebarLayout {
   return { ...structuredClone(layout), dock };
 }

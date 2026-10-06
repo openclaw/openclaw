@@ -22,7 +22,6 @@ import {
   createGitRuntimeTransaction,
   prepareGitRuntimePromotion,
 } from "./update-runner-git-runtime.js";
-import { createGitUpdateSteps } from "./update-runner-git-step-policy.js";
 import {
   runGitActivationBranchCheckStep,
   runGitCleanCheckStep,
@@ -37,7 +36,12 @@ import {
   withGitTargetInspectionRoot,
 } from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
-import type { CommandRunner, UpdateRunResult, UpdateRunnerOptions } from "./update-runner-types.js";
+import type {
+  CommandRunner,
+  RunStepOptions,
+  UpdateRunResult,
+  UpdateRunnerOptions,
+} from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
 export async function updateGitCheckout(params: {
@@ -91,11 +95,34 @@ export async function updateGitCheckout(params: {
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
-  const { step, workStep, forRunner, recoveryStep } = createGitUpdateSteps({
+  // Work and probes share ordering, including commands in the private inspection clone.
+  let stepIndex = 0;
+  const forRunner =
+    (runner: CommandRunner, deadline: number | undefined) =>
+    (name: string, argv: string[], cwd: string, env?: NodeJS.ProcessEnv): RunStepOptions => ({
+      runCommand: runner,
+      name,
+      argv,
+      cwd,
+      timeoutMs: deadline,
+      env,
+      progress: opts.progress,
+      stepIndex: stepIndex++,
+      totalSteps,
+      results: steps,
+    });
+  const step = forRunner(runCommand, timeoutMs);
+  // Work can outlive an observation allowance. Only the caller may cap it.
+  const workStep = forRunner(runCommand, opts.timeoutMs);
+  const recoveryStep = (name: string, argv: string[], cwd: string): RunStepOptions => ({
     runCommand,
-    opts,
-    probeTimeoutMs: timeoutMs,
-    totalSteps,
+    name,
+    argv,
+    cwd,
+    // Recovery retains its finite settlement allowance after work has failed.
+    timeoutMs,
+    stepIndex: 0,
+    totalSteps: 1,
     results: steps,
   });
 
@@ -313,8 +340,8 @@ export async function updateGitCheckout(params: {
       runInspectionCommand: CommandRunner,
     ) => {
       let publishedCandidate = false;
-      const { step: inspectionStep, workStep: inspectionWorkStep } =
-        forRunner(runInspectionCommand);
+      const inspectionStep = forRunner(runInspectionCommand, timeoutMs);
+      const inspectionWorkStep = forRunner(runInspectionCommand, opts.timeoutMs);
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
         // Close the pinned pack on every exit, including admission refusal,
         // before the surrounding inspection checkout is removed.

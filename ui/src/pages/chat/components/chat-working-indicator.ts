@@ -28,7 +28,10 @@ export function renderChatWorkingIndicator(
     waitingSubagents?: ChatSubagentWait;
     /** Unfinished subagents to mention while the session itself is still working. */
     runningSubagents?: number;
-    onOpenSession?: (key: string) => void;
+    /** Shows one subagent; without it a waited-on subagent's name is plain text. */
+    onOpenSubagent?: (key: string) => void;
+    /** Shows the session's subagents; without it their count is plain text. */
+    onOpenSubagents?: () => void;
     startupLabel?: string;
     outputTokens?: number | null;
     presentation?: "standalone" | "continuation";
@@ -66,18 +69,26 @@ export function renderChatWorkingIndicator(
     words.trim() ? html`<span>${words.trim()}</span>` : nothing;
   const childName = !child
     ? nothing
-    : options.onOpenSession
+    : options.onOpenSubagent
       ? html`<button
           class="chat-working-indicator__child"
           type="button"
           title=${child.label}
-          @click=${() => options.onOpenSession?.(child.key)}
+          @click=${() => options.onOpenSubagent?.(child.key)}
         >
           ${child.label}
         </button>`
       : html`<span class="chat-working-indicator__child" title=${child.label}
           >${child.label}</span
         >`;
+  // With several left the whole sentence is the control: where a translation
+  // puts the count, and what it puts beside it, differs too much to cut it out.
+  const waitingOnCount =
+    !child && (waitingSubagents?.runningCount ?? 0) > 1 && options.onOpenSubagents !== undefined;
+  const runningLabel =
+    runningSubagents === 1
+      ? t("chat.subagentsRunningOne")
+      : t("chat.subagentsRunning", { count: String(runningSubagents) });
   const working = !waitingSubagents && !waitingApproval && !options.startupLabel;
   // Providers report exact usage at response boundaries, not per text delta.
   // Keep the latest count visible while the run continues through tools.
@@ -114,7 +125,15 @@ export function renderChatWorkingIndicator(
         ${
           child
             ? html`${sentencePart(beforeChild)}${childName}${sentencePart(afterChild.join(""))}`
-            : html`<span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>`
+            : waitingOnCount
+              ? html`<button
+                  class="chat-working-indicator__subagents"
+                  type="button"
+                  @click=${() => options.onOpenSubagents?.()}
+                >
+                  ${statusLabel}
+                </button>`
+              : html`<span class=${working && !continuation ? "sr-only" : ""}>${statusLabel}</span>`
         }
         ${
           waitingApproval || startedAt === null
@@ -149,13 +168,17 @@ export function renderChatWorkingIndicator(
           runningSubagents > 0
             ? html`
                 <span aria-hidden="true">·</span>
-                <span class="chat-working-indicator__subagents"
-                  >${
-                    runningSubagents === 1
-                      ? t("chat.subagentsRunningOne")
-                      : t("chat.subagentsRunning", { count: String(runningSubagents) })
-                  }</span
-                >
+                ${
+                  options.onOpenSubagents
+                    ? html`<button
+                        class="chat-working-indicator__subagents"
+                        type="button"
+                        @click=${() => options.onOpenSubagents?.()}
+                      >
+                        ${runningLabel}
+                      </button>`
+                    : html`<span class="chat-working-indicator__subagents">${runningLabel}</span>`
+                }
               `
             : nothing
         }

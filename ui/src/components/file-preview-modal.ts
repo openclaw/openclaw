@@ -317,7 +317,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
   }
 
   private handleQueryInput = (event: Event) => {
-    const nextQuery = (event.target as HTMLInputElement).value ?? "";
+    const nextQuery = (event.target as HTMLInputElement).value;
     this.dispatchEvent(
       new CustomEvent<string>("file-preview-query-change", {
         bubbles: true,

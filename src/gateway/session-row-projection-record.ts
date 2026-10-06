@@ -82,6 +82,7 @@ export type Row = {
   /** Exact private reads retain their session claim only for the consuming frame. */
   privateSource?: { identity: string | symbol; assertCurrent(): void };
   preparedPrivate?: {
+    relatedRows: Record<string, Pick<EntryRow, "key" | "agentId" | "storeTarget" | "entry">>;
     entries: Record<string, SessionEntry>;
     databaseFacts: PreparedSessionRowDatabaseFacts;
     titleFields?: SessionTitleFields;
@@ -240,7 +241,7 @@ export function createIncognitoSessionRow(params: {
   membership?: ReadonlySet<string>;
   source: NonNullable<Row["privateSource"]>;
   prepared?: {
-    relatedEntries?: Record<string, NonNullable<Row["storedEntry"]>>;
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
     databaseFacts: PreparedSessionRowDatabaseFacts;
     titleFields?: SessionTitleFields;
     terminalModel?: { modelProvider: string; model: string };
@@ -260,7 +261,16 @@ export function createIncognitoSessionRow(params: {
     ...(params.prepared
       ? {
           preparedPrivate: {
-            entries: { ...params.prepared.relatedEntries, [key]: storedEntry },
+            relatedRows: params.prepared.relatedRows,
+            entries: {
+              ...Object.fromEntries(
+                Object.entries(params.prepared.relatedRows).map(([relatedKey, relatedRow]) => [
+                  relatedKey,
+                  relatedRow.entry,
+                ]),
+              ),
+              [key]: storedEntry,
+            },
             databaseFacts: params.prepared.databaseFacts,
             titleFields: params.prepared.titleFields,
             terminalModel: params.prepared.terminalModel,

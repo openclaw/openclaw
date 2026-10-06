@@ -42,18 +42,6 @@ type PluginSkillCandidate = {
   rejectHardlinks: boolean;
 };
 
-type DiscoveredSkillCandidates = {
-  candidates: CandidateSkillDir[];
-  rootIsSkill: boolean;
-  configuredRootCandidate?: CandidateSkillDir;
-};
-
-type ChildDirectoryScan = {
-  dirs: string[];
-  scannedEntryCount: number;
-  truncated: boolean;
-};
-
 type SkillDiscoveryBudget = {
   remainingDirectoryScans: number;
   remainingRawEntries: number;
@@ -79,7 +67,7 @@ function listChildDirectories(
     onDiagnostic?: SkillDiscoveryReporter;
     onSymlink?: SkillDirectoryReporter;
   },
-): ChildDirectoryScan {
+) {
   const { budget } = opts;
   if (budget && (budget.remainingDirectoryScans <= 0 || budget.remainingRawEntries <= 0)) {
     budget.truncated = true;
@@ -433,7 +421,7 @@ export function discoverSkillCandidates(params: {
   onDirectory?: SkillDirectoryReporter;
   /** Each listed link, including links that resolve to files or escape the root. */
   onSymlink?: SkillDirectoryReporter;
-}): DiscoveredSkillCandidates {
+}) {
   const rootDir = path.resolve(params.dir);
   let rootRealPath: string;
   try {
@@ -490,7 +478,10 @@ export function discoverSkillCandidates(params: {
   const baseDirIsNestedSkillsRoot = path.resolve(baseDir) === path.resolve(rootDir, "skills");
   const baseDirLooksLikeSkillsRoot = path.basename(baseDir) === "skills";
   const discoveryBudget = createSkillDiscoveryBudget(maxCandidatesPerRoot);
-  const reportTruncatedScan = (scan: ChildDirectoryScan, nestedDir?: string) => {
+  const reportTruncatedScan = (
+    scan: ReturnType<typeof listChildDirectories>,
+    nestedDir?: string,
+  ) => {
     const candidateLimitReached = scan.dirs.length > maxCandidatesPerRoot;
     discoveryBudget.truncated ||= candidateLimitReached;
     if (!scan.truncated && !candidateLimitReached) {

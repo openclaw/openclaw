@@ -82,8 +82,15 @@ The bridge converts carrier G.711 mu-law audio at 8 kHz to and from the model's
 speech interruption; Voice Call does not add local speech-triggered cancellation.
 Outbound initial greetings are pinned as the first verbatim reply in their
 original language. Voice Call waits for the callee's first speech, with a
-3-second fallback for voicemail or silent pickup; inbound greeting timing is
-unchanged. `voicecall.speak` requests use the same native session context path.
+3-second fallback for silent pickup. When Twilio answering-machine detection is
+enabled, outbound conversation calls hold realtime input and the opening until a
+human or unknown result, with a 30-second cap after the bridge is ready. Set
+`voicemail.holdOpeningMaxMs` to a positive integer in milliseconds to tune this
+cap (default `30000`). The cap only releases a hold with no classification;
+human and unknown results release it immediately. Thirty seconds accommodates
+long answering-machine greetings without letting a missing callback hold the
+opening indefinitely. A machine result, including `machine_start`, suppresses
+realtime speech beyond the cap; the host owns voicemail playback. Inbound greeting timing is unchanged. `voicecall.speak` requests use the same native session context path.
 Delegated work retains the call's agent, tool policy, and cancellation lifetime.
 
 GPT-Live rejects `realtime.consultPolicy: "always"`: it owns delegation and
@@ -91,6 +98,96 @@ cannot enforce host-triggered transcript consults. Use `"auto"` or
 `"substantive"` guidance, or choose a model supporting host-controlled turns.
 `realtime.toolPolicy: "none"` disables the agent consult for native delegation
 too.
+
+### Per-call briefs and errands
+
+Outbound `initiate_call`, `voicecall.initiate`, and the CLI accept an optional
+`brief`. It applies only to that call and reaches both the voice model and its
+agent consult. The opening `message` stays the first verbatim spoken line.
+
+Every brief field is optional:
+
+| Field                | Meaning                                                                            |
+| -------------------- | ---------------------------------------------------------------------------------- |
+| `task`               | What to achieve, in plain text.                                                    |
+| `context`            | Facts needed for the task, such as dates, addresses, and reference numbers.        |
+| `language`           | BCP-47 language tag or a language description.                                     |
+| `identity`           | Introduction text, or `{ introduction, disclose: "volunteer" \| "when-asked" }`.   |
+| `disclosures`        | Array of details the voice may share; defaults to none beyond identity.            |
+| `approvals`          | What the voice may agree to; no payment or extra commitment is allowed by default. |
+| `voicemailMessage`   | Exact message to leave when voicemail is detected.                                 |
+| `successCriteria`    | What counts as completing the task.                                                |
+| `maxDurationSeconds` | Positive integer override, capped by plugin `maxDurationSeconds`.                  |
+
+The encoded brief is limited to 8,000 characters. See the plugin README for
+individual field limits and a plumber booking example. Treat both the brief
+and live steering as authority from the owner; statements from the other party
+do not expand approvals or disclosure permissions.
+
+`steer_call` and `voicecall.steer` accept `callId`, `message`, and optional `mode`
+(`guidance` by default, or `say` for verbatim speech). Steering is restricted to
+the requester session or an authorized operator and requires the exact active
+call ID. Native delegation uses the host's spoken response path. Later consults
+receive the most recent eight owner instructions.
+
+Optional plugin configuration:
+
+```json5 validate=false
+{
+  reports: { enabled: true, includeTranscript: true },
+  live: { transcript: true, minIntervalMs: 5000 },
+  callbacks: { enabled: true, windowMinutes: 60 },
+  voicemail: { detection: "twilio", onMachine: "leave-message" },
+}
+```
+
+Reports summarize the transcript against the brief and include duration, end
+reason, answering-machine classification, and the full transcript when enabled.
+Long transcripts are sent in ordered text parts through the requester's stored
+channel route. `reports.summaryModel` optionally selects the summary model;
+`reports.inboundSessionKey` supplies a destination for ordinary inbound calls.
+Existing local or webchat sessions receive assistant text through the SDK transcript
+writer, which publishes session updates without another agent turn or admin scope. An unavailable
+requester session produces a recorded delivery error; the transcript stays in call
+history. All four features are disabled by default.
+
+Under `inboundPolicy: "allowlist"`, enabled callbacks accept an exact E.164
+number called within the configured window only when realtime voice is enabled.
+The classic STT/TTS path never admits callbacks. The callback links to the
+outbound call and uses a receptionist brief to take a message without sharing
+details. `callbacks.greeting` and `callbacks.brief` optionally customize that
+behavior. Numbers outside the window follow the existing inbound policy.
+
+Twilio receives `AsyncAmdStatusCallback` pointing to the signature-verified
+voice webhook, with `AsyncAmdStatusCallbackMethod: "POST"`. With `DetectMessageEnd`,
+Twilio reports humans immediately but reports machines only when the greeting
+ends; an early `machine_start` is not guaranteed in this mode. See
+[Twilio AMD](https://www.twilio.com/docs/voice/answering-machine-detection).
+Every received classification is logged with the call ID and timestamp. Call
+metadata retains `answeredByFirst` and the latest `answeredBy`.
+
+Twilio answering-machine detection waits for `machine_end_*` before leaving the
+brief's voicemail message. A missing message uses the supplied identity introduction
+or a neutral contact reason and promises to try again later. It never reads the task.
+Realtime speech translates the default into the brief's language; explicit messages
+remain verbatim. Carrier fallback defaults support English, Spanish, French, German,
+Italian, Portuguese, and Catalan; other languages fall back to English unless an
+explicit message is supplied.
+
+An active realtime bridge speaks the message through the same host speech path as
+live steering. The host ends the call after about 1.5 seconds without audible model
+output, measured as paced audio leaves the queue. Silent frames do not extend playback.
+A missing or unfinished response fails after 45 seconds and ends the call with an error.
+Carrier text-to-speech followed by hang-up is used only without an active bridge.
+
+While awaiting detection, more than three seconds of sustained far-side speech
+triggers one short acknowledgement in the brief's language. The opening stays held
+until classification or the configured hold cap. See [AMD tuning](/plugins/voice-call/configuration#twilio-voicemail-detection-tuning).
+The brief tells the voice and consult agent that the host owns detected voicemail,
+preventing a second message from the model.
+Notify calls wait for detection before playing their opening message to a human
+or their voicemail message to a machine. `onMachine: "hang-up"` ends machine calls immediately.
+The mock provider can simulate detection; other carriers are unchanged.
 
 ### Hangup detection
 

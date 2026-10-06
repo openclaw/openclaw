@@ -101,7 +101,6 @@ function isSameSessionGeneration(
   );
 }
 
-/** Resolves one queued item into an admitted turn. */
 export async function admitFollowupTurn(params: {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;

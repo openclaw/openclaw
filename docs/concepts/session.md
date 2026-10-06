@@ -216,6 +216,13 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+First turns that qualify for restart-safe admission through `sessions.create`
+use the same durable admission as idle `chat.send` turns, including direct RPC
+clients. A restart
+during managed worktree preparation resumes the accepted turn and prepares or
+reuses its local worktree before starting the agent. Recovery does not inherit
+the original caller's permission to run worktree setup scripts.
+
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.

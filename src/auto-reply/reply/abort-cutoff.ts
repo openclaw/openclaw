@@ -1,4 +1,3 @@
-// Resolves abort cutoff markers used to stop stale reply streams.
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions/types.js";

@@ -7,6 +7,11 @@ import {
   resolveOpenClawRegisteredAgentDatabasePath,
 } from "./openclaw-state-db.paths.js";
 
+vi.hoisted(() => {
+  // The custody runner can preload these owners before the Windows path mock.
+  vi.resetModules();
+});
+
 vi.mock("node:path", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:path")>();
   return { ...actual, default: actual.win32 };

@@ -664,39 +664,50 @@ describe("lobster pet element", () => {
     expect(second.querySelector(".lob-bindle")).toBeNull();
   });
 
-  it("stays silent by default and chirps only when sounds are enabled", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-07-09T12:00:00"));
-    const audioContextCtor = vi.fn(() => {
-      const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
-      return {
-        state: "running",
-        currentTime: 0,
-        destination: {},
-        resume: vi.fn(),
-        close: vi.fn(() => Promise.resolve()),
-        createOscillator: vi.fn(() => ({
-          type: "sine",
-          frequency: param(),
-          connect: (node: unknown) => node,
-          start: vi.fn(),
-          stop: vi.fn(),
-        })),
-        createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
-      };
-    });
-    vi.stubGlobal("AudioContext", audioContextCtor);
-    const element = createPet(42);
-    await arrive(element);
+  it.each(["running", "suspended"] as const)(
+    "keeps opt-in sounds and pet interaction usable with %s audio",
+    async (audioState) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-07-09T12:00:00"));
+      let resumeCalls = 0;
+      const audioContextCtor = vi.fn(function MockAudioContext() {
+        const param = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+        return {
+          state: audioState,
+          currentTime: 0,
+          destination: {},
+          // Vitest spies consume rejected promises while recording settled results.
+          resume: () => {
+            resumeCalls += 1;
+            return Promise.reject(new Error("Audio resume rejected"));
+          },
+          close: vi.fn(() => Promise.resolve()),
+          createOscillator: vi.fn(() => ({
+            type: "sine",
+            frequency: param(),
+            connect: (node: unknown) => node,
+            start: vi.fn(),
+            stop: vi.fn(),
+          })),
+          createGain: vi.fn(() => ({ gain: param(), connect: vi.fn() })),
+        };
+      });
+      vi.stubGlobal("AudioContext", audioContextCtor);
+      const element = createPet(42);
+      await arrive(element);
 
-    poke(element);
-    expect(audioContextCtor).not.toHaveBeenCalled();
+      poke(element);
+      expect(audioContextCtor).not.toHaveBeenCalled();
 
-    element.soundsEnabled = true;
-    await element.updateComplete;
-    poke(element);
-    expect(audioContextCtor).toHaveBeenCalledTimes(1);
-  });
+      element.soundsEnabled = true;
+      await element.updateComplete;
+      poke(element);
+      expect(audioContextCtor).toHaveBeenCalledTimes(1);
+      await element.updateComplete;
+      expect(resumeCalls).toBe(audioState === "suspended" ? 1 : 0);
+      expect(spriteClasses(element)).toContain("lobster-pet--act-startle");
+    },
+  );
 
   it("wears the party hat on its first-visit anniversary", async () => {
     vi.useFakeTimers();

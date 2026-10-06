@@ -31,15 +31,11 @@ type DirectOperatorAuthorityParams = {
   disallowed: boolean;
 };
 
-function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
-  const internal = params.client?.internal;
+/** Classifies a direct operator connection without granting any capability. */
+export function isDirectGatewayUserClient(client: GatewayClient | null | undefined): boolean {
+  const internal = client?.internal;
   return (
-    params.runId.trim().length > 0 &&
-    params.client != null &&
-    Boolean(params.resolvedSessionKey?.trim()) &&
-    !params.spawnedBy?.trim() &&
-    params.inputProvenance === undefined &&
-    !params.disallowed &&
+    client != null &&
     internal?.syntheticClient !== true &&
     internal?.senderAttribution === undefined &&
     internal?.approvalRuntime !== true &&
@@ -50,6 +46,17 @@ function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean
     internal?.pluginSubagentRequester === undefined &&
     internal?.runtimePluginToolGrant === undefined &&
     internal?.delegatedToolPolicyHandoffId === undefined
+  );
+}
+
+function isDirectGatewayUserTurn(params: DirectOperatorAuthorityParams): boolean {
+  return (
+    params.runId.trim().length > 0 &&
+    isDirectGatewayUserClient(params.client) &&
+    Boolean(params.resolvedSessionKey?.trim()) &&
+    !params.spawnedBy?.trim() &&
+    params.inputProvenance === undefined &&
+    !params.disallowed
   );
 }
 

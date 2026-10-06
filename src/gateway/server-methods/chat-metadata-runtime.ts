@@ -302,7 +302,10 @@ export function createGatewayChatMetadataRuntime(params: {
         sessionProjectionByKey: new Map(),
       };
       // Rebuild only variants clients already use, before the replacement becomes readable.
-      await Promise.allSettled([...requestedModelLists.values()].map(current.modelLists.prepare));
+      const { modelLists } = current;
+      await Promise.allSettled(
+        [...requestedModelLists.values()].map((request) => modelLists.prepare(request)),
+      );
     } catch (error) {
       // Invalidation and stop revoke old preparation, including its failures.
       // Only the current refresh may settle the replacement's readers.

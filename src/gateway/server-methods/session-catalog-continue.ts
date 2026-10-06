@@ -18,6 +18,7 @@ export async function continueAuthorizedSessionCatalog(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   commitGuard?: () => void;
+  signal?: AbortSignal;
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; error: ErrorShape }> {
   const { catalogId: _catalogId, ...providerRequest } = params.request;
   // Fail closed for unscoped callers: providers gate high-authority
@@ -42,6 +43,7 @@ export async function continueAuthorizedSessionCatalog(params: {
       client: params.client,
       context: params.context,
       commitGuard: params.commitGuard,
+      signal: params.signal,
     });
   }
   const continueSession = provider.continueSession;

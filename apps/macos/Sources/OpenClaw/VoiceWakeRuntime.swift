@@ -215,10 +215,10 @@ actor VoiceWakeRuntime {
 
             self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
                 guard let self else { return }
-                let transcript = result?.bestTranscription.formattedString
-                let segments = result.flatMap { result in
-                    transcript
-                        .map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+                let transcription = result?.bestTranscription
+                let transcript = transcription?.formattedString
+                let segments = transcription.map {
+                    WakeWordSpeechSegments.from(transcription: $0, transcript: $0.formattedString)
                 } ?? []
                 let isFinal = result?.isFinal ?? false
                 Task { await self.noteRecognitionCallback(transcript: transcript, isFinal: isFinal, error: error) }

@@ -77,7 +77,6 @@ function projectSchemaTier(params: {
   };
 }
 
-/** Split one schema section into common and advanced projections. */
 export function splitConfigSchemaByTier(params: {
   schema: JsonSchema;
   path: string[];

@@ -26,6 +26,8 @@ import {
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
+} from "../../config/sessions/session-entry-read-request.js";
+import {
   withSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoreInWorker,
   withSessionEntriesFromStoresInWorker,

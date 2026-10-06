@@ -285,7 +285,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
       }
       this.core.invalidate();
       this.routeDataObserved = true;
-      this.setSelectedAgent(this.resolveSelectedAgentId());
+      this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "");
       if (
         (data.agentId ?? "") === this.selectedAgentId &&
         data.selectionIntentRevision === this.context.settingsAgentSelection.intentRevision &&
@@ -384,11 +384,6 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
     this.addProviderKey = "";
   }
 
-  private resolveSelectedAgentId(): string {
-    const selected = this.context.settingsAgentSelection.state.selectedId;
-    return selected ? normalizeAgentId(selected) : "";
-  }
-
   private setSelectedAgent(agentId: string): boolean {
     if (agentId === this.selectedAgentId) {
       return false;
@@ -400,7 +395,7 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
   }
 
   private syncSelectedAgent() {
-    if (!this.setSelectedAgent(this.resolveSelectedAgentId())) {
+    if (!this.setSelectedAgent(this.context.settingsAgentSelection.state.selectedId ?? "")) {
       return;
     }
     this.invalidateRequests();

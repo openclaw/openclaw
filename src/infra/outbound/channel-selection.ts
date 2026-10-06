@@ -42,7 +42,6 @@ function resolveAvailableChannel(params: {
   return plugin ? { channel: plugin.id, plugin } : undefined;
 }
 
-/** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
   return entry !== undefined && entry.enabled !== false;
@@ -168,12 +167,10 @@ async function listConfiguredMessageChannelPlugins(
   return plugins;
 }
 
-/** Lists deliverable channels with at least one enabled, configured account. */
 export async function listConfiguredMessageChannels(cfg: OpenClawConfig): Promise<string[]> {
   return (await listConfiguredMessageChannelPlugins(cfg)).map((plugin) => plugin.id);
 }
 
-/** Resolves the message action channel from explicit input, context fallback, or config. */
 export async function resolveMessageChannelSelection(params: {
   cfg: OpenClawConfig;
   channel?: string | null;

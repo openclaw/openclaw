@@ -100,18 +100,19 @@ function captureFileAgentDatabaseExecution(
     existing ??= executions.get(identity.canonicalPath);
     if (expectedCreationIdentity) {
       const capturesAbsence = expectedCreationIdentity.key.startsWith("path:");
+      const observed =
+        capturesAbsence && existing?.kind === "file" ? existing.creationIdentity : identity;
       if (
         constraints.expectedIdentity ||
         (capturesAbsence &&
-          (existing ||
-            agentDatabaseLifecycle.databases.has(pathname) ||
+          (agentDatabaseLifecycle.databases.has(pathname) ||
             agentDatabaseLifecycle.pending.has(pathname))) ||
         (!capturesAbsence &&
           (!expectedCreationIdentity.key.startsWith("file:") ||
             typeof expectedCreationIdentity.birthtime !== "string")) ||
-        identity.key !== expectedCreationIdentity.key ||
-        identity.canonicalPath !== expectedCreationIdentity.canonicalPath ||
-        identity.birthtime !== expectedCreationIdentity.birthtime
+        observed?.key !== expectedCreationIdentity.key ||
+        observed.canonicalPath !== expectedCreationIdentity.canonicalPath ||
+        observed.birthtime !== expectedCreationIdentity.birthtime
       ) {
         throw new Error("Agent creation no longer owns its originally observed target");
       }
@@ -173,7 +174,8 @@ function createAgentDatabaseExecution(
   let retired = false;
   let revoked = false;
   let borrowers = 0;
-  let creationReference: object | undefined;
+  let creationIdentity = expectedCreationIdentity;
+  let creationBorrowers = 0;
   let generation: AgentDatabaseNativeGeneration | undefined;
   let fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
   let nativeClosing: Promise<void> | undefined;
@@ -321,7 +323,7 @@ function createAgentDatabaseExecution(
             }
             fileIdentity ??= Object.freeze({ ...received });
           },
-          fileIdentity ? undefined : creatingTarget,
+          fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
           creationClaim?.witness,
         );
         generation = created;
@@ -407,6 +409,9 @@ function createAgentDatabaseExecution(
     get sharedDatabaseKey() {
       return context.admission.identity.key;
     },
+    get creationIdentity() {
+      return creationIdentity;
+    },
     borrow(borrowedPath, expected, creating, requestedPath) {
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
@@ -454,7 +459,7 @@ function createAgentDatabaseExecution(
         }
       };
       assertReferenceCurrent();
-      if (creatingTarget && !fileIdentity && generation) {
+      if (creatingTarget && !creationIdentity && !fileIdentity && generation) {
         throw new Error("Agent creation cannot capture another pending native opener");
       }
       retainAlias(borrowedPath);
@@ -467,15 +472,15 @@ function createAgentDatabaseExecution(
       if (executionState.idle === owner && !nativeClosing && !cleanupFailure) {
         executionState.idle = undefined;
       }
-      const reference = {};
-      if (creatingTarget && !fileIdentity) {
-        creationReference ??= reference;
+      if (creatingTarget) {
+        creationIdentity ??= creatingTarget;
+        creationBorrowers += 1;
       }
       const assertCreationReference = (create: boolean) => {
         if (creatingTarget && !fileIdentity && !create) {
           throw new Error("Originally observed agent target requires creating admission first");
         }
-        if (creationReference && !fileIdentity && (!create || creationReference !== reference)) {
+        if (creationBorrowers && !fileIdentity && (!create || !creatingTarget)) {
           throw new Error(
             "Originally observed agent target requires its captured creating reference",
           );
@@ -578,7 +583,8 @@ function createAgentDatabaseExecution(
           release ??= (async () => {
             await Promise.allSettled(pending);
             if (
-              creationReference === reference &&
+              creatingTarget &&
+              --creationBorrowers === 0 &&
               !fileIdentity &&
               !nativeClosing &&
               !cleanupFailure
@@ -591,8 +597,8 @@ function createAgentDatabaseExecution(
                   reportCleanupFailure(error);
                 }
               }
-              if (!generation && !nativeClosing && !cleanupFailure) {
-                creationReference = undefined;
+              if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
+                creationIdentity = undefined;
               }
             }
             borrowers -= 1;

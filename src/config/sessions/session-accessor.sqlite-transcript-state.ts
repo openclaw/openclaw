@@ -271,11 +271,6 @@ export function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId
   return maxSeq + 1;
 }
 
-function normalizeTranscriptMutationAtMs(value: number): number | undefined {
-  const timestamp = Math.floor(value);
-  return Number.isFinite(timestamp) && timestamp >= 0 ? timestamp : undefined;
-}
-
 // Only compilation is retained; writer transactions must see their latest mutation fences.
 const transcriptMutationStateQuery = createSqliteQueryCache((database) => {
   const db = getSessionKysely(database);
@@ -311,8 +306,8 @@ export function advanceTranscriptMutationAtInTransaction(
   value: number,
   options: { strictly?: boolean } = {},
 ): void {
-  const transcriptUpdatedAt = normalizeTranscriptMutationAtMs(value);
-  if (transcriptUpdatedAt === undefined) {
+  const transcriptUpdatedAt = Math.floor(value);
+  if (!Number.isFinite(transcriptUpdatedAt) || transcriptUpdatedAt < 0) {
     return;
   }
   const state = readTranscriptMutationStateInTransaction(database, sessionId);

@@ -1,4 +1,3 @@
-// Channels page renders WhatsApp status.
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { html, nothing } from "lit";
 import type { WhatsAppStatus } from "../../api/types.ts";

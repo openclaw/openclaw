@@ -252,7 +252,7 @@ export abstract class ChatPaneBase extends OpenClawLightDomElement {
     if (!this.state?.connected || this.state.client !== this.context?.gateway.snapshot.client) {
       return false;
     }
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
+    const phase = getChatHistoryLoadState(this.state).phase;
     return phase === "committed" || phase === "failed";
   }
   protected readonly synchronizeForegroundTranscript = () => {

@@ -24,11 +24,6 @@ export type MessageToolDeliveryState = {
   completed: boolean;
 };
 
-function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
-  return value === "turn" || value === "session" ? value : undefined;
-}
-
-/** Bridges embedded-agent events into channel progress and compaction notices. */
 export function createAgentRunEventHandler(params: {
   turn: AgentTurnParams;
   lifecycleBackstop: AgentLifecycleTerminalBackstop;
@@ -169,6 +164,7 @@ export function createAgentRunEventHandler(params: {
       });
     }
     if (evt.stream === "approval" && !shouldSuppressProgressAfterMessageToolDelivery()) {
+      const scope = evt.data.scope;
       await params.turn.opts?.onApprovalEvent?.({
         phase: readStringValue(evt.data.phase),
         kind: readStringValue(evt.data.kind),
@@ -181,7 +177,7 @@ export function createAgentRunEventHandler(params: {
         command: readStringValue(evt.data.command),
         host: readStringValue(evt.data.host),
         reason: readStringValue(evt.data.reason),
-        scope: readApprovalScopeValue(evt.data.scope),
+        scope: scope === "turn" || scope === "session" ? scope : undefined,
         message: readStringValue(evt.data.message),
       });
     }

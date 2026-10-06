@@ -28,16 +28,12 @@ enum VoiceWakeTextUtils {
         scalar.isASCII && CharacterSet.alphanumerics.contains(scalar)
     }
 
-    private static func requiresASCIIWordBoundaries(_ value: String) -> Bool {
-        value.unicodeScalars.contains(where: self.isASCIIWordScalar)
-    }
-
     private static func hasASCIIWordBoundaries(
         transcript: String,
         range: Range<String.Index>,
         trigger: String) -> Bool
     {
-        guard self.requiresASCIIWordBoundaries(trigger) else { return true }
+        guard trigger.unicodeScalars.contains(where: self.isASCIIWordScalar) else { return true }
 
         if range.lowerBound > transcript.startIndex {
             let beforeIndex = transcript.index(before: range.lowerBound)
@@ -115,7 +111,6 @@ enum VoiceWakeTextUtils {
         minCommandLength: Int,
         trimWake: TrimWake) -> String?
     {
-        guard !transcript.isEmpty else { return nil }
         guard !self.normalizeToken(transcript).isEmpty else { return nil }
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
         guard

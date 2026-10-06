@@ -1,9 +1,9 @@
-import type { BigIntStats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
+import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
   captureUpdateCandidatePluginCodeLink,
@@ -37,17 +37,26 @@ export function assertUpdateCandidatePluginEntryStat(
   if (!sameKind || !sameIdentity || !sameMode) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
-  const sameFile =
-    entry.kind !== "file" ||
-    sameFileMutationFingerprint(current, {
+  if (entry.kind === "file") {
+    const expected = {
       dev: BigInt(entry.dev),
       ino: BigInt(entry.ino),
       size: BigInt(entry.size),
       birthtimeNs: BigInt(entry.birthtimeNs),
       mtimeNs: BigInt(entry.mtimeNs),
       ctimeNs: BigInt(entry.ctimeNs),
-    });
-  if (!sameFile || (entry.kind === "symlink" && current.size !== BigInt(entry.size))) {
+      mode: BigInt(entry.mode | constants.S_IFREG),
+      uid: BigInt(entry.uid),
+      gid: BigInt(entry.gid),
+    };
+    if (
+      !sameFileMutationMetadata(expected, current) ||
+      (current.ctimeNs !== expected.ctimeNs &&
+        hashFileMutationSnapshotSync(entry.path, expected) !== entry.sha256)
+    ) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  } else if (entry.kind === "symlink" && current.size !== BigInt(entry.size)) {
     throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
   }
 }

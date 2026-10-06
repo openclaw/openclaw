@@ -406,7 +406,7 @@ describe("gateway server chat", () => {
     { method: "send", message: "hello from dashboard" },
     { method: "steer", message: "follow-up from dashboard" },
   ])(
-    "sessions.$method accepts an existing session input before reporting its committed history position",
+    "sessions.$method returns the committed history position when starting an existing session input",
     async ({ method, message }) => {
       const sessionKey = `agent:main:dashboard:test-${method}`;
       const runId = `idem-sessions-${method}-1`;
@@ -428,9 +428,8 @@ describe("gateway server chat", () => {
           idempotencyKey: runId,
         });
         expect(res.ok).toBe(true);
-        expectRecordFields(res.payload, { runId, status: "started" });
-        // The suite's TEST client ACKs before dispatch can commit the user turn.
-        expect(res.payload).not.toHaveProperty("messageSeq");
+        // Direct operator input commits through restart-safe admission before the ACK.
+        expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
         await waitForAgentRunDrained(runId);
 
         const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
@@ -440,7 +439,10 @@ describe("gateway server chat", () => {
         );
         expect(users).toHaveLength(1);
         const user = expectRecordFields(users[0], { role: "user" });
-        expectRecordFields(user["__openclaw"], { seq: 1, idempotencyKey: `${runId}:user` });
+        expectRecordFields(user["__openclaw"], {
+          seq: res.payload?.messageSeq,
+          idempotencyKey: `${runId}:user`,
+        });
         expect(collectHistoryTextValues(users)).toEqual([message]);
       } finally {
         // A failed ACK assertion must not retire storage before detached work finishes.

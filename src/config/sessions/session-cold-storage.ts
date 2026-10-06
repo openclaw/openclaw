@@ -55,6 +55,7 @@ import type {
   SessionColdTurnGuard,
 } from "./session-cold-storage-worker.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { withSessionHistoryWorkerReadCandidates } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -370,6 +371,13 @@ export async function restoreSessionColdTranscript(
   turnGuard?: SessionColdTurnGuard,
 ): Promise<void> {
   assertCurrent?.();
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+    // An actor has no cold archive to restore; loss must still reject this continuation.
+    return;
+  }
   let resolved = preparation?.target;
   if (
     !resolved &&

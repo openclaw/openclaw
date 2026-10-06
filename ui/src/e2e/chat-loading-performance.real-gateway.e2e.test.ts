@@ -14,6 +14,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { installHistoryPaginationProbe } from "./chat-history-pagination-probe.test-support.ts";
 import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -435,6 +436,7 @@ suite.define(() => {
           });
         });
         await page.goto(url.toString());
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const selectedPane = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--active:not([inert])",
@@ -464,6 +466,7 @@ suite.define(() => {
         startedAt = Date.now();
         measuring = true;
         await page.reload();
+        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const selectedCommitted = waitForStartupCommit(selectedKey, selectedPane);
         const homeCommitted = waitForStartupCommit(
@@ -673,6 +676,7 @@ suite.define(() => {
           startedAt = Date.now();
           // Keep the same short-link input even if navigation canonicalized the prior URL.
           await page.goto(`${url.origin}${url.pathname}`);
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const narrowSelectedCommitted = waitForStartupCommit(
             selectedKey,
@@ -917,6 +921,7 @@ suite.define(() => {
             (response) => response.url() === new URL(versionedAvatarUrl, suite.server.baseUrl).href,
           );
           await page.reload();
+          await enterControlUiSession(page);
           await waitForControlUiGatewayReady(page);
           const response = await responseReady;
           expect(response.status()).toBe(200);

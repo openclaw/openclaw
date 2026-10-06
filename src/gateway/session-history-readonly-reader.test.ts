@@ -183,6 +183,16 @@ it.each(["cold", "warm", "policy", "receipt"] as const)(
           expect((await read()).messages.map(readChatHistoryMessageId)).toEqual([
             "requested-message",
           ]);
+          // The race must reach SQLite while canonical admission stays warm.
+          const missingEntryReader = createReadonlySessionHistoryReader({
+            ...target,
+            entryValidationKey: "agent:main:missing-row",
+          });
+          await scope.run(target.database, () =>
+            missingEntryReader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+              maxMessages: 10,
+            }),
+          );
         }
         if (admission === "policy") {
           setCanonicalSqliteSessionMainKey(database, "custom");

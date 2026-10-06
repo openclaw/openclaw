@@ -1,4 +1,3 @@
-// Chat-item projection, expansion, reply hydration, and guarded row rendering.
 import { html, nothing } from "lit";
 import { markdownGitHubAliasSignature } from "../../../components/markdown-github-repositories.ts";
 import { currentThemeBranding } from "../../../components/neutral-mark.ts";
@@ -292,7 +291,9 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     waitingApproval: props.waitingApproval,
     waitingSubagents: subagentWait ?? undefined,
     runningSubagents: subagents.running,
-    onOpenSession: props.onOpenSession,
+    // Subagents the panel does not list still open as sessions, and have no list to show.
+    onOpenSubagent: (subagents.listed && props.onOpenSubagent) || props.onOpenSession,
+    onOpenSubagents: subagents.listed ? props.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
   } satisfies StreamGroupOptions;

@@ -108,7 +108,7 @@ type SensitiveRenderState = {
 };
 
 export function isAnySchema(schema: JsonSchema): boolean {
-  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
+  return Object.keys(schema).every((key) => META_KEYS.has(key));
 }
 
 export function jsonValue(value: unknown): string {

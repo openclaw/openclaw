@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
@@ -144,6 +145,41 @@ describe("voice-call runtime lifecycle", () => {
       Symbol.for("openclaw.voice-call.runtimeCoordinator")
     ];
     vi.restoreAllMocks();
+  });
+
+  it("requires service startup before enabling requester reporting", async () => {
+    const registration = registerVoiceCall({ config: { reports: { enabled: true } } });
+    expectLifecycleError(await executeCall(registration.tool()), "requires service startup");
+    expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+  });
+
+  it("captures each replacement service context independently of the requesting caller", async () => {
+    const actor = new AsyncLocalStorage<string>();
+    const runtimeA = createRuntime("call-a", "+15550000001");
+    const runtimeB = createRuntime("call-b", "+15550000002");
+    vi.mocked(createVoiceCallRuntime)
+      .mockResolvedValueOnce(runtimeA.runtime)
+      .mockResolvedValueOnce(runtimeB.runtime);
+    const serviceA = registerVoiceCall({ config: { reports: { enabled: true } } });
+    void actor.run("service-a", () => serviceA.service.start(serviceContext));
+    await actor.run("requesting-caller", () => executeCall(serviceA.tool()));
+    const contextA = vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0].runInServiceContext;
+    expect(contextA).toBeDefined();
+    expect(actor.run("requesting-caller", () => contextA?.(() => actor.getStore()))).toBe(
+      "service-a",
+    );
+
+    const serviceB = registerVoiceCall({ config: { reports: { enabled: true } } });
+    void actor.run("service-b", () => serviceB.service.start(serviceContext));
+    await actor.run("requesting-caller", () => executeCall(serviceB.tool()));
+    const contextB = vi.mocked(createVoiceCallRuntime).mock.calls[1]?.[0].runInServiceContext;
+    expect(actor.run("requesting-caller", () => contextB?.(() => actor.getStore()))).toBe(
+      "service-b",
+    );
+    expect(actor.run("requesting-caller", () => contextA?.(() => actor.getStore()))).toBe(
+      "service-a",
+    );
+    expect(runtimeA.stop).toHaveBeenCalledOnce();
   });
 
   it("shares one pending runtime between full and tool-discovery registrations", async () => {

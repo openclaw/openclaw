@@ -126,23 +126,6 @@ type IndexedMessageSentEvent = {
   event: MessageSentEvent;
 };
 
-function queuedTerminalFailureEvents(
-  entry: QueuedDelivery,
-  error: string,
-): IndexedMessageSentEvent[] {
-  return acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => {
-    const summary = buildPayloadSummary(prepared.payload);
-    return {
-      sourceIndex: prepared.sourceIndex,
-      event: {
-        success: false,
-        content: summary.hookContent ?? summary.text,
-        error,
-      },
-    };
-  });
-}
-
 function emitRecoveredTerminalFailure(
   entry: QueuedDelivery,
   error: string,
@@ -151,15 +134,21 @@ function emitRecoveredTerminalFailure(
   if (entry.legacyPreparedContentUnavailable) {
     return;
   }
-  const fallbackEvents = queuedTerminalFailureEvents(entry, error);
   // Rendering can suppress an accepted payload before later payloads settle.
   // Reconcile by source index so a gap cannot duplicate or misattribute events.
   const collectedBySourceIndex = new Map(
     collected.map(({ sourceIndex, event }) => [sourceIndex, event] as const),
   );
-  const terminalEvents = fallbackEvents.map(
-    ({ sourceIndex, event }) => collectedBySourceIndex.get(sourceIndex) ?? event,
-  );
+  const terminalEvents = acceptedPreparedOutboundEntries(entry.preparedBatch).map((prepared) => {
+    const summary = buildPayloadSummary(prepared.payload);
+    return (
+      collectedBySourceIndex.get(prepared.sourceIndex) ?? {
+        success: false,
+        content: summary.hookContent ?? summary.text,
+        error,
+      }
+    );
+  });
   emitRecoveredMessageSentEvents(entry, terminalEvents);
 }
 
@@ -362,67 +351,6 @@ function buildReconciledSentResult(
   };
 }
 
-function buildReconciledCommitContext(params: {
-  entry: QueuedDelivery;
-  cfg: OpenClawConfig;
-  result: OutboundDeliveryResult;
-}): ChannelMessageSendCommitContext {
-  const payload = queuedDeliveryPayloads(params.entry)[0] ?? {};
-  const result = {
-    messageId: params.result.messageId,
-    receipt: params.result.receipt ?? {
-      platformMessageIds: [params.result.messageId].filter(Boolean),
-      parts: [],
-      sentAt: Date.now(),
-    },
-  };
-  const base = {
-    cfg: params.cfg,
-    to: params.entry.to,
-    deliveryQueueId: params.entry.id,
-    accountId: params.entry.accountId,
-    replyToId:
-      params.entry.effectiveReplyToId !== undefined
-        ? params.entry.effectiveReplyToId
-        : params.entry.reply?.replyToId,
-    replyToMode: params.entry.reply?.source === "implicit" ? params.entry.reply.mode : undefined,
-    threadId: params.entry.threadId,
-    silent: params.entry.silent,
-    result,
-  };
-  if (
-    payload.presentation !== undefined ||
-    payload.delivery !== undefined ||
-    payload.interactive !== undefined ||
-    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
-  ) {
-    return {
-      ...base,
-      kind: "payload",
-      text: payload.text ?? "",
-      mediaUrl: payload.mediaUrl,
-      payload,
-    };
-  }
-  const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.find((url) => url);
-  if (mediaUrl) {
-    return {
-      ...base,
-      kind: "media",
-      text: payload.text ?? "",
-      mediaUrl,
-      audioAsVoice: payload.audioAsVoice,
-      gifPlayback: params.entry.gifPlayback,
-      forceDocument: params.entry.forceDocument,
-    };
-  }
-  return {
-    ...base,
-    kind: "text",
-    text: payload.text ?? "",
-  };
-}
-
 async function runReconciledSentCommitHooks(params: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
@@ -447,13 +375,50 @@ async function runReconciledSentCommitHooks(params: {
   }
   const result = buildReconciledSentResult(params.entry, params.reconciliation);
   try {
-    await afterCommit(
-      buildReconciledCommitContext({
-        entry: params.entry,
-        cfg: params.cfg,
-        result,
-      }),
-    );
+    const { entry } = params;
+    const payload = queuedDeliveryPayloads(entry)[0] ?? {};
+    const base = {
+      cfg: params.cfg,
+      to: entry.to,
+      deliveryQueueId: entry.id,
+      accountId: entry.accountId,
+      replyToId:
+        entry.effectiveReplyToId !== undefined ? entry.effectiveReplyToId : entry.reply?.replyToId,
+      replyToMode: entry.reply?.source === "implicit" ? entry.reply.mode : undefined,
+      threadId: entry.threadId,
+      silent: entry.silent,
+      text: payload.text ?? "",
+      result: {
+        messageId: result.messageId,
+        receipt: result.receipt ?? {
+          platformMessageIds: [result.messageId].filter(Boolean),
+          parts: [],
+          sentAt: Date.now(),
+        },
+      },
+    };
+    let context: ChannelMessageSendCommitContext;
+    if (
+      payload.presentation !== undefined ||
+      payload.delivery !== undefined ||
+      payload.interactive !== undefined ||
+      (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
+    ) {
+      context = { ...base, kind: "payload", mediaUrl: payload.mediaUrl, payload };
+    } else {
+      const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.find((url) => url);
+      context = mediaUrl
+        ? {
+            ...base,
+            kind: "media",
+            mediaUrl,
+            audioAsVoice: payload.audioAsVoice,
+            gifPlayback: entry.gifPlayback,
+            forceDocument: entry.forceDocument,
+          }
+        : { ...base, kind: "text" };
+    }
+    await afterCommit(context);
   } catch (err) {
     params.log.warn(
       `Delivery entry ${params.entry.id} reconciled sent afterCommit hook failed: ${formatErrorMessage(err)}`,

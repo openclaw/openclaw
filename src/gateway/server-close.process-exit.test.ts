@@ -41,7 +41,7 @@ it("keeps accepted terminal writes and the clean-close receipt ahead of process 
     drainRetainedEmbeddingProviders: async () => {},
   });
   const params = createDeps({
-    agentUnsub: async () => {
+    drainPersistence: async () => {
       terminalDraining.resolve();
       await terminalOwner.drain();
       terminalDrained.resolve();

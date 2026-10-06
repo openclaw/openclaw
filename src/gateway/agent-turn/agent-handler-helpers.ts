@@ -10,7 +10,6 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
   resolveAgentHarnessSessionContextError,
@@ -27,10 +26,7 @@ export function canPrepareAgentSessionWorktree(
   sessionKey: string | undefined,
   entry: InternalSessionEntry | undefined,
 ): boolean {
-  return (
-    Boolean(sessionKey && isSubagentSessionKey(sessionKey) && entry?.pendingWorktree) &&
-    entry?.pendingProjectGitUrl === undefined
-  );
+  return Boolean(sessionKey && entry?.pendingWorktree) && entry?.pendingProjectGitUrl === undefined;
 }
 
 export function resolveAgentSessionWorkStartError(

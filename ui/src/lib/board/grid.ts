@@ -1,5 +1,3 @@
-/** Pure order-and-size layout for the session dashboard board. */
-
 export const BOARD_GRID_COLUMNS = 12;
 export const BOARD_GRID_ROW_HEIGHT = 56;
 export const BOARD_GRID_GAP = 12;
@@ -155,7 +153,6 @@ export function previewDrag(
   return canonical.map(withOrder);
 }
 
-/** Returns a new canonical item list with one clamped size change. */
 export function resize(
   items: readonly BoardGridItem[],
   name: string,

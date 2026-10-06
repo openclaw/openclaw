@@ -27,13 +27,11 @@ export function createUpdateFailureReportController(params: {
   let generation = 0;
   let activeGeneration: number | null = null;
 
-  const invalidate = () => {
-    generation += 1;
-    activeGeneration = null;
-  };
-
   return {
-    invalidate,
+    invalidate: () => {
+      generation += 1;
+      activeGeneration = null;
+    },
     report: async (attemptId: string): Promise<void> => {
       const client = params.getClient();
       if (!client || activeGeneration !== null || !params.isCurrent(attemptId, client)) {

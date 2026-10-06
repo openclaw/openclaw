@@ -1,4 +1,3 @@
-/** Built-in blocking user-question tool and its active-session answer bridge. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { raceWithTimeout } from "@openclaw/retry";
 import type {

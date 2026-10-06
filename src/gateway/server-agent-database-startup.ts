@@ -1,5 +1,6 @@
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -168,6 +169,7 @@ export function activateGatewayAgentDatabaseStartup(params: {
           !previousSecrets ||
           !(await refreshActiveSecretsRuntimeSnapshotForConfig({
             sourceConfig: previousSecrets.sourceConfig,
+            runtimeSourceConfig: getRuntimeConfigSourceSnapshot() ?? undefined,
             includeAuthStoreRefs: true,
             assertCurrent: () => {
               signal.throwIfAborted();

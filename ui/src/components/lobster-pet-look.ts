@@ -277,8 +277,6 @@ export function createLobsterPetLook(seed: number, now: Date = new Date()): Lobs
   return preparedLook;
 }
 
-// Same species as icons.lobster / the dreams-scene sleeper: smooth dome body
-// with stubby legs, side claws, antennae, and teal-glint eyes.
 const READING_BOOK = svg`
   <g class="lob-reading-book" transform="translate(0 2)">
     <path

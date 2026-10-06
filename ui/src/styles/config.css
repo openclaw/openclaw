@@ -1,8 +1,4 @@
-/* ===========================================
-   Config Page
-   ===========================================
-
-   The schema-driven form itself renders through the settings design
+/* The schema-driven form itself renders through the settings design
    language (settings-section/settings-group/settings-row; see
    ui/src/styles/settings.css). This file keeps only the config page
    chrome (tabs, actions, diff, raw editor) plus genuinely form-specific
@@ -25,7 +21,6 @@
   flex-shrink: 0;
 }
 
-/* Toolbar: mode toggle / section tabs */
 .config-toolbar {
   display: flex;
   align-items: center;
@@ -34,7 +29,6 @@
   gap: var(--space-2) var(--space-3);
 }
 
-/* Raw mode file operations (open / discard / save) */
 .config-raw-actions {
   display: flex;
   align-items: center;
@@ -64,7 +58,6 @@
   }
 }
 
-/* Diff Panel */
 .config-diff {
   margin: 12px 20px 0;
   border: 1px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -147,7 +140,6 @@
   color: var(--ok);
 }
 
-/* Content Area */
 .config-content {
   flex: 1;
   overflow-y: auto;
@@ -752,7 +744,6 @@
   min-width: 32px;
 }
 
-/* Loading State */
 .config-loading {
   display: flex;
   flex-direction: column;
@@ -772,7 +763,6 @@
   animation: btn-spinner-spin 0.7s linear infinite;
 }
 
-/* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {
   font-size: 12px;
   color: var(--danger);
@@ -825,7 +815,6 @@
   border-color: var(--danger);
 }
 
-/* Redacted click-to-reveal inputs/textareas. */
 .cfg-redacted {
   opacity: 0.7;
 }
@@ -862,14 +851,12 @@
   }
 }
 
-/* MCP */
 .mcp-page {
   display: grid;
   gap: 14px;
   margin-top: 12px;
 }
 
-/* Memory */
 .memory-page {
   display: grid;
   gap: 0;
@@ -975,7 +962,6 @@
   color: var(--danger);
 }
 
-/* Advanced Settings accordion navigation, rendered by view.ts. */
 .config-accordion-nav {
   margin-bottom: 20px;
 }

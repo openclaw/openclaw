@@ -1,4 +1,3 @@
-// Memory destination shell and its merged Settings surface.
 import { html, nothing, type TemplateResult } from "lit";
 import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
@@ -178,11 +177,8 @@ type MemoryViewProps = {
   pluginsHref: string;
   memoryImportHref: string;
   canImportMemory: boolean;
-  /** New status-led landing view. */
   overview: TemplateResult;
-  /** Search and read the selected agent's indexed memory. */
   memories: TemplateResult;
-  /** Agent-scoped dream diary and scene. */
   dreams: TemplateResult;
   /** One embedded editor for every `memory.*` schema field. */
   editor: TemplateResult;

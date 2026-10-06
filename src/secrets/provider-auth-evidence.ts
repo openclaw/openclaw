@@ -5,11 +5,6 @@ import { normalizeOptionalString as normalizeOptionalPathInput } from "@openclaw
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { ProviderAuthEvidence } from "./provider-env-vars.js";
 
-type ResolvedLocalProviderAuthEvidence = {
-  credentialMarker: string;
-  source: string;
-};
-
 function expandAuthEvidencePath(
   rawPath: string,
   env: NodeJS.ProcessEnv,
@@ -81,7 +76,7 @@ function hasLocalFileAuthEvidence(evidence: ProviderAuthEvidence, env: NodeJS.Pr
 export function resolveLocalProviderAuthEvidence(
   evidenceEntries: readonly ProviderAuthEvidence[] | undefined,
   env: NodeJS.ProcessEnv,
-): ResolvedLocalProviderAuthEvidence | null {
+) {
   for (const evidence of evidenceEntries ?? []) {
     if (
       evidence.type !== "local-file-with-env" ||

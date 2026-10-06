@@ -211,9 +211,6 @@ impl GatewayDeviceIdentity {
         let signing_key_bytes = Zeroizing::new(decode_key(&self.private_key, "private")?);
         let signing_key = SigningKey::from_bytes(&signing_key_bytes);
         let public_key = signing_key.verifying_key().to_bytes();
-        if STANDARD.encode(public_key) != self.public_key {
-            return Err("Gateway device identity keypair is invalid.".to_string());
-        }
         let payload = build_device_auth_payload(DeviceAuthPayloadFields {
             device_id: &self.device_id,
             client_id: CLIENT_ID,

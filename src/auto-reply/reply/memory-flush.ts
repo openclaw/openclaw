@@ -1,4 +1,3 @@
-// Builds memory flush prompts when conversation context exceeds model budget.
 import { resolveAnthropicServerCompactionPlan } from "@openclaw/ai/internal/anthropic";
 import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/internal/openai-responses-payload-policy";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -21,12 +20,6 @@ export function resolveMaxActiveTranscriptBytes(cfg?: OpenClawConfig): number | 
     cfg?.agents?.defaults?.compaction?.maxActiveTranscriptBytes,
   );
   return typeof parsed === "number" && parsed > 0 ? parsed : undefined;
-}
-
-function resolvePositiveTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
 }
 
 export function resolveEffectivePromptTokens(
@@ -52,7 +45,6 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
   return tokens === undefined ? undefined : Math.ceil(tokens);
 }
 
-/** Resolves the blocking threshold using the selected reserve and server floor. */
 export function resolveCompactionThreshold(params: {
   contextWindowTokens: number;
   reserveTokensFloor: number;
@@ -152,8 +144,11 @@ export function shouldRunPreflightCompaction(params: {
   if (!params.entry) {
     return false;
   }
+  const projectedTokens = asPositiveFiniteNumber(params.tokenCount);
   const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+    projectedTokens === undefined
+      ? resolveFreshSessionTotalTokens(params.entry)
+      : Math.floor(projectedTokens);
   return (
     typeof totalTokens === "number" &&
     totalTokens > 0 &&

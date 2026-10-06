@@ -50,6 +50,7 @@ it.each(["before settlement", "after settlement", "persisted interruption"] as c
         storePath: path.join(state.sessionsDir(), "sessions.json"),
       };
       const admitted = buildRestartSafeChatTranscriptState({
+        sourceIngress: "control-ui",
         admission: { requestFingerprint: "synthetic-request" },
         clientRunId: runId,
         startedAt: 100,

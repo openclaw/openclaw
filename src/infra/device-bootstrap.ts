@@ -1,4 +1,3 @@
-// Bootstraps device identity and trust state on first run.
 import { randomUUID } from "node:crypto";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -186,7 +185,6 @@ export async function readDevicePairSetupCompletion(
   );
 }
 
-/** Remove every outstanding bootstrap token. */
 export async function clearDeviceBootstrapTokens(
   params: BootstrapParams<"bootstrap.clear"> & { assertCurrent?: () => void } = {},
 ): Promise<DeviceBootstrapOperations["bootstrap.clear"]["output"]> {
@@ -292,7 +290,6 @@ export async function getBoundDeviceBootstrapContext(params: {
   );
 }
 
-/** Read the profile from already-bound bootstrap context. */
 export async function getBoundDeviceBootstrapProfile(
   params: Parameters<typeof getBoundDeviceBootstrapContext>[0],
 ): Promise<DeviceBootstrapProfile | null> {

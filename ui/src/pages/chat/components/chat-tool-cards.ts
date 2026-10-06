@@ -53,9 +53,6 @@ export function renderBrowserTabPreviews(
         .map((card) => ({ card, groupKey: group.key })),
     ),
   );
-  if (cards.length === 0) {
-    return [];
-  }
   // Select each tab's final state before collapsing reopened pages. A newer
   // blank/non-web result must still retire that tab's older web preview.
   const seenTabs = new Set<string>();
@@ -136,8 +133,6 @@ export function renderToolIcon(
   // SAFETY: Unknown display icon names produce undefined and use the fallback.
   return icons[name as IconName] ?? icons.puzzle;
 }
-
-// ── Kind-aware tool rows (command / read / edit / write / search / fetch) ──
 
 const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   read: "chat.toolCards.verbs.read",
@@ -486,9 +481,12 @@ export function renderToolCard(
   const workspaceFilePath = toolWorkspacePath(card, view);
   const isFileRow = Boolean(workspaceFilePath);
   const subagent = resolveSpawnedSubagent(card, opts.subagents?.subagentSessions);
-  const subagentKey = subagent?.session?.key;
-  const openSession = opts.subagents?.onOpenSession;
-  const openSubagent = subagentKey && openSession ? () => openSession(subagentKey) : undefined;
+  const subagentSession = subagent?.session;
+  // Only a subagent the panel lists can be shown there; any other opens its session.
+  const onOpenSubagent =
+    (subagentSession?.listed && opts.subagents?.onOpenSubagent) || opts.subagents?.onOpenSession;
+  const openSubagent =
+    subagentSession && onOpenSubagent ? () => onOpenSubagent(subagentSession.key) : undefined;
   // A link inside the row needs the row's own toggle beside it, not around it.
   const linkedRow = isFileRow ? "file" : openSubagent ? "subagent" : null;
   const rowContent = html`
