@@ -43,6 +43,8 @@ import type {
   SessionEntryCreateWithTranscriptResult,
   SessionEntryCommitContext,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
+import { createIncognitoSessionEntryWithTranscript } from "./session-incognito-entry-creation.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 type CreationScope = ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
@@ -63,6 +65,10 @@ export async function createSessionEntryWithTranscriptInScope<TError>(
     | SessionEntryCreateWithTranscriptPrepareResult<TError>,
   options: SessionEntryCreateWithTranscriptOptions,
 ): Promise<SessionEntryCreateWithTranscriptResult<TError>> {
+  const binding = captureIncognitoSessionBinding({ ...scope, storePath: scope.path });
+  if (binding) {
+    return createIncognitoSessionEntryWithTranscript(binding, scope, createEntry, options);
+  }
   const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
   const useWorker =
     isMainThread &&

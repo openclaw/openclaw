@@ -23,7 +23,7 @@ openclaw channels status --probe
 Healthy baseline:
 
 - `Runtime: running`
-- `Connectivity check: ok`
+- A successful connectivity check
 - `Capability: read-only`, `write-capable`, or `admin-capable`
 - Channel check shows transport connected and, where supported, `works` or `audit ok`
 

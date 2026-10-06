@@ -23,7 +23,7 @@ openclaw channels status --probe
 
 Healthy signals:
 
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity check: ok`, and a `Capability: ...` line.
+- `openclaw gateway status` shows `Runtime: running`, a successful connectivity check, and a `Capability: ...` line.
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, `works` or `audit ok`.
 
@@ -132,7 +132,7 @@ Most post-upgrade breakage is config drift or stricter defaults now being enforc
     Common signatures:
 
     - `refusing to bind gateway ... without auth` → non-loopback bind without a valid gateway auth path.
-    - `Connectivity check: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
+    - a failed connectivity check while runtime is running → gateway alive but inaccessible with current auth/url.
 
   </Accordion>
   <Accordion title="3. Pairing and device identity state changed">

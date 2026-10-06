@@ -188,9 +188,19 @@ it.each([false, true])(
     if (abandoned) {
       reconcileUpdateRunsInNativeKernelForTest();
     }
-    const broadcast = vi.fn();
+    const published = createDeferredCore();
+    const broadcast = vi.fn((event, payload) => {
+      if (
+        event === "update.run.changed" &&
+        payload.runId === runId &&
+        payload.status === "succeeded"
+      ) {
+        published.resolve();
+      }
+    });
     watcher = startUpdateRunWatcher({ lifecycle, broadcast, log: { warn: vi.fn() } });
-    await vi.waitFor(() => expect(getUpdateRun(runId)?.status).toBe("succeeded"));
+    await published.promise;
+    expect(getUpdateRun(runId)?.status).toBe("succeeded");
     expect(getUpdateRun(runId)).toMatchObject({
       reason: null,
       after: { version: "2026.9.4", buildId: "candidate-build" },

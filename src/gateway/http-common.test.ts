@@ -8,9 +8,12 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
 import type { GatewayAuthResult } from "./auth.js";
 import {
   readJsonBodyOrError,
+  retainGatewayHttpResponseWork,
   sendGatewayAuthFailure,
   sendInvalidRequest,
   sendJson,
@@ -310,6 +313,44 @@ describe("setSseHeaders", () => {
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
     setSseHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
+  });
+});
+
+describe("HTTP response root ownership", () => {
+  it("does not retain a response that disconnected during input preparation", async () => {
+    const before = getActiveGatewayRootWorkCount();
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    let release: (() => void) | undefined;
+    try {
+      await runWithGatewayRootWorkAdmissionForTest(async () => {
+        res.destroy();
+        expect(res.destroyed).toBe(true);
+        release = retainGatewayHttpResponseWork(res);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(before);
+    } finally {
+      release?.();
+    }
+  });
+
+  it("retains an ended response until its buffered final write finishes", async () => {
+    const before = getActiveGatewayRootWorkCount();
+    const res = new ServerResponse({ method: "POST" } as IncomingMessage);
+    let release: (() => void) | undefined;
+    try {
+      await runWithGatewayRootWorkAdmissionForTest(async () => {
+        res.end("final reply");
+        expect(res.writableEnded).toBe(true);
+        expect(res.writableFinished).toBe(false);
+        release = retainGatewayHttpResponseWork(res);
+      });
+      expect(getActiveGatewayRootWorkCount()).toBe(before + 1);
+      res.emit("finish");
+      expect(getActiveGatewayRootWorkCount()).toBe(before);
+    } finally {
+      release?.();
+      res.destroy();
+    }
   });
 });
 

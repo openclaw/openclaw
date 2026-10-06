@@ -26,13 +26,18 @@ A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
-When the parent turn has ended but subagents are still active, the chat shows
-**Waiting on subagents**. A single active child already loaded in the pane can
-be opened from its name beside the indicator. Elapsed time appears when the
-loaded history records a yield after the parent's last run began.
-Successful `sessions_yield` calls leave a quiet **Handed off and waiting** marker
-with a timestamp; it changes to **Resumed** when the conversation continues.
-Private continuation context stays hidden.
+When a turn hands off with `sessions_yield` and its subagents are still active,
+the working indicator stays under that reply and reads **Waiting on 3
+subagents**, counting down as they finish. When one is left it shows that
+subagent's name, which opens its session. Elapsed time counts from the handoff.
+If the turn ended without a handoff while subagents are still active, the same
+line follows the finished reply without elapsed time. Until the pane has loaded
+every child session, the line reads **Waiting on subagents**. Child sessions
+that are not subagents are counted without names once no subagent is left, as
+**Waiting on 2 sessions**. Once everything it waited on has finished, the line
+goes away until the agent resumes. Tool rows you opened stay open through the
+handoff. A successful `sessions_yield` leaves no marker in the transcript, and
+its private continuation context stays hidden.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,

@@ -616,6 +616,32 @@ describe("session branch diff stats", () => {
     }
   });
 
+  it.each([true, false])(
+    "refreshes stat-dirty binary files only in an owned checkout (owned=%s)",
+    async (refreshIndex) => {
+      await initializeFeatureBranch();
+      await writeFile("image.bin", Buffer.from([0, 1, 2, 3]));
+      await commit("binary fixture", "image.bin");
+      await trackRemote("main");
+      await trackRemote("feature");
+      const indexPath = path.join(root, ".git", "index");
+      const originalIndex = await fs.readFile(indexPath);
+      const tree = await resolveRevision("HEAD^{tree}");
+      await fs.utimes(path.join(root, "image.bin"), new Date(0), new Date(0));
+      const result = await runGitReadOperation({
+        type: "pull-request.branch-facts",
+        input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [], refreshIndex },
+      });
+      if (refreshIndex) {
+        expect(result).toBeUndefined();
+        expect(await fs.readFile(indexPath)).not.toEqual(originalIndex);
+        expect((await git("write-tree")).stdout.trim()).toBe(tree);
+      } else {
+        expect(await fs.readFile(indexPath)).toEqual(originalIndex);
+      }
+    },
+  );
+
   it("reports local changes without createUrl until the branch exists on origin", async () => {
     await initializeFeatureBranch();
     await appendCommit("a.txt", "two\n", "local only");

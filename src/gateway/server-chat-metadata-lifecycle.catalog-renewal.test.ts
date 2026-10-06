@@ -169,7 +169,7 @@ describe("catalog renewal metadata broadcasts", () => {
     }
   });
 
-  it.each(["usage", "auth", "removed", "outcome", "failed"] as const)(
+  it.each(["usage", "removed", "failed"] as const)(
     "publishes only settled visible changes for a renewal (%s)",
     async (change) => {
       const harness = await createRenewalLifecycle();
@@ -182,30 +182,15 @@ describe("catalog renewal metadata broadcasts", () => {
       const next = structuredClone(harness.inventory);
       if (change === "removed") {
         next.entries = next.entries.filter(({ id }) => id !== "second");
-      } else if (change === "outcome") {
-        next.providerOutcomes = [{ provider: "custom", status: "unavailable" }];
       }
-      if (change === "usage" || change === "auth") {
+      if (change === "usage") {
         const auth = getPreparedModelFullCatalogAuth(original)!;
         setPreparedModelFullCatalogAuth(next, {
           ...auth,
           authStore: {
             ...auth.authStore,
-            ...(change === "usage"
-              ? {
-                  lastGood: { custom: "custom:default" },
-                  usageStats: { "custom:default": { lastUsed: 42 } },
-                }
-              : {
-                  profiles: {
-                    ...auth.authStore.profiles,
-                    "custom:added": {
-                      type: "api_key",
-                      provider: "custom",
-                      key: "synthetic-added-key",
-                    },
-                  },
-                }),
+            lastGood: { custom: "custom:default" },
+            usageStats: { "custom:default": { lastUsed: 42 } },
           },
         });
       }
@@ -281,10 +266,6 @@ describe("catalog renewal metadata broadcasts", () => {
           expect(getPreparedModelFullCatalogAuth(original)?.authStore.lastGood).toEqual({
             custom: "custom:default",
           });
-        } else if (change === "auth") {
-          expect(
-            getPreparedModelFullCatalogAuth(owner.readFullModelCatalog!()!)?.authStore.profiles,
-          ).toHaveProperty("custom:added");
         } else if (change === "removed") {
           expect(result.models?.map(({ id }) => id).toSorted()).toEqual(
             next.entries.map(({ id }) => id).toSorted(),

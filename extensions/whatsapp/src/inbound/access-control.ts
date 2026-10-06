@@ -14,7 +14,7 @@ type BlockedInboundAccessControlResult = {
   admission?: never;
 };
 
-export type AcceptedInboundAccessControlResult = {
+type AcceptedInboundAccessControlResult = {
   allowed: true;
   shouldMarkRead: true;
   isSelfChat: boolean;

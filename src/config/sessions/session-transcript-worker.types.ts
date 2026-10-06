@@ -58,7 +58,6 @@ import type {
   SessionTranscriptReadScope,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type {
   SessionEntryCurrentFacts,
   SessionEntryCurrentSource,
@@ -123,15 +122,20 @@ import type {
   SessionTranscriptMaintenanceFacts,
 } from "./session-transcript-hydration.types.js";
 import type {
+  SessionColdMetadataWorkerInput,
+  SessionColdMetadataWorkerResult,
+  SessionColdStorageInventoryWorkerInput,
   SessionTranscriptInventoryWorkerInput,
   SessionTranscriptInventoryWorkerValues,
   SessionTranscriptInventoryReaders,
 } from "./session-transcript-inventory.types.js";
-import type { SessionTranscriptSearchResult } from "./session-transcript-search.types.js";
+import type { SessionTranscriptSearchReadResult } from "./session-transcript-search.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type {
   SessionTranscriptMatchWorkerInput,
   SessionTranscriptSearchWorkerInput,
+  SessionTranscriptSearchCurrentWorkerInput,
+  SessionProjectionStatusWorkerInput,
   SessionTranscriptAnchorsWorkerInput,
   SessionModelContextWorkerInput,
   SessionTranscriptWatermarkWorkerInput,
@@ -231,35 +235,10 @@ type SessionRowBackfillWorkerInput = {
   params: SessionRowTranscriptReadParams;
 };
 
-export type SessionColdMetadataWorkerInput = {
-  kind: "cold-metadata";
-  database: { agentId: string; path: string };
-  sessionId: string;
-  env: NodeJS.ProcessEnv;
-};
-
-export type SessionColdMetadataWorkerResult = {
-  kind: "cold-metadata";
-  archive: Omit<SessionColdArchive, "archive_blob"> | undefined;
-};
-
-type SessionColdStorageInventoryWorkerInput = {
-  kind: "cold-storage-inventory";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-};
-
 export type SessionRowPresenceWorkerInput = {
   kind: "session-row-presence";
   database: { agentId: string; path: string };
   scope: SessionAccessScope & { databaseAgentId: string };
-};
-
-type SessionProjectionStatusWorkerInput = {
-  kind: "projection-status";
-  database: { agentId: string; path: string };
-  env: NodeJS.ProcessEnv;
-  sessionId?: string;
 };
 
 export type SessionEntryCurrentWorkerInput = Omit<SessionEntryReadWorkerInput, "kind"> & {
@@ -393,6 +372,7 @@ export type SessionHistoryWorkerInput =
   | VoiceSessionsWorkerInput
   | SessionUsageCacheWorkerInput
   | SessionTranscriptSearchWorkerInput
+  | SessionTranscriptSearchCurrentWorkerInput
   | SessionTranscriptMatchWorkerInput;
 
 export type SessionTranscriptWorkerInput =
@@ -425,7 +405,8 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
     kind: "session-archive-pruning";
     result: PublishedSessionTranscriptArchive[];
   };
-  "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchResult };
+  "transcript-search": { kind: "transcript-search"; result: SessionTranscriptSearchReadResult };
+  "transcript-search-current": { kind: "transcript-search-current"; current: boolean };
   "transcript-match": { kind: "transcript-match"; result: { event: TranscriptEvent } | undefined };
   "cold-metadata": SessionColdMetadataWorkerResult;
   "cold-storage-inventory": {
@@ -580,7 +561,11 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders & {
   readColdStorageInventory: SessionHistoryReader<SessionColdStorageInventoryWorkerInput>;
   searchTranscripts: (
     params: SessionTranscriptSearchWorkerInput["params"],
-  ) => Promise<SessionTranscriptSearchResult>;
+  ) => Promise<SessionTranscriptSearchReadResult>;
+  isTranscriptSearchCurrent: SessionHistoryReader<
+    SessionTranscriptSearchCurrentWorkerInput,
+    boolean
+  >;
   generation: number;
   assertCurrent: () => void;
   run: (

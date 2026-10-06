@@ -31,11 +31,7 @@ export {
   resolveControlUiLinks,
   resolveLocalControlUiProbeLinks,
 } from "../gateway/control-ui-links.js";
-export {
-  detectBrowserOpenSupport,
-  openUrl,
-  resolveBrowserOpenCommand,
-} from "../infra/browser-open.js";
+export { detectBrowserOpenSupport, openUrl } from "../infra/browser-open.js";
 export { detectBinary } from "../infra/detect-binary.js";
 export { randomToken } from "./random-token.js";
 

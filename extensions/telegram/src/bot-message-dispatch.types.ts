@@ -62,7 +62,6 @@ export type CurrentTurnTranscriptFinal = Pick<
   NonNullable<Awaited<ReturnType<typeof readLatestAssistantTextByIdentity>>>,
   "text" | "openclawDelivery"
 > & { messageId?: string };
-export type TelegramScopedTranscriptSession = { sessionId: string; storePath: string };
 
 export type FreshTelegramSessionEntryLoader = ((
   agentId: string,
@@ -153,7 +152,7 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  verboseProgressActive: () => boolean;
+  verboseProgressActive: () => Promise<boolean>;
   previewLifecycle: LivePreviewLifecycle<ReplyPayload, number>;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

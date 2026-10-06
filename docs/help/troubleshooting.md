@@ -29,10 +29,8 @@ Good output, one line each:
 - `openclaw status` shows configured channels, no auth errors.
 - `openclaw status --all` produces a full, shareable report.
 - `openclaw gateway probe` shows `Reachable: yes`. `Capability: ...` is the
-  auth level the check proved; `Read check: limited - missing scope:
-operator.read` is degraded diagnostics, not a connect failure.
-- `openclaw gateway status` shows `Runtime: running`, `Connectivity check:
-ok`, and a plausible `Capability: ...`. Add `--require-rpc` to also require
+  auth level the check proved. Missing `operator.read` scope limits read diagnostics; it does not mean the connection failed.
+- `openclaw gateway status` shows `Runtime: running`, a successful connectivity check, and a plausible `Capability: ...`. Add `--require-rpc` to also require
   read-scope RPC proof.
 - `openclaw doctor` reports no blocking config/service errors.
 - `openclaw channels status --probe` returns live per-account transport state
@@ -214,7 +212,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Runtime: running`
-    - `Connectivity check: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - Channel shows transport connected and, where supported, `works` or
       `audit ok` in `channels status --probe`
@@ -242,7 +240,7 @@ Each branch is the title of an accordion below.
     Good output:
 
     - `Dashboard: http://...` shown in `openclaw gateway status`
-    - `Connectivity check: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
     - No auth loop in logs
 
@@ -272,7 +270,7 @@ Each branch is the title of an accordion below.
 
     - `Service: ... (loaded)`
     - `Runtime: running`
-    - `Connectivity check: ok`
+    - A successful connectivity check
     - `Capability: read-only`, `write-capable`, or `admin-capable`
 
     Log signatures:

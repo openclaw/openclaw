@@ -385,8 +385,8 @@ function resolveCurrentLibc(): string | undefined {
   return undefined;
 }
 
-function isUnsupportedOptionalLockPackage(value: unknown): boolean {
-  if (!isRecord(value) || value.optional !== true) {
+function isUnsupportedOptionalLockPackage(value: Record<string, unknown>): boolean {
+  if (value.optional !== true) {
     return false;
   }
   return (
@@ -413,16 +413,6 @@ function readLockPackageLocationName(location: string): string | undefined {
     return second ? `${first}/${second}` : undefined;
   }
   return undefined;
-}
-
-function readLockPackageName(location: string, value: unknown): string | undefined {
-  if (isRecord(value)) {
-    const packageName = readOptionalString(value.name);
-    if (packageName) {
-      return packageName;
-    }
-  }
-  return readLockPackageLocationName(location);
 }
 
 function resolveManagedNpmLockPackagePath(params: {
@@ -597,7 +587,7 @@ function collectNpmLockPeerDependencyPins(params: {
     ) {
       continue;
     }
-    const packageName = readLockPackageName(location, value);
+    const packageName = readOptionalString(value.name) ?? readLockPackageLocationName(location);
     if (packageName === "openclaw") {
       continue;
     }

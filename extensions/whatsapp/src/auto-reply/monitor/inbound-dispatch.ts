@@ -75,10 +75,6 @@ type VisibleReplyTarget = {
   } | null;
 };
 
-type ReplyThreadingContext = {
-  implicitCurrentMessage?: "default" | "allow" | "deny";
-};
-
 type SenderContext = {
   id?: string;
   name?: string;
@@ -382,7 +378,7 @@ export async function prepareWhatsAppInboundContext(params: {
   sender: SenderContext;
   transcript?: string;
   mediaTranscribedIndexes?: number[];
-  replyThreading?: ReplyThreadingContext;
+  replyThreading?: FinalizedMsgContext["ReplyThreading"];
   visibleReplyTo?: VisibleReplyTarget;
   suppressMessageReceivedHooks?: boolean;
   buildContext?: typeof buildChannelInboundEventContext;
@@ -858,11 +854,9 @@ export function createWhatsAppReplyPlan(params: {
     delivery,
     replyOptions,
     replyResolver: params.replyResolver,
-    finalize: (dispatchResult: {
-      observedReplyDelivery?: boolean;
-      queuedFinal?: boolean;
-      counts?: Partial<Record<ReplyDispatchKind, number>>;
-    }): boolean => {
+    finalize: (
+      dispatchResult: NonNullable<Parameters<typeof hasVisibleInboundReplyDispatch>[0]>,
+    ): boolean => {
       const didQueueVisibleReply = hasVisibleInboundReplyDispatch(dispatchResult);
       const didDeliverVisibleReply = didSendReply || dispatchResult.observedReplyDelivery === true;
 

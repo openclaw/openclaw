@@ -16,7 +16,9 @@ expensive jobs in `ci.yml`:
 - The published-npm-driver × candidate update cell, including on update-owner PRs.
 - Dependency/dead-export scanning (Knip) and the full runtime topology/architecture job.
   Runtime import-cycle checks remain in the existing PR guard; TypeScript changes
-  also select Madge there. See [scope selection](/ci/scope-and-routing/selection).
+  also select Madge there. TypeScript changes under `src/`, `extensions/`, or
+  `packages/` also select Kysely guardrails in that same job; generated Kysely
+  types remain deferred. See [scope selection](/ci/scope-and-routing/selection).
 - Android screenshot capture.
 
 The first four groups retain their existing hourly main-tier and full release

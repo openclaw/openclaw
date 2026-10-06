@@ -229,7 +229,8 @@ export type ChatItem =
       tone?: "danger";
       /** Collapse the body behind a disclosure; the label line stays visible. */
       collapsedBody?: true;
-      sessionsYield?: "waiting" | "resumed";
+      /** Structural only: separates a handed-off run from its resumption. Never rendered. */
+      handoffBoundary?: true;
     }
   | {
       kind: "divider";
@@ -257,6 +258,8 @@ export type ChatItem =
       kind: "reading-indicator";
       key: string;
       startedAt: number;
+      /** The run handed off and is idle; its subagents are what is still working. */
+      waitingOn?: "subagents";
       runId?: string;
       boundaryId?: string;
     }

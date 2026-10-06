@@ -162,17 +162,6 @@ function optionalStringRecordArg(input: unknown, key: string): Record<string, st
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
-function serverAllowsUtilityTool(
-  server: McpToolCatalog["servers"][string],
-  operation: string,
-  sessionDeniedOnly: boolean,
-): boolean {
-  return (
-    (server.deniedToolNames?.includes(operation) === true) === sessionDeniedOnly &&
-    isMcpToolAllowed(server.toolFilter, operation)
-  );
-}
-
 /**
  * Projects an already-listed MCP catalog into agent tools. Without `createExecute`,
  * the projected tools are inventory-only and throw if execution is attempted.
@@ -298,7 +287,11 @@ export function buildBundleMcpToolsFromCatalog(params: {
       },
     ) => {
       const { operation } = definition;
-      if (!server[capability] || !serverAllowsUtilityTool(server, operation, sessionDeniedOnly)) {
+      if (
+        !server[capability] ||
+        (server.deniedToolNames?.includes(operation) === true) !== sessionDeniedOnly ||
+        !isMcpToolAllowed(server.toolFilter, operation)
+      ) {
         return;
       }
       const execute = !sessionDeniedOnly

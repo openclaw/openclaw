@@ -249,6 +249,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
     case "gateway.event_loop.sample":
     case "diagnostic.gc":
     case "diagnostic.child_process.spawn":
+    case "worker.request":
     case "log.record":
     case "telemetry.exporter":
       // These events use separate exporters and are excluded by the subscription.
@@ -617,12 +618,6 @@ function listRecords(): DiagnosticStabilityEventRecord[] {
   return records;
 }
 
-function listExporterRecords(): DiagnosticStabilityEventRecord[] {
-  return [...getDiagnosticStabilityState().exporterRecords.values()].toSorted(
-    (left, right) => left.seq - right.seq,
-  );
-}
-
 function summarizeRecords(
   records: DiagnosticStabilityEventRecord[],
 ): DiagnosticStabilitySnapshot["summary"] {
@@ -731,6 +726,7 @@ export function startDiagnosticStabilityRecorder(): void {
         "gateway.event_loop.sample",
         "diagnostic.gc",
         "diagnostic.child_process.spawn",
+        "worker.request",
       ],
     },
   );
@@ -750,7 +746,9 @@ export function getDiagnosticStabilitySnapshot(options?: {
   const state = getDiagnosticStabilityState();
   const exporterQuery = options?.type === "telemetry.exporter";
   const { filtered, events } = selectRecords(
-    exporterQuery ? listExporterRecords() : listRecords(),
+    exporterQuery
+      ? [...state.exporterRecords.values()].toSorted((left, right) => left.seq - right.seq)
+      : listRecords(),
     options,
   );
   return {

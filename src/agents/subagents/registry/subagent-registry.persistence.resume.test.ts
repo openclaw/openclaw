@@ -19,7 +19,10 @@ import { closeOpenClawStateDatabaseForTest as closeSeedStateDatabase } from "../
 import "./subagent-registry.mocks.shared.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry-state.fixture.test-support.js";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import { registerSubagentDismissedRetentionCases } from "./subagent-registry.persistence.retention.test-support.js";
 import {
   gateSubagentRequesterSettlement,
@@ -32,7 +35,6 @@ import {
   writeChildSession,
 } from "./subagent-registry.persistence.test-support.js";
 import { registerStaleRequesterWakeBatchTests } from "./subagent-registry.persistence.wake.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type WakeRequester = typeof maybeWakeRequesterAfterAllChildrenSettled;

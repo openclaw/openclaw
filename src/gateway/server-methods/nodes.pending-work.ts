@@ -5,10 +5,7 @@ import {
   validateNodePendingDrainParams,
   validateNodePendingEnqueueParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  captureNodePairingGeneration,
-  isNodePairingGenerationCurrent,
-} from "../../infra/device-pairing-node-state.js";
+import { captureNodePairingGeneration } from "../../infra/device-pairing-node-state.js";
 import {
   drainNodePendingWork,
   enqueueNodePendingWork,
@@ -56,15 +53,19 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const generation = await captureNodePairingGeneration(nodeId);
-      if (!generation || !(await isNodePairingGenerationCurrent(generation))) {
+      const generation = context.nodeRegistry.get(nodeId)?.pairingGeneration;
+      if (
+        !generation ||
+        !client?.connId ||
+        !(await context.nodeRegistry.isConnectionCurrentPairingState(client.connId))
+      ) {
         respondPairingChanged(respond);
         return;
       }
       // Draining deletes work, so the authenticated caller must still be the
       // registry session that owns the persisted generation.
-      const session = context.nodeRegistry.getForPairingGeneration(nodeId, generation.key);
-      if (!client?.connId || session?.connId !== client.connId) {
+      const session = context.nodeRegistry.getForPairingGeneration(nodeId, generation);
+      if (session?.connId !== client.connId) {
         respondPairingChanged(respond);
         return;
       }
@@ -72,7 +73,7 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
       const drained = drainNodePendingWork(nodeId, {
         maxItems: p.maxItems,
         includeDefaultStatus: true,
-        pairingGeneration: generation.key,
+        pairingGeneration: generation,
       });
       respond(true, { nodeId, ...drained }, undefined);
     });

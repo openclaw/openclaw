@@ -192,12 +192,15 @@ export function createSessionRowProjectionContext(subagents: SubagentSessionList
       }
       if (row.subagentRevision !== subagentRevision) {
         row.materialized.source.childLinks = projectSessionRowChildLinks(readChildLinks(row));
-        row.materialized.row.swarm = buildSessionSwarmSummary(
+        const swarm = buildSessionSwarmSummary(
           current.subagentRuns.swarmRunsByRequesterSessionKey.get(row.key) ?? [],
           row.key,
           row.agentId,
           { includeChildren: true },
         );
+        if (!isDeepStrictEqual(row.materialized.row.swarm, swarm)) {
+          row.materialized.row.swarm = swarm;
+        }
         row.subagentRevision = subagentRevision;
       }
     },

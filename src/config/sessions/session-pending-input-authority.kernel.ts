@@ -1,4 +1,5 @@
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
@@ -15,7 +16,8 @@ export function readSessionPendingInputAuthorityFacts(
     return {
       agentId,
       storePath: database.path,
-      sessionKey,
+      // Authority uses the logical agent key; SQLite keeps the original stored key.
+      sessionKey: toAgentStoreSessionKey({ agentId, requestKey: sessionKey }),
       entry: readSessionEntryRow(database, sessionKey, "list")?.entry,
       readSource:
         typeof identity.identity === "string"

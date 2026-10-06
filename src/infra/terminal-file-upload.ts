@@ -351,11 +351,9 @@ async function scanUploads(
   return { bytes, directories };
 }
 
-async function runTerminalUploadCleanupRecovery(options?: {
-  tempRoot?: string;
-  retentionMs?: number;
-  nowMs?: number;
-}): Promise<void> {
+async function runTerminalUploadCleanupRecovery(
+  options: Parameters<typeof ensureTerminalUploadCleanup>[0],
+): Promise<void> {
   const requestedRoot = options?.tempRoot ?? resolveTerminalUploadRoot();
   let root = path.resolve(requestedRoot);
   try {

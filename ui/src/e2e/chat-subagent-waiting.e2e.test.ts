@@ -176,15 +176,24 @@ suite.define(() => {
             });
           }
         };
-        expect(await indicator.textContent()).toContain("Waiting on subagents");
         const childLink = indicator.getByRole("button", {
           name: "Backend implementation",
           exact: true,
         });
         await childLink.waitFor();
+        expect((await indicator.textContent())?.replace(/\s+/g, " ")).toContain(
+          "Waiting on Backend implementation",
+        );
         expect(await indicator.locator("openclaw-elapsed-time").count()).toBe(1);
         expect(await indicator.textContent()).not.toContain("output tokens");
-        await activePane.getByText("Handed off and waiting", { exact: true }).waitFor();
+        // The wait is the handed-off turn's own status: no marker, no second assistant row.
+        expect(
+          await activePane
+            .locator(".chat-group.assistant", { hasText: "Backend work is now delegated." })
+            .locator(".chat-working-indicator--subagents")
+            .count(),
+        ).toBe(1);
+        expect(await activePane.locator(".chat-notice").count()).toBe(0);
         await captureWaiting("light", 1280);
         await captureWaiting("dark", 1280);
         await captureWaiting("dark", 390);
@@ -204,7 +213,7 @@ suite.define(() => {
         await expect.poll(() => selectedTitle.textContent()).toBe("Backend implementation");
         await page.goBack();
         await expect.poll(() => selectedTitle.textContent()).toBe("Build the implementation");
-        await activePane.getByText("Handed off and waiting", { exact: true }).waitFor();
+        await activePane.locator(".chat-working-indicator--subagents").waitFor();
         await gateway.waitForRequest("sessions.list", {
           after: childRosterReads,
           match: childRosterQuery,
@@ -271,7 +280,7 @@ suite.define(() => {
           session: restartedChild,
           ancestorSessions: [waitingAgain],
         });
-        await indicator.getByText("Waiting on subagents", { exact: true }).waitFor();
+        await activePane.locator(".chat-working-indicator--subagents").waitFor();
         expect(await gateway.getRequests("sessions.list", { spawnedBy: parent.key })).toHaveLength(
           childReads,
         );
@@ -310,8 +319,8 @@ suite.define(() => {
             ".chat-pane-cache__pane--active .chat-working-indicator:not(.chat-working-indicator--subagents)",
           )
           .waitFor();
-        expect(await indicator.textContent()).not.toContain("Waiting on subagents");
-        await page.getByText("Resumed", { exact: true }).waitFor();
+        expect(await indicator.textContent()).not.toContain("Waiting on");
+        expect(await activePane.locator(".chat-notice").count()).toBe(0);
         if (artifactDir) {
           await page.screenshot({
             path: path.join(artifactDir, "resumed-dark-1280.png"),

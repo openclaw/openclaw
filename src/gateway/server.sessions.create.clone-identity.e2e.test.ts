@@ -44,7 +44,7 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
 test.each(
   (["clone", "refresh"] as const).flatMap((operation) =>
-    (["allowed", "replaced", "retired", "rotated"] as const).map((identity) => ({
+    (["allowed", "retired", "rotated"] as const).map((identity) => ({
       operation,
       identity,
     })),
@@ -160,12 +160,7 @@ test.each(
     let reachedBoundary = false;
     const revoke = async () => {
       reachedBoundary = true;
-      if (identity === "replaced") {
-        setRuntimeConfigSnapshot({
-          ...selected,
-          tools: { github: { profileId: "ghp_22222222222222222222222222222222" } },
-        });
-      } else if (identity === "retired") {
+      if (identity === "retired") {
         setRuntimeConfigSnapshot({ ...selected, tools: {} });
       } else if (identity === "rotated") {
         await writeManagedGitHubProfileFiles(

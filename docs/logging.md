@@ -200,6 +200,16 @@ openclaw gateway --verbose --ws-log full
 
 ### Steering and input cancellation
 
+Ordinary channel reply routing logs
+`steering rejected; applying follow-up policy` at warning level when steering
+falls back. The fixed `reason` code distinguishes an unavailable owner or
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
+Records include the channel, opaque session ID, and input or active run IDs when
+supplied. `disposition` distinguishes a follow-up policy decision, confirmed
+or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.
+These records omit message text, attachments, session keys, and raw exceptions.
+
 When retained reply-delivery state prevents steering, the Gateway logs
 `chat steering rejected; falling back to follow-up dispatch`. Its structured
 fields distinguish the incoming input's `runId` from `activeRunId` and record

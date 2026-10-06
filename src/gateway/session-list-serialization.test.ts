@@ -68,6 +68,39 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     expect(JSON.parse(firstWire).payload.sessions).toEqual(JSON.parse(secondWire).payload.sessions);
     expect(first.sessions).toBe(second.sessions);
     expect(first.owners).toBe(second.owners);
+    const projection = getSessionRowProjection(context)!;
+    const present = vi.spyOn(projection, "present");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const unrelated = createSubagentRunRecord({
+      runId: "unrelated-presentation",
+      childSessionKey: "agent:main:subagent:unrelated-presentation",
+      requesterSessionKey: "agent:main:unrelated-parent",
+      createdAt: start,
+    });
+    try {
+      for (const publish of [false, true]) {
+        if (publish) {
+          subagentRuns.set(unrelated.runId, unrelated);
+          subagentRuns.commitOwnership(unrelated);
+        }
+        const unchanged = await read(0, false);
+        expect(unchanged.sessions[0]).toBe(first.sessions[0]);
+        expect(present).not.toHaveBeenCalled();
+        expect(
+          clone.mock.calls.filter(
+            ([value]) =>
+              value !== null &&
+              typeof value === "object" &&
+              "key" in value &&
+              value.key === scope.sessionKey,
+          ),
+        ).toHaveLength(0);
+      }
+    } finally {
+      present.mockRestore();
+      clone.mockRestore();
+      subagentRuns.delete(unrelated.runId);
+    }
     const otherIdentity = await read(2, false);
     expect(otherIdentity.sessions).not.toBe(first.sessions);
     expect(otherIdentity.owners).not.toBe(first.owners);
@@ -188,7 +221,6 @@ it("shares encoded socket lists by identity and refreshes compact, published, an
     );
     const releaseForeground = retainSessionListForegroundWork();
     try {
-      const projection = getSessionRowProjection(context)!;
       // Creation also dirties the parent; only the clock may change between measured reads.
       await projection.ensureMaterialized();
       const readChildren = () =>

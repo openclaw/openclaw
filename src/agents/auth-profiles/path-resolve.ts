@@ -12,10 +12,9 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import type { SharedAuthStoreOwnership } from "./types.js";
 
 const SHARED_AUTH_STORE_OWNERSHIP_CACHE_LIMIT = 256;
-
-export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
 
 /** Pure producer facts; capturing a supplied runtime snapshot must not open SQLite. */
 export type AuthProfileOwnerScope = { stateDir: string; sharedMainDir: string };

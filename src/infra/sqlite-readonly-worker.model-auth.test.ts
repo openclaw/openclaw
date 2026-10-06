@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "../agents/auth-profiles/mutation-lineage.js";
 import { overlayRuntimeExternalOAuthProfiles } from "../agents/auth-profiles/oauth-shared.js";
@@ -20,6 +22,7 @@ import {
   loadAuthProfileStoreForRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfiles,
 } from "../agents/auth-profiles/store-runtime.js";
+import { receiveAuthProfileUpdateValue } from "../agents/auth-profiles/store-update-transfer.js";
 import { withAuthProfileStoreAgentDir } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
@@ -47,6 +50,7 @@ import {
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import * as sqliteWorker from "./sqlite-readonly-worker.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "./sqlite-worker-contract.js";
+import * as sqliteAdmission from "./sqlite-worker-operation-admission.js";
 import { runWithSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 
@@ -192,9 +196,28 @@ describe("model resolution auth row snapshots", () => {
         await runWithSqliteWorkerStateContext(context, () =>
           backend[SQLITE_WORKER_PREPARE_COMMAND]?.("authProfiles.read"),
         );
-        const rows = await runWithSqliteWorkerStateContext(context, () =>
-          backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
-        );
+        let rows: unknown;
+        // Corruption/eviction is under test; consume the real paired field transport in-process.
+        const handoff = vi
+          .spyOn(sqliteAdmission, "requestSqliteWorkerOperationAdmission")
+          .mockImplementation(({ stage: admissionStage, facts }) => {
+            if (
+              admissionStage !== "prepare" ||
+              !isRecord(facts) ||
+              facts.kind !== "auth-store-read" ||
+              !(facts.port instanceof MessagePort)
+            ) {
+              throw new Error("Expected the auth read field transport");
+            }
+            rows = receiveAuthProfileUpdateValue(facts.port);
+          });
+        try {
+          await runWithSqliteWorkerStateContext(context, () =>
+            backend.execute({ type: "authProfiles.read", input: { artifactPreserving: false } }),
+          );
+        } finally {
+          handoff.mockRestore();
+        }
         expect(injected).toBe(true);
         expect(rows).toMatchObject({ store: { status: "unreadable" }, cacheable: false });
         expect(

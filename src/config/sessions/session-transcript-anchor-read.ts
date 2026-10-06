@@ -129,7 +129,7 @@ export async function readSessionTranscriptAnchorsAsync(
       return empty;
     }
     return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPath: storePath },
+      { ...options, requestedPaths: [storePath] },
       async (owner) => {
         const read = async () => {
           const native = onRead ? getOpenClawAgentDatabaseIfOpen(options) : undefined;

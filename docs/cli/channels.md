@@ -78,7 +78,7 @@ such as `discord-archive` do not match `discord`.
 
 `channels status --probe` is the live path: on a reachable gateway it runs per-account
 `probeAccount` and optional `auditAccount` checks, so output can include transport
-state plus check results such as `works`, `check failed`, `audit ok`, or `audit failed`.
+state plus successful or failed account checks and audits.
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live check output.
 
@@ -273,7 +273,7 @@ Notes:
 - `--account` is only valid with `--channel`.
 - Each account check and diagnostics step has its own timeout. A stalled step is reported in both text and JSON output, and the command continues with the remaining accounts.
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
-- Checks are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without checks report `Check: unavailable`.
+- Checks are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without checks report that the live check is unavailable.
 
 ## Resolve names to IDs
 

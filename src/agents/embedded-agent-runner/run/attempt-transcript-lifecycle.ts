@@ -35,7 +35,6 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   let cleanupDrain: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
-  let teardownBudgetLogged = false;
   const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
 
   const createLifecycleOwner = (): LifecycleOwner => ({
@@ -127,20 +126,13 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       release();
     }
   };
-  const logTeardownBudgetExpiry = (): void => {
-    if (teardownBudgetLogged) {
-      return;
-    }
-    teardownBudgetLogged = true;
-    log.error(
-      `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
-        `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
-        `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
-    );
-  };
   const settleWithinTeardownBudget = async (operation: Promise<void>): Promise<void> => {
     if (!(await settlesWithin(operation, TRANSCRIPT_TEARDOWN_BUDGET_MS))) {
-      logTeardownBudgetExpiry();
+      log.error(
+        `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
+          `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
+          `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
+      );
     }
   };
   const beginCleanup = async (): Promise<void> => {

@@ -20,8 +20,8 @@ read_when:
 
   <a id="why-does-openclaw-gateway-status-say-runtime-running-but-connectivity-probe-failed" />
 
-  <Accordion title='Why does openclaw gateway status say "Runtime: running" but "Connectivity check: failed"?'>
-    "Running" is the **supervisor's** view (launchd/systemd/schtasks); the connectivity check is the CLI actually connecting to the gateway WebSocket. Trust these lines from `openclaw gateway status`: `Check target:` (the URL the check used), `Listening:` (what is actually bound on the port), `Last gateway error:` (common root cause when the process is alive but the port is not listening).
+  <Accordion title='Why does openclaw gateway status report a running process but a failed connection?'>
+    "Running" is the **supervisor's** view (launchd/systemd/schtasks); the connectivity check is the CLI actually connecting to the gateway WebSocket. In `openclaw gateway status`, compare the connection target URL with `Listening:` (what is actually bound on the port), and inspect `Last gateway error:` for the failure cause when the process is alive but the port is not listening.
   </Accordion>
 
   <Accordion title='Why does openclaw gateway status show "Config (cli)" and "Config (service)" different?'>

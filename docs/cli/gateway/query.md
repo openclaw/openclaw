@@ -309,9 +309,9 @@ openclaw gateway probe --port 18789
   <Accordion title="Interpretation">
     - `Reachable: yes` means at least one target accepted a WebSocket connect.
     - `Capability: read-only|write-capable|admin-capable|pairing-pending|connect-only` reports what the check could prove about auth, separate from reachability.
-    - `Read check: ok` means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
-    - `Read check: limited - missing scope: operator.read` means connect succeeded but read-scope RPC is limited. Reported as **degraded** reachability, not full failure.
-    - `Read check: failed` after `Connect: ok` means the WebSocket connected but follow-up read diagnostics timed out or failed — also **degraded**, not unreachable.
+    - A successful read check means read-scope detail RPC calls (`health`/`status`/`system-presence`/`config.get`) also succeeded.
+    - A read check limited by missing `operator.read` scope means connect succeeded but read-scope RPC is limited. Reported as **degraded** reachability, not full failure.
+    - A failed read check after `Connect: ok` means the WebSocket connected but follow-up read diagnostics timed out or failed — also **degraded**, not unreachable.
     - Like `gateway status`, this command reuses existing cached device auth but does not create first-time device identity or pairing state.
     - Exit code is non-zero only when no checked target is reachable.
 
@@ -476,6 +476,13 @@ openclaw gateway suspend --port 18999 --json
 The ready output includes the suspension ID, lease expiry, and the matching
 resume command. Common RPC options such as `--url`, `--token`, `--password`,
 `--timeout`, `--json`, and `--port` are supported.
+
+Suspension blocker messages name active root requests and include run IDs and
+session keys for chat runs and pending terminal writes. Each category lists up
+to eight holders, with an omitted count for the rest. `gateway.suspend.status`
+returns the same details while draining, and each draining observation writes
+one `DRAINING` line to the Gateway log. Pending final writes remain protected
+until their persistence owner settles, even after a chat client disconnects.
 
 ### `gateway resume <suspensionId>`
 

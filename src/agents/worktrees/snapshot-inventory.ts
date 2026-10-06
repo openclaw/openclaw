@@ -256,9 +256,11 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
     }
   }
   const isStagedInput = createStagedInputPathMatcher(await fsRoot(input.checkoutPath));
+  let untracked = 0;
   const otherNested = await inspectOtherPaths(input.checkoutPath, {
     unstattedIndexPaths: unstattedIndexPaths(index),
     untracked: async (entry) => {
+      untracked++;
       add(entry);
     },
     ignored: async (entry) => {
@@ -271,6 +273,10 @@ async function collectSnapshotInventory(input: SnapshotInput): Promise<SnapshotI
   if (otherNested || (await containsGitMarker(input.checkoutPath, paths.values()))) {
     throw new Error("nested git repositories cannot be snapshotted losslessly");
   }
+  await requestGitWorkerEffect({
+    type: "worktree.snapshot-inventory",
+    input: { tracked: sourcePaths.size, untracked },
+  });
   return { head, headPaths, paths };
 }
 

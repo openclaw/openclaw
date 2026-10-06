@@ -64,6 +64,7 @@ import {
 import {
   BASE_GATEWAY_BENCH_CONFIG,
   buildGatewayBenchChildArgs,
+  buildGatewayBenchCommand,
   CliArgumentError,
   createGatewayBenchEnv,
   hasHelpFlag,
@@ -72,6 +73,8 @@ import {
   resolveEntry,
   resolveOutputPath,
   parseCliArgs,
+  parseGatewayBenchRuntimeOptions,
+  type GatewayBenchRuntimeOptions,
   waitForInitialProbe,
   writeGatewayBenchConfig,
   writePluginFixtures,
@@ -259,11 +262,10 @@ type FailedBenchmarkAttempt = Extract<BenchmarkAttempt, { status: "failure" }> &
   index: number;
 };
 
-type CliOptions = {
+type CliOptions = GatewayBenchRuntimeOptions & {
   provider: "mock" | "openai";
   agentCount: number;
   agentWarmupTurns: number;
-  gatewayCpus?: string;
   browserHistoryMessages: number;
   browserSessionClicks: number;
   cadenceMs: number;
@@ -352,6 +354,7 @@ const VALUE_FLAGS = new Set([
   "--agent-count",
   "--agent-warmup-turns",
   "--gateway-cpus",
+  "--gateway-runtime",
   "--browser-history-messages",
   "--browser-session-clicks",
   "--cadence-ms",
@@ -395,6 +398,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     return value;
   };
   const options: CliOptions = {
+    ...parseGatewayBenchRuntimeOptions(flags),
     provider,
     agentCount: boundedInt("--agent-count", 1, MAX_AGENT_COUNT),
     browserHistoryMessages: boundedInt("--browser-history-messages", 80, 500),
@@ -432,7 +436,6 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
     streamChunkDelayMs: boundedInt("--stream-chunk-delay-ms", MOCK_RESPONSE_CHUNK_DELAY_MS, 30_000),
     subscribers: boundedInt("--subscribers", 0, MAX_CONCURRENCY, true),
     timeoutMs: boundedInt("--timeout-ms", DEFAULT_TIMEOUT_MS, 10 * 60_000),
-    gatewayCpus: flags.get("--gateway-cpus")?.[0],
     agentWarmupTurns: boundedInt("--agent-warmup-turns", 0, MAX_WARMUP, true),
     toolEvents: flags.has("--tool-events"),
     turnsPerSession: boundedInt("--turns-per-session", 1, MAX_TURNS_PER_SESSION),
@@ -442,9 +445,6 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
   };
   if (options.activitySummaryDiagnostics && provider !== "mock") {
     throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
-  }
-  if (options.gatewayCpus !== undefined && !/^\d+(?:,\d+)*$/u.test(options.gatewayCpus)) {
-    throw new CliArgumentError("--gateway-cpus requires comma-separated CPU numbers");
   }
   if (
     provider === "openai" &&
@@ -508,6 +508,7 @@ Options:
   --browser-session-clicks <n> Click n existing sessions and revisit one during load (default: 0, max: 20; requires built UI and Chromium)
   --concurrency <n>  Concurrent synthetic sessions (default: ${DEFAULT_CONCURRENCY})
   --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
+  --gateway-runtime <path> Gateway executable (default: the benchmark runtime)
   --agent-warmup-turns <n> Verified turns per active session in the same Gateway before load (default: 0, max: ${MAX_WARMUP})
   --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
   --control-plane   Also probe cron.list and cron.status during load
@@ -1863,37 +1864,29 @@ async function runGatewaySample(
           }
         }
       }
-      if (options.gatewayCpus && process.platform !== "linux") {
-        throw new Error("--gateway-cpus requires Linux taskset");
-      }
       const profiledArgs = options.cpuProfDir
         ? ["--cpu-prof", `--cpu-prof-dir=${options.cpuProfDir}`, ...gatewayArgs]
         : gatewayArgs;
-      gateway = spawn(
-        options.gatewayCpus ? "taskset" : process.execPath,
-        options.gatewayCpus
-          ? ["--cpu-list", options.gatewayCpus, process.execPath, ...profiledArgs]
-          : profiledArgs,
-        {
-          cwd: process.cwd(),
-          detached: process.platform !== "win32",
-          stdio: ["pipe", "pipe", "pipe", "ipc"],
-          env: {
-            ...createGatewayBenchEnv(fixtureRoot, configPath, {
-              caseEnv: {
-                ...(options.diagnosticsTimeline
-                  ? {
-                      OPENCLAW_DIAGNOSTICS: "timeline",
-                      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
-                    }
-                  : {}),
-                OPENCLAW_SKIP_CHANNELS: "1",
-              },
-            }),
-            OPENAI_API_KEY: live ? process.env.OPENAI_API_KEY : "gateway-concurrency-benchmark",
-          },
+      const command = buildGatewayBenchCommand(profiledArgs, options);
+      gateway = spawn(command.command, command.args, {
+        cwd: process.cwd(),
+        detached: process.platform !== "win32",
+        stdio: ["pipe", "pipe", "pipe", "ipc"],
+        env: {
+          ...createGatewayBenchEnv(fixtureRoot, configPath, {
+            caseEnv: {
+              ...(options.diagnosticsTimeline
+                ? {
+                    OPENCLAW_DIAGNOSTICS: "timeline",
+                    OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+                  }
+                : {}),
+              OPENCLAW_SKIP_CHANNELS: "1",
+            },
+          }),
+          OPENAI_API_KEY: live ? process.env.OPENAI_API_KEY : "gateway-concurrency-benchmark",
         },
-      );
+      });
       readGatewayProcess = observeBenchmarkChild(gateway);
       // A failed launch emits error instead of exit; reject into teardown before polling readiness.
       await once(gateway, "spawn");
@@ -3161,6 +3154,10 @@ async function main(): Promise<void> {
     turnsPerSession: options.turnsPerSession,
     agentWarmupTurns: options.agentWarmupTurns,
     gatewayCpus: options.gatewayCpus,
+    gatewayRuntime:
+      failedAttempt && options.activitySummaryDiagnostics
+        ? "[omitted in activity-summary diagnostics mode]"
+        : options.gatewayRuntime,
     visibleObserver: options.visibleObserver,
     workspaceFanout: options.workspaceFanout,
   };

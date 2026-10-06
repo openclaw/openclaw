@@ -8,7 +8,6 @@ import {
   readLocalGitHubPublicationWorktreeOwner,
   resolveLocalGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
-import { githubPublicationBaseLineageArgs } from "./github-publication-base.js";
 import { prepareGitHubPublicationContent } from "./github-publication-content.js";
 import {
   createGitHubPublicationExecutionIdentity,
@@ -53,6 +52,7 @@ import {
   readKnownGitHubPublicationPullRequestUrls,
   recoverGitHubPublicationWorkspace,
 } from "./github-publication-recovery.js";
+import { projectGitHubPublicationResult } from "./github-publication-store.js";
 import { prepareGitHubPublicationTarget } from "./github-publication-target.js";
 import { prepareGitHubPublicationWorkflowGuard } from "./github-publication-workflows.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
@@ -62,31 +62,17 @@ const PUBLICATION_MARKER = "OpenClaw-Publication";
 
 type PublicationRow = GitHubPublicationExecutionRow;
 
-function parseJsonObject(value: string, label: string): Record<string, unknown> {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch (error) {
-    throw new Error(`${label} returned invalid JSON`, { cause: error });
-  }
-  if (!isRecord(parsed)) {
-    throw new Error(`${label} returned an invalid response`);
-  }
-  return parsed;
-}
-
 /** Lost requester authority permits receipt reconciliation, never a publication retry. */
 export async function reconcileGitHubPublication<Row extends PublicationRow>(params: {
   initial: Row;
   identity?: GitHubPublicationIdentityOwner;
   validateCustody: () => boolean;
   pushOnly?: "observed" | "dispatched";
-  projectResult: (row: Row) => SessionGitHubPublicationResult;
   complete: (row: Row, result: SessionGitHubPublicationResult) => Row;
 }): Promise<SessionGitHubPublicationResult | undefined> {
   const row = params.initial;
   if (row.status === "published" || row.status === "failed") {
-    return params.projectResult(row);
+    return projectGitHubPublicationResult(row);
   }
   // Shared execution records these facts before dispatching any branch or PR write.
   if (
@@ -150,7 +136,7 @@ export async function reconcileGitHubPublication<Row extends PublicationRow>(par
   if (!url) {
     return undefined;
   }
-  return params.projectResult(
+  return projectGitHubPublicationResult(
     params.complete(row, {
       requestId: row.request_id,
       status: "published",
@@ -174,7 +160,6 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
   prepareAuthority?: () => Promise<void>;
   validateCustody: () => boolean;
   assertWorkflowChangesAllowed: () => void;
-  projectResult: (row: Row) => SessionGitHubPublicationResult;
   bindWorkspaceSnapshot: (input: {
     row: Row;
     sourceHeadCommit: string;
@@ -196,7 +181,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
 }): Promise<SessionGitHubPublicationResult> {
   const { initial } = params;
   if (initial.status === "published" || initial.status === "failed") {
-    return params.projectResult(initial);
+    return projectGitHubPublicationResult(initial);
   }
   let pullRequestPending = false;
   // A confirmed push can still leave its pull-request outcome unknown.
@@ -408,7 +393,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         transportEnv,
         "GitHub publication remote branch could not be verified.",
       );
-      const ancestry = await run(githubPublicationBaseLineageArgs(remoteHead, headCommit), {
+      const ancestry = await run(["git", "merge-base", "--is-ancestor", remoteHead, headCommit], {
         cwd: worktree.path,
       });
       if (ancestry.code === 1) {
@@ -463,7 +448,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     });
     const { assertAction } = content;
     const completePublished = (url: string, publishedHead: string) =>
-      params.projectResult(
+      projectGitHubPublicationResult(
         params.complete(row, {
           requestId: row.request_id,
           status: "published",
@@ -630,9 +615,16 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
         },
       );
       if (created.code === 0) {
-        pullRequestUrl = readNonBlankString(
-          parseJsonObject(created.stdout.toString("utf8"), "GitHub pull request creation").html_url,
-        );
+        let value: unknown;
+        try {
+          value = JSON.parse(created.stdout.toString("utf8"));
+        } catch (error) {
+          throw new Error("GitHub pull request creation returned invalid JSON", { cause: error });
+        }
+        if (!isRecord(value)) {
+          throw new Error("GitHub pull request creation returned an invalid response");
+        }
+        pullRequestUrl = readNonBlankString(value.html_url);
       }
       params.recordEffect?.("pull_request", pullRequestUrl ? { url: pullRequestUrl } : {});
       if (!pullRequestUrl) {
@@ -658,7 +650,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       throw error;
     }
     if (error instanceof GitHubPublicationAuthorityLostError && params.defer) {
-      return params.projectResult(params.defer(initial));
+      return projectGitHubPublicationResult(params.defer(initial));
     }
     if (
       params.interrupt &&
@@ -668,7 +660,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       // Unavailable observations cannot settle dispatched effects; only an owner's
       // definitive outcome ends recovery, retaining any already-recorded effects.
       assertAuthority();
-      return params.projectResult(params.interrupt());
+      return projectGitHubPublicationResult(params.interrupt());
     }
     // A head on entry belongs to an earlier attempt; current preparation updates row.
     // It can carry unconfirmed GitHub effects, not proof that a write was dispatched.
@@ -684,7 +676,7 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
       );
     }
     const failure = resolveGitHubPublicationFailure(error);
-    const result = params.projectResult(
+    const result = projectGitHubPublicationResult(
       params.complete(initial, {
         requestId: initial.request_id,
         status: "failed",

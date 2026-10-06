@@ -494,7 +494,7 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         },
         target: createTestUserTurnTranscriptTarget(),
       });
-      const queued = vi.spyOn(session.agent, "steer");
+      const queued = vi.spyOn(session.agent, "admitSteeringMessage");
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
       try {
         await session.steer("Expanded runtime prompt", withImage ? [image] : undefined, recorder);

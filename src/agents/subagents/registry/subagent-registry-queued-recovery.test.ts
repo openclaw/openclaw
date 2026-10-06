@@ -95,9 +95,14 @@ afterEach(async () => {
 async function readStored() {
   const reply = await executeExistingOpenClawStateRead(
     { env: state.env },
-    { type: "subagents.runs", scope: { kind: "all" } },
+    { type: "subagents.runs", scope: { kind: "page" } },
   );
-  if (!reply?.ok || reply.type !== "subagents.runs" || reply.projection) {
+  if (
+    !reply?.ok ||
+    reply.type !== "subagents.runs" ||
+    reply.projection ||
+    reply.page?.nextRunId !== null
+  ) {
     throw new Error("Queued recovery fixture could not read its durable registry");
   }
   return reply.runs;

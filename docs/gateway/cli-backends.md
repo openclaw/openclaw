@@ -603,6 +603,10 @@ fragments. Native stdout and MCP input are not included in these diagnostics.
 Stderr is supplemental display text only. It does not change the native error's
 retry, authentication, timeout, or fallback classification.
 
+On macOS and Linux, a broken input pipe preserves the process's exit error when
+the child exits during graceful shutdown. If OpenClaw must terminate the child,
+the original pipe error remains the failure; cancellation retains its own reason.
+
 | Symptom               | Fix                                                                                            |
 | --------------------- | ---------------------------------------------------------------------------------------------- |
 | CLI not found         | Put the CLI on the Gateway service's `PATH`, or update the owning plugin's registered command. |
