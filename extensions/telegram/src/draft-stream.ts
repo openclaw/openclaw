@@ -859,8 +859,12 @@ export function createTelegramDraftStream(params: {
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    // A lazy update replaces the pending one and carries no send authority.
+    // An accepted lazy update replaces the pending one and carries no send
+    // authority; stopped or final streams ignore it and keep the pending update's.
     updateLazy: (resolveText: () => string | undefined) => {
+      if (streamState.stopped || streamState.final) {
+        return;
+      }
       pendingPlatformSendAuthorization = undefined;
       requestedUpdates += 1;
       updateDraft({ resolveText });

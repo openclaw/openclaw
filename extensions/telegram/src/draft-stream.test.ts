@@ -1291,4 +1291,28 @@ describe("Telegram preview send authority", () => {
     expectNthPreviewSend(api, 2, "Next turn");
     expect(stream.isStopped()).toBe(false);
   });
+
+  it("keeps a final's authority for its resume attempt when a late lazy update is ignored", async () => {
+    const api = createMockDraftApi();
+    const firstFinalEdit = Promise.withResolvers<never>();
+    api.editMessageText.mockReturnValueOnce(firstFinalEdit.promise);
+    const stream = createDraftStream(api);
+    let authorized = true;
+    stream.update("Working");
+    await stream.flush();
+    stream.update("Final answer", {
+      assertPlatformSendAuthorized: () => {
+        if (!authorized) {
+          throw new Error("Send authority revoked");
+        }
+      },
+    });
+    const stopping = stream.stop();
+    await vi.waitFor(() => expect(api.editMessageText).toHaveBeenCalledOnce());
+    stream.updateLazy(() => "Late partial");
+    authorized = false;
+    firstFinalEdit.reject(Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" }));
+    await stopping.catch(() => undefined);
+    expect(api.editMessageText).toHaveBeenCalledOnce();
+  });
 });
