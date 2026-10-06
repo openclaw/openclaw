@@ -42,16 +42,7 @@ interface PolicyCompareOptions {
   readonly json?: boolean;
 }
 
-type PolicyCheckReport = {
-  readonly ok: boolean;
-  readonly attestation?: ReturnType<typeof createPolicyAttestation>;
-  readonly evidence: unknown;
-  readonly checksRun: number;
-  readonly checksSkipped: number;
-  readonly findings: readonly Record<string, unknown>[];
-  readonly expectedAttestationHash?: string;
-  readonly exitCode: 0 | 1;
-};
+type PolicyCheckReport = Awaited<ReturnType<typeof buildPolicyCheckReport>>;
 
 export function registerPolicyCli(program: Command): void {
   const policy = program.command("policy").description("Verify workspace policy conformance");
@@ -133,7 +124,7 @@ async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
 async function buildPolicyCheckReport(
   options: PolicyCheckOptions,
   ownerSurface: "policy check" | "policy watch",
-): Promise<PolicyCheckReport> {
+) {
   const severityMin =
     options.severityMin === undefined ? "info" : parseHealthFindingSeverity(options.severityMin);
   if (severityMin === null) {
@@ -302,12 +293,11 @@ function writePolicyCheckReport(report: PolicyCheckReport, options: PolicyCheckO
   } else {
     process.stdout.write(`policy check: ${report.findings.length} finding(s)\n`);
     for (const finding of report.findings) {
-      const where = typeof finding.path === "string" ? ` ${finding.path}` : "";
-      const line = typeof finding.line === "number" ? `:${finding.line}` : "";
-      const severity = typeof finding.severity === "string" ? finding.severity : "unknown";
-      const checkId = typeof finding.checkId === "string" ? finding.checkId : "unknown";
-      const message = typeof finding.message === "string" ? finding.message : "";
-      process.stdout.write(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
+      const where = finding.path !== undefined ? ` ${finding.path}` : "";
+      const line = finding.line !== undefined ? `:${finding.line}` : "";
+      process.stdout.write(
+        `  [${finding.severity}] ${finding.checkId}${where}${line} - ${finding.message}\n`,
+      );
     }
   }
 }
@@ -402,7 +392,7 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
-function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {
+function toAttestedJsonFinding(finding: HealthFinding) {
   return {
     checkId: finding.checkId,
     severity: finding.severity,
@@ -417,14 +407,14 @@ function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> 
   };
 }
 
-function toJsonFinding(finding: HealthFinding): Record<string, unknown> {
+function toJsonFinding(finding: HealthFinding) {
   return {
     ...toAttestedJsonFinding(finding),
     ...policyFindingMetadata(finding),
   };
 }
 
-function policyFindingMetadata(finding: HealthFinding): Record<string, unknown> {
+function policyFindingMetadata(finding: HealthFinding) {
   const metadata = POLICY_FIX_METADATA_BY_CHECK_ID.get(
     finding.checkId as (typeof POLICY_CHECK_IDS)[number],
   );

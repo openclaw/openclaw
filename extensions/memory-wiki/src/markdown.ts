@@ -36,7 +36,7 @@ export type WikiClaim = ReturnType<typeof normalizeWikiClaims>[number];
 type WikiPersonCard = ReturnType<typeof normalizeWikiPersonCard>;
 export type WikiRelationship = ReturnType<typeof normalizeWikiRelationships>[number];
 
-export type WikiPageFrontmatterError = {
+type WikiPageFrontmatterError = {
   relativePath: string;
   message: string;
 };

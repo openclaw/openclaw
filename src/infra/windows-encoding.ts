@@ -160,11 +160,9 @@ export function decodeWindowsOutputBuffer(params: {
 }
 
 /** Decodes a text file, preferring valid UTF-8 before the Windows system encoding. */
-export function decodeWindowsTextFileBuffer(params: {
-  buffer: Buffer;
-  platform?: NodeJS.Platform;
-  windowsEncoding?: string | null;
-}): string {
+export function decodeWindowsTextFileBuffer(
+  params: Parameters<typeof decodeWindowsOutputBuffer>[0],
+): string {
   return (
     decodeUtf16BomBuffer(params.buffer) ??
     decodeWindowsBufferWithFallback({
@@ -335,8 +333,8 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
   let index = buffer.length - 1;
   let continuationBytes = 0;
   while (index >= 0 && continuationBytes < 3) {
-    const byte = buffer.at(index);
-    if (byte === undefined || byte < 0x80 || byte > 0xbf) {
+    const byte = buffer.readUInt8(index);
+    if (byte < 0x80 || byte > 0xbf) {
       break;
     }
     continuationBytes += 1;
@@ -346,11 +344,7 @@ function getTrailingIncompleteUtf8Bytes(buffer: Buffer): Buffer {
     return buffer;
   }
 
-  const leadByte = buffer.at(index);
-  if (leadByte === undefined) {
-    return Buffer.alloc(0);
-  }
-  const sequenceLength = getUtf8SequenceLength(leadByte);
+  const sequenceLength = getUtf8SequenceLength(buffer.readUInt8(index));
   if (sequenceLength <= 1) {
     return Buffer.alloc(0);
   }

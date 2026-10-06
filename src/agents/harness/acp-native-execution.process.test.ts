@@ -311,19 +311,34 @@ it.for([
         const upstream: typeof import("acpx/runtime") = await import(
           pathToFileURL(require.resolve("acpx/runtime")).href
         );
-        const upstreamOperation =
-          operation === "model"
-            ? vi.spyOn(upstream.AcpxRuntime.prototype, "setModel")
-            : vi.spyOn(upstream.AcpxRuntime.prototype, "startTurn");
-        // The warmed manager queues this call before polling returns; the earlier native control stays held.
+        const upstreamEntered = createDeferred();
+        const method = operation === "model" ? "setModel" : "startTurn";
+        const originalOperation = upstream.AcpxRuntime.prototype[method];
+        const upstreamOperation = vi
+          .spyOn(upstream.AcpxRuntime.prototype, method)
+          .mockImplementation(
+            new Proxy(originalOperation, {
+              apply(target, receiver, args) {
+                upstreamEntered.resolve();
+                return Reflect.apply(target, receiver, args);
+              },
+            }),
+          );
+        // Observe upstream admission while the earlier native control keeps its queue occupied.
         run = runAgentHarnessAttempt(attempt.input);
         void run.catch(() => {});
-        await Promise.race([
-          expect.poll(() => upstreamOperation.mock.calls.length).toBe(1),
-          run.then((result) => {
-            throw new Error(`Attempt ended before native ${operation} boundary`, { cause: result });
-          }),
-        ]);
+        await withinTest(
+          Promise.race([
+            upstreamEntered.promise,
+            run.then((result) => {
+              throw new Error(`Attempt ended before native ${operation} boundary`, {
+                cause: result,
+              });
+            }),
+          ]),
+          signal,
+        );
+        expect(upstreamOperation).toHaveBeenCalledOnce();
         if (kind === "revoke") {
           attempt.close();
         }

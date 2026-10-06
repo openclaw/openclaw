@@ -93,7 +93,7 @@ export async function withSessionTranscriptReadSource<T>(
     };
     assertSource();
     return withSessionHistoryWorkerDatabase(
-      { ...options, requestedPath: storePath },
+      { ...options, requestedPaths: [storePath] },
       async (owner) => {
         const assertCurrent = () => {
           assertSource();

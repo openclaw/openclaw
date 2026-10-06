@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
@@ -13,13 +12,14 @@ import { resolveProviderConfigSecretInput } from "./model-auth-provider-config.j
 import { prepareModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import type {
+  ModelServiceTierObservation,
   PreparedAccountCatalogAccess,
   PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
 
-type ModelServiceTierObservation = NonNullable<ProviderCatalogOutcome["modelServiceTiers"]>[number];
+const SERVICE_TIER_OBSERVATION_TTL_MS = 5 * 60_000;
 function readDirectBinding(config: OpenClawConfig, provider: string) {
   const { providerConfig, ref } = resolveProviderConfigSecretInput(config, provider);
   return { apiKey: ref ?? providerConfig?.apiKey, auth: providerConfig?.auth };
@@ -30,12 +30,12 @@ type AccountCatalogCredential =
 type AccountCatalogObservation = AccountCatalogCredential & {
   result?: Promise<readonly ProviderCatalogOutcome[]>;
   outcomes?: readonly ProviderCatalogOutcome[];
-  modelServiceTiers?: readonly ModelServiceTierObservation[];
+  serviceTierObservations?: readonly (ModelServiceTierObservation & { expiresAt: number })[];
 };
 
 function matchesServiceTierRoute(
   observation: ModelServiceTierObservation,
-  route: Omit<ModelServiceTierObservation, "serviceTiers">,
+  route: Pick<ModelServiceTierObservation, "modelId" | "runtimeId" | "api" | "baseUrl">,
 ): boolean {
   return (
     observation.modelId === route.modelId &&
@@ -50,13 +50,61 @@ export function createPreparedAccountCatalogAccess(
   isCurrent: () => boolean,
   retirementSignal?: AbortSignal,
   config: OpenClawConfig = {},
+  onChanged?: () => void,
 ): PreparedAccountCatalogAccess {
   const ownerIsCurrent = () => !retirementSignal?.aborted && isCurrent();
   const accounts = new Map<string, AccountCatalogObservation>();
+  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  const scheduleExpiry = () => {
+    clearTimeout(expiryTimer);
+    expiryTimer = undefined;
+    if (!onChanged || !ownerIsCurrent()) {
+      return;
+    }
+    let nextExpiry = Infinity;
+    for (const account of accounts.values()) {
+      for (const observation of account.serviceTierObservations ?? []) {
+        nextExpiry = Math.min(nextExpiry, observation.expiresAt);
+      }
+    }
+    if (nextExpiry === Infinity) {
+      return;
+    }
+    expiryTimer = setTimeout(
+      () => {
+        expiryTimer = undefined;
+        if (!ownerIsCurrent()) {
+          return;
+        }
+        const now = Date.now();
+        let changed = false;
+        for (const account of accounts.values()) {
+          const previous = account.serviceTierObservations;
+          account.serviceTierObservations = previous?.filter(({ expiresAt }) => expiresAt > now);
+          changed ||= account.serviceTierObservations?.length !== previous?.length;
+        }
+        scheduleExpiry();
+        if (changed) {
+          onChanged();
+        }
+      },
+      Math.max(0, nextExpiry - Date.now()),
+    );
+    expiryTimer.unref();
+  };
+  const deleteAccount = (identityKey: string) => {
+    const observed = accounts.get(identityKey)?.serviceTierObservations?.length;
+    if (accounts.delete(identityKey)) {
+      scheduleExpiry();
+      if (observed) {
+        onChanged?.();
+      }
+    }
+  };
   const readAccount = (identityKey: string, credential: AccountCatalogCredential["credential"]) => {
     const account = accounts.get(identityKey);
     if (account && !isDeepStrictEqual(account.credential, credential)) {
-      accounts.delete(identityKey);
+      deleteAccount(identityKey);
       return undefined;
     }
     return account;
@@ -64,10 +112,23 @@ export function createPreparedAccountCatalogAccess(
   const createAccount = (identityKey: string, credential: AccountCatalogCredential) => {
     const account: AccountCatalogObservation = structuredClone(credential);
     accounts.set(identityKey, account);
-    pruneMapToMaxSize(accounts, 64);
+    for (const key of accounts.keys()) {
+      if (accounts.size <= 64) {
+        break;
+      }
+      deleteAccount(key);
+    }
     return account;
   };
-  retirementSignal?.addEventListener("abort", () => accounts.clear(), { once: true });
+  retirementSignal?.addEventListener(
+    "abort",
+    () => {
+      accounts.clear();
+      clearTimeout(expiryTimer);
+      expiryTimer = undefined;
+    },
+    { once: true },
+  );
   return {
     reconcileAuth(authStore, includesProvider, profileIds) {
       if (!ownerIsCurrent()) {
@@ -90,11 +151,11 @@ export function createPreparedAccountCatalogAccess(
           (includesProvider(account.credential.provider) || profileIds?.includes(profileId)) &&
           !isDeepStrictEqual(account.credential, credential)
         ) {
-          accounts.delete(identityKey);
+          deleteAccount(identityKey);
         }
       }
     },
-    readServiceTiers(params) {
+    readServiceTierObservation(params) {
       if (!ownerIsCurrent()) {
         return undefined;
       }
@@ -106,10 +167,12 @@ export function createPreparedAccountCatalogAccess(
       if (account?.source === "direct") {
         account = readAccount(params.identityKey, readDirectBinding(config, account.provider));
       }
-      const observation = account?.modelServiceTiers?.find((candidate) =>
+      const observation = account?.serviceTierObservations?.find((candidate) =>
         matchesServiceTierRoute(candidate, route),
       );
-      return observation && [...observation.serviceTiers];
+      return observation && observation.expiresAt > Date.now()
+        ? { requestedTier: observation.requestedTier, responseTier: observation.responseTier }
+        : undefined;
     },
     prepareServiceTierObserver(params) {
       const selected = params.selectedCredential;
@@ -148,19 +211,36 @@ export function createPreparedAccountCatalogAccess(
           ...observation,
           baseUrl: normalizeCatalogRouteBaseUrl(observation.baseUrl) ?? observation.baseUrl,
         };
-        const previous = captured.modelServiceTiers?.find((candidate) =>
-          matchesServiceTierRoute(candidate, route),
+        const now = Date.now();
+        const previous = captured.serviceTierObservations?.find(
+          (candidate) => candidate.expiresAt > now && matchesServiceTierRoute(candidate, route),
         );
-        if (isDeepStrictEqual(previous?.serviceTiers, observation.serviceTiers)) {
-          return false;
+        let changed = false;
+        captured.serviceTierObservations = (captured.serviceTierObservations ?? []).filter(
+          (candidate) => {
+            if (candidate.expiresAt <= now) {
+              changed = true;
+              return false;
+            }
+            return !matchesServiceTierRoute(candidate, route);
+          },
+        );
+        const matched = observation.requestedTier === observation.responseTier;
+        if (!matched) {
+          captured.serviceTierObservations = [
+            ...captured.serviceTierObservations.slice(-127),
+            { ...route, expiresAt: now + SERVICE_TIER_OBSERVATION_TTL_MS },
+          ];
         }
-        captured.modelServiceTiers = [
-          ...(captured.modelServiceTiers ?? [])
-            .filter((candidate) => !matchesServiceTierRoute(candidate, route))
-            .slice(-127),
-          { ...route, serviceTiers: [...observation.serviceTiers] },
-        ];
-        return true;
+        changed ||= matched
+          ? Boolean(previous)
+          : previous?.requestedTier !== observation.requestedTier ||
+            previous?.responseTier !== observation.responseTier;
+        scheduleExpiry();
+        if (changed) {
+          onChanged?.();
+        }
+        return changed;
       };
     },
     async acquire(params) {
@@ -170,7 +250,7 @@ export function createPreparedAccountCatalogAccess(
         );
       }
       if (params.allowDiscovery && params.refresh) {
-        accounts.delete(`profile:${params.profileId}`);
+        deleteAccount(`profile:${params.profileId}`);
       }
       const identityKey = `profile:${params.profileId}`;
       let observation = readAccount(identityKey, params.credential);
@@ -201,11 +281,11 @@ export function createPreparedAccountCatalogAccess(
       } catch (error) {
         // A revoked request cannot poison a later authorized selection of this account.
         if (current()) {
-          if (captured.modelServiceTiers?.length) {
-            // Catalog failure cannot erase a tier actually observed on the API route.
+          if (captured.serviceTierObservations?.length) {
+            // Catalog failure cannot erase a recent response observed on the API route.
             captured.result = undefined;
           } else {
-            accounts.delete(`profile:${params.profileId}`);
+            deleteAccount(`profile:${params.profileId}`);
           }
         }
         throw error;

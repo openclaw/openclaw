@@ -404,6 +404,9 @@ function startPendingSessionDeliveryRuntime(params: {
   const queueContext = captureOpenClawStateWorkerContext();
   const scheduler = params.scheduler.scope();
   const { signal } = scheduler;
+  const runDelivery = createScheduledGatewayRunner(
+    fenceScheduledGatewayContextResolver(params.resolveGatewayContext),
+  );
   let stopPromise: Promise<void> | undefined;
   let stopRuntime: (() => Promise<void>) | undefined;
   // Delay session continuation recovery so the gateway has time to publish ready state and
@@ -427,27 +430,27 @@ function startPendingSessionDeliveryRuntime(params: {
             scheduler: params.scheduler,
             queueContext,
             deliver: (entry, { queueContext: deliveryContext }) =>
-              deliverQueuedSessionDelivery({
-                deps: params.deps,
-                entry,
-                queueContext: deliveryContext,
-                ...(params.resolveGatewayContext
-                  ? { resolveGatewayContext: params.resolveGatewayContext }
-                  : {}),
-              }),
+              runDelivery(() =>
+                deliverQueuedSessionDelivery({
+                  deps: params.deps,
+                  entry,
+                  queueContext: deliveryContext,
+                  resolveGatewayContext: params.resolveGatewayContext,
+                }),
+              ),
             log: logRecovery,
             onSettled: settleQueuedSessionDelivery,
           });
           try {
-            await recoverPendingRestartContinuationDeliveries({
-              deps: params.deps,
-              queueContext,
-              log: logRecovery,
-              maxEnqueuedAt: params.maxEnqueuedAt,
-              ...(params.resolveGatewayContext
-                ? { resolveGatewayContext: params.resolveGatewayContext }
-                : {}),
-            });
+            await runDelivery(() =>
+              recoverPendingRestartContinuationDeliveries({
+                deps: params.deps,
+                queueContext,
+                log: logRecovery,
+                maxEnqueuedAt: params.maxEnqueuedAt,
+                resolveGatewayContext: params.resolveGatewayContext,
+              }),
+            );
           } finally {
             // Recovery and scheduling are independent safeguards. A transient
             // recovery failure must not leave persisted rows without timers.

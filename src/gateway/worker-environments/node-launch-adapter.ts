@@ -534,6 +534,15 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
               ? {
                   prepareLaunch: (node: NodeWorkerSupervisorNodeProof) => {
                     if (
+                      input.descriptor.assignment.inference === "runtime-local" &&
+                      node.workerHost.nativeInference !== 1
+                    ) {
+                      throw createNodeRunnerInventoryIssueError(
+                        node.nodeId,
+                        NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
+                      );
+                    }
+                    if (
                       node.workerHost.idleRetention === true &&
                       input.descriptor.admission.handshake.protocolFeatures.includes(
                         NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,

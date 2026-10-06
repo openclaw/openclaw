@@ -1924,6 +1924,41 @@ describe("previous release update compatibility", () => {
     expect(current.y()).toBe("npm");
   });
 
+  it("retains published cleanup-scope imports after package replacement", () => {
+    const target = "runtime-cleanup-abcdefgh.mjs";
+    const { root, inventory } = recordImportedFixture(
+      `(await import("./${target}")).runCliDisposerAfterPending()`,
+      {
+        [target]:
+          '//#region src/cli/runtime-cleanup.ts\nexport function runCliDisposerAfterPending() { return "old"; }\n',
+      },
+      undefined,
+      "src/cli/runtime-cleanup-scope.ts",
+    );
+    fsSync.unlinkSync(path.join(root, "dist", target));
+    write(
+      root,
+      "dist/current.mjs",
+      '//#region src/cli/runtime-cleanup.ts\nfunction runCliDisposerAfterPending() { return "current"; } export { runCliDisposerAfterPending as cleanup };\n',
+    );
+    writeUpdateCompatibilityChunks({
+      distDir: path.join(root, "dist"),
+      sourceDir: root,
+      inventory,
+    });
+    const result = childProcess.execFileSync(
+      testNodeExecPath,
+      [
+        "--input-type=module",
+        "-e",
+        'import { unlinkSync } from "node:fs"; import { fileURLToPath } from "node:url"; const scope = await import(process.argv[1]); unlinkSync(fileURLToPath(process.argv[1])); console.log(await scope.restart());',
+        pathToFileURL(path.join(root, "dist/command.js")).href,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.trim()).toBe("current");
+  });
+
   it("records emitted aliases and forwards old consumers to the current implementations", async () => {
     const inventory = recordFixture();
     expect(inventory.releases[0].chunks).toMatchObject([

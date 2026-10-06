@@ -23,6 +23,7 @@ import type { BoardSessionTarget, BoardStore } from "../../boards/board-store.js
 import { GITHUB_ACTIONS_GRANT_PREFIX } from "../../boards/github-actions-capability.js";
 import { readCanvasDocumentHtmlSource } from "../../canvas/documents.js";
 import { buildWidgetDocument } from "../../canvas/wrap.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import {
   resolveBoardWidgetContentKind,
   resolveBoardWidgetContentKindByPluginKind,
@@ -384,19 +385,24 @@ export function createBoardHandlers(
         const putWidget = () =>
           store.putWidget(boardParams, {
             ...(resolveMcpAppInteraction ? { resolveMcpAppInteraction } : {}),
-            assertCurrent: () => {
-              authority.assertActive();
-              identity?.assertSelected();
-              const cfg = context.getRuntimeConfig();
-              const current = resolveRequestedSessionStoreTarget(
-                cfg,
-                boardSession.sessionKey,
-                boardSession.agentId,
-              );
-              if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
-                throw new BoardValidationError("invalid_operation", "board session changed; retry");
-              }
-            },
+            assertCurrent: composeSessionSourceAssertion(
+              [identity?.assertSelected ?? authority.assertActive],
+              (assertSources) => {
+                assertSources();
+                const cfg = context.getRuntimeConfig();
+                const current = resolveRequestedSessionStoreTarget(
+                  cfg,
+                  boardSession.sessionKey,
+                  boardSession.agentId,
+                );
+                if (!current.ok || current.value.sessionKey !== boardSession.sessionKey) {
+                  throw new BoardValidationError(
+                    "invalid_operation",
+                    "board session changed; retry",
+                  );
+                }
+              },
+            ),
           });
         let snapshot = identity ? await identity.start(putWidget) : await putWidget();
         authority.assertActive();

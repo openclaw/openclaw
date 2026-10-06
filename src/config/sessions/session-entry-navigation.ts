@@ -186,9 +186,6 @@ export class SessionEntryNavigation<T extends SessionNavigationEntry> {
   }
 
   protected resolveOpaqueLeafTargetId(targetId: string | null): string | null {
-    if (targetId === null || this.byId.has(targetId)) {
-      return targetId;
-    }
     return this.resolveCanonicalParentId(targetId);
   }
 

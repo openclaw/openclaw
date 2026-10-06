@@ -57,7 +57,7 @@ function resolveSessionsListWindowLimit(limit: number | undefined, offset: numbe
   return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
 }
 
-function* selectSessionEntries(
+export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
   const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
@@ -358,31 +358,16 @@ export function prepareSessionRowSelection(
     storePath: selectedScope.path,
     userProfileIdentityById: rowContext.userProfileIdentityById,
     getRowContext: () => rowContext,
-    getTarget: (
-      key: string,
-    ):
-      | (SelectionTarget & {
-          storeKey?: string;
-          getModelFacts?: () => ReturnType<SessionRowProjection["modelFacts"]>;
-        })
-      | undefined => {
+    getTarget: (key: string): (SelectionTarget & { storeKey?: string }) | undefined => {
       const winner = selected.get(key);
-      if (!winner || (!opts.search && key === winner.key)) {
-        return winner;
-      }
-      const query = {
-        agentId: winner.agentId,
-        key: winner.key,
-        storePath: winner.storeTarget.storePath,
-      };
-      return {
-        ...winner,
-        ...(opts.search && projection.isMaterialized(query)
-          ? { materialized: projection.capture(query)?.materialized }
-          : {}),
-        ...(key !== winner.key ? { storeKey: winner.key } : {}),
-        getModelFacts: () => projection.modelFacts(query, prepared?.metadataPrepared === true),
-      };
+      return !winner || key === winner.key ? winner : { ...winner, storeKey: winner.key };
+    },
+    getModelFacts: (key: string) => {
+      const winner = selected.get(key)!;
+      return projection.modelFacts(
+        { agentId: winner.agentId, key: winner.key, storePath: winner.storeTarget.storePath },
+        prepared?.metadataPrepared === true,
+      );
     },
   };
 }
@@ -437,6 +422,8 @@ export function prepareProjectedSessionList(params: {
   now: number;
   metadataPrepared?: boolean;
   searchIdentities?: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>>;
+  /** Reused only within one admitted caller/configuration/profile authority epoch. */
+  visibility?: WeakMap<object, boolean>;
 }) {
   const { projection, opts, key: exactKey, context, client, now } = params;
   if (params.searchIdentities && params.searchIdentities.cfg !== projection.state.cfg) {
@@ -473,10 +460,14 @@ export function prepareProjectedSessionList(params: {
       : undefined,
     entryFilter: (key, entry) => {
       const row = getTarget(key);
-      const visible = Boolean(
-        row &&
-        (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
-      );
+      let visible = params.visibility?.get(entry);
+      if (visible === undefined) {
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
+        params.visibility?.set(entry, visible);
+      }
       return (
         visible &&
         (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&

@@ -151,11 +151,7 @@ type BundledStaticCatalogScopedLookup = {
   pluginIds: string[];
 };
 
-type BundledProviderStaticCatalogResolverParams = {
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
+type BundledProviderStaticCatalogResolverParams = Partial<BundledStaticCatalogParams> & {
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerIds?: readonly string[];
 };
@@ -164,13 +160,9 @@ type BundledProviderStaticCatalogResolverParams = {
  * Prepares a process-stable bundled manifest catalog lookup.
  * Manifest discovery runs once; provider-specific plans are cached on demand.
  */
-export function createBundledStaticCatalogModelResolver(params?: {
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  includeRuntimeDiscovery?: boolean;
-  metadataSnapshot?: PluginMetadataSnapshot;
-  workspaceDir?: string;
-}): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
+export function createBundledStaticCatalogModelResolver(
+  params?: Partial<BundledStaticCatalogParams> & { includeRuntimeDiscovery?: boolean },
+): (lookup: BundledStaticCatalogLookup) => ProviderRuntimeModel | undefined {
   const catalogParams = {
     cfg: params?.cfg,
     env: params?.env ?? process.env,
@@ -302,24 +294,15 @@ export function createBundledStaticCatalogModelResolver(params?: {
 
 /** Resolves one bundled static-catalog model row for provider/model lookup. */
 export function resolveBundledStaticCatalogModel(
-  params: BundledStaticCatalogLookup & {
-    cfg?: OpenClawConfig;
-    workspaceDir?: string;
-    env?: NodeJS.ProcessEnv;
-    includeRuntimeDiscovery?: boolean;
-    metadataSnapshot?: PluginMetadataSnapshot;
-  },
+  params: BundledStaticCatalogLookup &
+    Parameters<typeof createBundledStaticCatalogModelResolver>[0],
 ): ProviderRuntimeModel | undefined {
   return createBundledStaticCatalogModelResolver(params)(params);
 }
 
-function resolveBundledProviderStaticCatalogPluginIds(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): string[] {
+function resolveBundledProviderStaticCatalogPluginIds(
+  params: BundledStaticCatalogParams & { provider: string },
+): string[] {
   const pluginIds = resolveOwningPluginIdsForProviderRef({
     provider: params.provider,
     config: params.cfg,
@@ -664,13 +647,8 @@ export function createBundledProviderStaticCatalogContextResolver(
  * skip-discovery fallback aligned with model list/inspect without running live
  * discovery or untrusted workspace plugins.
  */
-export async function resolveBundledProviderStaticCatalogModel(params: {
-  provider: string;
-  modelId: string;
-  cfg?: OpenClawConfig;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): Promise<ProviderRuntimeModel | undefined> {
+export async function resolveBundledProviderStaticCatalogModel(
+  params: BundledStaticCatalogLookup & Partial<BundledStaticCatalogParams>,
+): Promise<ProviderRuntimeModel | undefined> {
   return createScopedBundledProviderStaticCatalogModelResolver(params)(params);
 }

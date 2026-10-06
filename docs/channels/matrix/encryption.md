@@ -74,7 +74,7 @@ With `--include-recovery-key`, text output confirms when a raw recovery key is a
 
 `Verified by owner` is `yes` only when `Cross-signing verified` is `yes`; local trust or an owner signature alone is not enough.
 
-`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured probes.
+`--allow-degraded-local-state` returns best-effort diagnostics without preparing the Matrix account first; useful for offline or partially-configured checks.
 
 ### Verify this device with a recovery key
 

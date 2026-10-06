@@ -36,7 +36,13 @@ type WorktreeService = Pick<
   | "retireSnapshot"
 >;
 
-function publicWorktreeRecord({ gcProtection: _gcProtection, ...record }: ManagedWorktreeRecord) {
+function publicWorktreeRecord(
+  { gcRetry: _gcRetry, ...record }: ManagedWorktreeRecord,
+  qualified = false,
+) {
+  if (!qualified) {
+    delete record.gcProtection;
+  }
   return record;
 }
 
@@ -124,7 +130,11 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         invalidParams(respond);
         return;
       }
-      respond(true, { worktrees: (await service.list()).map(publicWorktreeRecord) }, undefined);
+      respond(
+        true,
+        { worktrees: (await service.list()).map((record) => publicWorktreeRecord(record)) },
+        undefined,
+      );
     },
     "worktrees.create": async (opts) => {
       const { params, respond } = opts;
@@ -176,7 +186,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         runSetupScript: scopes.includes(ADMIN_SCOPE),
       });
       commitGuard?.();
-      respond(true, params.expectedOwnerId ? record : publicWorktreeRecord(record), undefined);
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
     },
     "worktrees.remove": async (opts) => {
       const { params, respond } = opts;
@@ -258,7 +268,7 @@ export function createWorktreesHandlers(service: WorktreeService): GatewayReques
         ...(commitGuard ? { commitGuard, signal: opts.signal } : {}),
       });
       commitGuard?.();
-      respond(true, params.expectedOwnerId ? record : publicWorktreeRecord(record), undefined);
+      respond(true, publicWorktreeRecord(record, Boolean(params.expectedOwnerId)), undefined);
     },
     "worktrees.branches": async (opts) => {
       const { params, respond } = opts;

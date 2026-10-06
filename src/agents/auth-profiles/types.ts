@@ -15,6 +15,17 @@ import type { LegacyOAuthRef } from "./legacy-oauth-ref.js";
 
 type InlineAuthProfileCredential = z.infer<typeof inlineAuthProfileCredentialSchema>;
 
+export type SharedAuthStoreOwnership = { location: "legacy-main" } | { location: "state-db" };
+
+/** Internal prepared ownership, carried through commit publication and compensation. */
+export type AuthProfileStoreOwner = {
+  databasePath: string;
+  sharedDatabasePath: string;
+  location: SharedAuthStoreOwnership["location"];
+};
+
+export type PreparedAuthProfileStoreOwner = AuthProfileStoreOwner & { env: NodeJS.ProcessEnv };
+
 /** Provider identifier recorded on auth profile credentials. */
 export type OAuthProvider = string;
 
@@ -181,6 +192,8 @@ export type RuntimeAuthProfileStore = AuthProfileStore & {
   /** Runtime-only built-in CLI winners; internal provenance, never exposed or persisted. */
   runtimeExternalCliProfileIds?: string[];
   runtimeLocalProfileIds?: string[];
+  /** Canonical local OAuth rows may be hidden by shared-store reconciliation. */
+  runtimeHasLocalOAuthProfiles?: boolean;
   /** Provider orders stored by this owner; [] means no local override, even with inherited priority. */
   runtimeLocalOrderProviderIds?: string[];
   runtimeInheritsMainState?: boolean;

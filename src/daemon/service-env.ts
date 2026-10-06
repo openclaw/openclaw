@@ -59,15 +59,6 @@ function readServiceSqliteEnvironment(
   };
 }
 
-function readServiceProxyEnvironment(
-  env: Record<string, string | undefined>,
-): Record<string, string | undefined> {
-  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
-  // generic shell proxy vars are audited but not frozen into services.
-  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
-  return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
-}
-
 function normalizeServicePathDir(dir: string | undefined): string | undefined {
   const trimmed = dir?.trim();
   // Service PATH snapshots are only emitted for macOS/Linux; keep POSIX semantics
@@ -163,31 +154,6 @@ function addExistingDir(
   }
 }
 
-// Nix shell precedence: rightmost profile in NIX_PROFILES = highest priority.
-// When NIX_PROFILES is absent, fall back to the default single-user profile.
-function addNixProfileBinDirs(
-  dirs: string[],
-  home: string,
-  env: Record<string, string | undefined> | undefined,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home">,
-  includeMissingDefault: boolean,
-  existsSync: (candidate: string) => boolean,
-): void {
-  const nixProfiles = env?.NIX_PROFILES?.trim();
-  if (nixProfiles) {
-    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
-      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), options);
-    }
-  } else {
-    const defaultProfileBin = `${home}/.nix-profile/bin`;
-    if (includeMissingDefault) {
-      dirs.push(defaultProfileBin);
-    } else {
-      addExistingDir(dirs, defaultProfileBin, existsSync);
-    }
-  }
-}
-
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return [
@@ -239,7 +205,18 @@ function resolveUserBinDirs(
   for (const directory of [".volta/bin", ".asdf/shims", ".bun/bin"]) {
     addExistingDir(dirs, `${home}/${directory}`, existsSync);
   }
-  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
+  // Nix gives the rightmost profile highest priority; otherwise use the default profile.
+  const nixProfiles = env?.NIX_PROFILES?.trim();
+  if (nixProfiles) {
+    for (const profile of nixProfiles.split(/\s+/).toReversed()) {
+      addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), pathOptions);
+    }
+  } else {
+    const defaultProfileBin = `${home}/.nix-profile/bin`;
+    if (includeMissingUserBinDefaults || existsSync(defaultProfileBin)) {
+      dirs.push(defaultProfileBin);
+    }
+  }
   // Preserve both the pnpm root (v10) and its bin subdirectory (v11) in order.
   for (const directory of [
     ".nvm/current/bin",
@@ -402,6 +379,8 @@ function buildCommonServiceEnvironment(
       : getMinimalServicePathPartsFromEnv({ env, platform, extraDirs: extraPathDirs }).join(
           path.posix.delimiter,
         );
+  // Generic shell proxy vars are audited but never frozen into services.
+  const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
@@ -409,7 +388,7 @@ function buildCommonServiceEnvironment(
     NODE_USE_SYSTEM_CA: startupTlsEnv.NODE_USE_SYSTEM_CA,
     OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR,
     OPENCLAW_CONFIG_PATH: env.OPENCLAW_CONFIG_PATH,
-    ...readServiceProxyEnvironment(env),
+    ...(proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {}),
     ...(minimalPath ? { PATH: minimalPath } : {}),
   };
 }

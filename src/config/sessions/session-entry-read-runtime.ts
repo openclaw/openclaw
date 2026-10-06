@@ -49,6 +49,7 @@ import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.j
 import type {
   SessionEntryWorkerRead,
   PreparedSessionEntryWorkerRead,
+  SessionStoreWorkerReadInput,
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
@@ -64,6 +65,7 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   maintenanceLane,
+  projectionLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -265,16 +267,6 @@ export async function readSessionEntryInWorker(
             }
           : { expectedCreationIdentity: targetIdentity },
       );
-      const assertRetainedTarget = () => {
-        execution.assertCurrent();
-        const currentIdentity = readDatabasePathIdentitySync(options.path);
-        if (
-          currentIdentity.key !== targetIdentity.key ||
-          currentIdentity.canonicalPath !== targetIdentity.canonicalPath
-        ) {
-          throw new Error("Session database identity changed while awaiting admission");
-        }
-      };
       const assertCurrent = () => {
         execution.assertCurrent();
         owner.assertCurrent();
@@ -301,8 +293,8 @@ export async function readSessionEntryInWorker(
       let entry: SessionEntry | undefined;
       try {
         entry = await runOpenClawAgentWorkerWrite(options, async () => {
-          await owner.refreshBeforeDispatch(assertRetainedTarget);
-          assertRetainedTarget();
+          await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+          execution.assertCurrent();
           await execution.prepare(source);
           return execution.runExisting(source, (worker) =>
             worker.execute({ type: "session.entry.read", input: { sessionKey } }),
@@ -537,10 +529,7 @@ type SessionStoreWorkerReader = Pick<
 };
 
 export async function withSessionStoreReaderInWorker<T>(
-  input: Omit<SessionStoreWorkerReadScope, "agentId"> & {
-    agentId?: string;
-    defaultAgentId?: string;
-  },
+  input: SessionStoreWorkerReadInput,
   read: (source: SessionStoreWorkerReader) => Promise<T>,
   {
     backing = false,
@@ -635,7 +624,7 @@ export async function withSessionStoreReaderInWorker<T>(
           (!logical || item.owner.receipt.agentId === database.agentId),
       )?.owner;
       return withSessionHistoryWorkerDatabase(
-        { ...database, env },
+        { ...database, requestedPaths: [storePath, sourcePath], env },
         async (reader) => {
           const sourceIdentity = prepareSource
             ? readDatabasePathIdentitySync(database.path)
@@ -715,7 +704,7 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
-        { lane },
+        { lane: lane ?? (input.projection === "sharing" ? projectionLane : undefined) },
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

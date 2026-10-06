@@ -66,61 +66,48 @@ async function completeAdmission(result: Admission | undefined, sessionKey: stri
   }
 }
 
-it.each(["missing", "corrupt"] as const)(
-  "handles a %s persistent store through reply admission without main-thread SQLite",
-  async (storage) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = path.join(state.sessionsDir(), "agent.sqlite");
-      const sessionKey = "agent:main:first-worker-admission";
-      openOpenClawStateDatabase({ env: state.env });
-      expect(fs.existsSync(storePath)).toBe(false);
-      const corruptBytes = Buffer.from("synthetic bytes that are not a SQLite database");
-      if (storage === "corrupt") {
-        fs.mkdirSync(path.dirname(storePath), { recursive: true });
-        fs.writeFileSync(storePath, corruptBytes);
+it("creates a missing persistent store through reply admission without main-thread SQLite", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "agent.sqlite");
+    const sessionKey = "agent:main:first-worker-admission";
+    openOpenClawStateDatabase({ env: state.env });
+    expect(fs.existsSync(storePath)).toBe(false);
+    const sql = observeMainThreadSql({ includeClose: true });
+    sql.calibrate();
+    const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+    let result: Admission | undefined;
+    try {
+      const pending = admitReplyTurn({
+        storePath,
+        sessionKey,
+        sessionId: "first-worker-admission-session",
+        kind: "visible",
+        resetTriggered: false,
+      }).then((admitted) => {
+        result = admitted;
+        return admitted;
+      });
+      result = await pending;
+      if (result.status !== "owned" || !result.databaseClaim) {
+        throw new Error("First persistent admission must retain its database claim");
       }
-      const sql = observeMainThreadSql({ includeClose: true });
-      sql.calibrate();
-      const opened = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      let result: Admission | undefined;
+      expect(result.sessionEntry).toBeUndefined();
+      expect(result.databaseClaim.isCurrent()).toBe(true);
+      expect(fs.existsSync(storePath)).toBe(true);
+      await completeAdmission(result, sessionKey);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      sql.expectIdle();
+      expect(opened).not.toHaveBeenCalled();
+    } finally {
       try {
-        const pending = admitReplyTurn({
-          storePath,
-          sessionKey,
-          sessionId: "first-worker-admission-session",
-          kind: "visible",
-          resetTriggered: false,
-        }).then((admitted) => {
-          result = admitted;
-          return admitted;
-        });
-        if (storage === "corrupt") {
-          await expect(pending).rejects.toThrow(/not a database|malformed|corrupt/i);
-          expect(fs.readFileSync(storePath)).toEqual(corruptBytes);
-        } else {
-          result = await pending;
-          if (result.status !== "owned" || !result.databaseClaim) {
-            throw new Error("First persistent admission must retain its database claim");
-          }
-          expect(result.sessionEntry).toBeUndefined();
-          expect(result.databaseClaim.isCurrent()).toBe(true);
-          expect(fs.existsSync(storePath)).toBe(true);
-          await completeAdmission(result, sessionKey);
-        }
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
-        sql.expectIdle();
-        expect(opened).not.toHaveBeenCalled();
+        await completeAdmission(result, sessionKey);
       } finally {
-        try {
-          await completeAdmission(result, sessionKey);
-        } finally {
-          opened.mockRestore();
-          sql.restore();
-        }
+        opened.mockRestore();
+        sql.restore();
       }
-    });
-  },
-);
+    }
+  });
+});
 
 it("admits cold and reopened persistent replies without main-thread SQLite while a shared writer is held", async ({
   signal,

@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { Model, SimpleStreamOptions, StreamFunction } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
   buildGoogleGenerateContentParams,
@@ -24,9 +24,9 @@ const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
 let toolCallCounter = 0;
 
 export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOptions> = (
-  model: Model<"google-vertex">,
-  context: Context,
-  options?: GoogleVertexOptions,
+  model,
+  context,
+  options,
 ) => {
   const stream = new AssistantMessageEventStream();
   const output = createAssistantOutput(model, "google-vertex");
@@ -45,9 +45,9 @@ export const streamGoogleVertex: StreamFunction<"google-vertex", GoogleVertexOpt
 };
 
 export const streamSimpleGoogleVertex: StreamFunction<"google-vertex", SimpleStreamOptions> = (
-  model: Model<"google-vertex">,
-  context: Context,
-  options?: SimpleStreamOptions,
+  model,
+  context,
+  options,
 ) => {
   const base = buildBaseOptions(model, options, undefined);
   return streamGoogleVertex(model, context, {

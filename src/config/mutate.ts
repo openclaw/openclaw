@@ -119,8 +119,7 @@ export type ConfigMutationIO = {
   env?: NodeJS.ProcessEnv;
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
   writeConfigFile: (
-    cfg: OpenClawConfig,
-    options?: ConfigWriteOptions,
+    ...args: Parameters<typeof writeConfigFile>
   ) => Promise<ConfigWriteResult | void>;
 };
 
@@ -179,11 +178,10 @@ export type ConfigMutationResult<T> = ConfigReplaceResult & {
   attempts: number;
 };
 
-type ConfigMutationOwnership = {
-  expectedConfigPath?: string;
-  ownedConfigPathForWrite?: string;
-  assertConfigPathForWrite?: () => void;
-};
+type ConfigMutationOwnership = Pick<
+  ConfigWriteOptions,
+  "expectedConfigPath" | "ownedConfigPathForWrite" | "assertConfigPathForWrite"
+>;
 
 function assertManagedRuntimeEnvGeneration(generation: number): void {
   if (getPublishedConfigRuntimeEnvState().generation !== generation) {
@@ -233,10 +231,7 @@ async function readConfigSnapshotForMutation(params: {
   ownedConfigPathForWrite?: string;
   io?: ConfigMutationIO;
   writeOptions?: ConfigWriteOptions;
-}): Promise<{
-  snapshot: ConfigFileSnapshot;
-  writeOptions: ConfigWriteOptions;
-}> {
+}): ReturnType<typeof readConfigFileSnapshotForWrite> {
   const options = {
     ...(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : {}),
     ...(params.writeOptions?.observe === false ? { observe: false } : {}),

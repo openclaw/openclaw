@@ -12,7 +12,10 @@ import { isSessionRunActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
-import type { SessionListTargetLookup } from "./session-list-target.js";
+import type {
+  SessionListModelFactsLookup,
+  SessionListTargetLookup,
+} from "./session-list-target.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,
@@ -79,6 +82,7 @@ export function createSessionListSearchMatcher(params: {
   search: string;
   identityNames?: ReadonlyMap<string, string>;
   getTarget: SessionListTargetLookup;
+  getModelFacts?: SessionListModelFactsLookup;
   modelCatalog?: SessionListModelCatalog;
   now: number;
   getRowContext: SessionListRowContextProvider;
@@ -156,10 +160,7 @@ export function createSessionListSearchMatcher(params: {
     if (matchesSessionListSearch([params.identityNames?.get(agentId)], search)) {
       return true;
     }
-    const source = expectDefined(
-      target.materialized?.source ?? target.getModelFacts?.(),
-      "prepared search row model facts",
-    );
+    const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
     // Derived model aliases are not agent-key matches.
     if (!search.startsWith("agent:")) {
       const subagentRun = context().subagentRuns.getDisplaySubagentRun(storeKey);
@@ -171,6 +172,7 @@ export function createSessionListSearchMatcher(params: {
         {
           allowPluginNormalization: false,
           manifestPlugins: metadataSnapshot,
+          configuredDefaultModelByAgent: context().configuredDefaultModelByAgent,
         },
       );
       const models: Array<string | undefined> = [];

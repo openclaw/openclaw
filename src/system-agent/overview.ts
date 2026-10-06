@@ -336,7 +336,7 @@ export function formatSystemAgentStartupMessage(overview: SystemAgentOverview): 
     `Config: ${configStatus}. Default agent: ${agentLabel}.`,
     overview.gateway.reachable
       ? `Gateway: reachable at ${overview.gateway.url}.`
-      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`,
+      : `Gateway: not reachable at ${overview.gateway.url}; I already did the first check.`,
     formatStartupAction(overview),
   ]
     .filter((line): line is string => line !== undefined)

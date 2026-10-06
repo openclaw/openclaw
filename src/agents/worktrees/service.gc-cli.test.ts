@@ -243,6 +243,9 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
       removed: idle.map((record) => record.id),
       orphansRetired: 1,
       retiredCheckoutPaths: [orphan!.path],
+      eligibleCount: 4,
+      deferredCount: 591,
+      failedCount: 0,
       protectedCount: 591,
       protectionReasons: {
         "owner is active": 390,

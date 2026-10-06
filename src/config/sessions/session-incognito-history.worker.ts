@@ -40,6 +40,7 @@ import type { IncognitoHistoryOperations } from "./session-incognito-history-con
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
+import { isSessionTranscriptIndexStatusClean } from "./session-transcript-index-status.worker.js";
 import { readSessionTranscriptMaintenance } from "./session-transcript-maintenance-read.js";
 import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import {
@@ -198,17 +199,22 @@ export function createIncognitoHistoryWorker(
           maxChars: command.input.maxChars,
         };
         break;
-      case "session.history.branches":
-        request = {
-          kind: "branch-summaries",
-          request: {
+      case "session.history.branches": {
+        const read = await prepareSessionHistoryReadOperation(
+          {
+            kind: "branch-summaries",
             database: physical,
-            sessionKey,
-            sessionId,
-            lifecycleRevision: command.input.lifecycleRevision,
+            request: {
+              sessionKey,
+              sessionId,
+              lifecycleRevision: command.input.lifecycleRevision,
+            },
           },
-        };
-        break;
+          database,
+        );
+        prepared = prepareHistoryRead(command.type, () => read().result);
+        return;
+      }
       case "session.history.context":
         request = {
           kind: "model-context",
@@ -227,12 +233,26 @@ export function createIncognitoHistoryWorker(
         break;
       case "session.history.search": {
         const { query, limit, match, role, order } = command.input;
-        request = {
-          kind: "transcript-search",
-          database: physical,
-          params: { ...target, sessionKeys: [sessionKey], query, limit, match, role, order },
-        };
-        break;
+        const { searchSessionTranscriptsReadOnlySync } =
+          await import("./session-transcript-search.js");
+        prepared = prepareHistoryRead(command.type, () => {
+          const {
+            found: _found,
+            revision: _revision,
+            ...result
+          } = searchSessionTranscriptsReadOnlySync(
+            { ...target, sessionKeys: [sessionKey], query, limit, match, role, order },
+            { ...physical, env },
+          );
+          return {
+            kind: "transcript-search",
+            result: {
+              ...result,
+              indexing: !isSessionTranscriptIndexStatusClean(database.db),
+            },
+          };
+        });
+        return;
       }
       case "session.history.watermark":
         request = { kind: "transcript-watermark", database: physical, scope: target };

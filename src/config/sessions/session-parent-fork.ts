@@ -11,6 +11,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -19,6 +20,7 @@ import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
+  resolveSqliteScope,
   formatLegacySqliteSessionMarkerForScope,
   resolveSqliteSessionKey,
   toDatabaseOptions,
@@ -157,7 +159,7 @@ function withForkWorkers<T>(
           captured ?? observed,
         );
         owners.push(owner);
-        return settleForkOwners([owner], () => operation(owner));
+        return settleForkOwner(owner, () => operation(owner));
       },
       guard,
     );
@@ -470,7 +472,9 @@ function withIncognitoForkWorkers<T>(
     owner: Pick<IncognitoParentForkBinding["source"], "actor" | "authority">,
   ): ForkOwner => {
     if (
-      path.resolve(scope.storePath) !== owner.actor.path ||
+      (path.resolve(scope.storePath) !== owner.actor.path &&
+        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope))) !==
+          owner.actor.path) ||
       (scope.agentId && scope.agentId !== owner.actor.agentId)
     ) {
       throw new Error("Incognito parent fork binding does not match its captured store");
@@ -521,34 +525,28 @@ function withIncognitoForkWorkers<T>(
   );
 }
 
-async function settleForkOwners<T>(
-  owners: Array<ReturnType<typeof captureForkWorker>>,
+async function settleForkOwner<T>(
+  owner: ReturnType<typeof captureForkWorker>,
   run: () => Promise<T>,
 ): Promise<T> {
   const outcome = await run().then(
     (value) => ({ ok: true as const, value }),
     (error: unknown) => ({ ok: false as const, error }),
   );
-  const failures: unknown[] = outcome.ok ? [] : [outcome.error];
-  for (const owner of owners) {
-    try {
-      await owner.execution.release();
-    } catch (error) {
-      failures.push(error);
+  try {
+    await owner.execution.release();
+  } catch (error) {
+    if (outcome.ok) {
+      throw error;
     }
-  }
-  if (failures.length > 1) {
     throw retainSqliteWorkerErrorCode(
       createSqliteLifecycleAggregateError(
-        failures,
+        [outcome.error, error],
         "Session fork and executor cleanup failed",
-        failures[0],
+        outcome.error,
       ),
-      failures[0],
+      outcome.error,
     );
-  }
-  if (failures.length) {
-    throw failures[0];
   }
   if (!outcome.ok) {
     throw outcome.error;

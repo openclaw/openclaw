@@ -169,6 +169,7 @@ export async function runPrimaryNativeCompactionInLanes<T>(
         requireCompactionWriterEntry(read.value, expectedEntry);
       },
     );
+    host.assertActive?.();
     return run();
   });
 }
@@ -346,6 +347,7 @@ export async function executeQueuedContextEngineCompaction(input: {
               expectedEntry,
               backendParams.abortSignal,
             );
+            writeContext.assertCommitAllowed();
             const clearClaim = setTranscriptBytePreflightClaim(
               backendParams.runtimeContext,
               transcriptBytePreflightAuthority,

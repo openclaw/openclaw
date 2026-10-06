@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { withOrderedSessionEntriesInWorker } from "../../config/sessions/session-entry-read-ordered.js";
 import type { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { PreparedSessionEntryWorkerRead } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { createSessionHistoryWorkerReaders } from "../../config/sessions/session-transcript-worker-readers.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
@@ -130,19 +131,21 @@ export function resetFollowupTurnTestState() {
       assertCurrent() {},
     });
   });
-  followupTurnTestState.withOrderedEntriesInWorker.mockImplementation(async ([input], consume) => {
-    const entry = await followupTurnTestState.readEntry();
-    return consume([
-      {
+  followupTurnTestState.withOrderedEntriesInWorker.mockImplementation(async (inputs, consume) => {
+    const reads: PreparedSessionEntryWorkerRead[] = [];
+    for (const input of inputs) {
+      const entry = await followupTurnTestState.readEntry();
+      reads.push({
         result: {
           kind: "session-exact-entries",
-          entries: entry ? [{ sessionKey: input!.sessionKeys![0]!, entry }] : [],
+          entries: entry ? [{ sessionKey: input.sessionKeys![0]!, entry }] : [],
           lifecycleTimestamps: {},
         },
-        database: { agentId: input!.agentId, path: input!.storePath, env: input!.env ?? {} },
+        database: { agentId: input.agentId, path: input.storePath, env: input.env ?? {} },
         assertCurrent: () => {},
-      },
-    ]);
+      });
+    }
+    return consume(reads);
   });
   followupTurnTestState.execute.mockResolvedValue({
     runId: "run-1",

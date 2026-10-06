@@ -34,7 +34,10 @@ import {
 } from "./openclaw-state-db-contract.js";
 import { assertExistingOpenClawStateRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
 import { openTrackedStateDatabaseResult } from "./openclaw-state-db-handle.js";
-import { invalidateOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
+import {
+  invalidateOpenClawStateRuntimeIntegrity,
+  type OpenClawStateIntegrityPolicy,
+} from "./openclaw-state-db-integrity-admission.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import type { OpenClawStateReadOnlyDatabase } from "./openclaw-state-read.types.js";
@@ -171,11 +174,16 @@ export type OpenClawStateSettledRead<T> =
   | { status: "available"; value: T }
   | { status: "unavailable"; error: unknown };
 
-export function assertStateReadSchema(database: DatabaseSync, pathname: string): void {
+export function assertStateReadSchema(
+  database: DatabaseSync,
+  pathname: string,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
+): void {
   assertStateReadSchemaForPolicy(
     database,
     pathname,
     isExistingOpenClawStateSchema(pathname, database),
+    integrityPolicy,
   );
 }
 
@@ -183,12 +191,14 @@ function assertStateReadSchemaForPolicy(
   database: DatabaseSync,
   pathname: string,
   existingSchema: boolean,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
   if (existingSchema) {
     assertExistingOpenClawStateRuntimeSchema(
       database,
       pathname,
       getSqliteWorkerStateIntegrityAdmission(),
+      integrityPolicy,
     );
   } else {
     assertSupportedStateSchemaVersion(database, pathname);

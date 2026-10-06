@@ -181,8 +181,9 @@ export function recordOpenClawAgentDatabaseRegistryMutation(
   }
 }
 
-/** Fence native registration settlement under its original shared generation. */
+/** Fence native registry settlement under its original shared generation. */
 export function captureOpenClawAgentDatabaseRegistration(params: {
+  kind?: AgentDatabaseRegistryMutation["kind"];
   agentId: string;
   agentPath: string;
   admission: OpenClawStateDatabaseReadAdmission;
@@ -191,7 +192,7 @@ export function captureOpenClawAgentDatabaseRegistration(params: {
 }) {
   const options = { path: params.admission.databasePath };
   const operation = Symbol("agent-registry-registration");
-  const mutation = captureRegistryMutation("upsert", [
+  const mutation = captureRegistryMutation(params.kind ?? "upsert", [
     { agentId: params.agentId, path: params.agentPath },
   ]);
   const advance = (phase: RegistryTransition["phase"]) => {

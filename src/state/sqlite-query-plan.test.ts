@@ -3,10 +3,7 @@ import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  deleteOrphanedTranscriptIndexRowsInTransaction,
-  hasOrphanedTranscriptIndexRows,
-} from "../config/sessions/session-transcript-index.js";
+import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessions/session-transcript-index.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
@@ -144,35 +141,30 @@ describe("sqlite hot query plans", () => {
         db.exec("ANALYZE sqlite_schema");
       }
 
-      const statements: { sql: string; kind: "read" | "delete" }[] = [];
-      const tracker = trackSqliteStatementExecutions(db, ["read", "delete"], (sql) => {
-        const kind = sql.startsWith("delete") ? "delete" : "read";
-        statements.push({ sql, kind });
-        return kind;
+      const statements: string[] = [];
+      const tracker = trackSqliteStatementExecutions(db, ["delete"], (sql) => {
+        statements.push(sql);
+        return "delete";
       });
       try {
-        expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
         db.exec("BEGIN IMMEDIATE");
         deleteOrphanedTranscriptIndexRowsInTransaction(db);
         db.exec("COMMIT");
-        expect(tracker.counts).toEqual({ read: 3, delete: 3 });
+        expect(tracker.counts).toEqual({ delete: 3 });
       } finally {
         tracker.restore();
       }
-      const activeStatements = statements.filter((statement) =>
-        statement.sql.includes('from "session_transcript_active_events"'),
+      const activeStatements = statements.filter((sql) =>
+        sql.includes('from "session_transcript_active_events"'),
       );
-      expect(activeStatements).toHaveLength(2);
-      for (const { sql, kind } of activeStatements) {
-        const params = kind === "read" ? [1] : [];
-        const plan = explainQueryPlan(db, sql, params);
+      expect(activeStatements).toHaveLength(1);
+      for (const sql of activeStatements) {
+        const plan = explainQueryPlan(db, sql);
         expect(plan).not.toContain("CORRELATED");
         expect(plan).toContain("USING COVERING INDEX");
-        if (kind === "delete" && statistics === "production") {
-          expect(plan).toMatch(/SEARCH session_transcript_active_events .*\(session_id=\?\)/);
-        }
         if (statistics === "production") {
-          const program = db.prepare(`EXPLAIN ${sql}`).all(...params);
+          expect(plan).toMatch(/SEARCH session_transcript_active_events .*\(session_id=\?\)/);
+          const program = db.prepare(`EXPLAIN ${sql}`).all();
           for (const table of ["session_transcript_active_events", "transcript_events"]) {
             const roots = new Set(
               db
@@ -197,11 +189,9 @@ describe("sqlite hot query plans", () => {
           VALUES ('orphan', 0, 0, 1);
         PRAGMA foreign_keys = ON;
       `);
-      expect(hasOrphanedTranscriptIndexRows(db)).toBe(true);
       db.exec("BEGIN IMMEDIATE");
       deleteOrphanedTranscriptIndexRowsInTransaction(db);
       db.exec("COMMIT");
-      expect(hasOrphanedTranscriptIndexRows(db)).toBe(false);
       expect(
         db.prepare("SELECT count(*) AS n FROM session_transcript_active_events").get(),
       ).toEqual({

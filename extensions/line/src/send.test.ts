@@ -476,7 +476,7 @@ describe("LINE send helpers", () => {
     pushMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "push-first" }, { id: "push-second" }],
     });
-    const result = await sendModule.sendMessageLine("line:user:U123", "Image caption", {
+    const result = await sendModule.pushMessageLine("line:user:U123", "Image caption", {
       cfg: LINE_TEST_CFG,
       verbose: true,
       mediaUrl: "https://example.com/original.jpg",
@@ -508,12 +508,18 @@ describe("LINE send helpers", () => {
     replyMessageMock.mockResolvedValueOnce({
       sentMessages: [{ id: "reply-first" }, { id: "reply-second" }],
     });
-    const result = await sendModule.sendMessageLine("line:group:C1", text, {
-      cfg: LINE_TEST_CFG,
-      replyToken: "reply-token",
-      mediaUrl: "https://example.com/media.jpg",
-      verbose: true,
-    });
+    await sendModule.replyMessageLine(
+      "reply-token",
+      [
+        {
+          type: "image",
+          originalContentUrl: "https://example.com/media.jpg",
+          previewImageUrl: "https://example.com/media.jpg",
+        },
+        { type: "text", text },
+      ],
+      { cfg: LINE_TEST_CFG, verbose: true },
+    );
 
     expect(replyMessageMock).toHaveBeenCalledTimes(1);
     expect(pushMessageMock).not.toHaveBeenCalled();
@@ -531,8 +537,26 @@ describe("LINE send helpers", () => {
         },
       ],
     });
-    expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual(expectedMediaSendResult("C1", ["reply-first", "reply-second"], 2));
+    expect(logVerboseMock).toHaveBeenCalledWith("line: replied with 2 messages");
+  });
+
+  it("preserves all accepted reply ids when activity recording fails", async () => {
+    replyMessageMock.mockResolvedValueOnce({
+      sentMessages: [{ id: "713452345678901234" }, { id: "713452345678901235" }],
+    });
+    recordChannelActivityMock.mockImplementationOnce(() => {
+      throw new Error("activity store unavailable");
+    });
+
+    const caught = await capturePartialDelivery(() =>
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
+        cfg: LINE_TEST_CFG,
+      }),
+    );
+    expect(caught.deliveryResult).toEqual({
+      messageIds: ["713452345678901234", "713452345678901235"],
+      visibleReplySent: true,
+    });
   });
 
   it("preserves a finalized push when activity recording fails", async () => {
@@ -663,7 +687,7 @@ describe("LINE send helpers", () => {
   });
 
   it("sends a bare audio URL using the kind inferred by the LINE media owner", async () => {
-    await sendModule.sendMessageLine("line:user:U123", "", {
+    await sendModule.pushMessageLine("line:user:U123", "", {
       cfg: LINE_TEST_CFG,
       mediaUrl: "https://example.com/voice.m4a",
     });
@@ -871,9 +895,8 @@ describe("LINE send helpers", () => {
     lineFetchMock.mockResolvedValueOnce(response);
 
     const caught = await captureError(() =>
-      sendModule.sendMessageLine("U123", "Hello", {
+      sendModule.replyMessageLine("reply-token", [{ type: "text", text: "Hello" }], {
         cfg: LINE_TEST_CFG,
-        replyToken: "reply-token",
       }),
     );
 

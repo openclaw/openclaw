@@ -212,7 +212,7 @@ function readChannelProbeErrors(health: unknown): Array<{ id: string; error: str
       return [];
     }
     const error = probe.error;
-    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+    return [{ id, error: typeof error === "string" && error.trim() ? error : "check failed" }];
   });
 }
 

@@ -24,7 +24,6 @@ import {
   type OutboundDeliveryFailureStage,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
-  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import type { QueuedReplyPayloadSendingHook } from "./delivery-queue-storage.js";
 import {
@@ -260,14 +259,9 @@ export function toOutboundDeliveryError(params: {
   });
 }
 
-export function suppressedPayloadOutcome(params: {
-  index: number;
-  reason: OutboundPayloadDeliverySuppressionReason;
-  hookEffect?: {
-    cancelReason?: string;
-    metadata?: Record<string, unknown>;
-  };
-}): OutboundPayloadDeliveryOutcome {
+export function suppressedPayloadOutcome(
+  params: Omit<Extract<OutboundPayloadDeliveryOutcome, { status: "suppressed" }>, "status">,
+): OutboundPayloadDeliveryOutcome {
   return {
     index: params.index,
     status: "suppressed",

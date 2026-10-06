@@ -6,17 +6,6 @@ import type {
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
 
-export function getRestartRecoveryReplayError(entry: SubagentRunRecord): string | undefined {
-  return entry.terminalOwner !== "interrupted-recovery" ||
-    entry.pauseReason === "sessions_yield" ||
-    entry.execution.status !== "terminal" ||
-    typeof entry.execution.endedAt !== "number" ||
-    entry.execution.outcome?.status !== "error" ||
-    entry.endedReason !== "subagent-error"
-    ? undefined
-    : (entry.execution.outcome.error ?? "subagent run interrupted by gateway restart");
-}
-
 export function isRestartRecoveryLifecycleCurrent(
   receipt: SubagentRestartRecoveryReceipt,
 ): boolean {

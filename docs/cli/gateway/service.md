@@ -45,6 +45,33 @@ keeps running; check `openclaw gateway status --deep` again before restarting it
 A crashed service or a foreign listener still produces a failure. Port ownership
 alone does not prove readiness or rule out warm-up.
 
+### Linux maintenance holds
+
+On Linux, `openclaw gateway stop` asks systemd to stop the unit. An explicit stop
+suppresses its `Restart=always` policy until the unit is started again; it does
+not disable startup at the next login or boot. `gateway stop --disable` is
+macOS-only. For non-interactive maintenance, use `openclaw gateway stop --force`.
+
+A systemd mask also refuses explicit starts. Keep masks under operator control:
+OpenClaw does not remove them automatically. If you masked the default user
+service for maintenance, remove the hold before updating:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope shown by `openclaw gateway status --deep` for a custom profile or system
+service. Unmask **before** running `openclaw update`: preflight refuses a masked
+managed unit before replacing files or running migrations. Doctor and status
+report the mask with the unmask command; Doctor does not remove the hold or offer
+to reinstall the masked unit.
+
+If a unit becomes masked during an update, the updater keeps the activated
+candidate and reports a service-definition warning. Remove the mask, run
+`openclaw gateway start`, and check `openclaw gateway status --deep`; the refused
+start does not prove the candidate unhealthy or the Gateway ready.
+
 ### Recover an unreadable native service definition
 
 If installation or a managed update reports `SERVICE_DEFINITION_UNKNOWN`, first

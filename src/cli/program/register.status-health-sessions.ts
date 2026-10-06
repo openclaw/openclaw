@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -8,13 +9,8 @@ import { ExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import type { SessionsImportOptions } from "../sessions-import.js";
 
-type SessionsListCliOptions = {
-  json?: boolean;
+type SessionsListCliOptions = Omit<Parameters<typeof sessionsCommand>[0], "limit"> & {
   verbose?: boolean;
-  store?: string;
-  agent?: string;
-  allAgents?: boolean;
-  active?: string;
   limit?: string;
 };
 
@@ -201,8 +197,8 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show model provider usage/quota snapshots", false)
     .option("--agent <id>", "Agent id for --usage auth scope")
-    .option("--deep", "Probe channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
-    .option("--timeout <ms>", "Probe timeout in milliseconds")
+    .option("--deep", "Check channels (WhatsApp Web + Telegram + Discord + Slack + Signal)", false)
+    .option("--timeout <ms>", "Check timeout in milliseconds")
     .option("--verbose", "Verbose logging", false)
     .option("--debug", "Alias for --verbose", false)
     .addHelpText(
@@ -215,9 +211,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
           ["openclaw status --usage", "Show model provider usage/quota snapshots."],
           [
             "openclaw status --deep",
-            "Run channel probes (WA + Telegram + Discord + Slack + Signal).",
+            "Run channel checks (WA + Telegram + Discord + Slack + Signal).",
           ],
-          ["openclaw status --deep --timeout 5000", "Tighten probe timeout."],
+          ["openclaw status --deep --timeout 5000", "Tighten check timeout."],
         ])}`,
     )
     .addHelpText("after", () => formatDocsHelp("/cli/status"))

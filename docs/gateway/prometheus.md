@@ -108,6 +108,7 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_gateway_rpc_handler_seconds`                    | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_admission_seconds`                  | histogram | `method`                                                                                  |
 | `openclaw_gateway_rpc_queue_wait_seconds`                 | histogram | `method`                                                                                  |
+| `openclaw_chat_send_phase_seconds`                        | histogram | `phase`, `stage` (`request` or `startup`)                                                 |
 | `openclaw_gateway_rpc_stage_seconds`                      | histogram | `method`, `phase`                                                                         |
 | `openclaw_gateway_rpc_stage_thread_cpu_seconds`           | histogram | `method`, `phase`                                                                         |
 | `openclaw_worktree_preparation_seconds`                   | histogram | `kind`, `template`, `outcome`, `phase`                                                    |
@@ -328,23 +329,38 @@ dispatch; `openclaw_worker_request_seconds{kind,request_class}` measures dispatc
 to reply or failure. Both use the existing duration histogram buckets. Cancellation
 before dispatch removes the queued request without adding a duration sample.
 
-Kinds are `identity`, `avatar`, `catalog`, `transcript`, `sqlite_read`,
-`sqlite_writer`, `state_read`, `cron`, `compute`, or `other`. Request classes are
-`task`, `open`, `close`, `execute`, `transcript_read`, `sessions`, `transcripts`,
-`domain_execute`, `plugin_state`, `auth_profiles`, `cron`, or `other`. Unknown commands collapse to
-these fixed families; session IDs, database paths, and caller names are never
-labels. This bounds the three metric families to 250 retained label sets, even
-if every kind/class combination occurs; the exporter's shared series cap still
+Task kinds use their registered runtime entrypoint names, such as `gitOperations`,
+`preparedModelCatalog`, `codeModeNode`, and `sessionTranscript`. Standalone bundled
+workers have fixed names such as `diskBudget`, `memorySearch`, and `teamReports`.
+Unrecognized SDK worker filenames use `extension`; arbitrary filenames and paths never become
+labels. This replaces the broad `compute` and `other` task buckets and renames
+previous grouped task kinds, so update queries that select those older labels.
+
+SQLite transport kinds remain `sqlite_read` and `sqlite_writer`. Request classes
+retain `open`, `close`, `transcript_read`, `sessions`, `transcripts`,
+`domain_execute`, `plugin_state`, `auth_profiles`, and `cron`. Other commands use a
+fixed operation family, such as `workerInference`, `capture`, or `diagnostic`.
+Audit writer, database lifecycle, and state lease commands have finer labels such
+as `audit.writer.process`, `database.inspectIdle`, and `stateLease.renew`.
+Unknown commands retain `execute`; unknown request classes become `other`.
+The allowlists bound cardinality without publishing session IDs, database paths,
+command suffixes, or caller-provided names. The exporter's shared series cap still
 applies.
 
 The `transcripts` request family includes canonical event appends and retention.
 
+Shared-state reads use kind `stateRead` (formerly `state_read`) and the same
+bounded operation-family classifier as SQLite writers. Examples include
+`devicePairing`, `acpSessions`, `workers`, and `cron`; standalone admission reads
+use `admit`. The read owner supplies the operation before queue admission, so
+queue wait and execution use the same class without labeling request payloads.
+
 Dispatch is the host scheduler's allocation of a slot, not a worker-side CPU
 timestamp. Request duration includes preparation, cold worker startup, transport,
 host exchanges, and I/O. General task pools report `task`; SQLite commands retain
-their bounded method family. These metrics do not separate individual pools with
-the same kind, and unscoped one-shot inspection subprocesses are outside the queue
-gauge. Identity and avatar pools share compute admission with other compute pools;
+their bounded operation family. These metrics do not separate individual pools
+for the same worker entrypoint, and unscoped one-shot inspection subprocesses are
+outside the queue gauge. Identity and avatar pools share compute admission with other compute pools;
 their queue wait does not by itself prove their own worker limit is too small.
 
 Observations use the existing asynchronous diagnostic queue and begin when a
@@ -360,6 +376,9 @@ histogram_quantile(0.99,
 
 # Request classes occupying dispatch slots for the most wall time
 sum by (kind, request_class) (rate(openclaw_worker_request_seconds_sum[5m]))
+
+# Shared-state read rate, by operation family
+sum by (request_class) (rate(openclaw_worker_request_seconds_count{kind="stateRead"}[5m]))
 ```
 
 ### Memory and process churn
@@ -591,6 +610,6 @@ OpenClaw supports both surfaces independently. You can run either, both, or neit
 ## Related
 
 - [Diagnostics export](/gateway/diagnostics) — local diagnostics zip for support bundles
-- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` probes
+- [Health and readiness](/gateway/health) — `/healthz` and `/readyz` checks
 - [Logging](/logging) — file-based logging
 - [OpenTelemetry export](/gateway/opentelemetry) — OTLP push for traces, metrics, and logs

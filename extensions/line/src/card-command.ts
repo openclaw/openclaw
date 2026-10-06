@@ -147,11 +147,7 @@ function parseReceiptItems(itemsStr: string): Array<{ name: string; value: strin
  * Parse quoted arguments from command string
  * Supports: /card type "arg1" "arg2" "arg3" --flag value
  */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
+function parseCardArgs(argsStrInput: string) {
   let argsStr = argsStrInput;
   const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
     type: "",

@@ -620,7 +620,7 @@ describe("context-engine turn outbox", () => {
       { agentId: otherDatabase.agentId, path: otherDatabase.path },
       () => undefined,
     );
-    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseAsync");
+    const databaseAccess = vi.spyOn(agentDatabase, "withOpenClawAgentDatabaseRuntime");
     const accessesToTarget = () =>
       databaseAccess.mock.calls.filter(([options]) => options.path === database.path);
     try {

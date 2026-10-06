@@ -153,7 +153,7 @@ describe("main session recovery execution identity state", () => {
     if (prepared.kind !== "reserved") {
       throw new Error("expected reservation");
     }
-    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
 
     expect(
       transitionMainSessionRecovery(entry, {
@@ -253,15 +253,8 @@ describe("main session recovery execution identity state", () => {
       runId: "recovery-1",
       executionIdentity: { state: "enabled" },
     });
-    expect(retry).toMatchObject({
-      kind: "reserved",
-      reservation: {
-        executionIdentityAdmission: {
-          kind: "retry-reference",
-          token: executionIdentity("recovery-1"),
-        },
-      },
-    });
+    expect(retry.kind).toBe("reserved");
+    expect(entry.mainRestartRecovery?.executionIdentity).toEqual(executionIdentity("recovery-1"));
   });
 
   it("does not propagate a previously retained token while collection is disabled", () => {
@@ -280,11 +273,7 @@ describe("main session recovery execution identity state", () => {
       executionIdentity: { state: "disabled" },
     });
 
-    expect(prepared).toMatchObject({ kind: "reserved" });
-    if (prepared.kind !== "reserved") {
-      throw new Error("expected reservation");
-    }
-    expect(prepared.reservation.executionIdentityAdmission).toBeUndefined();
+    expect(prepared.kind).toBe("reserved");
     expect(entry.mainRestartRecovery?.executionIdentity).toBeUndefined();
   });
 

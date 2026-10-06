@@ -82,6 +82,17 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ]);
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
+        if (event.phase === "catalog-observation") {
+          if (context) {
+            invalidateSharedReadResponses(context.broadcast, "chat.metadata.changed");
+            broadcastChatMetadataChanged(context, {
+              agentId: event.agentId,
+              modelCatalogChanged: true,
+              authChanged: false,
+            });
+          }
+          return;
+        }
         if (
           event.phase === "catalog-status" ||
           (event.phase === "catalog-published" &&

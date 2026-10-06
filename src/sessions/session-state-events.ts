@@ -54,7 +54,6 @@ import type {
   SessionStateWorkerOperations,
 } from "./session-state-events.worker-contract.js";
 import { enqueueSessionStateNotice } from "./session-state-notices.js";
-import { deleteSessionUpstreamLink } from "./session-upstream-links.js";
 import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
 
 export { sweepSessionStateWatchNotices } from "./session-state-events.sweep.js";
@@ -248,7 +247,6 @@ export async function handleSessionStateSessionDeleted(
   agentId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<void> {
-  deleteSessionUpstreamLink(sessionKey, agentId, options);
   try {
     await clearSessionState({ kind: "delete", sessionKey, agentId }, options);
   } catch (error) {

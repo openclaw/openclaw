@@ -11,10 +11,8 @@ import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/stor
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildGatewaySessionRow } from "../../gateway/session-utils-row.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  disposeOpenClawAgentDatabaseByPath,
-} from "../../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -31,7 +29,7 @@ beforeAll(() => {
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
-  disposeOpenClawAgentDatabaseByPath(storePath);
+  await disposeOpenClawAgentDatabaseByPath(storePath);
   await closeOpenClawAgentDatabasesAsync(root);
   fs.rmSync(root, { recursive: true, force: true });
 });

@@ -1,5 +1,4 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveConfiguredGitHubHost } from "../../agents/github-host.js";
 import {
@@ -128,7 +127,6 @@ function createGitHubReadHandler<T>(
       rawAgentId: params.agentId,
       respond,
       cfg: context.getRuntimeConfig(),
-      normalize: normalizeOptionalString,
     });
     if (!resolved) {
       return;

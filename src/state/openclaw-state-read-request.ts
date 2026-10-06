@@ -242,6 +242,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "workerPlacements.changeSnapshot") {
     return bytes + stringBytes(command.profileIds ?? []);
   }
+  if (command.type === "workers.placementEnvironmentOwner") {
+    return bytes + Buffer.byteLength(command.environmentId, "utf8");
+  }
   if (command.type === "tui.lastSession.read") {
     return bytes + Buffer.byteLength(command.stateKey, "utf8");
   }

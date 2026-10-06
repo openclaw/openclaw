@@ -1,5 +1,4 @@
 // Gateway service lifecycle command core: install, uninstall, start, stop, restart.
-import type { Writable } from "node:stream";
 import { readBestEffortConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
@@ -42,12 +41,12 @@ type ServiceLifecycleOptions = DaemonLifecycleOptions & {
   restartIntent?: GatewayRestartIntent;
 };
 
-type StartPostCheckContext = {
+type StartPostCheckContext = Pick<
+  ReturnType<typeof createDaemonActionContext>,
+  "stdout" | "warnings" | "fail"
+> & {
   json: boolean;
-  stdout: Writable;
-  warnings: string[];
   warn?: (message: string) => void;
-  fail: ReturnType<typeof createDaemonActionContext>["fail"];
 };
 
 type RestartPostCheckContext = StartPostCheckContext & {
@@ -62,12 +61,7 @@ type ServiceRecoveryResult<TResult extends "started" | "stopped" | "restarted"> 
   loaded?: boolean;
 };
 
-type ServiceRecoveryContext = {
-  json: boolean;
-  stdout: Writable;
-  warn?: (message: string) => void;
-  fail: (message: string, hints?: string[]) => void;
-};
+type ServiceRecoveryContext = Omit<StartPostCheckContext, "warnings">;
 
 type ServiceStartRepairContext = ServiceRecoveryContext & {
   state: GatewayServiceState;
