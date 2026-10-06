@@ -887,7 +887,7 @@ export class NodeRegistry {
             ok: false,
             error: {
               code: "NOT_CONNECTED",
-              message: "node connection changed during connectivity probe",
+              message: "node connection changed during connectivity check",
             },
           };
     const eventTransport = this.eventTransportsByConn.get(node.connId);
@@ -929,7 +929,7 @@ export class NodeRegistry {
       const onClose = () =>
         finish({
           ok: false,
-          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity probe" },
+          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity check" },
         });
       const onError = (err: unknown) =>
         finish({
@@ -937,14 +937,14 @@ export class NodeRegistry {
           error: {
             code: "UNAVAILABLE",
             message:
-              err instanceof Error ? err.message : "node socket error during connectivity probe",
+              err instanceof Error ? err.message : "node socket error during connectivity check",
           },
         });
       const timer = setTimeout(
         () =>
           finish({
             ok: false,
-            error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+            error: { code: "TIMEOUT", message: "node connectivity check timed out" },
           }),
         timeout,
       );

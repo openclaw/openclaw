@@ -43,7 +43,7 @@ a supporting build returns. No transcript backfill or rewrite is required.
 
 Admitted agent and cached shared-state handles retain their schema version and
 table facts. The handle owner revokes these facts after local DDL or transaction
-rollback. A fresh `PRAGMA data_version` probe observes foreign commits on the next
+rollback. A fresh `PRAGMA data_version` check observes foreign commits on the next
 unpinned read, even within the same event-loop turn. On a foreign commit, the owner
 compares `schema_version` and `user_version` in one pinned snapshot and retains
 facts and their revision when both are unchanged. Data-only commits therefore
@@ -105,7 +105,7 @@ remain canonical; the nonunique index is derived. The canonical writable schema
 owner atomically rebuilds a mismatched definition during admission, including its
 integrity checks. No per-request repair or extra index is added. The rebuild uses
 startup I/O and temporary disk proportional to retained queue history, including
-a probe index and its replacement. Subsequent writes maintain the same index count.
+a check index and its replacement. Subsequent writes maintain the same index count.
 Older same-version writable owners can rebuild their queue-first definition on
 downgrade or binary rollback without changing rows; strict read-only validation
 may reject the changed index until that writable owner repairs it. Counts, null
@@ -121,7 +121,7 @@ admission accepts a missing index; the shared-state canonical-index owner
 installs or repairs it on writable open, and the feature's first-use schema
 includes it. The schema fast path detects missing or drifted indexes before
 admitting the handle. Construction on existing databases scans the table and
-uses temporary disk for the repair owner's probe and final index. Subsequent
+uses temporary disk for the repair owner's check and final index. Subsequent
 writes maintain index entries only for non-null IDs. Stored content, retention,
 permissions, and transaction ownership are unchanged. Older same-version
 readers ignore the additional nonunique index, so binary rollback leaves both

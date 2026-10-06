@@ -480,7 +480,7 @@ export const createDoctorHandlers = (
         agentId,
         embedding: {
           ok: false,
-          error: `gateway memory probe failed: ${formatError(err)}`,
+          error: `gateway memory check failed: ${formatError(err)}`,
         },
       };
       respond(true, payload, undefined);

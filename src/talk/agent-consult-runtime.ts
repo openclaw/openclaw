@@ -394,6 +394,7 @@ export async function consultRealtimeVoiceAgent(params: {
   fastMode?: RunEmbeddedAgentParams["fastMode"];
   timeoutMs?: number;
   toolsAllow?: string[];
+  toolBindings?: RunEmbeddedAgentParams["toolBindings"];
   extraSystemPrompt?: string;
   fallbackText?: string;
   abortSignal?: AbortSignal;
@@ -551,6 +552,7 @@ export async function consultRealtimeVoiceAgent(params: {
         toolResultFormat: "plain",
         execSession: sessionEntry,
         toolsAllow: params.toolsAllow,
+        toolBindings: params.toolBindings,
         timeoutMs,
         runId,
         lane: params.lane,

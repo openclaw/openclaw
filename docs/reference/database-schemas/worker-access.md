@@ -972,8 +972,12 @@ successor. Binding renewal continues during queue waits, drains before transacti
 entry, and stays quiesced through settlement. Separate shared-state and agent receipts
 prevent a binding deletion receipt from publishing a successful session deletion.
 Unknown outcomes block reuse of that native generation and never replay the write.
-Initialization facts and ACP finalizers become eligible only after acknowledged agent
-COMMIT. Opaque released SDK callbacks and incognito retain their native routes.
+ACP finalizers become eligible only after acknowledged agent COMMIT. Initialization
+rollback and opaque released SDK mutations retain native planning and transactions:
+their synchronous authority callbacks may reread the same agent database. Their
+authority checks stay live through the native transaction; initialization is consumed
+only after COMMIT. Ordinary host-minted binding participants retain the worker route,
+and incognito retains its native owner.
 The existing cross-database crash window, schemas, retention, and update behavior
 are unchanged; no migration is required.
 
@@ -1293,7 +1297,7 @@ an explicit retry still uses the durable tombstones and retained lineage. Index
 planning and vector inspection use the same retrieval worker and captured store
 target. Indexed memory text stays with that reader; the host receives only selected
 chunk identities, source paths, and counts. Preview remains noncreating, and native
-vector inspection closes its probe and read-only connection before replying.
+vector inspection closes its check and read-only connection before replying.
 Forget's corpus discovery requests read-only metadata without unused transcript
 revisions. Durable session summaries use the existing retained history worker,
 preserving captured store selection and classification without writable bootstrap.
@@ -1537,7 +1541,7 @@ publish after the enclosing transaction commits and are discarded on rollback.
 
 Personal model-account success and failover-failure bookkeeping use typed reductions
 in the existing `authProfiles` shared-state worker. The host captures the physical
-store before provider probes or writer admission; the synchronous transaction
+store before provider checks or writer admission; the synchronous transaction
 rereads current usage and refuses changed credentials. Both host and worker use
 the same usage reducers, and provider observations retain their credential and
 block-generation checks. Transaction and commit grants recheck live host authority
@@ -1629,14 +1633,23 @@ file cache even if ordinary result delivery fails; uncertain writes are never
 replayed. Explicit agent deletion and Doctor relocation retain their existing
 transaction owners. Schemas, retention, durability, and update behavior are unchanged.
 
-Session branch summaries retain compact counts and headlines in the transcript
-read worker, keyed by physical database identity and the transcript rewrite/append
-watermark. After a complete scan verifies unique indexed identities and backward
-ancestry, ordinary message appends extend the active summary using only the new
-sequence range. Rewrites, navigation changes, and legacy or irregular graphs use
-the complete scanner. First reads still scale with transcript length; cached
-append refreshes scale with new messages and branch count. No schema, stored
-transcript, retention, or configuration changes are required.
+Session branch summaries retain compact counts, headlines, and their append
+certificate in the host, keyed by physical database identity and the transcript
+rewrite/append watermark. Read workers validate that snapshot before extending
+it, so worker retirement does not discard the cache. Workers also adopt the host's
+live database validation receipt before canonical admission, preserving pending-row
+checks without repeating whole-store validation. Branch reads share the existing
+maintenance reader's prewarming, thirty-minute idle window, database custody, and
+memory-pressure retirement. They no longer start a dedicated worker after short
+idle gaps, and foreground history retains its separate reader. Branch identity and lifecycle
+reads use metadata without loading saved prompts or diff snapshots. After a complete scan
+verifies unique indexed identities and backward ancestry, linear canonical
+appends, including metadata, extend the active summary from the new sequence
+range. Rewrites, navigation changes, and legacy or irregular graphs use the
+complete scanner. First reads still scale with transcript length; cached append
+refreshes scale with new entries and branch count. Startup and memory-pressure
+retirement can still require worker creation. No schema, stored transcript, data
+retention, or configuration changes are required.
 
 Proxy capture sessions, events, payload compression, queries, and purge operations
 execute through the shared-state worker. Bundled HTTP and WebSocket capture
@@ -1760,11 +1773,11 @@ session work, and the exact placement before draining. Those synchronous guards
 remain separate migration work; suspension policy and teardown are unchanged.
 
 Disk-space monitoring discovers placement identities in the same reader, then
-hydrates their current records through the existing placement projection. Probe
+hydrates their current records through the existing placement projection. Check
 order remains the database's session-ID order. Live row checks still prune old
-observations and reject samples from an owner replaced during a tunnel probe;
+observations and reject samples from an owner replaced during a tunnel check;
 those synchronous checks remain separate migration work. Disk-pressure thresholds,
-probe limits, and notification behavior are unchanged.
+check limits, and notification behavior are unchanged.
 
 Worker session-tool grants and operation journals use the same shared-state
 writer. The placement authority owner publishes committed tool grants and fences
@@ -1868,7 +1881,7 @@ Ordinary lifecycle upserts read their selected rows and pending-archive fact in
 one read-worker snapshot. A matching physical database with no pending archives
 skips recovery; archive-producing mutations, native scopes, and Doctor transfers
 retain publication. Later foreign archive commits are visible to the next snapshot.
-Standalone recovery probes reuse the read worker without archive or writer admission.
+Standalone recovery checks reuse the read worker without archive or writer admission.
 Maintenance finalization takes writer admission only when its worker requests native
 access, then rechecks current entries and retains admission through commit publication.
 
@@ -1939,7 +1952,7 @@ work. Schemas, stored data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
 Watched human-turn signals and upstream observations use the shared-state writer,
-including their watcher probe and pruning. Producers await settlement and recheck
+including their watcher check and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in
 the committing transaction. Goal events and normalized child-run terminal outcomes
 share that recording command. Child completion joins recording and rechecks its
@@ -1959,7 +1972,7 @@ advances only the frozen notification watermark. Version enrichment and bounded 
 pages use the shared-state reader, preserving composite session identity and per-session
 pruned watermarks. Accepted operations retain the existing worker's FIFO and settlement
 owner. Schemas, retention, and update behavior are unchanged.
-The public SDK's synchronous ambient prompt probe remains compatibility debt.
+The public SDK's synchronous ambient prompt check remains compatibility debt.
 Creation, compaction, adoption, reset, deletion, and the restart notice sweep use
 the signal worker.
 

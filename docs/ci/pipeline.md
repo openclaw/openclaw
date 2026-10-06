@@ -145,7 +145,7 @@ and scene readiness; it does not compare pixels against a baseline.
 CI's `setup-test-bun` action consumes `scripts/lib/openclaw-bun.json` through
 `scripts/stage-openclaw-bun.sh`, the same owner used by the macOS and Tauri apps.
 Every pin bump requires **both** the paired CI Bun-lane replay and Bun-only smoke,
-and the macOS runtime probes plus two-binary test set, against the same published
+and the macOS runtime checks plus two-binary test set, against the same published
 fork tag. Neither app nor CI advances if either gate fails; Linux-only runtime
 regressions stop the shared repin too. Preserve the last jointly admitted tag
 and attach exact-tag evidence to the repin PR. Publication alone is not admission.
@@ -165,7 +165,7 @@ and Node test selections retain their existing cache settings.
 
 Bun's Vitest parent completes the canonical SQLite native-close admission before
 creating test threads. Each worker inherits that decision, allowing capable
-runtimes to reuse readers while negative probes retain conservative cleanup.
+runtimes to reuse readers while negative checks retain conservative cleanup.
 
 Audited ordinary unit-fast tests use Bun's native test runner, including
 qualified async callbacks and self-contained zero-argument setup hooks. Hooks
@@ -268,7 +268,7 @@ Ordinary manual CI, including Full Release Validation's `normal_ci` child, runs
 the complete original selection on Node and its compatible portion on Bun
 within the same job and worker slot. Other selections run on Node. Main pushes retain Node. Historical targets
 without the runtime-selection capability keep their original Node behavior.
-The UI job probes its actual config and arguments through the target's runtime
+The UI job checks its actual config and arguments through the target's runtime
 owner, so older unit-only helpers, helpers requiring the retired global FTL flag,
 and legacy compatibility targets retain Node.
 Current-runner targets use three native shards and three workers per row,
@@ -280,7 +280,7 @@ complete shard on Bun. Dual validation runs the complete UI selection on Node
 and then on Bun, including the six retention assertions. Partial runtime
 partitions still require the original shard inventory before omitting Node work.
 Partitions without browser files retain browser discovery for native sharding
-but omit Chromium version probing and Playwright's speculative browser startup.
+but omit Chromium version checking and Playwright's speculative browser startup.
 
 On both runtimes, non-isolated UI projects without cached test results group
 files by environment and options after native sharding. The sequencer targets
@@ -969,7 +969,7 @@ Every restored receipt still validates its compiler, configuration, source,
 resolution lookups, and output hashes; the negative boundary canary always runs.
 Receipts include missing candidates, directory listings, and symlink resolutions,
 so an unrelated new test can retain a hit while a newly effective type dependency
-invalidates it. Each validation snapshot shares actual probe results across
+invalidates it. Each validation snapshot shares actual check results across
 receipts, while comparing every recorded fact. Fresh compiles still seal the
 whole resolution namespace against changes during compilation. Old or malformed
 receipts recompile. This adds no producer job or package-selection exemption.

@@ -197,7 +197,7 @@ candidate. A dirty or occupied sibling is not a reason to stop and ask.
 
 Mantis uses the same plugin-owned discovery and managed installation. Relative
 executable overrides and `PATH` entries resolve from its requested `--repo-root`,
-and version probes run there with the same environment as lease commands. Its workflows
+and version checks run there with the same environment as lease commands. Its workflows
 prepare the executable with `node scripts/crabbox-setup.mjs`; the command prints
 the selected binary and verified version as JSON and, in GitHub Actions, adds its
 directory to `GITHUB_PATH`. Later QA and media commands reuse that executable.

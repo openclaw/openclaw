@@ -201,7 +201,7 @@ function fixture(
     [
       "actions/runs/20/attempts/1/jobs?per_page=100&page=1",
       {
-        total_count: 1,
+        total_count: 2,
         jobs: [
           {
             name: "Seal ClawHub package transactions",
@@ -210,6 +210,21 @@ function fixture(
             head_sha: sha,
             status: "completed",
             conclusion: "success",
+          },
+          {
+            name: `Pack ClawHub package (${entry.name})`,
+            run_id: 20,
+            run_attempt: 1,
+            head_sha: sha,
+            status: "completed",
+            conclusion: "success",
+            steps: [
+              {
+                name: "Upload ClawHub package artifact",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
           },
         ],
       },
@@ -944,6 +959,186 @@ describe("ClawHub detached postpublish verification", () => {
       expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
     },
   );
+
+  it.each([
+    {
+      label: "sealed milestone while the parent remains active",
+      status: "in_progress",
+      conclusion: null,
+      parentStatePolicy: "sealed-producer",
+      childConclusion: "success",
+      parentJobConclusion: "success",
+    },
+    {
+      label: "sealed milestone after parent and child failure",
+      status: "completed",
+      conclusion: "failure",
+      parentStatePolicy: "sealed-producer",
+      childConclusion: "failure",
+      parentJobConclusion: "success",
+    },
+    {
+      label: "sealed milestone after parent success",
+      status: "completed",
+      conclusion: "success",
+      parentStatePolicy: "sealed-producer",
+      childConclusion: "success",
+      parentJobConclusion: "success",
+    },
+    {
+      label: "protected recovery after parent cancellation",
+      status: "completed",
+      conclusion: "cancelled",
+      parentStatePolicy: "recovery-producer",
+      childConclusion: "success",
+      parentJobConclusion: "cancelled",
+    },
+  ])("reconciles the complete roster from $label", async (parentState) => {
+    const f = fixture();
+    const parent = {
+      ...f.parent,
+      status: parentState.status,
+      conclusion: parentState.conclusion,
+    };
+    f.metadata.set("actions/runs/10/attempts/1", parent);
+    f.child.conclusion = parentState.childConclusion;
+    const receipt = createClawHubParentAuthorization(f.transactions, "automated-sealed");
+    const receiptArchive = zip("authorization.json", Buffer.from(JSON.stringify(receipt)));
+    f.archives.set(1, receiptArchive);
+    Object.assign(f.receiptArtifact, {
+      size_in_bytes: receiptArchive.length,
+      digest: `sha256:${digest(receiptArchive)}`,
+    });
+    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 1,
+      jobs: [
+        {
+          name: "Publish plugins, then OpenClaw",
+          run_id: 10,
+          run_attempt: 1,
+          head_sha: sha,
+          status: "completed",
+          conclusion: parentState.parentJobConclusion,
+          steps: [
+            {
+              name: "Upload exact release child dispatch record",
+              status: "completed",
+              conclusion: "success",
+            },
+            {
+              name: "Upload immutable ClawHub parent authorization",
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        },
+      ],
+    });
+
+    const recoveryManifest = {
+      schemaVersion: 1,
+      kind: "openclaw-clawhub-recovery-manifest",
+      identity: f.transactions.identity,
+      packages: f.transactions.packages.map((entry) => ({
+        ...entry,
+        publicationStatus: "pending",
+        attemptId: "attempt-1",
+      })),
+    };
+    if (parentState.parentStatePolicy === "recovery-producer") {
+      const authorized = await verifyClawHubPostpublish({
+        ...f.options,
+        parent,
+        parentStatePolicy: parentState.parentStatePolicy,
+        recoveryManifest,
+        verifyPublication: false,
+      });
+      expect(authorized).toMatchObject({
+        complete: true,
+        outcome: "authorized-recovery-roster",
+      });
+      expect(f.registryReads).toEqual([]);
+    }
+
+    const result = await verifyClawHubPostpublish({
+      ...f.options,
+      parent,
+      parentStatePolicy: parentState.parentStatePolicy,
+      recoveryManifest:
+        parentState.parentStatePolicy === "recovery-producer" ? recoveryManifest : undefined,
+    });
+    expect(result.complete).toBe(true);
+    expect(result.packages).toHaveLength(1);
+  });
+
+  it("finds exact package producers beyond the first job page", async () => {
+    const f = fixture();
+    const parent = { ...f.parent, status: "completed", conclusion: "failure" };
+    f.metadata.set("actions/runs/10/attempts/1", parent);
+    const receipt = createClawHubParentAuthorization(f.transactions, "automated-sealed");
+    const receiptArchive = zip("authorization.json", Buffer.from(JSON.stringify(receipt)));
+    f.archives.set(1, receiptArchive);
+    Object.assign(f.receiptArtifact, {
+      size_in_bytes: receiptArchive.length,
+      digest: `sha256:${digest(receiptArchive)}`,
+    });
+    f.metadata.set("actions/runs/10/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 1,
+      jobs: [
+        {
+          name: "Publish plugins, then OpenClaw",
+          run_id: 10,
+          run_attempt: 1,
+          head_sha: sha,
+          status: "completed",
+          conclusion: "success",
+          steps: [
+            {
+              name: "Upload exact release child dispatch record",
+              status: "completed",
+              conclusion: "success",
+            },
+            {
+              name: "Upload immutable ClawHub parent authorization",
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+        },
+      ],
+    });
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      name: `Unrelated job ${index}`,
+      run_id: 20,
+      run_attempt: 1,
+      head_sha: sha,
+      status: "completed",
+      conclusion: "success",
+    }));
+    const original = f.metadata.get("actions/runs/20/attempts/1/jobs?per_page=100&page=1") as {
+      jobs: unknown[];
+    };
+    f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=1", {
+      total_count: 102,
+      jobs: firstPage,
+    });
+    f.metadata.set("actions/runs/20/attempts/1/jobs?per_page=100&page=2", {
+      total_count: 102,
+      jobs: original.jobs,
+    });
+    const result = await verifyClawHubPostpublish({
+      ...f.options,
+      parent,
+      parentStatePolicy: "sealed-producer",
+    });
+    expect(result.complete).toBe(true);
+    expect(
+      f.githubReads.filter((path) => path.includes("actions/runs/20/attempts/1/jobs")),
+    ).toEqual([
+      "actions/runs/20/attempts/1/jobs?per_page=100&page=1",
+      "actions/runs/20/attempts/1/jobs?per_page=100&page=2",
+    ]);
+  });
 
   it.each([
     { label: "protected-tag parent", parentOnMain: false, status: "identical" },

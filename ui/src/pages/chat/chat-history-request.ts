@@ -399,29 +399,15 @@ export async function loadOlderChatHistoryPage(
   return result;
 }
 
-export type StagedOlderHistoryPage = {
-  claim: {
-    client: GatewayBrowserClient;
-    connectionEpoch: number;
-    sessionKey: string;
-    agentId?: string;
-    /** Projection fence: any later history request or reset (tail reload,
-     * rewind, branch switch) advances the version and voids this page even
-     * when the replacement projection lands on the same cursor. */
-    historyVersion: number;
-  };
-  requestedOffset: number;
-  result: ChatHistoryResult;
-};
+export type StagedOlderHistoryPage = NonNullable<
+  Awaited<ReturnType<typeof fetchStagedOlderHistoryPage>>
+>;
 
 // The staged prefetch deliberately skips beginHistoryRequest: request
 // ownership is last-writer-wins, so a background fetch bumping the version
 // could invalidate a concurrent tail load's apply. The claim below carries the
 // same facts and the pane validates it at consume time instead.
-export async function fetchStagedOlderHistoryPage(
-  state: ChatState,
-  offset: number,
-): Promise<StagedOlderHistoryPage | undefined> {
+export async function fetchStagedOlderHistoryPage(state: ChatState, offset: number) {
   if (!state.client || !state.connected) {
     return undefined;
   }
@@ -438,6 +424,7 @@ export async function fetchStagedOlderHistoryPage(
       client,
       connectionEpoch,
       sessionKey,
+      // Any later history request or reset voids this page even on the same cursor.
       historyVersion,
       ...(requestAgentId ? { agentId: requestAgentId } : {}),
     },

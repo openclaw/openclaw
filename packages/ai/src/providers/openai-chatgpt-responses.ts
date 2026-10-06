@@ -248,11 +248,7 @@ function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | nu
 export const streamOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   OpenAICodexResponsesOptions
-> = (
-  model: Model<"openai-chatgpt-responses">,
-  context: Context,
-  options?: OpenAICodexResponsesOptions,
-) => {
+> = (model, context, options) => {
   const stream = new AssistantMessageEventStream();
 
   void (async () => {
@@ -671,7 +667,7 @@ export const streamOpenAICodexResponses: StreamFunction<
 export const streamSimpleOpenAICodexResponses: StreamFunction<
   "openai-chatgpt-responses",
   SimpleStreamOptions
-> = (model: Model<"openai-chatgpt-responses">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const resolvedOptions = {

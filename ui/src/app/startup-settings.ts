@@ -47,18 +47,6 @@ type NativeGatewayClientOptions = Pick<
   | "nativeConnectAuth"
 >;
 
-type ApplicationStartupSettings = {
-  settings: UiSettings;
-  password: string | null;
-  pendingGatewayUrl: string | null;
-  pendingGatewayToken: string | null;
-  pendingBootstrapToken: string | null;
-  pendingBootstrapProfile: ControlUiBootstrapProfileHint | null;
-  nativeClient: NativeGatewayClientOptions | null;
-  location: ApplicationStartupLocation;
-  changed: boolean;
-};
-
 declare global {
   interface Window {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: NativeControlAuth;
@@ -89,7 +77,7 @@ export function normalizeLegacyTerminalViewLocation(
 export function resolveApplicationStartupSettings(
   initialSettings: UiSettings,
   location: ApplicationStartupLocation,
-): ApplicationStartupSettings {
+) {
   let settings = initialSettings;
   let changed = false;
   let password: string | null = null;

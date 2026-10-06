@@ -210,7 +210,7 @@ The browser-extension row prepares only its native-host runtime JavaScript and a
 
 The previous thirteen-serial-shard layout consumed 4,258 job-seconds in successful [run 33494931388](https://github.com/openclaw/openclaw/actions/runs/33494931388) on 2026-09-01, averaging 327.5 seconds per Control UI row; preflight added 39 seconds and the tail row took 363 seconds. The current projects reduce the modeled body through bounded bundled concurrency. In run `33638745824`, twelve successful first-attempt Control UI rows had median/p90 test steps of 197/235 seconds, while their checkout median reached 116.5 seconds. Reducing thirteen Control UI shards to twelve removed one repeated checkout and setup without combining the separate browser-extension work. The current Control UI target is eight minutes per ordinary job within the fifteen-minute PR/main workflow objective. Measure queueing, checkout, setup and test work separately; the final gate still waits for the other selected jobs. The historical serial layout and the single hosted retry are not paired performance comparisons.
 
-Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs when the backend is unset or `blacksmith`. Hybrid keeps the heavy set plus the named critical-path plateau lanes on Blacksmith for attempt 1; other light lanes and every rerun Blacksmith lane use GitHub-hosted capacity. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu in every mode; push retries remain on their normal backend unless hybrid fallback applies. Manual `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners for the main test/build lanes. With an unset or `blacksmith` backend, ordinary canonical manual dispatches (`release_gate: false`) can still run the seven `check-shard` rows on their Blacksmith matrix runners; release-gate check rows remain hosted. Same-repo hybrid Full Release Validation sends only frozen-candidate lint to its matrix runner, both for exact main-ancestor SHAs without a release context and for canonical release-context candidates. These manual admissions are outside the main/PR arrival estimate above. The [`github` backend](/ci/runners#runner-backend-modes) provides a manual repository-wide fallback; canonical runs do not probe Blacksmith queue health or mutate the variable automatically.
+Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs when the backend is unset or `blacksmith`. Hybrid keeps the heavy set plus the named critical-path plateau lanes on Blacksmith for attempt 1; other light lanes and every rerun Blacksmith lane use GitHub-hosted capacity. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu in every mode; push retries remain on their normal backend unless hybrid fallback applies. Manual `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners for the main test/build lanes. With an unset or `blacksmith` backend, ordinary canonical manual dispatches (`release_gate: false`) can still run the seven `check-shard` rows on their Blacksmith matrix runners; release-gate check rows remain hosted. Same-repo hybrid Full Release Validation sends only frozen-candidate lint to its matrix runner, both for exact main-ancestor SHAs without a release context and for canonical release-context candidates. These manual admissions are outside the main/PR arrival estimate above. The [`github` backend](/ci/runners#runner-backend-modes) provides a manual repository-wide fallback; canonical runs do not check Blacksmith queue health or mutate the variable automatically.
 
 ## Vitest worker sizing
 
@@ -237,7 +237,7 @@ private-QA output variants. Checkout already fetches depth-one selected source;
 historical test prerequisites and revision-comparison inputs stay with their
 existing owners.
 
-A Linux Testbox probe on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
+A Linux Testbox check on four CPUs, 15.4 GiB RAM, and Node 24.19.0 measured
 preparation plus joined cleanup at 8.43/9.44 seconds without reuse and 3.21/3.17
 seconds after restoring a 30 MiB archive. Peak process RSS fell from
 2.59–2.66 GiB to 0.55 GiB. The two-sample midpoint saves 5.75 seconds before
@@ -289,7 +289,7 @@ changing test deadlines, assertions, inventory, or cleanup. Existing host admiss
 and fallback rules, the independently planned GitHub profile, and the separate
 four-worker Gateway methods policy remain unchanged.
 
-The historical [September 20 paired probe](https://github.com/openclaw/openclaw/actions/runs/35543209292)
+The historical [September 20 paired check](https://github.com/openclaw/openclaw/actions/runs/35543209292)
 at source `39b3aa10677c99af54e3bffb43cadf3bb6c89eb8` used the same eight-CPU,
 30.95 GiB, Node 24.19.0 Testbox for a fixed 2/8/8/2
 sequence, with fresh JavaScript cache paths for each round. Every round ran the
@@ -358,11 +358,11 @@ costs stay unchanged; new parallel measurements replace those serial references
 without another discount. Packing saves one Node PR row on each runner profile,
 with unchanged compact and push budgets.
 
-The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
+The [September 19 check](https://github.com/openclaw/openclaw/actions/runs/35441442486)
 ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
 All twelve samples passed. Single-plan cells ran all 293 core-2 files; two-plan
 cells also ran the complete core-1 group concurrently through a disposable
-probe-only admission exception. Production Gateway exclusivity remains intact.
+check-only admission exception. Production Gateway exclusivity remains intact.
 The default resolved to three workers.
 
 |     Workers | Plans | Wall seconds, both samples | Peak summed RSS | Peak process RSS |

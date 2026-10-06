@@ -174,7 +174,11 @@ it.each([
   },
 );
 
-function startConnectionFixture(workerHostingEnabled = false, preparedWorkspacesEnabled = false) {
+function startConnectionFixture(
+  workerHostingEnabled = false,
+  preparedWorkspacesEnabled = false,
+  nativeInferenceEnabled = false,
+) {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
     invoke: vi.fn(),
@@ -192,6 +196,7 @@ function startConnectionFixture(workerHostingEnabled = false, preparedWorkspaces
     manifest: { commands: [], caps: [], pathEnv: "/bin" },
     workerHostingEnabled,
     preparedWorkspacesEnabled,
+    nativeInferenceEnabled,
     initialInventory: { skills: [], pluginTools: [] },
     start,
   };
@@ -243,6 +248,35 @@ it.each(["disconnect", "close", "manifest"] as const)(
     }
   },
 );
+
+it("advertises configured native inference only to a capable Gateway", async () => {
+  const { connection, request, start } = startConnectionFixture(true, false, true);
+  try {
+    start.mock.calls[0]?.[0].onRunnerCapacityChanged?.({ total: 1, available: 1 });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_NATIVE_INFERENCE] : [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration).toMatchObject({
+        workerHost: {
+          enabled: true,
+          ...(supported ? { nativeInference: 1 } : {}),
+        },
+      });
+      if (!supported) {
+        expect(declaration.workerHost).not.toHaveProperty("nativeInference");
+      }
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+    }
+  } finally {
+    await connection.close();
+  }
+});
 
 it("logs failures once per connection, redacts secrets, and waits for the next cadence", async () => {
   const { connection, request, publications, writeStderrLine } = startConnectionFixture();

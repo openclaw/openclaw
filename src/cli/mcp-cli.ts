@@ -465,17 +465,17 @@ async function probeMcpServerIssues(params: {
     const result = await readMcpProbeResult(runtime);
     const diagnostic = result.diagnostics[0];
     if (diagnostic) {
-      return [issue("error", `probe failed: ${diagnostic.message}`)];
+      return [issue("error", `check failed: ${diagnostic.message}`)];
     }
     const server = result.servers[params.name];
     if (!server) {
-      return [issue("error", "probe did not connect to this server")];
+      return [issue("error", "check did not connect to this server")];
     }
     return server.approvalHint
       ? [issue("info", `Codex approval mode: ${server.codexApprovalMode}; ${server.approvalHint}`)]
       : [];
   } catch (err) {
-    return [issue("error", `probe failed: ${formatErrorMessage(err)}`)];
+    return [issue("error", `check failed: ${formatErrorMessage(err)}`)];
   } finally {
     await runtime.dispose();
   }
@@ -622,11 +622,11 @@ function resolveMcpProbeIssue(params: {
 }): string | undefined {
   if (params.result.diagnostics.length > 0) {
     const first = expectDefined(params.result.diagnostics[0], "diagnostics entry at 0");
-    return `MCP probe failed for "${first.serverName}" in ${params.path}: ${first.message}`;
+    return `MCP check failed for "${first.serverName}" in ${params.path}: ${first.message}`;
   }
   for (const [name, server] of Object.entries(params.servers)) {
     if (server.enabled !== false && !params.result.servers[name]) {
-      return `MCP probe did not connect to "${name}" in ${params.path}.`;
+      return `MCP check did not connect to "${name}" in ${params.path}.`;
     }
   }
   return undefined;
@@ -825,7 +825,7 @@ export function registerMcpCli(program: Command) {
       const servers = selectMcpServers(loaded, name, opts);
       if (name && loaded.mcpServers[name]?.enabled === false) {
         fail(
-          `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before probing it.`,
+          `MCP server "${name}" is disabled in ${loaded.path}. Run ${formatCliCommand(`openclaw mcp configure ${name} --enable`)} before checking it.`,
           opts.json,
         );
       }
@@ -843,7 +843,7 @@ export function registerMcpCli(program: Command) {
         if (opts.json) {
           defaultRuntime.writeJson(result);
         } else {
-          defaultRuntime.log(`MCP probe (${loaded.path}):`);
+          defaultRuntime.log(`MCP check (${loaded.path}):`);
           for (const [serverName, server] of Object.entries(result.servers)) {
             defaultRuntime.log(
               `- ${serverName}: ${server.tools} tools${server.resources ? ", resources" : ""}${server.prompts ? ", prompts" : ""}, Codex approval ${server.codexApprovalMode}`,
@@ -934,7 +934,7 @@ export function registerMcpCli(program: Command) {
 
   mcp
     .command("add")
-    .description("Add one MCP server from flags and probe it before saving")
+    .description("Add one MCP server from flags and check it before saving")
     .argument("<name>", "MCP server name")
     .option("--command <command>", "Stdio command to spawn")
     .option("--arg <value>", "Repeatable stdio argument", collectOption, [])
@@ -1113,7 +1113,7 @@ export function registerMcpCli(program: Command) {
     .option("--client-cert <path>", "HTTP mutual TLS client certificate path")
     .option("--client-key <path>", "HTTP mutual TLS client key path")
     .option("--clear-tls", "Clear TLS verification and mTLS overrides", false)
-    .option("--probe", "Probe the updated server before saving", false)
+    .option("--probe", "Check the updated server before saving", false)
     .action(
       async (
         name: string,

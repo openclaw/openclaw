@@ -3,7 +3,7 @@ summary: "How OpenClaw discovers Ollama models implicitly, plus narrow smoke tes
 read_when:
   - You want to know which models OpenClaw discovers and how
   - You need capability, reasoning, or cost detection rules
-  - You want a narrow text or vision probe that skips the agent tool surface
+  - You want a narrow text or vision check that skips the agent tool surface
 title: "Ollama model discovery"
 sidebarTitle: "Model discovery"
 ---
@@ -53,7 +53,7 @@ confirms metadata — typos still fail as unknown models.
 
 ### Smoke tests
 
-For a narrow text probe that skips the full agent tool surface:
+For a narrow text check that skips the full agent tool surface:
 
 ```bash
 OLLAMA_API_KEY=ollama-local \
@@ -64,7 +64,7 @@ OLLAMA_API_KEY=ollama-local \
     --json
 ```
 
-Add `--file` with an image for a lean vision-model probe (accepts PNG/JPEG/WebP;
+Add `--file` with an image for a lean vision-model check (accepts PNG/JPEG/WebP;
 non-image files are rejected before Ollama is called — use
 `openclaw infer audio transcribe` for audio):
 
