@@ -743,7 +743,7 @@ describe("runPreparedReply media-only handling", () => {
       expected: "/tmp/session-repo",
     },
   ])(
-    "keeps workspace separate from $name run cwd",
+    "resolves workspace and $name run cwd",
     async ({ defaultCwd, agentCwd, spawnedCwd, expected }) => {
       await runPrepared({
         cfg: {
@@ -759,7 +759,7 @@ describe("runPreparedReply media-only handling", () => {
       });
       expect(requireRunReplyAgentCall().followupRun.run).toMatchObject({
         cwd: expected,
-        workspaceDir: "/tmp/agent-workspace",
+        workspaceDir: spawnedCwd ?? "/tmp/agent-workspace",
       });
     },
   );

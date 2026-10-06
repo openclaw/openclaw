@@ -372,6 +372,7 @@ describe("cron service timer seam coverage", () => {
     expect(runCommandJob).toHaveBeenCalledWith({
       job,
       abortSignal: undefined,
+      deliveryAttemptFence: null,
     });
     expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   });

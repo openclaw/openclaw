@@ -14,7 +14,10 @@ export type DatabasePathIdentity = Readonly<{
 export function normalizeDatabasePath(location: string): string {
   const normalized =
     process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
+  // Preserve other path dialects and device namespaces that do not normalize to a drive or UNC.
+  return process.platform === "win32" && !/^(?:[a-z]:[\\/]|[\\/]{2})/iu.test(normalized)
+    ? location
+    : normalized;
 }
 
 // The physical host policy stays fixed across every admission in this process.
