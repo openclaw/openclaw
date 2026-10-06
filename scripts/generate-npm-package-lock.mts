@@ -1889,7 +1889,12 @@ function collectPnpmLockPlatformViolations(npmLock: unknown, pnpmLock = readPnpm
     path: string;
   }> = [];
   for (const [lockPath, metadata] of Object.entries(recordAt(npmLock, "packages") ?? {})) {
-    if (lockPath === "" || !isRecord(metadata) || metadata.link === true) {
+    if (
+      lockPath === "" ||
+      !isRecord(metadata) ||
+      metadata.link === true ||
+      typeof metadata.version !== "string"
+    ) {
       continue;
     }
     const packageName =
