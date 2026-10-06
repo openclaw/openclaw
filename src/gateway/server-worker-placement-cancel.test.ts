@@ -264,7 +264,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       await heldWriter;
       await reclaim;
       expect(events.filter((event) => event.phase === "end")).toEqual([
-        { phase: "end", status: "cancelled", aborted: true, stopReason: "aborted" },
+        { phase: "end", status: "cancelled", aborted: true, stopReason: "rpc" },
       ]);
       expect(context.chatAbortControllers.has(runId)).toBe(false);
       await closeSessionSqliteDatabasesForTest();

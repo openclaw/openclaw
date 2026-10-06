@@ -7,10 +7,7 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import {
-  createAgentRunRestartAbortError,
-  resolveAgentRunAbortLifecycleFields,
-} from "../agents/run-termination.js";
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -580,7 +577,8 @@ export function abortChatRunById(
     data: {
       phase: "end",
       status: "cancelled",
-      ...resolveAgentRunAbortLifecycleFields(active.controller.signal),
+      aborted: true,
+      stopReason,
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
       // Pre-execution admission time is not an execution start.
       startedAt: active.executionStarted === false ? undefined : active.startedAtMs,

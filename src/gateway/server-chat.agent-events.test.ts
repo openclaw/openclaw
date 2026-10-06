@@ -2033,7 +2033,7 @@ describe("agent event handler", () => {
       await unlisten.drain();
     });
     expect(h.agent().map(([, event]) => event.data)).toEqual([
-      expect.objectContaining({ phase: "end", aborted: true, stopReason: "aborted" }),
+      expect.objectContaining({ phase: "end", aborted: true, stopReason: "rpc" }),
     ]);
     expect(h.nodeAgent()).toHaveLength(1);
     expect(h.chat().filter(([, event]) => event.state === "aborted")).toHaveLength(1);
