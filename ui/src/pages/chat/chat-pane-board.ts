@@ -482,10 +482,17 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
           retry = true;
           return;
         }
-        const enabled =
-          state.connected &&
-          isSwarmEnabledInConfig(context.runtimeConfig?.state.configSnapshot?.config, agentId);
-        if (!enabled) {
+        const swarmEnabled = isSwarmEnabledInConfig(
+          context.runtimeConfig?.state.configSnapshot?.config,
+          agentId,
+        );
+        if (this.swarmEnabled !== swarmEnabled) {
+          this.swarmEnabled = swarmEnabled;
+          requestChatPageUpdate(state, "animation-frame");
+        }
+        // The child roster also owns ordinary subagent waits, launch rows, and
+        // attention. Disabling swarm must not hide those recorded outcomes.
+        if (!state.connected) {
           if (this.swarmHydrator) {
             this.swarmHydrator.dispose();
             this.swarmHydrator = null;

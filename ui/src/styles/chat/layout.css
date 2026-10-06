@@ -380,6 +380,11 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
+.chat-child-attention .chat-composer-neighbor-card__copy :is(strong, span) {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .chat-composer-neighbor-card--info {
   border-color: color-mix(in srgb, var(--info) 16%, transparent);
 }

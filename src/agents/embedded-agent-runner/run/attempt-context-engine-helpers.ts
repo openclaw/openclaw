@@ -26,7 +26,6 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: BootstrapMode;
-  deliversCompleteWorkspaceContext: boolean;
   hasCompletedBootstrapTurn: () => Promise<boolean>;
   resolveBootstrapContextForRun: () => Promise<
     AttemptBootstrapContext<TBootstrapFile, TContextFile>
@@ -43,22 +42,15 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.contextInjectionMode === "continuation-skip" &&
     !isHeartbeatLifecycleRun &&
     (await params.hasCompletedBootstrapTurn());
-  // Continuation-skip and explicit never both produce an empty injection set, but only a turn that
-  // delivered the whole workspace context records a marker; onboarding state alone is not proof.
+  // Continuation-skip and explicit never both produce an empty injection set,
+  // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
     !isHeartbeatLifecycleRun &&
-    params.bootstrapContextRunKind !== "cron" &&
-    // Every workspace file has to have reached the prompt. A guarded-read placeholder reports the
-    // fault instead of delivering the file, so certifying completion for that turn would let
-    // continuation-skip suppress content the session never received. A clean full bootstrap always
-    // recorded a marker; a setup-complete workspace is the new case, and only continuation-skip
-    // reads the marker back, so installs on the default "always" mode gain no entry per session.
-    params.deliversCompleteWorkspaceContext &&
-    (params.bootstrapMode === "full" || params.contextInjectionMode === "continuation-skip");
+    params.bootstrapMode === "full";
 
   const context = shouldSkipBootstrapInjection
     ? { bootstrapFiles: [], contextFiles: [] }

@@ -16,13 +16,13 @@ import { hasCompletedBootstrapTurn } from "../../bootstrap-files.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "../../workspace-legacy-state.test-support.js";
 
 const hoisted = vi.hoisted(() => ({
-  runAgentEndSideEffects: vi.fn(),
+  runAgentEndSideEffectsAsync: vi.fn(async () => {}),
   shouldWaitForCompletionRequiredAsyncTasks: vi.fn((): boolean => false),
 }));
 
 // mock-isolation: The marker write is finalization's own job; the real fan-out would start another turn.
 vi.mock("../../harness/agent-end-side-effects.js", () => ({
-  runAgentEndSideEffects: hoisted.runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync: hoisted.runAgentEndSideEffectsAsync,
 }));
 // mock-isolation: Building the end-context graph needs plugin and hook registries this flow does not exercise.
 vi.mock("./agent-end-context.js", () => ({
@@ -46,7 +46,7 @@ describe("embedded attempt bootstrap completion flow", () => {
 
   beforeEach(async () => {
     resetLegacyWorkspaceStateCheckForTest();
-    hoisted.runAgentEndSideEffects.mockReset();
+    hoisted.runAgentEndSideEffectsAsync.mockReset();
     testState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-bootstrap-completion-flow-",
