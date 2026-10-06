@@ -424,6 +424,8 @@ export async function dispatchChatSlashCommand(
   if (result.trackRunId && targetIsCurrent()) {
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
+    host.chatStreamItemId = undefined;
+    host.chatStreamItemStartOffset = undefined;
     host.chatSending = false;
   }
 
