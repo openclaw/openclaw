@@ -6,6 +6,7 @@ import {
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseControlUiSessionReturnPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import {
   checkGatewayHttpRequestAuth,
   resolveSharedSecretHttpOperatorScopes,
@@ -78,6 +79,11 @@ export async function serveControlUiSessionEntry(
       operatorAccessAuthority: requestAuth.operatorAccessAuthority,
     },
   };
+  // The HTTP client shares the resident profile facts used by connection-bound
+  // session selection; authenticated display metadata alone carries no role/aliases.
+  if (projection) {
+    prepareGatewayRecipientProfile(client);
+  }
   const selected =
     projection && authorizeOperatorScopesForMethod("chat.history", scopes).allowed
       ? await resolveControlUiSessionPath({

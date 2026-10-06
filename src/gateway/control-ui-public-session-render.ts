@@ -20,14 +20,15 @@ export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
   let timer,etag="",running=false,retryAt=0;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
-  const schedule=(delay=15000+Math.floor(Math.random()*3000))=>{clearTimeout(timer);if(!document.hidden&&enabled())timer=setTimeout(refresh,Math.max(delay,retryAt-Date.now()))};
+  const jitter=()=>Math.floor(Math.random()*3000);
+  const schedule=(delay=15000+jitter())=>{clearTimeout(timer);if(!document.hidden&&enabled())timer=setTimeout(refresh,Math.max(delay,retryAt-Date.now()))};
   async function refresh(){
     if(document.hidden||!enabled()||running)return;
     running=true;
     let delay;
     try{
       const response=await fetch(location.href,{credentials:"same-origin",redirect:"error",cache:"no-store",headers:etag?{"If-None-Match":etag}:{},signal:AbortSignal.timeout(10000)});
-      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+Math.floor(Math.random()*3000);retryAt=Date.now()+delay}return}
+      if(response.status===429||response.status===503){const seconds=Number(response.headers.get("Retry-After"));if(Number.isFinite(seconds)&&seconds>0){delay=Math.max(15000,seconds*1000)+jitter();retryAt=Date.now()+delay}return}
       if(response.status===304||document.hidden)return;
       if(response.status!==200&&response.status!==404)return;
       const next=new DOMParser().parseFromString(await response.text(),"text/html");

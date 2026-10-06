@@ -59,7 +59,10 @@ import {
   prepareSessionCreateFilesystemRoot,
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
-import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
+import {
+  resolveSessionCreateSpawnContext,
+  validateSessionCreateSpawnRequest,
+} from "./session-create-spawn.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -127,32 +130,9 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       sessionCreation.via === "spawn"
         ? normalizeOptionalString(sessionCreation.requesterSessionKey)
         : undefined;
-    if (sessionCreation.inheritedToolPolicy && parentSessionKey !== spawnRequesterSessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "spawn parent must match the trusted agent caller"),
-      );
-      return;
-    }
-    if (
-      sessionCreation.childSessionPublication &&
-      (sessionCreation.via !== "spawn" ||
-        spawnRequesterSessionKey !== parentSessionKey ||
-        sessionCreation.childSessionPublication.requesterSessionKey !== parentSessionKey ||
-        p.fork === true ||
-        p.forkFrom !== undefined ||
-        p.incognito === true ||
-        p.visibility === "draft")
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Public ingress requires a fresh isolated, non-private child.",
-        ),
-      );
+    const spawnError = validateSessionCreateSpawnRequest(sessionCreation, p);
+    if (spawnError) {
+      respond(false, undefined, spawnError);
       return;
     }
     const requestedModel = normalizeOptionalString(p.model);
