@@ -31,6 +31,7 @@ import type {
   AgentToolUpdateCallback,
   StreamFn,
   ThinkingLevel,
+  ToolExecutionMode,
 } from "../../runtime/index.js";
 import type { BashResult } from "../bash-executor.js";
 import type { CompactionPreparation, CompactionResult } from "../compaction/index.js";
@@ -460,7 +461,6 @@ export interface ToolDefinition<
   | "parameters"
   | "outputSchema"
   | "prepareArguments"
-  | "executionMode"
 > {
   /** Optional one-line snippet for the Available tools section in the default system prompt. Custom tools are omitted from that section when this is not provided. */
   promptSnippet?: string;
@@ -468,6 +468,7 @@ export interface ToolDefinition<
   promptGuidelines?: string[];
   /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
   renderShell?: "default" | "self";
+  executionMode?: ToolExecutionMode;
 
   /** Execute the tool. */
   execute(

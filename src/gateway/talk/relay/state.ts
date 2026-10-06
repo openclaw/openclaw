@@ -9,6 +9,7 @@ import type { InternalRealtimeVoiceProviderCapabilities } from "../../../talk/pr
 import type {
   RealtimeVoiceAudioClearReason,
   RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBrowserAudioContract,
   RealtimeVoiceProviderConfig,
   RealtimeVoiceTool,
   RealtimeVoiceToolResultOptions,
@@ -313,8 +314,9 @@ export type CreateTalkRealtimeRelaySessionParams = {
 
 export type TalkRealtimeRelaySessionResult = Omit<
   Extract<TalkClientCreateResult, { transport: "gateway-relay" }>,
-  "voiceSessionId"
+  "voiceSessionId" | "audio"
 > & {
+  audio: RealtimeVoiceBrowserAudioContract;
   expiresAt: number;
 };
 

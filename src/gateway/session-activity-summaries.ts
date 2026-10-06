@@ -101,7 +101,13 @@ class ActivitySummaryCancelledError extends Error {
   }
 }
 
-export type SessionActivitySummaryService = ReturnType<typeof createSessionActivitySummaries>;
+export type SessionActivitySummaryService = {
+  ensure: (target: ActivitySummaryTarget) => ActivitySummaryView;
+  handleEvent: (event: SessionObserverEvent) => void;
+  handleTranscript: (event: InternalSessionTranscriptUpdate) => void;
+  handleLifecycle: (event: SessionLifecycleEvent) => void;
+  dispose: () => Promise<void>;
+};
 
 export function createSessionActivitySummaries(deps: {
   scheduler: GatewayScheduler;
@@ -110,7 +116,7 @@ export function createSessionActivitySummaries(deps: {
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
   prepareModel?: typeof defaultPrepareModel;
   completeModel?: typeof defaultCompleteModel;
-}) {
+}): SessionActivitySummaryService {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
   const running = new Set<Promise<void>>();
@@ -594,7 +600,7 @@ export function createSessionActivitySummaries(deps: {
     }
   });
   return {
-    ensure(this: void, requested: ActivitySummaryTarget): ActivitySummaryView {
+    ensure(requested) {
       const target = eventTarget(requested.key, requested.agentId)!;
       if (isCronSessionKey(target.key)) {
         return { state: "unavailable" };
@@ -610,7 +616,7 @@ export function createSessionActivitySummaries(deps: {
       }
       return projected ?? { state: "updating" };
     },
-    handleTranscript(this: void, event: InternalSessionTranscriptUpdate) {
+    handleTranscript(event) {
       const target = eventTarget(
         event.target?.sessionKey ?? event.sessionKey,
         event.target?.agentId ?? event.agentId,
@@ -629,7 +635,7 @@ export function createSessionActivitySummaries(deps: {
       }
       schedule(state, false);
     },
-    handleEvent(this: void, event: SessionObserverEvent) {
+    handleEvent(event) {
       const runContext = getAgentRunContext(event.runId);
       if (
         event.stream !== "lifecycle" ||
@@ -646,7 +652,7 @@ export function createSessionActivitySummaries(deps: {
         request(target);
       }
     },
-    handleLifecycle(this: void, event: SessionLifecycleEvent) {
+    handleLifecycle(event) {
       if (event.reason !== "archive" && event.reason !== "unarchive") {
         return;
       }
@@ -655,7 +661,7 @@ export function createSessionActivitySummaries(deps: {
         request(target);
       }
     },
-    async dispose(this: void) {
+    async dispose() {
       disposed = true;
       pumpJob?.cancel();
       pumpJob = undefined;

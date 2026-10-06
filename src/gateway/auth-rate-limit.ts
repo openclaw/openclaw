@@ -59,7 +59,30 @@ interface RateLimitCheckResult {
   retryAfterMs: number;
 }
 
-export type AuthRateLimiter = Omit<ReturnType<typeof createGatewayAuthRateLimiter>, "updateConfig">;
+export interface AuthRateLimiter {
+  /** Check whether `ip` is currently allowed to attempt authentication. */
+  check(ip: string | undefined, scope?: string): RateLimitCheckResult;
+  /** Record a failed authentication attempt for `ip`. */
+  recordFailure(ip: string | undefined, scope?: string): void;
+  /**
+   * Record a failed attempt and await any loopback penalty delay.
+   *
+   * Deliberately post-verification: it prices repeated guessing from one loopback
+   * source without ever gating a request before its credentials are checked.
+   * Gating earlier would stop parallel fan-out, but would also let a bad local
+   * peer stall the operator's own correct-credential CLI, which loopback must
+   * never do. Fan-out from loopback is out of scope for this limiter by design.
+   */
+  recordFailureAndDelay(ip: string | undefined, scope?: string): Promise<void>;
+  /** Reset the rate-limit state for `ip` (e.g. after a successful login). */
+  reset(ip: string | undefined, scope?: string): void;
+  /** Return the current number of tracked IPs (useful for diagnostics). */
+  size(): number;
+  /** Remove expired entries and release memory. */
+  prune(): void;
+  /** Dispose the limiter and cancel periodic cleanup timers. */
+  dispose(): void;
+}
 
 const authRateLimiterExemptionChecks = new WeakMap<
   AuthRateLimiter,
@@ -126,7 +149,9 @@ function resolveAuthRateLimitPolicy(config?: GatewayAuthRateLimitConfig) {
 export function createGatewayAuthRateLimiter(
   config: RateLimitConfig | undefined,
   { scheduler, id = "auth-rate-limit" }: { scheduler: GatewayScheduler; id?: string },
-) {
+): AuthRateLimiter & {
+  updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
+} {
   let policy = resolveAuthRateLimitPolicy(config);
   const pruneIntervalMs = resolvePruneIntervalMs(config?.pruneIntervalMs);
   const maxEntries = resolveIntegerOption(config?.maxEntries, DEFAULT_MAX_ENTRIES, { min: 1 });
@@ -242,13 +267,6 @@ export function createGatewayAuthRateLimiter(
     }
   }
 
-  /**
-   * Deliberately post-verification: it prices repeated guessing from one loopback
-   * source without ever gating a request before its credentials are checked.
-   * Gating earlier would stop parallel fan-out, but would also let a bad local
-   * peer stall the operator's own correct-credential CLI, which loopback must
-   * never do. Fan-out from loopback is out of scope for this limiter by design.
-   */
   function recordFailureAndDelay(rawIp: string | undefined, rawScope?: string): Promise<void> {
     if (disposed) {
       return Promise.resolve();

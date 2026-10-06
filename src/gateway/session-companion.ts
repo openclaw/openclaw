@@ -12,7 +12,12 @@ import { onGatewaySessionReset } from "./session-reset-notifications.js";
 
 type SessionCompanionTarget = { sessionKey: string; agentId: string };
 
-export type SessionCompanionService = ReturnType<typeof createSessionCompanion>;
+export type SessionCompanionService = {
+  ask: ReturnType<typeof createSessionCompanionAskRuntime>["ask"];
+  state: (target: SessionCompanionTarget) => SessionsCompanionStateResult;
+  reset: (target: SessionCompanionTarget) => void;
+  dispose: () => void;
+};
 
 type SessionCompanionDeps = SessionCompanionAskDeps & {
   scheduler: GatewayScheduler;
@@ -21,7 +26,7 @@ type SessionCompanionDeps = SessionCompanionAskDeps & {
 const SESSION_COMPANION_IDLE_TTL_MS = 2 * 60 * 60_000;
 const SESSION_COMPANION_SWEEP_INTERVAL_MS = 10 * 60_000;
 
-export function createSessionCompanion(deps: SessionCompanionDeps) {
+export function createSessionCompanion(deps: SessionCompanionDeps): SessionCompanionService {
   const { scheduler } = deps;
   const now = deps.now ?? (() => scheduler.now());
   const threads = new Map<string, SessionCompanionThread>();
@@ -85,7 +90,7 @@ export function createSessionCompanion(deps: SessionCompanionDeps) {
 
   return {
     ask: askRuntime.ask,
-    state(this: void, target: SessionCompanionTarget): SessionsCompanionStateResult {
+    state(target) {
       const key = sessionObserverScopeKey(target.sessionKey.trim(), target.agentId.trim());
       const thread = threads.get(key);
       if (!thread) {
@@ -96,10 +101,10 @@ export function createSessionCompanion(deps: SessionCompanionDeps) {
         exchanges: thread.exchanges.map(({ question, answer, ts }) => ({ question, answer, ts })),
       };
     },
-    reset(this: void, target: SessionCompanionTarget) {
+    reset(target) {
       reset(target, "explicit-reset");
     },
-    dispose(this: void) {
+    dispose() {
       if (disposed) {
         return;
       }
