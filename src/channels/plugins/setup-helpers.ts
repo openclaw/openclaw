@@ -186,7 +186,7 @@ export function createSetupInputPresenceValidator<
 >(params: {
   defaultAccountOnlyEnvError?: string;
   whenNotUseEnv?: SetupInputPresenceRequirement[];
-  validate?: ChannelSetupAdapter<Input>["validateInput"];
+  validate?: NonNullable<ChannelSetupAdapter<Input>["validateInput"]>;
 }): NonNullable<ChannelSetupAdapter<Input>["validateInput"]> {
   return (inputParams) => {
     if (

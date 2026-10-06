@@ -71,9 +71,13 @@ export function createSessionHistoryWorkerReaders(
   ): (input: Input, signal?: AbortSignal) => Promise<T> {
     return async (input, signal) =>
       runRequest(
-        // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
-        () =>
-          prepare ? prepare(input) : ({ kind, ...input } as SessionHistoryWorkerPreparedInput),
+        () => {
+          if (prepare) {
+            return prepare(input);
+          }
+          // SAFETY: The direct overload checks kind/input pairing; spread loses that correlation.
+          return { kind, ...input } as SessionHistoryWorkerPreparedInput;
+        },
         JSON.stringify(input).length * 2,
         (value) => {
           assertResultKind(value, kind, expected);

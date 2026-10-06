@@ -157,7 +157,7 @@ export function createStandardChannelSetupStatus(
   > & {
     channelLabel: string;
     includeStatusLine?: boolean;
-    resolveExtraStatusLines?: ChannelSetupWizardStatus["resolveStatusLines"];
+    resolveExtraStatusLines?: NonNullable<ChannelSetupWizardStatus["resolveStatusLines"]>;
   },
 ): ChannelSetupWizardStatus {
   const status: ChannelSetupWizardStatus = {

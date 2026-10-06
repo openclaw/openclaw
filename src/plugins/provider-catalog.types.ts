@@ -76,7 +76,7 @@ export type UnifiedModelCatalogProviderPlugin = {
     | Promise<readonly UnifiedModelCatalogEntry[] | null | undefined>
     | null
     | undefined;
-  liveCatalog?: UnifiedModelCatalogProviderPlugin["staticCatalog"];
+  liveCatalog?: NonNullable<UnifiedModelCatalogProviderPlugin["staticCatalog"]>;
 };
 
 /**

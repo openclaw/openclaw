@@ -4,6 +4,7 @@ import {
   filterStringEntries,
   normalizeArrayBackedTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
@@ -25,11 +26,11 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
-      hooks?: PluginEntryConfig["hooks"];
-      subagent?: NonNullable<PluginEntryConfig["subagent"]> & {
+      hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
+      subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
       };
-      llm?: NonNullable<PluginEntryConfig["llm"]> & {
+      llm?: SchemaContract<NonNullable<PluginEntryConfig["llm"]>> & {
         hasAllowedModelsConfig?: boolean;
         hasAllowedCompletionModelsConfig?: boolean;
       };
