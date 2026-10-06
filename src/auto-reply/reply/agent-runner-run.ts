@@ -13,6 +13,7 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { hasOutboundReplyContent } from "../../plugin-sdk/reply-payload.js";
 import {
   getGatewayContextResolver,
@@ -251,11 +252,6 @@ export async function runReplyAgent(
     isActive &&
     messageInjectionDisposition === "none" &&
     terminalDeliveryBlockReason !== undefined;
-  if (shouldQueueTerminalReceiptSteer) {
-    logVerbose(
-      `queue: active session ${activeReplyOperation?.sessionId ?? followupRun.run.sessionId} cannot accept steering (${terminalDeliveryBlockReason}); queuing instead`,
-    );
-  }
 
   const questionInput = await runReplyQuestionInput(input);
   if (questionInput.handled) {
@@ -390,6 +386,23 @@ export async function runReplyAgent(
       queuedRunFollowupTurn,
       false,
     );
+    if (shouldQueueTerminalReceiptSteer || shouldQueueProvidedSteer) {
+      diagnosticLogger.warn("steering rejected; applying follow-up policy", {
+        reason: shouldQueueTerminalReceiptSteer
+          ? terminalDeliveryBlockReason
+          : "source-operation-pending",
+        disposition: enqueued
+          ? "followup-queued"
+          : replyOperationRunState?.admission?.status === "skipped" &&
+              replyOperationRunState.admission.reason === "queue-cap"
+            ? "skipped-queue-cap"
+            : "followup-not-enqueued",
+        channel:
+          followupRun.originatingChannel ?? followupRun.run.messageProvider ?? sessionCtx.Provider,
+        sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+        runId: opts?.runId,
+      });
+    }
     if (!enqueued) {
       releaseAdmissionTicket();
       typing.cleanup();

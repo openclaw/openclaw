@@ -269,6 +269,7 @@ function captureHistoryRequest(request: SessionHistoryWorkerRequest): SessionHis
       canonicalKey: params.canonicalKey,
       max: params.max,
       maxHistoryBytes: params.maxHistoryBytes,
+      responseHistoryBytes: params.responseHistoryBytes,
       effectiveMaxChars: params.effectiveMaxChars,
       offset: params.offset,
       messageId: params.messageId,

@@ -144,6 +144,7 @@ async function resolveSessionBranch(
   context: GitCheckoutContext,
   mergedHeads: readonly MergedPullHead[],
   refresh: boolean,
+  refreshIndex: boolean,
 ): Promise<ControlUiSessionBranch | undefined> {
   if (!context.branch || context.branch === context.defaultBranch) {
     return undefined;
@@ -162,7 +163,13 @@ async function resolveSessionBranch(
   const facts = await runGitReadOperation(
     {
       type: "pull-request.branch-facts",
-      input: { root, branch: context.branch, defaultBranch: context.defaultBranch, mergedHeads },
+      input: {
+        root,
+        branch: context.branch,
+        defaultBranch: context.defaultBranch,
+        mergedHeads,
+        refreshIndex,
+      },
     },
     { refresh },
   );
@@ -512,7 +519,12 @@ export async function loadControlUiSessionPullRequests(
     const branch =
       projection === "publication" || workingBranchHasLivePullRequest
         ? undefined
-        : await resolveSessionBranch(context, mergedHeads, request.refresh === true);
+        : await resolveSessionBranch(
+            context,
+            mergedHeads,
+            request.refresh === true,
+            target.refreshIndex === true,
+          );
     assertCurrent();
     return {
       ...snapshot,

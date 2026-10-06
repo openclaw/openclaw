@@ -551,20 +551,7 @@ async function fetchDriveCommentContext(
     botOpenIds?: Iterable<string | undefined>;
     abortSignal?: AbortSignal;
   },
-): Promise<{
-  documentTitle?: string;
-  documentUrl?: string;
-  isWholeComment?: boolean;
-  quoteText?: string;
-  rootCommentText?: string;
-  targetReplyText?: string;
-  rootCommentContent?: ParsedCommentContent;
-  targetReplyContent?: ParsedCommentContent;
-  currentCommentThreadReplies: ResolvedCommentReplyContext[];
-  wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[];
-  nearestBotWholeCommentAfter?: ResolvedWholeCommentTimelineEntry;
-  nearestBotWholeCommentBefore?: ResolvedWholeCommentTimelineEntry;
-}> {
+) {
   const [metaResponse, commentResponse] = await Promise.all([
     requestFeishuOpenApi<FeishuDriveMetaBatchQueryResponse>({
       client: params.client,

@@ -15,6 +15,7 @@ import {
   inspectActionsArtifactZip,
   readBoundedRegularFile,
   validateActionsArtifactBinding,
+  validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
@@ -24,6 +25,9 @@ const REPOSITORY = "openclaw/openclaw";
 const PARENT_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const CHILD_WORKFLOW = ".github/workflows/plugin-clawhub-release.yml";
 const MAX_RECEIPT_BYTES = 64 * 1024;
+const DISPATCH_JOBS = new Set(["Publish plugins, then OpenClaw", "record_docker_only_scope"]);
+const DISPATCH_UPLOAD_STEP = "Upload exact release child dispatch record";
+const MAX_DISPATCH_RECORDS = 32;
 
 function positiveId(value, label) {
   if (!/^[1-9][0-9]*$/u.test(String(value)) || !Number.isSafeInteger(Number(value))) {
@@ -32,7 +36,7 @@ function positiveId(value, label) {
   return Number(value);
 }
 
-function requireSuccessfulRun(run, expected) {
+function requireRun(run, expected) {
   const actual = {
     repository: run?.repository?.full_name,
     headRepository: run?.head_repository?.full_name,
@@ -105,25 +109,35 @@ async function listRunArtifacts(runId, context) {
   throw new Error("ClawHub postpublish artifact listing is incomplete.");
 }
 
-async function downloadArtifact(artifact, run, context, maxArchiveBytes) {
+async function downloadArtifact(artifact, run, context, maxArchiveBytes, producer) {
+  const expected = {
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    artifactDigest: artifact.digest,
+    artifactSizeBytes: artifact.size_in_bytes,
+    repository: REPOSITORY,
+    runId: run.id,
+    runAttempt: run.run_attempt,
+    workflowSha: run.head_sha,
+    workflowHeadBranch: run.head_branch,
+    workflowEvent: "workflow_dispatch",
+    runStatePolicy: producer ? "same-run-producer-success" : "completed-success",
+    workflowPath: run.path.split("@")[0],
+    ...(producer
+      ? {
+          consumerRunAttempt: producer.consumerRunAttempt,
+          producerJobName: producer.jobName,
+        }
+      : {}),
+  };
   validateActionsArtifactBinding({
     artifactMetadata: artifact,
     workflowRun: { ...run, path: run.path.split("@")[0] },
-    expected: {
-      artifactId: artifact.id,
-      artifactName: artifact.name,
-      artifactDigest: artifact.digest,
-      artifactSizeBytes: artifact.size_in_bytes,
-      repository: REPOSITORY,
-      runId: run.id,
-      runAttempt: run.run_attempt,
-      workflowSha: run.head_sha,
-      workflowHeadBranch: run.head_branch,
-      workflowEvent: "workflow_dispatch",
-      runStatePolicy: "completed-success",
-      workflowPath: run.path.split("@")[0],
-    },
+    expected,
   });
+  if (producer) {
+    validateActionsArtifactProducerJob({ expected, workflowJobs: producer.jobs });
+  }
   await mkdir(context.archiveDir, { recursive: true });
   return await downloadExactActionsArtifactArchive({
     ...context,
@@ -140,6 +154,127 @@ async function downloadArtifact(artifact, run, context, maxArchiveBytes) {
       workflowSha: run.head_sha,
     },
   });
+}
+
+async function listRunJobs(run, context) {
+  const jobs = [];
+  let total;
+  for (let page = 1; page <= 20; page += 1) {
+    const result = await githubJson(
+      `actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100&page=${page}`,
+      context,
+    );
+    total ??= result.total_count;
+    if (
+      !Number.isSafeInteger(total) ||
+      total < 1 ||
+      total > 2000 ||
+      result.total_count !== total ||
+      !Array.isArray(result.jobs) ||
+      result.jobs.length === 0
+    ) {
+      break;
+    }
+    jobs.push(...result.jobs);
+    if (jobs.length === total) {
+      return { total_count: total, jobs };
+    }
+  }
+  throw new Error("ClawHub dispatch producer job inventory is incomplete.");
+}
+
+function dispatchExecutionTimes(job, step) {
+  return [job.started_at, step?.started_at, step?.completed_at, job.completed_at].map(Date.parse);
+}
+
+function dispatchProducer(jobs, run) {
+  const matches = jobs.jobs.filter(
+    (job) => DISPATCH_JOBS.has(job.name) && job.conclusion !== "skipped",
+  );
+  const job = matches[0];
+  const uploads = job?.steps?.filter((step) => step.name === DISPATCH_UPLOAD_STEP);
+  const step = uploads?.[0];
+  if (
+    matches.length !== 1 ||
+    job.run_id !== run.id ||
+    job.run_attempt !== run.run_attempt ||
+    job.head_sha !== run.head_sha ||
+    job.status !== "completed" ||
+    job.conclusion !== "success" ||
+    !Number.isSafeInteger(job.runner_id) ||
+    job.runner_id <= 0 ||
+    uploads?.length !== 1 ||
+    step.status !== "completed" ||
+    step.conclusion !== "success"
+  ) {
+    throw new Error("Missing or ambiguous successful ClawHub dispatch producer.");
+  }
+  const times = dispatchExecutionTimes(job, step);
+  if (
+    times.some((time, index) => !Number.isFinite(time) || (index > 0 && time < times[index - 1]))
+  ) {
+    throw new Error("ClawHub dispatch producer execution timestamps are invalid.");
+  }
+  return { job, step, times };
+}
+
+async function resolveDispatchRecord(parent, expectedParent, artifacts, context) {
+  const prefix = `openclaw-release-children-${parent.id}-`;
+  const exact = artifacts.filter((artifact) => artifact.name === `${prefix}${parent.run_attempt}`);
+  if (exact.length === 1) {
+    return { artifact: exact[0], run: parent };
+  }
+  if (exact.length > 1 || parent.run_attempt === 1) {
+    throw new Error("Missing exact parent release dispatch record.");
+  }
+  const current = dispatchProducer(await listRunJobs(parent, context), parent);
+  const retained = artifacts.filter((artifact) => {
+    const attempt = artifact.name?.startsWith(prefix) ? artifact.name.slice(prefix.length) : "";
+    return (
+      /^[1-9][0-9]*$/u.test(attempt) &&
+      Number.isSafeInteger(Number(attempt)) &&
+      Number(attempt) < parent.run_attempt
+    );
+  });
+  if (retained.length > MAX_DISPATCH_RECORDS) {
+    throw new Error("ClawHub dispatch recovery exceeds its historical record limit.");
+  }
+  const matches = [];
+  for (const artifact of retained) {
+    const runAttempt = positiveId(artifact.name.slice(prefix.length), "dispatch producer attempt");
+    const run = await githubJson(`actions/runs/${parent.id}/attempts/${runAttempt}`, context);
+    requireRun(run, { ...expectedParent, runAttempt, conclusion: run?.conclusion });
+    if (run.path !== parent.path) {
+      throw new Error("ClawHub dispatch producer workflow ref mismatch.");
+    }
+    const jobs = await listRunJobs(run, context);
+    // Failed-job reruns project retained jobs under new IDs/attempts. Match the
+    // authenticated execution, not the newest artifact or its creation clock.
+    const sameExecution = jobs.jobs.some((job) => {
+      const uploads = job.steps?.filter((step) => step.name === DISPATCH_UPLOAD_STEP);
+      return (
+        job.name === current.job.name &&
+        job.runner_id === current.job.runner_id &&
+        uploads?.length === 1 &&
+        dispatchExecutionTimes(job, uploads[0]).every(
+          (time, index) => time === current.times[index],
+        )
+      );
+    });
+    if (!sameExecution) {
+      continue;
+    }
+    const original = dispatchProducer(jobs, run);
+    matches.push({
+      artifact,
+      run,
+      producer: { consumerRunAttempt: parent.run_attempt, jobName: original.job.name, jobs },
+    });
+  }
+  if (matches.length !== 1) {
+    throw new Error("Missing or ambiguous retained ClawHub dispatch record.");
+  }
+  return matches[0];
 }
 
 function identityFromReceipt(receipt) {
@@ -182,21 +317,19 @@ export async function verifyClawHubPostpublish({
     headSha: trigger?.head_sha,
     ref: trigger?.head_branch,
   };
-  requireSuccessfulRun(trigger, expectedParent);
+  requireRun(trigger, expectedParent);
   const context = { token, fetchImpl, archiveDir: join(outputDir, "archives") };
   const parent = await githubJson(`actions/runs/${runId}/attempts/${runAttempt}`, context);
-  requireSuccessfulRun(parent, expectedParent);
+  requireRun(parent, expectedParent);
   const artifacts = await listRunArtifacts(runId, context);
-  const dispatchName = `openclaw-release-children-${runId}-${runAttempt}`;
-  const dispatchArtifacts = artifacts.filter((artifact) => artifact.name === dispatchName);
-  if (dispatchArtifacts.length !== 1) {
-    throw new Error("Missing exact parent release dispatch record.");
-  }
+  const dispatchRecord = await resolveDispatchRecord(parent, expectedParent, artifacts, context);
+  const dispatchRunAttempt = dispatchRecord.run.run_attempt;
   const { archiveBytes: dispatchZip } = await downloadArtifact(
-    dispatchArtifacts[0],
-    parent,
+    dispatchRecord.artifact,
+    dispatchRecord.run,
     context,
     MAX_RECEIPT_BYTES + 4096,
+    dispatchRecord.producer,
   );
   const dispatchFiles = inspectActionsArtifactZip(dispatchZip, ["dispatch.json"], {
     maxEntryBytes: MAX_RECEIPT_BYTES,
@@ -225,7 +358,7 @@ export async function verifyClawHubPostpublish({
     dispatch.schemaVersion !== 1 ||
     dispatch.repository !== REPOSITORY ||
     String(dispatch.parentRunId) !== String(runId) ||
-    String(dispatch.parentRunAttempt) !== String(runAttempt) ||
+    String(dispatch.parentRunAttempt) !== String(dispatchRunAttempt) ||
     dispatch.parentWorkflow !== PARENT_WORKFLOW ||
     dispatch.toolingRef !== parent.head_branch ||
     dispatch.toolingSha !== parent.head_sha ||
@@ -262,10 +395,11 @@ export async function verifyClawHubPostpublish({
       repository: REPOSITORY,
       parentRunId: runId,
       parentRunAttempt: runAttempt,
+      dispatchRunAttempt,
       complete: true,
       outcome: "no-normal-clawhub-publication",
-      dispatchArtifactId: dispatchArtifacts[0].id,
-      dispatchArtifactDigest: dispatchArtifacts[0].digest,
+      dispatchArtifactId: dispatchRecord.artifact.id,
+      dispatchArtifactDigest: dispatchRecord.artifact.digest,
       packages: [],
     };
     await writeFile(join(outputDir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
@@ -273,7 +407,7 @@ export async function verifyClawHubPostpublish({
   }
   positiveId(dispatch.normalClawHubRunId, "dispatched child run");
   positiveId(dispatch.normalClawHubRunAttempt, "dispatched child attempt");
-  const prefix = `openclaw-clawhub-parent-authorization-v2-${runId}-${runAttempt}-`;
+  const prefix = `openclaw-clawhub-parent-authorization-v2-${runId}-${dispatchRunAttempt}-`;
   const receipts = artifacts.filter((artifact) => artifact.name?.startsWith(prefix));
   if (receipts.length !== 1) {
     throw new Error("Expected exactly one ClawHub parent authorization artifact for this attempt.");
@@ -281,9 +415,10 @@ export async function verifyClawHubPostpublish({
   const receiptArtifact = receipts[0];
   const { archiveBytes } = await downloadArtifact(
     receiptArtifact,
-    parent,
+    dispatchRecord.run,
     context,
     MAX_RECEIPT_BYTES + 4096,
+    dispatchRecord.producer,
   );
   const files = inspectActionsArtifactZip(archiveBytes, ["authorization.json"], {
     maxEntryBytes: MAX_RECEIPT_BYTES,
@@ -304,7 +439,7 @@ export async function verifyClawHubPostpublish({
   if (
     receiptArtifact.name !== `${prefix}${identity.runId}-${identity.runAttempt}` ||
     receipt.runId !== String(runId) ||
-    receipt.runAttempt !== String(runAttempt) ||
+    receipt.runAttempt !== String(dispatchRunAttempt) ||
     receipt.headSha !== parent.head_sha ||
     receipt.ref !== parent.head_branch
   ) {
@@ -352,12 +487,13 @@ export async function verifyClawHubPostpublish({
     repository: REPOSITORY,
     parentRunId: runId,
     parentRunAttempt: runAttempt,
+    dispatchRunAttempt,
     childRunId: child.id,
     childRunAttempt: child.run_attempt,
     toolingSha: parent.head_sha,
     candidateSha: identity.candidateSha,
-    dispatchArtifactId: dispatchArtifacts[0].id,
-    dispatchArtifactDigest: dispatchArtifacts[0].digest,
+    dispatchArtifactId: dispatchRecord.artifact.id,
+    dispatchArtifactDigest: dispatchRecord.artifact.digest,
     receiptArtifactId: receiptArtifact.id,
     receiptArtifactDigest: receiptArtifact.digest,
     packages: [],

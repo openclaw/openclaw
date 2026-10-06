@@ -112,10 +112,19 @@ export function gitCommandArgv(cwd: string, args: string[], config: string[] = [
   ];
 }
 
-function withForegroundGitMaintenance(argv: string[]): string[] {
+function gitExecutionArgv(
+  cwd: string,
+  args: string[],
+  options: { killProcessTree?: boolean; lowerPriority?: boolean },
+): string[] {
   // Maintenance and legacy auto-GC must stay in their cancellable process tree.
-  return argv[0] === "git"
-    ? ["git", "-c", "maintenance.autoDetach=false", "-c", "gc.autoDetach=false", ...argv.slice(1)]
+  const argv = gitCommandArgv(
+    cwd,
+    args,
+    options.killProcessTree ? ["maintenance.autoDetach=false", "gc.autoDetach=false"] : [],
+  );
+  return options.lowerPriority && process.platform !== "win32"
+    ? ["nice", "-n", "10", ...argv]
     : argv;
 }
 
@@ -131,6 +140,8 @@ export type GitCommandOptions = Pick<
   | "maxOutputBytes"
   | "terminateOnOutputLimit"
 > & {
+  /** Yield CPU to foreground Gateway work for content-heavy background reads. */
+  lowerPriority?: boolean;
   operation?: GitProcessOperation;
   /** An admitted destructive operation must settle without the generic Git deadline. */
   waitForExit?: boolean;
@@ -169,11 +180,11 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
   options: GitCommandOptions,
 ): Promise<Result & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
-  const argv = gitCommandArgv(cwd, args);
+  const argv = gitExecutionArgv(cwd, args, options);
   if (options.waitForExit === true) {
     const start = () => {
       options.beforeRun?.();
-      return run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+      return run(argv, {
         ...options,
         timeoutMs: undefined,
       });
@@ -185,7 +196,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     retryableGitNetworkOperation(args),
     { ...options, timeoutMs },
     (attemptTimeoutMs) =>
-      run(options.killProcessTree ? withForegroundGitMaintenance(argv) : argv, {
+      run(argv, {
         ...options,
         timeoutMs: attemptTimeoutMs,
       }),
@@ -194,6 +205,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
 }
 
 export type GitBufferedCommandOptions = BufferedCommandOptions & {
+  lowerPriority?: boolean;
   beforeRun?: () => void;
   startRun?: GitOperationStarter;
   operation?: GitProcessOperation;
@@ -204,16 +216,15 @@ export async function executeGitCommandBuffered(
   args: string[],
   options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
-  const argv = gitCommandArgv(cwd, args);
+  const argv = gitExecutionArgv(cwd, args, {
+    ...options,
+    killProcessTree: options.killProcessTree !== false,
+  });
   return await withGitProcessOperation(options.operation, () =>
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) =>
-        runCommandBuffered(
-          options.killProcessTree === false ? argv : withForegroundGitMaintenance(argv),
-          { ...options, timeoutMs },
-        ),
+      (timeoutMs) => runCommandBuffered(argv, { ...options, timeoutMs }),
     ),
   );
 }

@@ -34,19 +34,21 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
         continue;
       }
       try {
-        // Incremental tasks preserve objects and reflogs shared by active worktrees.
+        // Git runs these tasks in order. Repair pack lookup before graph traversal:
+        // a stale multi-pack index can make the graph task consume the whole budget.
         await requireGit(
           repoRoot,
           [
             "maintenance",
             "run",
             "--auto",
+            "--task=incremental-repack",
             "--task=commit-graph",
             "--task=loose-objects",
-            "--task=incremental-repack",
           ],
           {
             killProcessTree: true,
+            lowerPriority: true,
             signal: params.signal,
             beforeRun: assertCurrent,
             timeoutMs: WORKTREE_GIT_MAINTENANCE_TIMEOUT_MS,

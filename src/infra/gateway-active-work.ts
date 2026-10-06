@@ -88,8 +88,10 @@ export type GatewayActiveWorkInspectors = {
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
   getChatRuns: () => number;
+  getChatRunHolders?: () => string[];
   getQueuedTurns: () => number;
   getTerminalPersistence: () => number;
+  getTerminalPersistenceHolders?: () => string[];
   getTerminalSessions: () => number;
 };
 
@@ -164,9 +166,23 @@ export function createGatewayActiveWorkSnapshot(
     (options.ignoreTerminalSessions ? counts.terminalSessions : 0);
 
   const blockers: GatewayActiveWorkBlocker[] = [];
-  const add = (count: number, kind: GatewayActiveWorkBlocker["kind"], message: string) => {
+  const add = (
+    count: number,
+    kind: GatewayActiveWorkBlocker["kind"],
+    message: string,
+    getHolders?: () => string[],
+  ) => {
     if (count > 0) {
-      blockers.push({ kind, count, message: `${count} ${message}` });
+      const holders = getHolders?.().toSorted() ?? [];
+      const names = holders.slice(0, 8).map((name) => name.replace(/[\r\n\t]/g, " ").slice(0, 256));
+      if (holders.length > names.length) {
+        names.push(`+${holders.length - names.length} more`);
+      }
+      blockers.push({
+        kind,
+        count,
+        message: `${count} ${message}${names.length > 0 ? `: ${names.join(", ")}` : ""}`,
+      });
     }
   };
   add(counts.queueSize, "queue", "queued or active operation(s)");
@@ -177,26 +193,24 @@ export function createGatewayActiveWorkSnapshot(
   add(counts.agentRuns, "agent-run", "admitted agent run(s)");
   add(counts.acpRuns, "acp-run", "active ACP turn(s)");
   add(counts.mediaRuns, "media-generation", "active media generation(s)");
-  const rootRequestHolders =
-    inspectors.getRootRequests && !inspectors.getRootRequestHolders
-      ? []
-      : (resolved.getRootRequestHolders?.() ?? []);
-  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
-  if (rootRequestHolders.length > rootRequestHolderNames.length) {
-    rootRequestHolderNames.push(
-      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
-    );
-  }
   add(
     counts.rootRequests,
     "root-request",
-    `active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+    "active gateway request(s)",
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? undefined
+      : resolved.getRootRequestHolders,
   );
   add(counts.sessionAdmissions, "session-admission", "admitted session turn(s)");
   add(counts.sessionMutations, "session-mutation", "active session lifecycle mutation(s)");
-  add(counts.chatRuns, "chat-run", "active chat run(s)");
+  add(counts.chatRuns, "chat-run", "active chat run(s)", resolved.getChatRunHolders);
   add(counts.queuedTurns, "queued-turn", "queued chat turn(s)");
-  add(counts.terminalPersistence, "terminal-persistence", "pending terminal session write(s)");
+  add(
+    counts.terminalPersistence,
+    "terminal-persistence",
+    "pending terminal session write(s)",
+    resolved.getTerminalPersistenceHolders,
+  );
   if (!options.ignoreTerminalSessions) {
     add(counts.terminalSessions, "terminal-session", "open terminal session(s)");
   }

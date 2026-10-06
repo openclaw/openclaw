@@ -65,7 +65,10 @@ type PublicationRows = WeakMap<
 >;
 type Publication = {
   rows: PublicationRows;
-  lists: Map<string, { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection }>;
+  lists: Map<
+    string,
+    { rows?: GatewaySessionRow[]; selection?: SessionEntrySelection; selectedAt?: number }
+  >;
 };
 type PublicationView = (context: SessionRowReadView["state"]["rowContext"]) => Publication;
 
@@ -436,7 +439,6 @@ export function prepareProjectedSessionPresentation(
       if (
         opts.search ||
         opts.spawnedBy ||
-        opts.activeMinutes !== undefined ||
         opts.activeOnly ||
         opts.includeOwnerSessionCounts ||
         opts.activityPulseBoundaries
@@ -444,6 +446,13 @@ export function prepareProjectedSessionPresentation(
         return select();
       }
       const view = listView(opts);
+      if (
+        view.selection &&
+        opts.activeMinutes !== undefined &&
+        (now < view.selectedAt! || now > (view.selection.activityExpiresAt ?? Infinity))
+      ) {
+        view.selection = undefined;
+      }
       if (!view.selection) {
         const { entries, ...facets } = select();
         Object.freeze(entries);
@@ -451,6 +460,7 @@ export function prepareProjectedSessionPresentation(
           ...freezeJsonSnapshot(structuredClone(facets)),
           entries,
         });
+        view.selectedAt = now;
       }
       return view.selection;
     },

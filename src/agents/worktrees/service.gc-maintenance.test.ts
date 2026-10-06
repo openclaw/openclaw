@@ -68,12 +68,14 @@ it("maintains each shared repository and suspends failures until explicitly retr
   const controller = new AbortController();
   const execute = gitExec.executeGitCommand;
   const maintenanceRoots: string[] = [];
+  const taskOrders: string[][] = [];
   const commands = vi
     .spyOn(gitExec, "executeGitCommand")
     .mockImplementation(async (cwd, args, options) => {
       if (args[0] !== "maintenance") {
         return await execute(cwd, args, options);
       }
+      taskOrders.push(args.filter((arg) => arg.startsWith("--task=")));
       expect(options).toMatchObject({
         killProcessTree: true,
         signal: controller.signal,
@@ -102,6 +104,14 @@ it("maintains each shared repository and suspends failures until explicitly retr
       issueCount: 0,
     });
     expect(maintenanceRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
+    // Git honors task order; graph traversal must not starve pack-index repair.
+    expect(taskOrders).toEqual(
+      [repo, otherRepo].map(() => [
+        "--task=incremental-repack",
+        "--task=commit-graph",
+        "--task=loose-objects",
+      ]),
+    );
     const warning = await logs.findText("worktree Git maintenance");
     expect(warning).toContain("gc is already running");
     await service.gc({ signal: controller.signal });

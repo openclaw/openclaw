@@ -312,7 +312,6 @@ extensions/discord/src/token.ts	2
 extensions/discord/src/voice-message.ts	3
 extensions/discord/src/voice/access.ts	1
 extensions/discord/src/voice/audio.ts	1
-extensions/discord/src/voice/ingress.ts	1
 extensions/discord/src/voice/realtime-turns.ts	3
 extensions/discord/src/voice/receive-recovery.ts	1
 extensions/discord/src/voice/sdk-runtime.ts	1
@@ -351,7 +350,7 @@ extensions/feishu/src/perm.ts	1
 extensions/feishu/src/policy.ts	1
 extensions/feishu/src/presentation-card.ts	1
 extensions/feishu/src/reply-dispatcher.ts	1
-extensions/feishu/src/send.ts	8
+extensions/feishu/src/send.ts	7
 extensions/feishu/src/setup-core.ts	1
 extensions/feishu/src/setup-surface.ts	9
 extensions/feishu/src/tool-account.ts	1
@@ -1004,7 +1003,6 @@ extensions/whatsapp/src/inbound/extract.ts	10
 extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	2
-extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/qa-driver.runtime.ts	1
@@ -1060,7 +1058,7 @@ extensions/zalouser/src/text-styles-inline.ts	1
 extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/text-styles-source.ts	1
 extensions/zalouser/src/tool.ts	1
-extensions/zalouser/src/zalo-js.ts	9
+extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	2
 packages/acp-core/src/runtime/errors.ts	6
 packages/agent-core/src/agent-loop.ts	2
@@ -1237,7 +1235,6 @@ src/agents/anthropic-payload-log.ts	2
 src/agents/apply-patch-file-ops.ts	2
 src/agents/apply-patch-targets.ts	1
 src/agents/apply-patch.ts	2
-src/agents/auth-profiles/clone.ts	1
 src/agents/auth-profiles/external-auth.ts	1
 src/agents/auth-profiles/oauth-refresh-failure.ts	1
 src/agents/auth-profiles/oauth-refresh-lock-errors.ts	1

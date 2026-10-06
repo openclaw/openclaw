@@ -13,6 +13,10 @@ import {
   withSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
+import type {
+  PreparedSessionSourceAuthority,
+  SessionSourceAssertion,
+} from "../../../config/sessions/session-source-authority.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreCandidateIdentities,
@@ -61,7 +65,7 @@ export type NativeSessionBindingAuthority = {
   /** Cancellation and lifecycle only; durable authority is acquired through withCurrent. */
   assertCurrent: () => void;
   /** For shipped synchronous capabilities that cannot await worker admission. */
-  assertLegacyCurrent: () => void;
+  assertLegacyCurrent: SessionSourceAssertion;
   withCurrent: NativeSessionBindingWithCurrent;
   withPreparedCurrent?: <T>(
     consume: () => T,
@@ -204,7 +208,7 @@ export function createNativeSessionBindingAuthority(
       assertEntry(expected, entry);
     }
   };
-  return {
+  const authority = {
     lineage,
     assertCurrent,
     withCurrent: async (consume) => {
@@ -304,6 +308,7 @@ export function createNativeSessionBindingAuthority(
     prepareMutation: async () => {
       assertCurrent();
       const checks: SessionEntryCurrentCheck[] = [];
+      const sourceChecks: PreparedSessionSourceAuthority["checks"] = [];
       const nativeChecks: Array<() => void> = [];
       const native = new Map(
         lineage
@@ -340,6 +345,20 @@ export function createNativeSessionBindingAuthority(
                 assertEntry(expected, facts);
               },
             });
+            sourceChecks.push({
+              predicate: {
+                source: captured.source,
+                sessionKey: captured.source.sessionKey,
+                fields: ["sessionId", "previousSessionId"],
+                expected: {
+                  sessionId: expected.sessionId,
+                  previousSessionId: expected.previousSessionId,
+                },
+              },
+              refuse: () => {
+                throw expected.createSupersededError(expected.sessionId);
+              },
+            });
           },
         );
       }
@@ -358,10 +377,22 @@ export function createNativeSessionBindingAuthority(
             },
           }
         : undefined;
-      return { assertCurrent: assertMutationCurrent, sessionEntryCurrent: restriction };
+      return {
+        assertCurrent: assertMutationCurrent,
+        sessionEntryCurrent: restriction,
+        sessionSource: {
+          assertCurrent: assertMutationCurrent,
+          checks: sourceChecks,
+          nativeSource: nativeChecks.length > 0,
+        },
+      };
     },
     assertLegacyCurrent,
-  };
+  } satisfies NativeSessionBindingAuthority;
+  Object.assign(authority.assertLegacyCurrent, {
+    prepareSessionSource: async () => (await authority.prepareMutation()).sessionSource,
+  });
+  return authority;
 }
 
 function readNativeBindingLineage(

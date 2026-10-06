@@ -8,7 +8,6 @@ import { stripChannelTargetPrefix, stripTargetKindPrefix } from "openclaw/plugin
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveZaloAccount } from "./accounts.js";
-import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { resolveZaloToken } from "./token.js";
@@ -92,10 +91,7 @@ async function runZaloSend(
   }
 }
 
-function resolveSendContext(options: ZaloSendOptions): {
-  token: string;
-  fetcher?: ZaloFetch;
-} {
+function resolveSendContext(options: ZaloSendOptions) {
   if (options.cfg) {
     const account = resolveZaloAccount({
       cfg: options.cfg,

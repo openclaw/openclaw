@@ -470,7 +470,7 @@ describe("gateway request suspension admission", () => {
       ]);
       const context = {
         cron,
-        logGateway: { warn: vi.fn() },
+        logGateway: { warn: vi.fn(), info: vi.fn() },
         chatAbortControllers,
         chatQueuedTurns: new Map(),
         terminalSessions,
@@ -517,6 +517,9 @@ describe("gateway request suspension admission", () => {
               : []),
           ]),
         });
+        expect(context.logGateway.info).toHaveBeenCalledWith(
+          expect.stringContaining("run=reply-pending session=agent:main:session-pending"),
+        );
         if (!result) {
           throw new Error("expected an owned draining suspension lease");
         }
