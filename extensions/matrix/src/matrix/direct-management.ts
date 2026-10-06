@@ -253,11 +253,8 @@ export async function repairMatrixDirectRooms(params: {
   remoteUserId: string;
   encrypted?: boolean;
 }): Promise<MatrixDirectRoomRepairResult> {
-  const remoteUserId = normalizeRemoteUserId(params.remoteUserId);
-  const inspected = await inspectMatrixDirectRooms({
-    client: params.client,
-    remoteUserId,
-  });
+  const inspected = await inspectMatrixDirectRooms(params);
+  const { remoteUserId } = inspected;
   const activeRoomId =
     inspected.activeRoomId ??
     (await params.client.createDirectRoom(remoteUserId, {

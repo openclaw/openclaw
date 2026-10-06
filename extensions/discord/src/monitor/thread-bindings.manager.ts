@@ -266,9 +266,8 @@ function createLoadedThreadBindingManager(
         unbindParams.assertCurrent?.();
       },
     });
-    const removed = existingLocal;
-    manager.notifyUnbound(removed, unbindParams);
-    return removed;
+    manager.notifyUnbound(existingLocal, unbindParams);
+    return existingLocal;
   };
 
   const manager: ThreadBindingManager = {
@@ -292,14 +291,12 @@ function createLoadedThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound events when allowBots is enabled.
-        if (cfg) {
-          void maybeSendBindingMessage({
-            cfg,
-            record: removed,
-            text: farewell,
-            preferWebhook: false,
-          });
-        }
+        void maybeSendBindingMessage({
+          cfg,
+          record: removed,
+          text: farewell,
+          preferWebhook: false,
+        });
       }
     },
     getIdleTimeoutMs: () => idleTimeoutMs,
@@ -538,7 +535,7 @@ function createLoadedThreadBindingManager(
         );
 
         const introText = bindParams.introText?.trim();
-        if (introText && cfg) {
+        if (introText) {
           void maybeSendBindingMessage({
             cfg,
             record,

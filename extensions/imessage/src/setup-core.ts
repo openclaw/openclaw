@@ -145,8 +145,7 @@ async function promptIMessageAllowFrom(params: {
 export const imessageDmPolicy = createChannelDmPolicy({
   label: "iMessage",
   channel,
-  resolveAccount: (cfg, accountId) =>
-    resolveIMessageAccount({ cfg, accountId: accountId ?? resolveDefaultIMessageAccountId(cfg) }),
+  resolveAccount: (cfg, accountId) => resolveIMessageAccount({ cfg, accountId }),
   setupSurface: () => imessageSetupAdapter,
   promptAllowFrom: promptIMessageAllowFrom,
 });

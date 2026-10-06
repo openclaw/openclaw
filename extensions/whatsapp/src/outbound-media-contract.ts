@@ -10,7 +10,6 @@ import {
   MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
   transcodeAudioBufferToOpus,
 } from "openclaw/plugin-sdk/media-runtime";
-import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   sanitizeAssistantVisibleText,
@@ -102,9 +101,10 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   },
 ): NormalizedWhatsAppOutboundPayload<T> {
   const preferredMediaUrls = normalizeUniqueStringEntries(payload.mediaUrls);
-  const mediaUrls = normalizeUniqueStringEntries(
-    resolveOutboundMediaUrls({ mediaUrl: payload.mediaUrl, mediaUrls: preferredMediaUrls }),
-  );
+  const mediaUrls =
+    preferredMediaUrls.length > 0
+      ? preferredMediaUrls
+      : normalizeUniqueStringEntries([payload.mediaUrl]);
   const normalizeText = options?.normalizeText ?? normalizeWhatsAppPayloadText;
   return {
     ...payload,

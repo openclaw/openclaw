@@ -35,7 +35,6 @@ import {
   TextDisplay,
   serializePayload,
   type MessagePayloadObject,
-  type TopLevelComponents,
 } from "./internal/discord.js";
 import {
   createDiscordClient,
@@ -116,8 +115,7 @@ function createApprovalActionRow(view: PendingApprovalView): Row<Button> {
 }
 
 function buildExecApprovalPayload(container: Container): MessagePayloadObject {
-  const components: TopLevelComponents[] = [container];
-  return { components, allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
+  return { components: [container], allowed_mentions: DISCORD_APPROVAL_ALLOWED_MENTIONS };
 }
 
 function formatCommandPreview(commandText: string, maxChars: number): string {

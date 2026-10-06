@@ -1210,8 +1210,7 @@ export async function deliverSlackSlashResponseWithWebApi(params: {
     ...(mrkdwn !== undefined ? { mrkdwn } : {}),
   };
   if (payload.response_type === "in_channel") {
-    const postSlackMessage = params.client.chat.postMessage.bind(params.client.chat);
-    const response = await postSlackMessage(message);
+    const response = await params.client.chat.postMessage(message);
     requireSlackPostMessageTimestamp(response);
   } else {
     await params.client.chat.postEphemeral({ ...message, user: params.command.user_id });

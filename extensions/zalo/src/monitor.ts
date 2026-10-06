@@ -11,7 +11,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   deliverTextOrMediaReply,
@@ -618,7 +618,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
           accountId: account.accountId,
           statusSink,
           fetcher,
-          tableMode: "off",
         });
       },
       onDelivered: (_payload, _info, result) => {
@@ -656,7 +655,6 @@ async function deliverZaloReply(params: {
   accountId?: string;
   statusSink?: ZaloStatusSink;
   fetcher?: ZaloFetch;
-  tableMode?: MarkdownTableMode;
 }): Promise<void> {
   const {
     payload,
@@ -673,10 +671,7 @@ async function deliverZaloReply(params: {
     statusSink,
     fetcher,
   } = params;
-  const tableMode = params.tableMode ?? "code";
-  const reply = resolveSendableOutboundReplyParts(payload, {
-    text: core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
-  });
+  const reply = resolveSendableOutboundReplyParts(payload);
   const chunkMode = core.channel.text.resolveChunkMode(config, "zalo", accountId);
   const acceptedMessageIds: string[] = [];
   let visibleReplySent = false;
