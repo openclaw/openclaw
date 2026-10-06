@@ -387,6 +387,6 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   }
   const slashShutdownCleanupPromise = slashShutdownCleanup;
   if (slashShutdownCleanupPromise) {
-    await Promise.resolve(slashShutdownCleanupPromise);
+    await slashShutdownCleanupPromise;
   }
 }
