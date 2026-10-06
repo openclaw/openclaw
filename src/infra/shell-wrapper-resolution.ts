@@ -342,14 +342,13 @@ function extractShellWrapperPayload(
   kind: ShellWrapperKind,
   baseExecutable: string,
 ): string | null {
-  switch (kind) {
-    case "posix":
-      return extractPosixShellInlineCommand(argv, baseExecutable);
-    case "cmd":
-      return extractCmdInlineCommand(argv);
-    case "powershell":
-      return resolvePowerShellInlineCommandMatch(argv).command;
+  if (kind === "posix") {
+    return extractPosixShellInlineCommand(argv, baseExecutable);
   }
+  if (kind === "cmd") {
+    return extractCmdInlineCommand(argv);
+  }
+  return resolvePowerShellInlineCommandMatch(argv).command;
 }
 
 function isLegacyShLoginInlineForm(argv: string[], baseExecutable: string): boolean {
@@ -430,9 +429,9 @@ export function hasEnvManipulationBeforeShellWrapper(argv: string[]): boolean {
 /** Classify shell wrapper argv and return the approval-display command when safe. */
 export function extractShellWrapperCommand(
   argv: string[],
-  rawCommand?: string | null,
+  rawCommandInput?: string | null,
 ): ShellWrapperCommand {
-  rawCommand = rawCommand?.trim() || null;
+  const rawCommand = rawCommandInput?.trim() || null;
   const candidate = resolveShellWrapperPayload(argv);
   if (!candidate) {
     return { isWrapper: false, command: null };
