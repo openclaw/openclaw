@@ -154,7 +154,7 @@ private data class NodeHarness(
 )
 
 private data class InvokeScenarioResult(
-  val request: GatewaySession.InvokeRequest,
+  val request: GatewayNodeInvokeRequest,
   val resultParams: JsonObject,
 )
 
@@ -2180,7 +2180,7 @@ class GatewaySessionInvokeTest {
     extraContext: CoroutineContext = EmptyCoroutineContext,
     deviceAuthStore: DeviceAuthTokenStore = InMemoryDeviceAuthStore(),
     onConnectFailure: (GatewaySession.ErrorShape, Boolean) -> Unit = { _, _ -> },
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): NodeHarness {
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
@@ -2280,11 +2280,11 @@ class GatewaySessionInvokeTest {
     invokeEventFrame: String,
     onHandshake: ((RecordedRequest) -> Unit)? = null,
     afterResult: suspend (InvokeScenarioResult) -> Unit = {},
-    onInvoke: suspend (GatewaySession.InvokeRequest) -> GatewaySession.InvokeResult,
+    onInvoke: suspend (GatewayNodeInvokeRequest) -> GatewaySession.InvokeResult,
   ): InvokeScenarioResult {
     val json = testJson()
     val connected = CompletableDeferred<Unit>()
-    val invokeRequest = CompletableDeferred<GatewaySession.InvokeRequest>()
+    val invokeRequest = CompletableDeferred<GatewayNodeInvokeRequest>()
     val invokeResultParams = CompletableDeferred<String>()
     val lastDisconnect = AtomicReference("")
     val server =

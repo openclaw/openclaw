@@ -1,5 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Classifies a Gateway connect failure into what the login gate should say and where the fix lives.
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { t } from "../i18n/index.ts";
 import {

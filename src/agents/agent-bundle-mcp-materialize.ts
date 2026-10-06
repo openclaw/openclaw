@@ -1,4 +1,3 @@
-/** Materializes configured MCP catalog entries into agent tools and runtime helpers. */
 import crypto from "node:crypto";
 import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

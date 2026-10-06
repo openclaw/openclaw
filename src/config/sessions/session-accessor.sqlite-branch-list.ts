@@ -16,6 +16,7 @@ import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-tra
 import type { SessionBranchListParams, SessionBranchListResult } from "./session-accessor.types.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -26,9 +27,12 @@ const pendingBranchReads = new Map<string, Promise<SessionBranchSummaryReadResul
 
 export async function listSessionBranches(
   params: SessionBranchListParams,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<SessionBranchListResult> {
   const sourceKey = normalizeStoreSessionKey(params.sessionStoreKey ?? params.sessionKey);
+  const incognito =
+    suppliedIncognito ??
+    captureIncognitoSessionHistoryBinding({ ...params, sessionKey: sourceKey });
   if (incognito) {
     const result = await readIncognitoSessionHistory(
       incognito,

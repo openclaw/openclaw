@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
 import java.net.URI
 import java.net.URLDecoder
 
@@ -28,7 +29,7 @@ internal object ChatWidgetUrlResolver {
   fun supportsTarget(target: String): Boolean = parseRelativeTarget(target) != null
 
   private fun resolve(
-    surface: ChatWidgetSurface,
+    surface: GatewayCanvasHostRoute,
     target: String,
     role: ChatWidgetSurfaceRole,
     attemptedRoles: Set<ChatWidgetSurfaceRole>,
@@ -60,8 +61,8 @@ internal object ChatWidgetUrlResolver {
     target: String,
     failedResource: ChatWidgetResource,
     currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
-    refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
-    refreshOperatorSurface: suspend (String?) -> ChatWidgetSurface?,
+    refreshNodeSurface: suspend (String?) -> GatewayCanvasHostRoute?,
+    refreshOperatorSurface: suspend (String?) -> GatewayCanvasHostRoute?,
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
     val blockedRoles = failedResource.attemptedSurfaceRoles
@@ -160,13 +161,8 @@ internal object ChatWidgetUrlResolver {
 }
 
 internal data class ChatWidgetSurfaceUrls(
-  val node: ChatWidgetSurface?,
-  val operator: ChatWidgetSurface?,
-)
-
-internal data class ChatWidgetSurface(
-  val url: String,
-  val tlsFingerprintSha256: String?,
+  val node: GatewayCanvasHostRoute?,
+  val operator: GatewayCanvasHostRoute?,
 )
 
 internal enum class ChatWidgetSurfaceRole {

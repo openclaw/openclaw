@@ -191,6 +191,15 @@ wait for an event-loop check before opening the socket.
 
 ## Streaming chat
 
+The `runId` returned by `chat.send` identifies the submitted input even when a
+steer falls back to a followup. Queue admission is nonterminal: keep observing
+that ID until the consuming execution completes, or the input is rejected,
+canceled, or dropped before consumption. Collected inputs each receive the
+batch execution's terminal outcome under their original IDs. SDK run handles
+use the same IDs for events, `wait()`, and cancellation; canceling an input before
+consumption withdraws only that input. A steer accepted into the active turn
+continues to complete after its transcript receipt while that turn remains active.
+
 Event callbacks receive the wire payload unchanged. A `chat` delta's optional
 `message` is an authoritative snapshot that already includes `deltaText`.
 Without `message`, append `deltaText` to the run's existing text. `replace: true`

@@ -14,18 +14,23 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
+import { getRuntimeConfigSourceSnapshot } from "../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import * as logging from "../logging/subsystem.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
-import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
+import {
+  activateSecretsRuntimeSnapshotWithSource,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -158,6 +163,7 @@ it.for([
     const restorationEntered = createDeferredCore();
     const restorationRelease = createDeferredCore();
     let startupSettled = false;
+    let recoverySource: OpenClawConfig | undefined;
     let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
     if (holdSubagentRestoration) {
       vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
@@ -541,6 +547,41 @@ it.for([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        if (outcome === "recover") {
+          const active = getActiveSecretsRuntimeSnapshot()!;
+          const source = structuredClone(active.sourceConfig);
+          source.models = {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                models: [
+                  {
+                    id: "gpt-5.6-sol",
+                    name: "GPT-5.6",
+                    api: "openai-responses",
+                    agentRuntime: { id: "openclaw" },
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128000,
+                    maxTokens: 4096,
+                  },
+                ],
+              },
+            },
+          };
+          const runtime = structuredClone(source);
+          recoverySource = source;
+          runtime.models!.providers!.openai!.models[0]!.compat = {
+            supportsTemperature: false,
+            codeMode: "preferred",
+          };
+          // Startup keeps catalog defaults in the secrets input, separate from authored config.
+          activateSecretsRuntimeSnapshotWithSource(
+            { ...active, config: runtime, sourceConfig: runtime },
+            source,
+          );
+        }
         preparationRelease.resolve();
         if (outcome === "superseded") {
           await vi.waitFor(
@@ -568,6 +609,11 @@ it.for([
         );
         expect(input).toBeDefined();
         expect(input && getPreparedModelRuntimeSnapshot(input)).toBeDefined();
+        expect(getRuntimeConfig().models?.providers?.openai?.models[0]?.compat).toEqual({
+          supportsTemperature: false,
+          codeMode: "preferred",
+        });
+        expect(getRuntimeConfigSourceSnapshot()).toEqual(recoverySource);
         const snapshot = getActiveSecretsRuntimeSnapshot();
         expect(
           snapshot?.authStores.find((entry) => entry.databasePath === agentPath)?.store.profiles[

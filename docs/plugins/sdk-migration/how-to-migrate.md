@@ -191,6 +191,26 @@ deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
 
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
+
 ## Await session transcript persistence
 
 Use the awaited `SessionManager` methods from

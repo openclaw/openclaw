@@ -44,6 +44,7 @@ export function registerGracefulGatewayShutdownTests({
   createSignaledLoopHarness,
   hasManagedProviderLocalServices,
   stopManagedProviderLocalServices,
+  gatewayLog,
   flushLogger,
   requestGatewayRestartWithSignalAdmission,
   armShutdownHardExitWatchdog,

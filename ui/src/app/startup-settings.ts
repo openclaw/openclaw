@@ -5,6 +5,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildControlUiFocusPath } from "@openclaw/session-url-contract";
+import type { RouteLocation } from "@openclaw/uirouter";
 import {
   CONTROL_UI_BOOTSTRAP_PROFILE_FRAGMENT_PARAM,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE_HINT,
@@ -14,12 +15,6 @@ import type { GatewayBrowserClientOptions } from "../api/gateway.ts";
 import { inferBasePathFromPathname, sessionRouteNamespaceFromPath } from "../app-route-paths.ts";
 import { createNativeGatewayConnectAuth } from "./native-gateway-auth.ts";
 import { resolveGatewayCredentialsForUrlEdit, type UiSettings } from "./settings.ts";
-
-type ApplicationStartupLocation = {
-  pathname: string;
-  search: string;
-  hash: string;
-};
 
 type NativeControlAuth = {
   gatewayUrl?: string | null;
@@ -54,9 +49,9 @@ declare global {
 }
 
 export function normalizeLegacyTerminalViewLocation(
-  location: ApplicationStartupLocation,
+  location: RouteLocation,
   basePath: string,
-): ApplicationStartupLocation {
+): RouteLocation {
   const applicationRoot = basePath ? `${basePath}/` : "/";
   if (location.pathname !== applicationRoot) {
     return location;
@@ -76,7 +71,7 @@ export function normalizeLegacyTerminalViewLocation(
 
 export function resolveApplicationStartupSettings(
   initialSettings: UiSettings,
-  location: ApplicationStartupLocation,
+  location: RouteLocation,
 ) {
   let settings = initialSettings;
   let changed = false;
@@ -126,8 +121,8 @@ export function resolveApplicationStartupSettings(
         })
       : null;
     const client = nativeAuth.client;
-    const clientName = normalizeGatewayClientId(normalizeOptionalString(client?.id));
-    const mode = normalizeGatewayClientMode(normalizeOptionalString(client?.mode));
+    const clientName = normalizeGatewayClientId(client?.id);
+    const mode = normalizeGatewayClientMode(client?.mode);
     const platform = normalizeOptionalString(client?.platform);
     const deviceFamily = normalizeOptionalString(client?.deviceFamily);
     const instanceId = normalizeOptionalString(client?.instanceId);

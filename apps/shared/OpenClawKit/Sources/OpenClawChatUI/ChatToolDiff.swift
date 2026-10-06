@@ -383,30 +383,17 @@ enum ChatToolDiff {
         storedRows: inout Int,
         clipped: inout Bool)
     {
-        let kind: ChatToolDiffLineKind
-        let lineNo: Int?
-        if raw.hasPrefix("+") {
-            kind = .add
-            lineNo = hunk.newLine
-            if let newLine = hunk.newLine {
-                hunk.newLine = newLine + 1
-            }
-        } else if raw.hasPrefix("-") {
-            kind = .del
-            lineNo = hunk.oldLine
-            if let oldLine = hunk.oldLine {
-                hunk.oldLine = oldLine + 1
-            }
-        } else {
-            kind = .ctx
-            lineNo = hunk.newLine
-            if let oldLine = hunk.oldLine, let newLine = hunk.newLine {
-                hunk.oldLine = oldLine + 1
-                hunk.newLine = newLine + 1
-            }
+        let kind: ChatToolDiffLineKind = raw.hasPrefix("+") ? .add : raw.hasPrefix("-") ? .del : .ctx
+        let lineNo = kind == .del ? hunk.oldLine : hunk.newLine
+        // Hunk coordinates come from tool output; an unrepresentable next line has no display number.
+        if kind != .add {
+            hunk.oldLine = hunk.oldLine.flatMap { $0 == .max ? nil : $0 + 1 }
+        }
+        if kind != .del {
+            hunk.newLine = hunk.newLine.flatMap { $0 == .max ? nil : $0 + 1 }
         }
         self.pushPatchLine(
-            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: raw.isEmpty ? "" : String(raw.dropFirst())),
+            ChatToolDiffLine(kind: kind, lineNo: lineNo, text: String(raw.dropFirst())),
             section: &section,
             storedRows: &storedRows,
             clipped: &clipped)

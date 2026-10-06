@@ -40,7 +40,6 @@ export type DefaultModelsViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   loading?: boolean;
-  /** True while the Gateway is discovering additional models. */
   catalogDiscovering?: boolean;
   /** Retryable discovery error from the current catalog publication or explicit Retry. */
   catalogDiscoveryError?: string | null;

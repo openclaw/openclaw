@@ -1,4 +1,3 @@
-/** Session MCP runtime manager install path: static get-or-create + requester resolve/install. */
 import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import type {
   SessionMcpConfigPublication,

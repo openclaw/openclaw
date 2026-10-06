@@ -8,18 +8,6 @@ enum PostAppUpdateCoreUpdate: String, Codable, Sendable {
 }
 
 struct PostAppUpdateReceipt: Codable, Equatable {
-    private enum CodingKeys: String, CodingKey {
-        case fromVersion
-        case toVersion
-        case recordedAt
-        case gatewayUpdateIncomplete
-        case coreUpdate
-        case notificationAttempts
-        case notificationInFlight
-        case runtimeBuildID
-        case setupRecovery
-    }
-
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
@@ -358,7 +346,7 @@ enum PostAppUpdateReceiptStore {
         let current = self.load(defaults: defaults) ?? receipt
         guard current.toVersion == receipt.toVersion else { return current }
         var updated = current
-        updated.notificationAttempts = min(current.notificationAttempts + 1, self.notificationRetryLimit)
+        updated.notificationAttempts = min(current.notificationAttempts, self.notificationRetryLimit - 1) + 1
         self.persist(updated, defaults: defaults)
         return updated
     }

@@ -93,8 +93,7 @@ export class SessionAttentionController implements ReactiveController {
     const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&
-      isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true &&
-      typeof gateway.snapshot.client?.request === "function"
+      isGatewayMethodAdvertised({ hello: gateway.snapshot.hello }, "question.list") === true
         ? gateway.snapshot.client
         : null;
     if (

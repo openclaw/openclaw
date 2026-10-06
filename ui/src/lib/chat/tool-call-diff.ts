@@ -1,8 +1,6 @@
 import { asNullableObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 
 /**
- * Inline diff data for tool-call rendering.
- *
  * Sources, in preference order:
  * 1. The edit tool's precomputed display diff (`details.diff`, numbered lines).
  * 2. A locally computed line diff from `oldText`/`newText`-style args when a
@@ -239,7 +237,6 @@ export function computeLineDiff(oldText: string, newText: string): LineDiffResul
     : { kind: "complete", lines: preview, stat: diffStat(lines) };
 }
 
-/** All-added preview for freshly written files, numbered from line 1. */
 export function buildWriteDiffLines(content: string): DiffLine[] {
   const sourceLines = splitDiffLines(content);
   const lines: DiffLine[] = [];

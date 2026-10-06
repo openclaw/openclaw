@@ -427,6 +427,36 @@ describe("new-session composer keyboard submission", () => {
     expect(onBackgroundSubmit).not.toHaveBeenCalled();
   });
 
+  it("keeps an IME confirmation Enter from starting a session", () => {
+    const onSubmit = vi.fn();
+    const { composer } = renderComposer({ message: "日本語の入力", onSubmit });
+    const textarea = composerTextarea(composer);
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const compositionEnd = new CompositionEvent("compositionend", { bubbles: true });
+    textarea.dispatchEvent(compositionEnd);
+    const confirmingEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+      keyCode: 13,
+    });
+    Object.defineProperty(confirmingEnter, "timeStamp", { value: compositionEnd.timeStamp - 1 });
+    textarea.dispatchEvent(confirmingEnter);
+
+    expect(confirmingEnter.defaultPrevented).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    textarea.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Enter" }));
+    const deliberateEnter = new KeyboardEvent("keydown", {
+      bubbles: true,
+      cancelable: true,
+      key: "Enter",
+    });
+    textarea.dispatchEvent(deliberateEnter);
+    expect(deliberateEnter.defaultPrevented).toBe(true);
+    expect(onSubmit).toHaveBeenCalledOnce();
+  });
+
   it.each([
     {
       label: "Meta+Enter in Enter mode",

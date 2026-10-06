@@ -182,8 +182,7 @@ export function extractToolPreview(outputText: string | undefined): CanvasToolPr
 function extractToolPresentation(
   details: unknown,
   text: string | undefined,
-  name: string,
-  browserToolName = name,
+  browserToolName: string,
 ): Pick<ToolCard, "preview" | "browserTab"> {
   const preview = extractCanvasFromDetails(details);
   const canvas =
@@ -432,7 +431,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       envelopeName && envelopeName !== "browser"
         ? envelopeName
         : (existing?.name ?? envelopeName ?? name);
-    const presentation = extractToolPresentation(details, text, name, browserToolName);
+    const presentation = extractToolPresentation(details, text, browserToolName);
     const isError = readToolErrorFlag(item) ?? messageIsError;
     const exitCode = readToolExitCode(
       item,

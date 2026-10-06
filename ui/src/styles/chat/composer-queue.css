@@ -353,7 +353,6 @@
   outline-offset: 1px;
 }
 
-/* Wraps onto its own flex line below the row (see renderChatQueueItem). */
 .chat-queue__error,
 .chat-queue__mentions {
   display: flex;

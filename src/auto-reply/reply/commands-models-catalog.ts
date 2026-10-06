@@ -228,7 +228,7 @@ export async function loadModelsProviderData(
           }
           const selectionDecisions = decisionsForEntry(entry);
           return (
-            selectionDecisions.evaluateNative(entry, await selectionDecisions.evaluateEntry(entry))
+            selectionDecisions.evaluateNative(entry, selectionDecisions.evaluateEntry(entry))
               .availability === true
           );
         };
@@ -249,7 +249,7 @@ export async function loadModelsProviderData(
       const selectionDecisions = decisionsForEntry(entry);
       const evaluation = selectionDecisions.evaluateNative(
         entry,
-        await selectionDecisions.evaluateEntry(entry, routeVariants),
+        selectionDecisions.evaluateEntry(entry, routeVariants),
       );
       recordModelAvailability(entry, evaluation);
       if (evaluation.routeResolution?.kind === "incompatible") {
@@ -429,17 +429,14 @@ export async function loadModelsProviderData(
       if (!modelAvailability.has(`${provider}/${model}`)) {
         const evaluation = selectionDecisions.evaluateNative(
           authEntry,
-          await selectionDecisions.evaluateEntry(
-            authEntry,
-            variants.length ? variants : [authEntry],
-          ),
+          selectionDecisions.evaluateEntry(authEntry, variants.length ? variants : [authEntry]),
         );
         recordModelAvailability(authEntry, evaluation, provider);
       }
       if (!entry) {
         continue;
       }
-      const runtimes = await selectionDecisions.runtimeChoices(
+      const runtimes = selectionDecisions.runtimeChoices(
         entry,
         variants.length ? variants : [entry],
       );

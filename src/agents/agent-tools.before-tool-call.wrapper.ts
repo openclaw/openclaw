@@ -180,7 +180,6 @@ function tagBeforeToolCallFailure(
   return tagged;
 }
 
-/** Return the closed terminal disposition carried by a before-tool failure. */
 export function getBeforeToolCallFailureDisposition(
   error: unknown,
 ): BeforeToolCallFailureDisposition | undefined {
@@ -237,7 +236,6 @@ export function isPreExecutionBlockedToolResult(result: unknown): boolean {
   );
 }
 
-/** Build the standard terminal result for vetoed tool calls. */
 export function buildBlockedToolResult(params: {
   reason: string;
   deniedReason?: HookBlockedReason;

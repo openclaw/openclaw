@@ -51,13 +51,7 @@ type UserModelLinks = z.infer<typeof linksSchema>;
 type AccountRecordName = "model-accounts" | `model-account:${string}`;
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
-export type UserModelAccount = {
-  authProfileId: string;
-  provider: string;
-  label: string;
-  authType: AuthProfileCredential["type"];
-  selected: boolean;
-};
+export type UserModelAccount = ReturnType<typeof accountSummary>;
 
 const MODEL_ACCOUNTS_PAGE_SIZE = 50;
 
@@ -221,11 +215,7 @@ function credentialOwner(db: DatabaseSync, authProfileId: string): string | unde
   return locator ? resolveOwner(db, locator.ownerProfileId) : undefined;
 }
 
-function accountSummary(
-  authProfileId: string,
-  value: string,
-  links: UserModelLinks,
-): UserModelAccount {
+function accountSummary(authProfileId: string, value: string, links: UserModelLinks) {
   const { credential } = parseRecord(value, profileSchema);
   const identity = [credential.email?.trim(), credential.displayName?.trim()].filter(Boolean);
   return {
@@ -561,11 +551,7 @@ export function setUserProfileAuthLink(
 }
 
 export function clearUserProfileAuthLink(
-  params: {
-    profileId: string;
-    provider: string;
-    assertCurrent?: (stage: "transaction" | "commit") => void;
-  },
+  params: Omit<Parameters<typeof setUserProfileAuthLink>[0], "authProfileId">,
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return runOpenClawStateWriteTransaction(

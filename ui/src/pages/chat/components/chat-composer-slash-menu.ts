@@ -149,12 +149,8 @@ export function updateSlashMenu(
     if (!opts.skipSlashIntent) {
       requestSlashCommandRefresh(state, host, requestUpdate);
     }
-    const cmdName = argMatch[1]?.toLowerCase();
-    const argFilter = argMatch[2]?.toLowerCase();
-    if (cmdName === undefined || argFilter === undefined) {
-      closeSlashMenuIfNeeded(state, requestUpdate);
-      return;
-    }
+    const cmdName = argMatch[1]!.toLowerCase();
+    const argFilter = argMatch[2]!.toLowerCase();
     const cmd = SLASH_COMMANDS.find(
       (entry) => entry.name === cmdName && (host.commandFilter?.(entry) ?? true),
     );

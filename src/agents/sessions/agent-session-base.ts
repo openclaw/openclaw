@@ -126,7 +126,6 @@ export abstract class AgentSessionBase {
       config.cleanupProviderSessionResourcesOnDispose ?? true;
   }
 
-  /** Model registry for API key resolution and model discovery */
   get modelRegistry(): ModelRegistry {
     return this.sessionModelRegistry;
   }
@@ -577,22 +576,18 @@ export abstract class AgentSessionBase {
     }
   }
 
-  /** Full agent state */
   get state(): AgentState {
     return this.agent.state;
   }
 
-  /** Current model (may be undefined if not yet selected) */
   get model(): Model | undefined {
     return this.agent.state.model;
   }
 
-  /** Current thinking level */
   get thinkingLevel(): ThinkingLevel {
     return this.agent.state.thinkingLevel;
   }
 
-  /** Whether agent is currently streaming a response */
   get isStreaming(): boolean {
     return this.agent.state.isStreaming;
   }
@@ -607,7 +602,6 @@ export abstract class AgentSessionBase {
     return this.retryCount;
   }
 
-  /** Names of the tools currently set on the agent. */
   getActiveToolNames(): string[] {
     return this.agent.state.tools.map((t) => t.name);
   }
@@ -696,7 +690,6 @@ export abstract class AgentSessionBase {
     return this.sessionManager.getSessionId();
   }
 
-  /** Current session display name, if set */
   get sessionName(): string | undefined {
     return this.sessionManager.getSessionName();
   }

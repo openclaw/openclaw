@@ -145,9 +145,6 @@ export class NewSessionComposerTextareaController {
   }
 
   /**
-   * Writes a transcript into the draft at the remembered caret and returns the
-   * new draft, or null when there is nothing to insert.
-   *
    * The captured element value includes keystrokes not yet committed upward.
    * Writing the final insertion directly grows the box before the next render
    * commits that same value into the page-owned draft.

@@ -1,5 +1,3 @@
-// Channel setup wizard modal: renders gateway wizard steps (note/select/text/
-// confirm/multiselect) plus the WhatsApp QR linking phase after config write.
 import { html, nothing, type TemplateResult } from "lit";
 import type { WizardStep } from "../../api/types.ts";
 import { renderChannelIcon } from "../../components/channel-icon.ts";
@@ -25,7 +23,6 @@ type ChannelWizardViewProps = {
   onToggleSecretVisibility: () => void;
   onAnswer: (value: unknown) => void;
   onClose: () => void;
-  // WhatsApp QR linking phase (wizard done + channel === whatsapp).
   whatsappQrDataUrl: string | null;
   whatsappMessage: string | null;
   whatsappConnected: boolean | null;

@@ -344,6 +344,10 @@ paired-node wire tests provide the full Gateway dispatch and reconciliation proo
 
 <Accordion title="Gateway concurrency (scripts/bench-gateway-concurrency.ts)">
 
+For connected clients and fixed-duration closed-loop requests, see
+[Control UI protocol load](/help/testing/control-ui-load). That mode has separate
+client counts, coordinated driver processes, reply correlation, and Linux resource accounting.
+
 Runs synthetic streaming agent turns in parallel sessions on one isolated
 Gateway. Add tool calls, session history, observers, and control-plane checks to
 reproduce allocation pressure from a busy Gateway. Build with `pnpm build`

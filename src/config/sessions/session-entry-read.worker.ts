@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok } from "@openclaw/normalization-core/result";
-import { readBoardSessionKeys } from "../../boards/sqlite-board-store.kernel.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -653,19 +652,21 @@ export function readSessionRowDatabaseFacts(
             request.sessionKeys,
             "list",
             "canonical",
+            { includeBoardPresence: true },
           );
-          const boardKeys = readBoardSessionKeys(database, request.sessionKeys);
           return {
             kind: "session-row-facts" as const,
             rows: request.sessionKeys.flatMap((sessionKey) => {
-              const entry = readRow(sessionKey)?.entry;
-              if (!entry) {
+              const selected = readRow(sessionKey);
+              if (!selected) {
                 return [];
               }
+              const { entry } = selected;
               const facts: SessionRowDatabaseFacts = {
                 sessionKey,
                 entry,
-                hasBoard: boardKeys.has(sessionKey),
+                hasBoard:
+                  selected.row.session_key === sessionKey && selected.row.board_present === 1,
               };
               if (readSessionActivitySummary(entry)) {
                 facts.activitySummaryWatermark = readSessionTranscriptWatermarkInDatabase(

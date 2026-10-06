@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
@@ -221,7 +220,7 @@ export function createIncognitoSessionHistoryReader(params: {
   actor: IncognitoSessionActor;
   authority: IncognitoSessionAuthority;
   target: IncognitoHistoryTarget & { agentId: string; storePath: string };
-  subagentCoordination: SubagentCoordinationDisplayResolver;
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
   resolveCurrentUserProfileDisplay: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: (jobId: string) => string | undefined;
   signal?: AbortSignal;
@@ -240,7 +239,6 @@ export function createIncognitoSessionHistoryReader(params: {
     signal,
   );
   const target = prepared.target;
-  const capturedStorePath = path.resolve(storePath);
   const claim = actor.sessions.captureCurrent(target.sessionKey);
   const assertCurrent = () => {
     signal?.throwIfAborted();
@@ -248,7 +246,7 @@ export function createIncognitoSessionHistoryReader(params: {
     authority.assertCurrent();
     prepared.authority.assertCurrent();
     claim.assertCurrent();
-    subagentCoordination.assertCurrent?.();
+    subagentCoordination?.assertCurrent?.();
     actor.assertReadable();
   };
   const assertScope = (scope: Partial<SessionTranscriptReadScope>) => {
@@ -257,12 +255,12 @@ export function createIncognitoSessionHistoryReader(params: {
       scope.sessionId !== target.sessionId ||
       (scope.sessionKey !== undefined && scope.sessionKey !== target.sessionKey) ||
       (scope.agentId !== undefined && scope.agentId !== agentId) ||
-      (scope.storePath !== undefined && path.resolve(scope.storePath) !== capturedStorePath) ||
       (scope.sessionEntry?.sessionId !== undefined &&
         scope.sessionEntry.sessionId !== target.sessionId)
     ) {
       throw new Error("Incognito history request belongs to another session or store");
     }
+    prepareIncognitoSessionHistoryRead(prepared, { ...scope, sessionId: target.sessionId }, signal);
   };
   const disclose = <T>(value: T): T => {
     assertCurrent();
@@ -400,7 +398,7 @@ export function createIncognitoSessionHistoryReader(params: {
       limits: IncognitoHistoryOperations["session.history.delta"]["input"]["options"],
       project: (
         value: IncognitoHistoryOperations["session.history.delta"]["output"],
-        subagents: SubagentCoordinationDisplayResolver,
+        subagents: SubagentCoordinationDisplayResolver | undefined,
       ) => Promise<T>,
     ) {
       const captured = structuredClone(limits);

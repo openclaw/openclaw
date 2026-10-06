@@ -451,11 +451,6 @@ type AvailableTag = {
   emoji_name?: string | null;
 };
 
-/**
- * Validate and parse an `availableTags` parameter from untrusted input.
- * Returns `undefined` when the value is missing or not an array.
- * Entries that lack a string `name` are silently dropped.
- */
 export function parseAvailableTags(raw: unknown): AvailableTag[] | undefined {
   if (!Array.isArray(raw)) {
     return undefined;
