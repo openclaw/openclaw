@@ -115,16 +115,18 @@ export async function readChatHistoryPage(
   signal?.throwIfAborted();
   const incognito =
     suppliedIncognito ??
-    sessionTranscriptReaders.captureIncognitoSessionHistoryReader(
-      {
-        agentId: input.sessionAgentId,
-        sessionId: input.sessionId ?? "",
-        sessionKey: input.canonicalKey,
-        storePath: input.storePath,
-        sessionEntry: input.entry,
-      },
-      signal,
-    );
+    (input.sessionId && input.storePath
+      ? sessionTranscriptReaders.captureIncognitoSessionHistoryReader(
+          {
+            agentId: input.sessionAgentId,
+            sessionId: input.sessionId,
+            sessionKey: input.canonicalKey,
+            storePath: input.storePath,
+            sessionEntry: input.entry,
+          },
+          signal,
+        )
+      : undefined);
   const binding = getCliSessionBinding(input.entry, "claude-cli");
   const params = prepareChatHistoryParams(incognito ? structuredClone(input) : input);
   if (incognito) {

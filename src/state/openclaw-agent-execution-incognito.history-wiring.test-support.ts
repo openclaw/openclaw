@@ -373,6 +373,12 @@ export function registerIncognitoHistoryWiringTests(fixture: HistoryWiringFixtur
       expect(page).toMatchObject({
         messages: [{ content: [{ text: "wired history proof" }] }],
       });
+      for (const missingIdentity of [{ sessionId: undefined }, { storePath: undefined }]) {
+        expect(await readChatHistoryPage({ ...request, ...missingIdentity })).toMatchObject({
+          messages: [],
+          pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
+        });
+      }
       assert(page.deltaCursor);
       for (const kind of ["rpc", "delta"] as const) {
         const controller = new AbortController();

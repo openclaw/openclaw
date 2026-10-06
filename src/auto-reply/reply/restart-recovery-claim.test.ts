@@ -45,6 +45,45 @@ function createController(
   });
 }
 
+async function createTrackedClaim(
+  fields: Partial<InternalSessionEntry> = {},
+  params: Partial<ClaimControllerParams> = {},
+) {
+  const scope = {
+    agentId: params.agentId ?? "main",
+    storePath:
+      params.storePath ?? path.join(tempDirs.make("openclaw-reply-claim-"), "sessions.json"),
+    sessionKey: params.sessionKey ?? "agent:main:main",
+  };
+  let entry: InternalSessionEntry = {
+    sessionId: "session",
+    updatedAt: 1,
+    status: "running",
+    restartRecoveryDeliveryRunId: "recovery-run",
+    ...fields,
+  };
+  const sessionId = entry.sessionId;
+  await replaceSessionEntry(scope, entry);
+  const controller = createController({
+    ...scope,
+    admissionRunId: "recovery-run",
+    getEntry: () => entry,
+    getSessionId: () => sessionId,
+    setEntry: (next) => {
+      entry = next;
+    },
+    ...params,
+  });
+  return {
+    controller,
+    scope,
+    read: () => loadSessionEntry(scope),
+    update: async (patch: Partial<InternalSessionEntry>) => {
+      entry = (await updateSessionEntry(scope, () => patch))!;
+    },
+  };
+}
+
 describe("createReplyRestartRecoveryClaimController", () => {
   describe("placement observations", () => {
     const placementDirs = useStateDatabaseTempDirs();
@@ -287,24 +326,10 @@ describe("createReplyRestartRecoveryClaimController", () => {
       const ops = { agentId: "ops", storePath, sessionKey };
       await replaceSessionEntry(main, { sessionId: "main-session", updatedAt: 1 });
       const mainBefore = loadSessionEntry(main);
-      let entry: InternalSessionEntry = {
-        sessionId: "ops-session",
-        restartRecoveryDeliveryRunId: "ops-recovery",
-        status: "running",
-        updatedAt: 1,
-      };
-      await replaceSessionEntry(ops, entry);
-      const controller = createController({
-        agentId: "ops",
-        admissionRunId: "ops-recovery",
-        getEntry: () => entry,
-        getSessionId: () => "ops-session",
-        sessionKey,
-        storePath,
-        setEntry: (next) => {
-          entry = next;
-        },
-      });
+      const { controller } = await createTrackedClaim(
+        { sessionId: "ops-session", restartRecoveryDeliveryRunId: "ops-recovery" },
+        { ...ops, admissionRunId: "ops-recovery" },
+      );
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
       const hostSql = observeHostDataSql();
       try {
@@ -343,46 +368,23 @@ describe("createReplyRestartRecoveryClaimController", () => {
   ])(
     "settles lifecycle ownership as $expectedStatus during claim cleanup",
     async ({ receiptState, expectedStatus, restartAbort }) => {
-      const root = tempDirs.make(`openclaw-reply-claim-${expectedStatus}-`);
-      const storePath = path.join(root, "sessions.json");
-      const sessionKey = "agent:main:main";
-      const sessionId = "session";
       let restartAborted = false;
-      let entry: InternalSessionEntry = {
-        abortedLastRun: false,
-        lifecycleRunId: "recovery-run",
-        restartRecoveryDeliveryRunId: "recovery-run",
-        sessionId,
-        startedAt: 1,
-        status: "running",
-        updatedAt: 1,
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, entry);
-      const controller = createController({
-        admissionRunId: "recovery-run",
-        getEntry: () => entry,
-        getSessionId: () => sessionId,
-        isRestartAbort: () => restartAborted,
-        sessionKey,
-        setEntry: (next) => {
-          entry = next;
-        },
-        storePath,
-      });
+      const { controller, update, read } = await createTrackedClaim(
+        { abortedLastRun: false, lifecycleRunId: "recovery-run", startedAt: 1 },
+        { isRestartAbort: () => restartAborted },
+      );
 
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
       restartAborted = restartAbort;
       if (receiptState) {
-        entry = (await updateSessionEntry({ storePath, sessionKey }, () => ({
-          restartRecoveryDeliveryReceiptState: receiptState,
-        }))) as InternalSessionEntry;
+        await update({ restartRecoveryDeliveryReceiptState: receiptState });
       } else if (!restartAbort) {
         await expect(controller.beginBeforeAgentReply()).resolves.toBe(true);
         await controller.checkpointBeforeAgentReply({ state: "handled-silent" });
       }
       await controller.clear();
 
-      const persisted = loadSessionEntry({ storePath, sessionKey }) as InternalSessionEntry;
+      const persisted = read()!;
       expect(persisted.status).toBe(expectedStatus);
       expect(persisted.lifecycleRunId).toBe(restartAbort ? "recovery-run" : undefined);
       expect(persisted.restartRecoveryDeliveryRunId).toBe(
@@ -401,49 +403,38 @@ describe("createReplyRestartRecoveryClaimController", () => {
   ] as const)(
     "preserves the delivery claim when queued cleanup loses ownership through %s",
     async (interruption) => {
-      const root = tempDirs.make("openclaw-reply-claim-queued-cleanup-");
-      const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
       const deliveryContext = { channel: "telegram", to: "chat", accountId: "default" };
       let restartAborted = false;
       let interruptBeforeCommit = false;
-      let entry: InternalSessionEntry = {
-        sessionId: "session",
-        updatedAt: 1,
-        status: "running",
-        abortedLastRun: false,
-        restartRecoveryDeliveryRunId: "recovery-run",
-        restartRecoveryDeliverySourceRunId: "source-turn",
-        restartRecoveryDeliveryContext: deliveryContext,
-        restartRecoverySourceIngress: "channel",
-      };
-      await replaceSessionEntry(scope, entry);
-      const controller = createController({
-        lifecycleGeneration:
-          interruption === "missing-generation" ? undefined : lifecycleGeneration,
-        admissionRunId: "recovery-run",
-        getEntry: () => entry,
-        getSessionId: () => {
-          if (interruptBeforeCommit) {
-            interruptBeforeCommit = false;
-            // The store awaits the prepared patch before entering its write transaction.
-            queueMicrotask(() => {
-              if (interruption === "commit-rotation") {
-                rotateAgentEventLifecycleGeneration();
-              } else {
-                restartAborted = true;
-              }
-            });
-          }
-          return "session";
+      const { controller, scope, read } = await createTrackedClaim(
+        {
+          abortedLastRun: false,
+          restartRecoveryDeliverySourceRunId: "source-turn",
+          restartRecoveryDeliveryContext: deliveryContext,
+          restartRecoverySourceIngress: "channel",
         },
-        isRestartAbort: () => restartAborted,
-        resolveDeliveryContext: () => deliveryContext,
-        setEntry: (next) => {
-          entry = next;
+        {
+          lifecycleGeneration:
+            interruption === "missing-generation" ? undefined : lifecycleGeneration,
+          getSessionId: () => {
+            if (interruptBeforeCommit) {
+              interruptBeforeCommit = false;
+              // The store awaits the prepared patch before entering its write transaction.
+              queueMicrotask(() => {
+                if (interruption === "commit-rotation") {
+                  rotateAgentEventLifecycleGeneration();
+                } else {
+                  restartAborted = true;
+                }
+              });
+            }
+            return "session";
+          },
+          isRestartAbort: () => restartAborted,
+          resolveDeliveryContext: () => deliveryContext,
         },
-        ...scope,
-      });
+      );
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
 
       const writerEntered = createDeferred();
@@ -502,7 +493,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
       }
       await Promise.all([handoff, clearing]);
 
-      const persisted = loadSessionEntry(scope);
+      const persisted = read();
       expect(persisted).toMatchObject({
         status: "running",
         abortedLastRun: interruption === "restart-handoff",
@@ -522,32 +513,16 @@ describe("createReplyRestartRecoveryClaimController", () => {
   );
 
   it("retires the source claim after an ordinary user abort", async () => {
-    const root = tempDirs.make("openclaw-reply-claim-user-abort-");
-    const scope = { storePath: path.join(root, "sessions.json"), sessionKey: "agent:main:main" };
-    let entry: InternalSessionEntry = {
-      sessionId: "session",
-      updatedAt: 1,
-      status: "running",
-      restartRecoveryDeliveryRunId: "recovery-run",
+    const { controller, scope, read } = await createTrackedClaim({
       restartRecoveryDeliverySourceRunId: "source-turn",
       restartRecoveryDeliveryContext: { channel: "telegram", to: "chat" },
       restartRecoverySourceIngress: "channel",
-    };
-    await replaceSessionEntry(scope, entry);
-    const controller = createController({
-      admissionRunId: "recovery-run",
-      getEntry: () => entry,
-      getSessionId: () => "session",
-      setEntry: (next) => {
-        entry = next;
-      },
-      ...scope,
     });
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
     await markSessionAbortTarget({ scope });
     await controller.clear();
 
-    const persisted = loadSessionEntry(scope);
+    const persisted = read();
     expect(persisted?.abortedLastRun).toBe(true);
     expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
     expect(persisted?.restartRecoveryDeliveryContext).toBeUndefined();
@@ -556,46 +531,35 @@ describe("createReplyRestartRecoveryClaimController", () => {
   });
 
   it("adopts an exact channel recovery claim before execution starts", async () => {
-    const root = tempDirs.make("openclaw-reply-channel-claim-adoption-");
-    const storePath = path.join(root, "sessions.json");
-    const sessionKey = "agent:main:telegram:group:chat:topic:thread";
-    const sessionId = "channel-session";
     const deliveryContext = {
       channel: "telegram",
       to: "chat",
       accountId: "default",
       threadId: "thread",
     };
-    let entry: InternalSessionEntry = {
-      abortedLastRun: false,
-      lifecycleRunId: "recovery-run",
-      restartRecoveryDeliveryContext: deliveryContext,
-      restartRecoveryDeliveryReceiptState: "terminal-pending",
-      restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
-      restartRecoveryDeliveryRunId: "recovery-run",
-      restartRecoveryDeliverySourceRunId: "source-turn",
-      restartRecoveryDeliveryToolCallId: "message-call",
-      sessionId,
-      startedAt: 1,
-      status: "running",
-      updatedAt: 1,
-    };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
-    const controller = createController({
-      admissionRunId: "recovery-run",
-      getEntry: () => entry,
-      getSessionId: () => sessionId,
-      resolveDeliveryContext: () => deliveryContext,
-      sessionKey,
-      setEntry: (next) => {
-        entry = next;
+    const { controller, read } = await createTrackedClaim(
+      {
+        abortedLastRun: false,
+        lifecycleRunId: "recovery-run",
+        restartRecoveryDeliveryContext: deliveryContext,
+        restartRecoveryDeliveryReceiptState: "terminal-pending",
+        restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
+        restartRecoveryDeliverySourceRunId: "source-turn",
+        restartRecoveryDeliveryToolCallId: "message-call",
+        sessionId: "channel-session",
+        startedAt: 1,
+        status: "running",
+        updatedAt: 1,
       },
-      sourceTurnId: "source-turn",
-      storePath,
-    });
+      {
+        sessionKey: "agent:main:telegram:group:chat:topic:thread",
+        resolveDeliveryContext: () => deliveryContext,
+        sourceTurnId: "source-turn",
+      },
+    );
 
     await expect(controller.admitUserTurn()).resolves.toBe("admitted");
-    expect(loadSessionEntry({ storePath, sessionKey })).toMatchObject({
+    expect(read()).toMatchObject({
       restartRecoveryDeliveryContext: deliveryContext,
       restartRecoveryDeliveryReceiptState: "terminal-pending",
       restartRecoveryDeliveryRequestFingerprint: "request-fingerprint",
