@@ -1074,7 +1074,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/compaction-successor.test.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.test.ts",
   "src/agents/embedded-agent-runner/extra-params.deepseek-v4-thinking-format.test.ts",
-  "src/agents/embedded-agent-runner/extra-params.zai-tool-stream.test.ts",
   "src/agents/embedded-agent-runner/google-prompt-cache.test.ts",
   "src/agents/embedded-agent-runner/model-resolution-consistency.test.ts",
   "src/agents/embedded-agent-runner/model.forward-compat.test.ts",
