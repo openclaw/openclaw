@@ -524,7 +524,8 @@ describe("node stream close acknowledgement", () => {
         client.close();
       }
       await expect.poll(() => settled).toBe(true);
-      expect(delays.some((delay) => delay >= 1_000)).toBe(false);
+      expect(delays.includes(40)).toBe(false);
+      expect(delays).toContain(30_000);
       expect(receivedSevens).toBe(payload.length);
     } finally {
       controller.abort();
@@ -556,10 +557,9 @@ describe("node stream close acknowledgement", () => {
   it("bounds websocket cleanup when the gateway sends a text frame", async () => {
     const gateway = createHttpServer();
     const wss = new WebSocketServer({ server: gateway });
+    let gatewaySocket: { send: (data: string) => void } | undefined;
     wss.on("connection", (ws) => {
-      ws.once("message", () => {
-        setTimeout(() => ws.send("not-binary"), 20);
-      });
+      gatewaySocket = ws;
     });
     await new Promise<void>((resolve) => {
       gateway.listen(0, "127.0.0.1", resolve);
@@ -583,6 +583,11 @@ describe("node stream close acknowledgement", () => {
           metadata: { ok: true },
           streamName: "desktop",
           signal: controller.signal,
+          emitStatus: async (status) => {
+            if (status.includes("attached")) {
+              gatewaySocket?.send("not-binary");
+            }
+          },
           scheduleCloseAck: (callback, delayMs) => {
             delays.push(delayMs);
             cleanups.push(callback);
@@ -595,6 +600,66 @@ describe("node stream close acknowledgement", () => {
       for (const cleanup of cleanups) {
         cleanup();
       }
+      controller.abort();
+      target.destroy();
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("retires a drained forward when the gateway never acknowledges close", async () => {
+    const gateway = createHttpServer();
+    const wss = new WebSocketServer({ server: gateway });
+    wss.on("connection", (ws) => {
+      ws.on("message", () => undefined);
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const target = new Duplex({
+      read() {},
+      write(_chunk, _encoding, callback) {
+        callback();
+      },
+    });
+    target.on("end", () => target.destroy());
+    const delays: number[] = [];
+    const controller = new AbortController();
+    try {
+      await runNodeStreamTransport({
+        gatewayUrl: `ws://127.0.0.1:${(gateway.address() as AddressInfo).port}`,
+        attachPath: "/node-desktop/attach",
+        expectedAttachPath: "/node-desktop/attach",
+        target: { stream: target },
+        metadata: { ok: true },
+        streamName: "desktop",
+        signal: controller.signal,
+        emitStatus: async (status) => {
+          if (status.includes("attached")) {
+            target.push(Buffer.alloc(64, 7));
+            target.push(null);
+          }
+        },
+        scheduleCloseAck: (callback, delayMs) => {
+          delays.push(delayMs);
+          if (delayMs === 30_000) {
+            callback();
+            return () => undefined;
+          }
+          const timer = setTimeout(callback, delayMs);
+          return () => clearTimeout(timer);
+        },
+      });
+      expect(delays).toContain(30_000);
+      expect(delays).not.toContain(5_000);
+    } finally {
       controller.abort();
       target.destroy();
       for (const client of wss.clients) {

@@ -228,6 +228,10 @@ function createNodeStreamSplice(params: {
             return;
           }
           params.ws.close();
+          // The gateway still has to acknowledge the close. A peer that
+          // already read the payload and then stays silent must not keep
+          // the command for the library's multi-day handshake budget.
+          cancelCloseAck = scheduleCloseAck(retireUnacknowledged, STREAM_CLOSE_FLUSH_MS);
         };
         closeAfterDrain();
       } else {
