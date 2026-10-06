@@ -30,7 +30,10 @@ impl SleepBridge {
             },
             move |suspension_id, route| {
                 let gateway = resume_gateway.clone();
-                async move { gateway.suspend_resume(suspension_id, route).await.map(|_| ()) }
+                async move {
+                    gateway.suspend_resume(suspension_id, route).await?;
+                    Ok(())
+                }
             },
             move || {
                 refresh_gateway.resume_reconnect();
