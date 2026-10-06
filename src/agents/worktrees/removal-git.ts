@@ -3,15 +3,18 @@ import { lstatSync } from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
+import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import {
   commandError,
   listGitWorktrees,
   requireGit,
   resolveGitMetadataPath,
   runGit,
+  WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
 import { WorktreeBranchMovedError } from "./removal-errors.js";
@@ -20,6 +23,29 @@ import type { ExactStateSnapshot } from "./snapshot-exact-state.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 type GitOptions = Parameters<typeof runGit>[2];
+
+/** A pending ref owns recovery even after its remover exits or registry activity changes. */
+export async function assertManagedWorktreeRemovalComplete(
+  record: Pick<ManagedWorktreeRecord, "id" | "repoRoot">,
+  options?: GitOptions,
+): Promise<void> {
+  const pending = await runGit(
+    record.repoRoot,
+    ["show-ref", "--verify", "--quiet", `refs/openclaw/removals/${record.id}`],
+    options,
+  );
+  options?.signal?.throwIfAborted();
+  options?.beforeRun?.();
+  if (pending.termination !== "exit" || (pending.code !== 0 && pending.code !== 1)) {
+    throw commandError("git show-ref --verify pending removal", pending);
+  }
+  if (pending.code === 0) {
+    throw new WorktreeRemovalContentionError(
+      "busy",
+      "Worktree removal is incomplete; recover its preserved snapshot before continuing",
+    );
+  }
+}
 
 function missingPathOrThrow(error: unknown): undefined {
   if (!isMissingPathError(error)) {
@@ -89,21 +115,35 @@ export async function prepareSnapshotBranchDeletion(
   return deletionOptions;
 }
 
-/** Once destructive deletion starts, its allocation owner joins it without a deadline. */
+/** Join admitted deletion through its own deadline, independently of caller cancellation. */
 export async function removeManagedCheckout(
   record: ManagedWorktreeRecord,
   git: WorktreeGitPolicy,
   requireLossless: boolean | undefined,
+  budget: "bounded" | "recovery",
   assertCurrent?: () => void,
+  queueSignal?: AbortSignal,
 ): Promise<void> {
-  const removed = await runOutsideCommandProcessScope(() =>
-    git.run(
-      record.repoRoot,
-      ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
-      { beforeRun: assertCurrent, killProcessTree: true, waitForExit: true },
-    ),
+  const removed = await withContentGitSlot(
+    () =>
+      runOutsideCommandProcessScope(() =>
+        git.run(
+          record.repoRoot,
+          ["worktree", "remove", ...(requireLossless ? [] : ["--force"]), "--", record.path],
+          {
+            beforeRun: assertCurrent,
+            killProcessTree: true,
+            lowerPriority: true,
+            // Explicit recover-removal must not interrupt a previously partial deletion again.
+            ...(budget === "recovery"
+              ? { waitForExit: true }
+              : { timeoutMs: WORKTREE_CHECKOUT_TIMEOUT_MS }),
+          },
+        ),
+      ),
+    queueSignal,
   );
-  if (removed.code !== 0) {
+  if (removed.termination !== "exit" || removed.code !== 0) {
     throw commandError("git worktree remove", removed);
   }
 }

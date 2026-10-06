@@ -8,6 +8,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { repairWorktreePackIndex } from "./git-maintenance.js";
 import { requireGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
 import {
@@ -45,8 +46,11 @@ afterEach(() => {
 });
 
 it("maintains each shared repository and suspends failures until explicitly retried", async () => {
-  const repo = tempDirs.make("worktree-gc-first-repo-");
-  const otherRepo = tempDirs.make("worktree-gc-second-repo-");
+  const repo = await initRepo(tempDirs.make("worktree-gc-first-repo-"));
+  const otherRepo = await initRepo(tempDirs.make("worktree-gc-second-repo-"));
+  for (const repoRoot of [repo, otherRepo]) {
+    await requireGit(repoRoot, ["repack", "-d"]);
+  }
   for (const [index, repoRoot] of [repo, repo, otherRepo].entries()) {
     const name = `manual-${index}`;
     const worktreePath = path.join(repoRoot, name);
@@ -68,13 +72,18 @@ it("maintains each shared repository and suspends failures until explicitly retr
   const controller = new AbortController();
   const execute = gitExec.executeGitCommand;
   const maintenanceRoots: string[] = [];
+  const repairRoots: string[] = [];
   const taskOrders: string[][] = [];
   const commands = vi
     .spyOn(gitExec, "executeGitCommand")
     .mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "multi-pack-index") {
+        repairRoots.push(cwd);
+      }
       if (args[0] !== "maintenance") {
         return await execute(cwd, args, options);
       }
+      expect(repairRoots.at(-1)).toBe(cwd);
       taskOrders.push(args.filter((arg) => arg.startsWith("--task=")));
       expect(options).toMatchObject({
         killProcessTree: true,
@@ -104,6 +113,7 @@ it("maintains each shared repository and suspends failures until explicitly retr
       issueCount: 0,
     });
     expect(maintenanceRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
+    expect(repairRoots.toSorted()).toEqual([repo, otherRepo].toSorted());
     // Git honors task order; graph traversal must not starve pack-index repair.
     expect(taskOrders).toEqual(
       [repo, otherRepo].map(() => [
@@ -114,11 +124,16 @@ it("maintains each shared repository and suspends failures until explicitly retr
     );
     const warning = await logs.findText("worktree Git maintenance");
     expect(warning).toContain("gc is already running");
+    // Removal must still repair this repo after broad maintenance has been suspended.
+    await repairWorktreePackIndex(repo, { signal: controller.signal });
+    expect(repairRoots.at(-1)).toBe(repo);
     await service.gc({ signal: controller.signal });
     expect(maintenanceRoots).toHaveLength(3);
+    expect(repairRoots).toHaveLength(4);
     expect(maintenanceRoots.at(-1)).toBe(otherRepo);
     await service.gc({ signal: controller.signal, retryDeferred: true });
     expect(maintenanceRoots).toHaveLength(5);
+    expect(repairRoots).toHaveLength(6);
     const calls = commands.mock.calls.length;
     controller.abort(new Error("cleanup cancelled"));
     await expect(service.gc({ signal: controller.signal })).rejects.toThrow("cleanup cancelled");

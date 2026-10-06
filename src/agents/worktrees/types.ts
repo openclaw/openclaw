@@ -30,13 +30,21 @@ export type ProvisionedFileState = {
   chunks: number;
 };
 
-/** gcProtection records a non-removal disposition; explicit GC retries that lifecycle. */
+export type WorktreeRemovalDeferral = {
+  stage: string;
+  elapsedMs: number;
+  attempts: number;
+  retryAt: number;
+};
+
 export type ManagedWorktreeRecord = Omit<
   SchemaContract<WorktreeRecord>,
   "ownerKind" | "runEndCleanup"
 > & {
   ownerKind: ManagedWorktreeOwnerKind;
   runEndCleanup?: ManagedWorktreeRunEndCleanup;
+  /** Internal retry metadata for the same revision-bound cleanup disposition. */
+  gcRetry?: WorktreeRemovalDeferral;
 };
 
 export type WorktreeRegistryPredicate =

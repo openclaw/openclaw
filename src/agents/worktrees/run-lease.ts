@@ -16,6 +16,7 @@ import {
   hasLiveWorktreeRunLeaseRow,
   releaseWorktreeRunLeaseRow,
 } from "./registry.js";
+import { assertManagedWorktreeRemovalComplete } from "./removal-git.js";
 import {
   admitWorktreeRunLeaseRowAsync,
   releaseWorktreeRunLeaseRowAsync,
@@ -85,7 +86,9 @@ async function retainGitLock(context: OpenClawStateWorkerContext, id: string): P
       if (!record) {
         return;
       }
-      await lockWorktreeForProcess(record);
+      const options = { beforeRun: () => context.admission.assertCurrent() };
+      await assertManagedWorktreeRemovalComplete(record, options);
+      await lockWorktreeForProcess(record, options);
       held.gitLocked = true;
     } catch (error) {
       heldGitLocks.delete(id);

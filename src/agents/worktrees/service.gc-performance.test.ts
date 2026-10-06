@@ -30,6 +30,14 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 
 const initializeRepository = useManagedWorktreeTestRepository();
 
+function isRepositoryMaintenance(args: readonly string[]): boolean {
+  return (
+    args[0] === "maintenance" ||
+    args[0] === "multi-pack-index" ||
+    (args[0] === "rev-parse" && args[1] === "--git-path" && args[2] === "objects/pack")
+  );
+}
+
 it("bounds cold cleanup inventories and retains dispositions across registry reopen", async () => {
   const root = tempDirs.make("openclaw-gc-spawns-");
   const repo = await initializeRepository(root);
@@ -89,7 +97,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
     measurements.push({
       pass,
       gitSpawns:
-        text.mock.calls.filter(([, args]) => args[0] !== "maintenance").length +
+        text.mock.calls.filter(([, args]) => !isRepositoryMaintenance(args)).length +
         bytes.mock.calls.length +
         buffered.mock.calls.length,
       elapsedMs: performance.now() - started,
@@ -115,7 +123,7 @@ it("bounds cold cleanup inventories and retains dispositions across registry reo
   buffered.mockClear();
   await new ManagedWorktreeService({ env, now: () => now }).gc();
   const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls]
-    .filter(([, args]) => args[0] !== "maintenance")
+    .filter(([, args]) => !isRepositoryMaintenance(args))
     .map(([cwd]) => cwd);
   expect(inspectedPaths).toContain(records[0]!.path);
   expect(inspectedPaths.every((cwd) => cwd === repo || cwd === records[0]!.path)).toBe(true);
