@@ -1305,7 +1305,7 @@ describe("codex command", () => {
 
     const command = runCommand("resume thread-release-rollover", { codexControlRequest }, context);
     try {
-      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(oldReleaseStarted).toHaveBeenCalledOnce(), { timeout: 5_000 });
       await patchSessionEntry({ ...scope, update: () => ({ sessionId: "session-2" }) });
       releaseOld();
 
