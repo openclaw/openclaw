@@ -260,6 +260,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       linkReaderTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "link-reader",
       onCloseLinkReader: () => closePanelSlot("link-reader"),
       terminalTabsInHeader,
+      onCloseTerminal: () => closePanelSlot("terminal"),
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),

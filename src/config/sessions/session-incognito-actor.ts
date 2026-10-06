@@ -429,6 +429,7 @@ export function createIncognitoSessionFacts(
           target: IncognitoComputeTarget | undefined,
           operation: (scope: IncognitoComputeScope) => Promise<T>,
           signal?: AbortSignal,
+          onRead?: (facts: readonly IncognitoSessionFacts[]) => void,
         ): Promise<T> => {
           assertOutsideGrant();
           assertBorrowed();
@@ -449,6 +450,9 @@ export function createIncognitoSessionFacts(
                   (result) => {
                     // Capture claims before the next FIFO turn can publish new facts.
                     observeFacts(result.facts);
+                    if (!isIncognitoComputeWrite(command.type)) {
+                      onRead?.(result.facts);
+                    }
                     return result.value;
                   },
                   signal,

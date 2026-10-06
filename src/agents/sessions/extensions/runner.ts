@@ -114,7 +114,6 @@ const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltI
   return builtinKeybindings;
 };
 
-/** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
   messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
   systemPrompt?: string;
@@ -164,10 +163,6 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 
 export type ShutdownHandler = () => void;
 
-/**
- * Helper function to emit session_shutdown event to extensions.
- * Returns true if the event was emitted, false if there were no handlers.
- */
 export async function emitSessionShutdownEvent(
   extensionRunner: ExtensionRunner,
   event: SessionShutdownEvent,
@@ -349,7 +344,6 @@ export class ExtensionRunner {
     return Array.from(toolsByName.values());
   }
 
-  /** Get a tool definition by name. Returns undefined if not found. */
   getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
     for (const ext of this.extensions) {
       const tool = ext.tools.get(toolName);

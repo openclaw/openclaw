@@ -192,9 +192,10 @@ through the existing session workers. Missing rows retain the selected store's r
 facts without opening a writable database on the Gateway thread. The router
 captures the original caller before session preparation yields, and admission
 rechecks current membership, session identity, and physical source before starting
-work. Read refreshes retain the original discovery owner and never replay a
-consumer that has begun effects. Process-held incognito reads keep their existing
-owner. Configuration, schemas, and stored formats are unchanged.
+work. If a speculative metadata snapshot races a committed write, its one bounded
+reread joins the existing writer FIFO. Read refreshes retain the original discovery
+owner and never replay a consumer that has begun effects. Process-held incognito
+reads keep their existing owner. Configuration, schemas, and stored formats are unchanged.
 
 Session creation rereads full target metadata through that same reader using its
 already-selected store and canonical keys. Lifecycle custody and current caller
@@ -209,6 +210,15 @@ same database owner preserves the captured registry witness. The existing mutati
 filter retains that first physical generation; different owners, replacement, and
 retirement still invalidate the read. Discovery, transcript callbacks, and writes
 are not replayed. Registration before target selection retains its existing refusal.
+
+Concurrent creators that observed the same absent agent database share its captured
+execution owner and native opening. The owner retains the creation reservation until
+all creating borrowers release it or the physical file is admitted. A later creator
+with that same observation can use the admitted file; a replaced target, different
+agent, shared-state database, or incognito owner still refuses admission. Schemas,
+stored bytes, and update behavior are unchanged.
+Queued session admission and writable reads validate through that same owner,
+so its first creation does not invalidate their earlier absence observation.
 
 Accepted chat input prepares fresh sharing and exact-row facts again before
 dispatch. Each read retains its physical owner and writer FIFO through synchronous
@@ -694,6 +704,32 @@ History uses the existing FIFO acceptance boundary; synchronous native SDK write
 remain covered by its native mutation witness. No new worker service, schema,
 retention, durability, environment switch, or update behavior is introduced.
 Native routes and T1 counts remain unchanged until the atomic P7 cutover.
+
+### Incognito history and compute facade composition (P7m, inactive)
+
+History, hydration, Memory, usage, and reconciliation facades consume the shared
+captured actor binding when one is supplied. The binding resolves the physical
+store and current session facts before asynchronous preparation; later reads
+cannot adopt a replacement actor. Memory retains that source across lazy adapter
+loading, observer callbacks, corpus projection, and cleanup. Corpus preparation
+on the actor skips filesystem archive discovery. Usage preserves the separately
+selected cache owner, and reconciliation keeps its existing accepted-work and
+publication lifecycle.
+
+Memory can consume retained transcript windows while grants remain bound to the
+current logical session. The actor verifies each retained window's ownership
+before extracting messages or reset metadata. Empty corpus reads also enter the
+actor FIFO and reject a selection invalidated by an earlier queued creation.
+
+Incremental Gateway history still requires its prepared subagent visibility
+resolver. A shared-bound reader without that resolver returns the existing reset
+response for a full history reload; activation must supply the resolver for
+incremental parity.
+
+Production acquisition still supplies no binding. Native selection and extraction
+bridges remain until the atomic activation removes them together. This composition
+changes no schema, retention, durability, permissions, environment names, or update
+behavior and retires no T1 sites.
 
 ### Incognito shared binding and SDK preflight (P7h1, inactive)
 
@@ -1452,6 +1488,14 @@ does not initialize a database; boot and Doctor retain initialization. The
 released synchronous SDK reader and pairing request/approval mutations retain
 their native paths, so their shared SQL sites remain T1. No schema, retention,
 durability, or update migration changes.
+
+Native transcript locks serialize accepted reads and writes through callback
+completion and join their settlement before releasing the reservation. Awaited
+message preparation captures the physical store and transcript version outside
+SQL; only a fresh insert revalidates preparation inside the native transaction.
+Replay and accepted-input custody retain their original decision. The released
+synchronous preparation callback remains a deprecated locked-context contract.
+This prerequisite changes no schema, retention, durability, or update behavior.
 
 ## Carry facts, publish after commit
 

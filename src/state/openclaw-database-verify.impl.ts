@@ -37,18 +37,14 @@ function isVerifyResult(result: unknown): result is OpenClawDatabaseVerifyResult
 }
 
 type DatabaseVerifyWorkerExit = { code: number | null; signal: NodeJS.Signals | null };
-type DatabaseVerifyWorkerLifecycle = {
-  settled: Promise<DatabaseVerifyWorkerExit>;
-  requestTermination: () => void;
-};
-const workerLifecycles = new WeakMap<ChildProcess, DatabaseVerifyWorkerLifecycle>();
+const workerLifecycles = new WeakMap<ChildProcess, ReturnType<typeof ownDatabaseVerifyWorker>>();
 
 export type DatabaseVerifyWorkerLifetime = {
   onWorker?: (worker: ChildProcess | undefined) => void;
   assertCurrent?: () => void;
 };
 
-function ownDatabaseVerifyWorker(worker: ChildProcess): DatabaseVerifyWorkerLifecycle {
+function ownDatabaseVerifyWorker(worker: ChildProcess) {
   let terminationRequested = false;
   const settled = new Promise<DatabaseVerifyWorkerExit>((resolve) => {
     let exit: DatabaseVerifyWorkerExit | undefined;

@@ -86,26 +86,8 @@ actor GatewayEndpointStore {
         let sourceSnapshot: @Sendable () async throws -> SourceSnapshot
 
         static let live = Deps(
-            token: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .token,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
-            password: {
-                let root = OpenClawConfigFile.loadDict()
-                let isRemote = ConnectionModeResolver.resolve(root: root).mode == .remote
-                return GatewayEndpointStore.resolveGatewayCredential(
-                    .password,
-                    isRemote: isRemote,
-                    root: root,
-                    env: ProcessInfo.processInfo.environment,
-                    launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
-            },
+            token: { GatewayEndpointStore.resolveGatewayCredential(.token) },
+            password: { GatewayEndpointStore.resolveGatewayCredential(.password) },
             localPort: { GatewayEnvironment.gatewayPort() },
             localUnavailableReason: { GatewayEnvironment.profileGatewayPortConflict() },
             remoteRouteIfRunning: { await RemoteTunnelManager.shared.controlTunnelRouteIfRunning() },
@@ -134,6 +116,16 @@ actor GatewayEndpointStore {
 
     static func admitPrimaryAppLaunch() {
         self.primaryAppLaunchAdmitted.withValue { $0 = true }
+    }
+
+    private static func resolveGatewayCredential(_ kind: Credential) -> String? {
+        let root = OpenClawConfigFile.loadDict()
+        return self.resolveGatewayCredential(
+            kind,
+            isRemote: ConnectionModeResolver.resolve(root: root).mode == .remote,
+            root: root,
+            env: ProcessInfo.processInfo.environment,
+            launchdSnapshot: GatewayLaunchAgentManager.launchdConfigSnapshot())
     }
 
     static func resolveGatewayCredential(
@@ -487,10 +479,7 @@ actor GatewayEndpointStore {
                     userInfo: [NSLocalizedDescriptionKey: "Gateway endpoint changed while resolving"])
             }
             return resolvedEndpoint
-        case let .connecting(mode, _, _):
-            guard mode == .remote else {
-                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
-            }
+        case .connecting:
             return try await self.ensureRemoteEndpoint(
                 source: context.source,
                 generation: context.generation)

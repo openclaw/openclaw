@@ -137,12 +137,22 @@ Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
 
+The `runId` returned by `chat.send` remains that input's public identity when
+steering falls back to a followup. Queue admission does not complete it. Its
+terminal event arrives when the followup execution finishes, with that
+execution's success, failure, or cancellation outcome. A `collect` batch completes
+every consumed input's `runId` with the batch's outcome. An input rejected,
+canceled, or dropped before consumption, including queue overflow, receives its
+terminal outcome immediately. Steering accepted into the active turn still
+completes the input's `runId` after its transcript receipt, without completing the
+active turn.
+
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
 ## Canceling a pending steer
 
 An authorized Gateway client can withdraw a message still waiting in the OpenClaw
-runtime's steering queue, before delivery starts, with `chat.abort({ sessionKey,
+runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
 

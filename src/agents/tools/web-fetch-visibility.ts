@@ -1,8 +1,3 @@
-/**
- * HTML visibility sanitizers for web_fetch.
- *
- * Removes hidden or invisible content before readable-text extraction.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

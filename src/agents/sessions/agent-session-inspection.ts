@@ -112,11 +112,6 @@ export abstract class AgentSessionInspection extends AgentSessionModels {
     };
   }
 
-  /**
-   * Get text content of last assistant message.
-   * Useful for /copy command.
-   * @returns Text content, or undefined if no assistant message exists
-   */
   getLastAssistantText(): string | undefined {
     const message = this.messages.findLast(
       (entry): entry is AssistantMessage =>

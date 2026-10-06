@@ -1,6 +1,3 @@
-/**
- * Resolves provider stream functions and API keys for embedded agents.
- */
 import type { LlmRuntime } from "@openclaw/ai";
 import { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";

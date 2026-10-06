@@ -16,11 +16,8 @@ export type UserProfile = Omit<
 
 export type UserProfileOwnerErrorCode = "merge" | "role" | "repair-required";
 
-export type UserProfileDisplay = {
-  id: string;
-  displayName: string | null;
+export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" | "hasAvatar"> & {
   avatarRevision: string;
-  hasAvatar: boolean;
 };
 
 export type UserProfileAuthority = {
@@ -109,10 +106,7 @@ export type UserProfileAccessFacts = Readonly<{
   githubLogin?: string | null;
 }>;
 
-export type UserProfileIdentity = {
-  profileId: string;
-  role: string | null;
-  githubLogin?: string | null;
+export type UserProfileIdentity = Omit<UserProfileAuthority, "aliases" | "display"> & {
   aliases: ReadonlySet<string>;
 };
 

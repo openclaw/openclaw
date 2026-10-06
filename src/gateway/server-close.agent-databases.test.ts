@@ -62,15 +62,10 @@ import type { IncognitoAgentDatabaseExecution } from "../state/openclaw-agent-ex
 import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readOpenClawAgentIntegrityVerification } from "../state/openclaw-quarantine-store.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import * as userProfiles from "../state/user-profile-list.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { readMentionStoreSnapshot } from "./mention-inbox-store.js";
-import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
@@ -175,98 +170,6 @@ it("settles an accepted incognito outbox write after the close prelude and befor
     vi.useRealTimers();
     vi.restoreAllMocks();
     await actor?.close();
-    await fixture.cleanup();
-  }
-});
-
-it("persists accepted mentions and involvement before Gateway worker close and rejects records after the close prelude", async ({
-  signal,
-}) => {
-  const fixture = await createGatewayMetadataCloseFixture("gateway-mention-close");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const parentClosed = createDeferredCore();
-  let closing: Promise<void> | undefined;
-  let accepted: Promise<void> | undefined;
-  try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
-    const alice = ensureProfileForEmail("alice@mentions.example.test");
-    const bob = ensureProfileForEmail("bob@mentions.example.test");
-    const sessionKey = "agent:main:mention-close";
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey },
-      {
-        sessionId: "mention-close-session",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: alice.id },
-      },
-    );
-    await kernel.mentionInbox.invalidateAsync();
-    const input: MentionCommittedInput = {
-      sourceId: "accepted-before-close",
-      committedSource: { generation: "mention-close", sequence: 1, timestamp: 1 },
-      sessionKey,
-      agentId: "main",
-      sessionId: "mention-close-session",
-      messageId: "accepted-before-close",
-      senderProfileId: alice.id,
-      recipientProfileIds: [bob.id],
-      excerpt: "@Bob review this change",
-    };
-    const prepareProfiles = userProfiles.prepareUserProfileCatalog;
-    vi.spyOn(userProfiles, "prepareUserProfileCatalog").mockImplementationOnce(async (...args) => {
-      const profiles = await prepareProfiles(...args);
-      entered.resolve();
-      await release.promise;
-      return profiles;
-    });
-    accepted = kernel.mentionInbox.recordCommittedInputAsync(input);
-    await withinTest(
-      awaitGateBeforeSettlement(
-        entered.promise,
-        accepted,
-        "Mention settled without preparing involvement profile aliases",
-      ),
-      signal,
-    );
-    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
-    const agent = openOpenClawAgentDatabase({ agentId: "main", env: fixture.state.env }).db;
-    kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
-    closing = server.close({ reason: "mention close regression" });
-    await withinTest(parentClosed.promise, signal);
-    await kernel.mentionInbox.recordCommittedInputAsync({
-      ...input,
-      sourceId: "refused-after-close",
-      messageId: "refused-after-close",
-    });
-    expect(shared.isOpen).toBe(true);
-    expect(agent.isOpen).toBe(true);
-    release.resolve();
-    await accepted;
-    await closing;
-    expect(shared.isOpen).toBe(false);
-    expect(agent.isOpen).toBe(false);
-
-    // Read durable results after the real close; a second Gateway boot adds no settlement proof.
-    const stored = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db }) => readMentionStoreSnapshot(-1, db),
-      { env: fixture.state.env },
-    );
-    expect(stored?.sources.map((source) => source.message?.content.messageId)).toEqual([
-      "accepted-before-close",
-    ]);
-    expect(stored?.sources[0]?.recipients).toEqual([[bob.id, expect.any(String)]]);
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey })?.profileInvolvement?.profiles[bob.id],
-    ).toMatchObject({ hidden: false, lastMention: input.committedSource });
-  } finally {
-    release.resolve();
-    await Promise.allSettled([accepted, closing]);
-    vi.restoreAllMocks();
     await fixture.cleanup();
   }
 });

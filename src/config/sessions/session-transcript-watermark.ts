@@ -2,6 +2,7 @@ import path from "node:path";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -10,8 +11,9 @@ import { withSessionTranscriptReadSource } from "./session-transcript-read-sourc
 
 export function readSessionTranscriptWatermarkAsync(
   scope: SessionTranscriptReadScope,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ) {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.watermark",

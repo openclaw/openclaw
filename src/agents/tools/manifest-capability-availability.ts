@@ -185,7 +185,6 @@ export function loadCapabilityMetadataSnapshot(params: {
   });
 }
 
-/** Checks whether any available plugin has a configured provider for a capability contract. */
 export function hasSnapshotCapabilityAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
@@ -199,7 +198,6 @@ export function hasSnapshotCapabilityAvailability(params: {
   );
 }
 
-/** Checks whether any available plugin exposes env-backed auth for a provider id. */
 export function hasSnapshotProviderEnvAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   providerId: string;
@@ -213,7 +211,6 @@ export function hasSnapshotProviderEnvAvailability(params: {
   );
 }
 
-/** Checks whether a specific provider id is available for a capability contract. */
 export function hasSnapshotCapabilityProviderAvailability(params: {
   snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;

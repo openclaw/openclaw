@@ -78,25 +78,6 @@ type NodeWorkerSupervisorCommandPayload =
   | { status: "ready" }
   | null;
 
-type NodeWorkerSupervisorCommandResult =
-  | { handled: false }
-  | {
-      handled: true;
-      ok: true;
-      payload: NodeWorkerSupervisorCommandPayload;
-    }
-  | {
-      handled: true;
-      ok: false;
-      code:
-        | "INVALID_REQUEST"
-        | "UNAVAILABLE"
-        | typeof NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
-        | typeof NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
-        | typeof NODE_WORKSPACE_TRANSFER_ERROR_CODE;
-      message: string;
-    };
-
 function workspaceTransferDiagnostic(error: NodeWorkerWorkspaceTransferError): string {
   if (!error.operation || !error.stage) {
     return error.message;
@@ -149,7 +130,7 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   signal?: AbortSignal;
-}): Promise<NodeWorkerSupervisorCommandResult> {
+}) {
   const { supervisor, bundleInstaller, workspace, paramsJSON, signal } = params;
   const receipt = (value: Awaited<ReturnType<NodeWorkerSupervisorControl["status"]>>) =>
     value ? projectNodeWorkerSupervisorReceipt(value) : null;
@@ -270,35 +251,35 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
   };
   const invoke = Object.hasOwn(commands, params.command) ? commands[params.command] : undefined;
   if (!invoke) {
-    return { handled: false };
+    return { handled: false as const };
   }
   try {
     const payload = await invoke();
     return payload === undefined
       ? {
-          handled: true,
-          ok: false,
-          code: "UNAVAILABLE",
+          handled: true as const,
+          ok: false as const,
+          code: "UNAVAILABLE" as const,
           message: "node worker runtime unavailable",
         }
-      : { handled: true, ok: true, payload };
+      : { handled: true as const, ok: true as const, payload };
   } catch (error) {
     const invalid = error instanceof Error && error.message.startsWith("INVALID_REQUEST:");
     const bundleInstallFailure = error instanceof NodeWorkerBundleInstallError;
     const capacityFailure = error instanceof NodeWorkerCapacityExhaustedError;
     const transferFailure = error instanceof NodeWorkerWorkspaceTransferError;
     return {
-      handled: true,
-      ok: false,
+      handled: true as const,
+      ok: false as const,
       code: invalid
-        ? "INVALID_REQUEST"
+        ? ("INVALID_REQUEST" as const)
         : bundleInstallFailure
           ? NODE_WORKER_BUNDLE_INSTALL_ERROR_CODE
           : capacityFailure
             ? NODE_WORKER_CAPACITY_EXHAUSTED_ERROR_CODE
             : transferFailure
               ? NODE_WORKSPACE_TRANSFER_ERROR_CODE
-              : "UNAVAILABLE",
+              : ("UNAVAILABLE" as const),
       message: transferFailure
         ? workspaceTransferDiagnostic(error)
         : invalid || bundleInstallFailure || capacityFailure

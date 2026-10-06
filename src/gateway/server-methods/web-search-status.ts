@@ -203,7 +203,7 @@ export async function prepareWebSearchStatus(
       const variants = catalog.routeVariants.filter(
         (row) => row.provider === entry.provider && row.id === entry.id,
       );
-      const host = await decisions.evaluateEntry(entry, variants);
+      const host = decisions.evaluateEntry(entry, variants);
       const evaluation = decisions.evaluateNative(entry, host);
       if (!catalog.isCurrent()) {
         throw new Error("Model catalog changed during search status projection.");

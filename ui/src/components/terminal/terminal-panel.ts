@@ -86,6 +86,8 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   @property({ type: Boolean }) fullscreen = false;
   /** Hosted by the chat side panel, which owns visibility and geometry. */
   @property({ type: Boolean }) embedded = false;
+  /** The embedding pane owns removal of its terminal slot. */
+  @property({ attribute: false }) onClose?: () => void;
   /** The hosting side-panel header presents this panel's tabs and actions. */
   @property({ type: Boolean }) tabsInHeader = false;
   /** Main-route terminal owns its queue and restore state independently of docks. */
@@ -341,7 +343,11 @@ export class OpenClawTerminalPanel extends OpenClawLitElement implements PanelHo
   closeTerminalPanel(): void {
     this.closeSessionPicker(false);
     this.terminalSessions.cancelPendingActions();
-    this.dockLayout.setOpen(false);
+    if (this.embedded) {
+      this.onClose?.();
+    } else {
+      this.dockLayout.setOpen(false);
+    }
   }
 
   get terminalPanelOpen(): boolean {
