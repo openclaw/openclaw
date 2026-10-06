@@ -1,4 +1,5 @@
 // Migrate Hermes tests cover config plugin behavior.
+import fs from "node:fs/promises";
 import path from "node:path";
 import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
@@ -46,8 +47,8 @@ describe("Hermes migration config mapping", () => {
     await testWorkspace.cleanup();
   });
 
-  it("plans provider, MCP, skill, and memory plugin config as plugin-owned items", async () => {
-    const { source, workspaceDir, stateDir } = makeHermesPaths(testWorkspace.dir);
+  it("plans plugin-owned config when target credential storage is unreadable", async () => {
+    const { source, workspaceDir, stateDir, agentDir } = makeHermesPaths(testWorkspace.dir);
     await writeFile(
       path.join(source, "config.yaml"),
       [
@@ -89,6 +90,9 @@ describe("Hermes migration config mapping", () => {
     );
     await writeFile(path.join(source, "memories", "MEMORY.md"), "memory line\n");
 
+    const credentialPath = path.join(agentDir, "openclaw-agent.sqlite");
+    const unreadableCredentials = "not a SQLite database\n";
+    await writeFile(credentialPath, unreadableCredentials);
     const provider = buildHermesMigrationProvider();
     const plan = await provider.plan(makeContext({ source, stateDir, workspaceDir }));
 
@@ -140,6 +144,7 @@ describe("Hermes migration config mapping", () => {
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",
     ]);
+    expect(await fs.readFile(credentialPath, "utf8")).toBe(unreadableCredentials);
   });
 
   it("applies mapped config items through the migration runtime config writer", async () => {
