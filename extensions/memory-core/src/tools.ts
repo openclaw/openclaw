@@ -482,11 +482,37 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
                   nowMs: Date.now(),
                   timezone: dreaming.timezone,
                 };
-                void import("./short-term-promotion-record.js")
-                  .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
-                  .catch(() => {
-                    // Gateway recall persistence stays off the reply latency path.
-                  });
+                const scopedRecall =
+                  options.runId &&
+                  options.agentSessionKey &&
+                  options.assertInvocationCurrent &&
+                  recall.workspaceDir
+                    ? {
+                        config: cfg,
+                        workspaceDir: recall.workspaceDir,
+                        query,
+                        results: recalled,
+                        runId: options.runId,
+                        sessionKey: options.agentSessionKey,
+                        assertActive: options.assertInvocationCurrent,
+                      }
+                    : undefined;
+                if (scopedRecall) {
+                  // Settle while the host still owns the tool invocation. Detached
+                  // imports can outlive the assertion that authorizes persistence.
+                  try {
+                    const { recordMemoryRecall } =
+                      await import("openclaw/plugin-sdk/memory-recall");
+                    await recordMemoryRecall(scopedRecall);
+                  } catch {
+                    // Optional recall accounting must not fail the search result.
+                  }
+                } else {
+                  // Direct CLI callers have no host turn to share with plugin hooks.
+                  void import("./short-term-promotion-record.js")
+                    .then(({ recordShortTermRecalls }) => recordShortTermRecalls(recall))
+                    .catch(() => {});
+                }
               }
               const attempts = [
                 ...((requestedCorpus === "all" || memory?.outcome === "partial") && memory

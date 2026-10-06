@@ -159,6 +159,8 @@ function resolveMemoryToolOptions(
     getConfig,
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
+    runId: ctx.runId,
+    assertInvocationCurrent: ctx.assertInvocationCurrent,
     sandboxed: ctx.sandboxed,
     oneShotCliRun: ctx.oneShotCliRun,
     conversationRecall: ctx.conversationRecall,

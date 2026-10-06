@@ -23,6 +23,13 @@ function resolve(options: OpenClawPluginToolOptions) {
 }
 
 describe("openclaw plugin tool context", () => {
+  it("forwards the host run identity without substituting a session identity", () => {
+    expect(resolve({ runId: "turn-one", sessionId: "conversation-one" }).context.runId).toBe(
+      "turn-one",
+    );
+    expect(resolve({ sessionId: "conversation-one" }).context.runId).toBeUndefined();
+  });
+
   it("forwards one host-minted memory audience and its currency assertion", async () => {
     const sessionId = randomUUID();
     const entry = { sessionId, updatedAt: 1, chatType: "direct" as const };
