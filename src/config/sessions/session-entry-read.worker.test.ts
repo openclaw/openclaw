@@ -21,6 +21,7 @@ import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
+import * as entryReads from "./session-accessor.sqlite-entry-read.js";
 import {
   deleteSessionEntryRows,
   writeSessionEntry,
@@ -260,13 +261,14 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
 it.each([false, true])("reads row metadata (continuation: %s)", async (useContinuation) => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:cron:row-facts";
+    const sessionKey = "agent:main:cron:row-facts-\ufffd";
+    const rawKey = "agent:main:cron:row-facts-\ud800";
     const sessionId = "row-facts-session";
     const siblingKey = "agent:main:cron:without-summary";
     const sessionKeys = [
       sessionKey,
       siblingKey,
-      ...Array.from({ length: 62 }, (_, index) => `agent:main:cron:cohort-${index}`),
+      ...Array.from({ length: 61 }, (_, index) => `agent:main:cron:cohort-${index}`),
     ];
     writeSessionEntry(database, sessionKey, {
       sessionId,
@@ -311,36 +313,8 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
     const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const retained = new OpenClawAgentDatabaseReadOnlyScope();
-    const readBoards = boardStore.readBoardSessionKeys;
-    const concurrentCommit = vi
-      .spyOn(boardStore, "readBoardSessionKeys")
-      .mockImplementationOnce((reader, key) => {
-        // Commit after entry acquisition; the remaining facts must retain its original snapshot.
-        peer.exec("BEGIN IMMEDIATE");
-        try {
-          peer
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
-            )
-            .run(sessionKey);
-          peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
-          peer
-            .prepare(
-              "UPDATE transcript_rewrite_watermarks SET generation = 'next-generation' WHERE session_id = ?",
-            )
-            .run(sessionId);
-          peer
-            .prepare(
-              "UPDATE session_transcript_cold_archives SET last_seq = 42 WHERE session_id = ?",
-            )
-            .run(sessionId);
-          peer.exec("COMMIT");
-        } catch (error) {
-          peer.exec("ROLLBACK");
-          throw error;
-        }
-        return readBoards(reader, key);
-      });
+    const prepareRows = entryReads.prepareExactSessionEntryRowReads;
+    const concurrentCommit = vi.spyOn(entryReads, "prepareExactSessionEntryRowReads");
     try {
       retained.run(target, () => {
         const opened = withOpenClawAgentDatabaseReadOnly((reader) => reader, { ...target, env });
@@ -361,17 +335,46 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
         if (useContinuation && !continuation) {
           throw new Error("Expected committed reader admission");
         }
+        concurrentCommit.mockImplementationOnce((...args) => {
+          const readRow = prepareRows(...args);
+          // Commit after entry acquisition; the remaining facts must retain its original snapshot.
+          peer.exec("BEGIN IMMEDIATE");
+          try {
+            peer
+              .prepare(
+                "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.label', 'after') WHERE session_key = ?",
+              )
+              .run(sessionKey);
+            peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
+            peer
+              .prepare(
+                "UPDATE transcript_rewrite_watermarks SET generation = 'next-generation' WHERE session_id = ?",
+              )
+              .run(sessionId);
+            peer
+              .prepare(
+                "UPDATE session_transcript_cold_archives SET last_seq = 42 WHERE session_id = ?",
+              )
+              .run(sessionId);
+            peer.exec("COMMIT");
+          } catch (error) {
+            peer.exec("ROLLBACK");
+            throw error;
+          }
+          return readRow;
+        });
         const exec = vi.spyOn(opened.value.db, "exec");
         const queries = trackSqliteStatementExecutions(
           opened.value.db,
           ["boards", "entries"],
           (sql) => {
+            if (/\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')) {
+              return "entries";
+            }
             if (/\bfrom "board_tabs"/iu.test(sql)) {
               return "boards";
             }
-            return /\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')
-              ? "entries"
-              : null;
+            return null;
           },
         );
         const parse = vi.spyOn(JSON, "parse");
@@ -389,14 +392,14 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
               kind: "session-row-facts",
               database: target,
               env,
-              sessionKeys,
+              sessionKeys: [...sessionKeys, rawKey],
               continuation: continuation?.receipt,
             });
           const first = read();
           expect(first.rows).toHaveLength(64);
-          expect(queries.counts.boards).toBe(1);
+          expect(queries.counts.boards).toBe(0);
           expect(queries.counts.entries).toBe(1);
-          expect(queries.rowCounts.entries).toBe(64);
+          expect(queries.rowCounts.entries).toBe(63);
           expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
@@ -412,12 +415,17 @@ it.each([false, true])("reads row metadata (continuation: %s)", async (useContin
             hasBoard: false,
           });
           expect(first.rows[1]).not.toHaveProperty("activitySummaryWatermark");
+          expect(first.rows.at(-1)).toMatchObject({
+            sessionKey: rawKey,
+            entry: { label: "before" },
+            hasBoard: false,
+          });
           expect(read().rows[0]).toMatchObject({
             entry: { label: "after" },
             hasBoard: false,
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
-          expect(queries.counts.boards).toBe(2);
+          expect(queries.counts.boards).toBe(0);
           expect(queries.counts.entries).toBe(2);
           expect(entryParseCount()).toBe(128);
           expect(

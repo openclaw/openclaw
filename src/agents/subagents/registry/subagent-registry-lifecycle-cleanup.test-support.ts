@@ -58,10 +58,7 @@ export function registerDetachedCleanupAuthorityTest({
       retainAttachmentsOnKeep: true,
     });
     let disposed = false;
-    let releaseCleanup!: () => void;
-    const cleanupReady = new Promise<void>((resolve) => {
-      releaseCleanup = resolve;
-    });
+    const cleanupReady = createDeferredCore();
     const requesterTranscriptWrite = vi.fn();
     const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
       requesterTranscriptWrite();
@@ -82,7 +79,7 @@ export function registerDetachedCleanupAuthorityTest({
     const dispatchFinished = createDeferredCore<unknown>();
     const cleanupFinished = createDeferredCore();
     const runSubagentAnnounceFlow = vi.fn(async () => {
-      await cleanupReady;
+      await cleanupReady.promise;
       try {
         const result = await dispatchGatewayMethodInProcess(
           "agent",
@@ -130,7 +127,7 @@ export function registerDetachedCleanupAuthorityTest({
 
     const dispatchResult = expect(dispatchFinished.promise).resolves.toEqual(delivered);
     disposed = true;
-    releaseCleanup();
+    cleanupReady.resolve();
 
     await dispatchResult;
     await cleanupFinished.promise;
@@ -311,18 +308,29 @@ export function registerDeliveryRetryOwnerTests({
   helperMocks: { safeRemoveAttachmentsDir: Mock<() => Promise<void>> };
   waitForLifecycleState: (assertion: () => void) => Promise<void>;
 }) {
-  it("retries a detached cleanup failure and completes on the next attempt", async () => {
-    vi.useFakeTimers();
+  function createAttachmentCleanupFixture(
+    beforeWrite?: LifecycleControllerFixtureOptions["beforeWrite"],
+  ) {
     const entry = createRunEntry({
       endedAt: 4_000,
       expectsCompletionMessage: false,
       retainAttachmentsOnKeep: false,
     });
-    helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
     const resumeSubagentRun = vi.fn(() => {
       controller.startSubagentAnnounceCleanupFlow(entry);
     });
-    const controller = createLifecycleController({ entry, resumeSubagentRun });
+    const controller = createLifecycleController({
+      entry,
+      beforeWrite,
+      resumeSubagentRun,
+    });
+    return { entry, controller, resumeSubagentRun };
+  }
+
+  it("retries a detached cleanup failure and completes on the next attempt", async () => {
+    vi.useFakeTimers();
+    helperMocks.safeRemoveAttachmentsDir.mockRejectedValueOnce(new Error("cleanup failed"));
+    const { entry, controller, resumeSubagentRun } = createAttachmentCleanupFixture();
 
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
@@ -502,21 +510,9 @@ export function registerDeliveryRetryOwnerTests({
 
   it("stops retrying detached cleanup failures and leaves the run durably unlocked", async () => {
     vi.useFakeTimers();
-    const entry = createRunEntry({
-      endedAt: 4_000,
-      expectsCompletionMessage: false,
-      retainAttachmentsOnKeep: false,
-    });
     const persist = vi.fn();
     helperMocks.safeRemoveAttachmentsDir.mockRejectedValue(new Error("cleanup failed"));
-    const resumeSubagentRun = vi.fn(() => {
-      controller.startSubagentAnnounceCleanupFlow(entry);
-    });
-    const controller = createLifecycleController({
-      entry,
-      beforeWrite: persist,
-      resumeSubagentRun,
-    });
+    const { entry, controller } = createAttachmentCleanupFixture(persist);
 
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);

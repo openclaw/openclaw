@@ -1241,7 +1241,7 @@ function createSandboxReadOperations(params: SandboxToolParams) {
     decodeText: ({ buffer, absolutePath }: { buffer: Buffer; absolutePath: string }) =>
       params.bridge.resolvePath({ filePath: absolutePath, cwd: params.root }).hostPath
         ? decodeWindowsTextFileBuffer({ buffer })
-        : buffer.toString("utf8"),
+        : decodeWindowsTextFileBuffer({ buffer, platform: "linux" }),
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),

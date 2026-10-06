@@ -300,6 +300,12 @@ describe("windows output encoding", () => {
     },
   );
 
+  it.each(["linux", "darwin"] as const)("decodes UTF-16 BOM file buffers on %s", (platform) => {
+    for (const [, raw] of UTF16_OUTPUT_CASES) {
+      expect(decodeWindowsTextFileBuffer({ buffer: raw, platform })).toBe("hi\n");
+    }
+  });
+
   it.each(UTF16_OUTPUT_CASES)("decodes %s output across every chunk boundary", (_, raw) => {
     for (let split = 1; split < raw.length; split += 1) {
       const decoder = createWindowsOutputDecoder({
