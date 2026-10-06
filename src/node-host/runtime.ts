@@ -110,7 +110,6 @@ export async function prepareNodeHostRuntime(params?: {
   const config = params?.config ?? getRuntimeConfig();
   const env = params?.env ?? process.env;
   const platform = params?.platform ?? process.platform;
-  const nativeInferenceSnapshot = snapshotNodeWorkerNativeInference(config, env, platform);
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
@@ -182,7 +181,6 @@ export async function prepareNodeHostRuntime(params?: {
       preparedContainerSupervisor = createNodeWorkerSupervisor({
         env,
         capacity: config.nodeHost?.workerRuns?.capacity,
-        nativeInferenceSnapshot,
         workspace: preparedWorkerWorkspace,
         containerEngine,
         ...(config.nodeHost?.workerRuns?.containerImage
@@ -208,6 +206,12 @@ export async function prepareNodeHostRuntime(params?: {
       await disablePreparedWorkerHosting(error);
     }
   }
+  const nativeInferenceSnapshot =
+    workerRunsEnabled &&
+    platform !== "win32" &&
+    config.nodeHost?.workerRuns?.isolation !== "container"
+      ? snapshotNodeWorkerNativeInference(config, env, platform)
+      : undefined;
   const skills =
     commandAllowlist || config.nodeHost?.skills?.enabled === false ? null : scanNodeHostedSkills();
   const buildManifest = (pluginManifest: typeof pluginNodeHost) =>
