@@ -572,6 +572,7 @@ export function formatToolSearchControlResult<T>(
     parentToolCallId?: string;
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     compact?: boolean;
+    images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
@@ -580,6 +581,9 @@ export function formatToolSearchControlResult<T>(
     runtime?.hasNetworkContent(options.parentToolCallId) ?? false,
   );
   const result = textResult(text, payload);
+  if (options.images?.length) {
+    result.content.push(...options.images);
+  }
   const terminal =
     options.terminalBatchStatus !== "waiting" &&
     runtime?.takeTerminalTargetBatch(options.parentToolCallId) === true;

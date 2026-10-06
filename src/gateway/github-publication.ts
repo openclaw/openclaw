@@ -381,7 +381,6 @@ export function createGitHubPublicationCoordinator(params: {
                 assertInvocationCurrent?.();
                 return true;
               },
-              projectResult: publicationResult,
               recordEffect: (kind, observed) => {
                 dispatched ||= observed === undefined;
                 effect = {
@@ -430,7 +429,6 @@ export function createGitHubPublicationCoordinator(params: {
               const observed = await reconcileGitHubPublication({
                 initial: current,
                 validateCustody,
-                projectResult: publicationResult,
                 complete,
                 pushOnly:
                   claimed.head_commit === null && effect?.kind === "push"

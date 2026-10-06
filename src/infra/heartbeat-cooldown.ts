@@ -23,6 +23,8 @@ type ShouldDeferInput = {
   recentRunStarts?: readonly number[];
   /** Work already retained by the wake queue after a prior guard deferral. */
   retainedWork?: boolean;
+  /** Every pending event is a command completion owned by a conversation turn. */
+  conversationTurn?: boolean;
 };
 
 export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
@@ -50,7 +52,13 @@ export function shouldDeferWake(input: ShouldDeferInput): DeferDecision {
     return { defer: false };
   }
 
-  if (input.intent !== "task" && !input.retainedWork && input.now < input.nextDueMs) {
+  // A conversation's own completion is its reply, not periodic work; spacing and flood still apply.
+  if (
+    input.intent !== "task" &&
+    !input.retainedWork &&
+    !input.conversationTurn &&
+    input.now < input.nextDueMs
+  ) {
     const spacingRetryAtMs = resolveMinSpacingRetryAtMs(input);
     return {
       defer: true,

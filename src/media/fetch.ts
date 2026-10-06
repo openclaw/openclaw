@@ -565,28 +565,6 @@ function shouldRetryMediaFetch(err: unknown): boolean {
   return isTransientNetworkError(err);
 }
 
-async function withMediaFetchRetry<T>(
-  options: FetchMediaOptions,
-  fn: () => Promise<T>,
-): Promise<T> {
-  const retry = options.retry;
-  if (!retry) {
-    return await fn();
-  }
-  return await retryAsync(fn, {
-    label: "media:fetch",
-    ...retry,
-    shouldRetry: (err, attempt) =>
-      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
-    sleep:
-      retry.sleep ??
-      ((delay) =>
-        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
-          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
-        })),
-  });
-}
-
 /** Validates and saves a caller-provided response without performing a new fetch. */
 export async function saveResponseMedia(
   res: Response,
@@ -629,7 +607,7 @@ async function withGuardedMediaResponse<T>(
   options: FetchMediaOptions,
   consume: (result: GuardedMediaResponse) => Promise<T>,
 ): Promise<T> {
-  return await withMediaFetchRetry(options, async () => {
+  const run = async () => {
     const result = await fetchGuardedMediaResponse(options);
     const { release } = result;
     try {
@@ -644,6 +622,22 @@ async function withGuardedMediaResponse<T>(
     } finally {
       await release();
     }
+  };
+  const retry = options.retry;
+  if (!retry) {
+    return await run();
+  }
+  return await retryAsync(run, {
+    label: "media:fetch",
+    ...retry,
+    shouldRetry: (err, attempt) =>
+      retry.shouldRetry ? retry.shouldRetry(err, attempt) : shouldRetryMediaFetch(err),
+    sleep:
+      retry.sleep ??
+      ((delay) =>
+        sleepWithAbort(delay, options.requestInit?.signal ?? undefined).catch((cause: unknown) => {
+          throw createMediaFetchFailure(redactSensitiveText(options.url), cause);
+        })),
   });
 }
 

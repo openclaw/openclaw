@@ -23,6 +23,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { readSessionGroupMembership } from "./session-group-membership.read.js";
 import { putSessionGroups } from "./session-groups.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 function observeQueries(prototype: StatementSync) {
@@ -270,9 +271,13 @@ it("publishes final replacement facts to observers registered before the project
         });
       }
       expect(projection.needsMembershipPreparation()).toBe(false);
-      expect(
-        projection.describe({ agentId: scope.agentId, key: scope.sessionKey })?.entry,
-      ).toMatchObject({
+      const query = { agentId: scope.agentId, key: scope.sessionKey };
+      const entry = await withReadySessionRows(
+        projection,
+        () => [query],
+        (read) => read.describe(query)?.entry,
+      );
+      expect(entry).toMatchObject({
         sessionId: "current",
         category: "current",
         participants: [

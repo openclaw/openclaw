@@ -1,5 +1,7 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/channels/feedback-reflection.worker.test.ts",
+  "src/config/sessions/session-accessor.sqlite-bounded-context.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.mirrors.test.ts",
   "src/gateway/server-methods/chat-transcript-persistence.generated-media.test.ts",
   "src/config/sessions/session-message-rewrite.test.ts",
@@ -369,6 +371,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/join-intro/report-channel-room-join.test.ts",
   "src/plugin-sdk/ingress-effect-once.test.ts",
   "src/plugin-sdk/session-transcript-runtime.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.guarded.test.ts",
+  "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
   "src/plugin-sdk/persistent-dedupe.worker.test.ts",
   "src/acp/runtime/session-meta.legacy-migration.test.ts",
   "src/agents/mcp-oauth-refresh-issuer.test.ts",
@@ -679,6 +683,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-execution.integrity.test.ts",
   "src/state/openclaw-agent-execution-incognito.test.ts",
   "src/state/openclaw-agent-execution-incognito.sessions.test.ts",
+  "src/state/openclaw-agent-execution-incognito.entry-patch.test.ts",
+  "src/state/openclaw-agent-execution-incognito.creation.test.ts",
   "src/plugin-sdk/codex-session-transcript-runtime.incognito.test.ts",
   "src/state/openclaw-agent-execution-incognito.acp.test.ts",
   "src/state/openclaw-agent-execution-incognito.side-data.test.ts",

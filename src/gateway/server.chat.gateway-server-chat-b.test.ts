@@ -16,6 +16,7 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
+import { createModelCatalogDecisions } from "../agents/model-catalog-decisions.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -1825,8 +1826,7 @@ describe("gateway server chat", () => {
                 return authStore;
               };
               const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
-              const { buildModelsListResult, createGatewayAgentModelCatalogProjector } =
-                await import("./server-methods/models-list-result.js");
+              const models = await import("./server-methods/models-list-result.js");
               const projectionByKey = new Map<
                 string,
                 Promise<{
@@ -1858,7 +1858,7 @@ describe("gateway server chat", () => {
                 if (existing) {
                   return existing;
                 }
-                const projector = createGatewayAgentModelCatalogProjector({
+                const projector = createModelCatalogDecisions({
                   cfg: initialConfig,
                   agentId,
                   snapshot: catalogSnapshot,
@@ -1871,7 +1871,7 @@ describe("gateway server chat", () => {
                 });
                 const projection = Promise.all([
                   projector.projectCatalog(),
-                  buildModelsListResult({
+                  models.buildModelsListResult({
                     source: { kind: "gateway", context },
                     agentId,
                     params: { view: "configured" },
@@ -1920,7 +1920,7 @@ describe("gateway server chat", () => {
                   };
                 }),
               });
-              const expiredPreferenceEvaluation = await createGatewayAgentModelCatalogProjector({
+              const expiredPreferenceEvaluation = await createModelCatalogDecisions({
                 cfg: initialConfig,
                 agentId: "work",
                 snapshot: catalogSnapshot,

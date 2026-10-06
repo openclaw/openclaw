@@ -5,16 +5,11 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
-import {
-  assertExistingDatabaseIdentity,
-  readDatabasePathIdentitySync,
-} from "../../infra/sqlite-worker-identity.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { runOpenClawAgentWriteWithYieldingAdmission } from "../../state/openclaw-agent-db-transaction.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
-  isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
@@ -22,8 +17,6 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
-import { resolveStateDir } from "../paths.js";
 import { deriveLastRoutePatch, deriveSessionMetaPatch } from "./metadata.js";
 import type {
   RecordInboundSessionMetaParams,
@@ -52,10 +45,7 @@ import {
   readLifecycleTargetSnapshot,
   readSessionEntrySelectionSnapshot,
 } from "./session-accessor.sqlite-entry-store.js";
-import {
-  assertCapturedSessionEntryReadSource,
-  resolveSessionEntry,
-} from "./session-accessor.sqlite-exact-read.js";
+import { resolveSessionEntry } from "./session-accessor.sqlite-exact-read.js";
 import { listTranscriptInstancesFromDatabase } from "./session-accessor.sqlite-history.js";
 import { prepareSessionIdentityPublication } from "./session-accessor.sqlite-identity.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "./session-accessor.sqlite-maintenance-kick.js";
@@ -78,6 +68,7 @@ import {
 } from "./session-canonical-key.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { sessionEntryPatchPredicateMatches } from "./session-entry-patch-guard.js";
+import { captureSessionEntryPatchSource } from "./session-entry-patch-source.js";
 import { patchSessionEntryInWorker } from "./session-entry-patch.js";
 import type {
   SessionEntryPatchGuard,
@@ -86,6 +77,7 @@ import type {
 import { buildSessionCreationStamp } from "./session-entry-provenance.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { kickSessionHistoryDiskBudgetMaintenance } from "./session-history-eviction.js";
+import { patchIncognitoSessionEntry } from "./session-incognito-entry-patch.js";
 import {
   prepareSessionSourceAuthority,
   type PreparedSessionSourceAuthority,
@@ -343,7 +335,7 @@ export async function patchSessionEntryTarget(
     : resolveSqliteScope({
         agentId: scope.agentId,
         env: scope.env,
-        sessionKey: "",
+        sessionKey: scope.target.canonicalKey,
         storePath: scope.storePath,
       });
   return await patchSqliteSessionEntrySnapshot({
@@ -387,41 +379,17 @@ async function patchSqliteSessionEntrySnapshot(
   params: SqliteSessionEntrySnapshotPatchParams,
 ): Promise<SessionEntry | null> {
   const { options, sessionKey } = params;
-  // Queueing and either cold open must retain the same registration and lease owner.
-  const resolved = {
-    ...params.resolved,
-    env: cloneEnvWithPlatformSemantics(params.resolved.env ?? process.env),
-  };
-  resolved.env.OPENCLAW_STATE_DIR = resolveStateDir(resolved.env);
-  const databaseOptions = toDatabaseOptions(resolved);
-  const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const targetIdentity = readDatabasePathIdentitySync(databasePath);
-  resolved.path = databasePath;
-  databaseOptions.path = databasePath;
-  const incognito = isIncognitoOpenClawAgentSqlitePath(databasePath, databaseOptions);
   const captured = params.capturedSource;
-  const assertCapturedSource = (database?: OpenClawAgentDatabase) => {
-    if (!captured) {
-      return;
-    }
-    if (!database && typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(
-        captured.path,
-        `file:${captured.databaseIdentity}`,
-        captured.databaseBirthtime,
-      );
-    }
-    assertCapturedSessionEntryReadSource(
-      captured,
-      database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions),
-    );
-  };
-  const assertCurrent = () => {
-    if (targetIdentity.key.startsWith("file:")) {
-      assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
-    }
-    assertCapturedSource();
-  };
+  const {
+    resolved,
+    databaseOptions,
+    databasePath,
+    targetIdentity,
+    incognito,
+    incognitoBinding,
+    assertCapturedSource,
+    assertCurrent,
+  } = captureSessionEntryPatchSource(params.resolved, sessionKey, captured);
   const prepare = async (prepared: SqliteLifecycleTargetSnapshot) => {
     const existing = prepared[0]?.entry;
     const writeBase = existing ?? options.fallbackEntry;
@@ -482,6 +450,23 @@ async function patchSqliteSessionEntrySnapshot(
       ? withOpenClawAgentDatabaseAsync(databaseOptions, operation, assertCurrent)
       : operation();
   };
+  if (incognitoBinding) {
+    const result = await patchIncognitoSessionEntry({
+      ...incognitoBinding,
+      sessionKey,
+      selection: params.selection,
+      assertCurrent() {
+        assertCurrent?.();
+        options.workerGuard?.assertCurrent?.();
+      },
+      assertCommitAllowed: options.assertCommitAllowed,
+      shouldCommit: options.shouldCommit,
+      source: options.workerGuard?.source,
+      prepare,
+      onCommitted: options.onCommitted,
+    });
+    return result.entry;
+  }
   let wrote = false;
   const useWorker =
     isMainThread &&

@@ -371,7 +371,7 @@ export function publishSessionEntryCacheInvalidation(
   const entry = update.entry
     ? (cached?.entry ?? projectSessionEntryCacheUpdate(update.entryJson, update.sideMetadata))
     : undefined;
-  publishSessionSharingEntryChange(database, entry ? { ...update, entry } : update);
+  publishSessionSharingEntryChange(database, { ...update, facts, ...(entry ? { entry } : {}) });
   const identity = findOpenClawAgentDatabaseIdentity(database);
   const sharingChange =
     update.sharingUnchanged ||
@@ -410,7 +410,11 @@ export function publishSessionEntryCacheCategoryUpdate(
   publishTrackedCacheUpdate(database, () => {
     const cached = sessionEntryCaches.get(database.db);
     for (const { sessionKey, sessionId } of rows) {
-      recordCommittedSessionMetadataPublication(database, sessionKey);
+      recordCommittedSessionMetadataPublication(database, sessionKey, {
+        kind: "category",
+        sessionId,
+        category: category ?? null,
+      });
       const current = cached?.entries.get(sessionKey);
       if (!current || current.sessionId !== sessionId) {
         continue;

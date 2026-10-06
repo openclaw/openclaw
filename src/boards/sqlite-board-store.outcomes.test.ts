@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import {
   receiveSqliteWorkerReply,
   settleFailedSqliteWorkerJobs,
@@ -208,11 +209,11 @@ it("relays a committed Board outcome after revocation without failing on client 
   boundary.close.mockRejectedValue(new Error("Client cleanup failed after committed publication"));
   await expect(
     store.putWidget(params, {
-      assertCurrent() {
+      assertCurrent: composeSessionSourceAssertion([], () => {
         if (!current) {
           throw new Error("Board request revoked during committed delivery");
         }
-      },
+      }),
     }),
   ).resolves.toBe(committed);
   expect(changes).toEqual([change]);

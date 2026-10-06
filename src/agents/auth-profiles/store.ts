@@ -48,10 +48,8 @@ import {
   loadPersistedSharedAuthProfileStore,
   mergeAuthProfileStores,
 } from "./persisted.js";
-import {
-  materializePersonalAuthProfile,
-  updatePersonalAuthProfileStore,
-} from "./personal-profiles.js";
+import { materializePersonalAuthProfile } from "./personal-profiles.js";
+import { withPersonalAuthProfileStore } from "./personal-store.js";
 import {
   createAuthProfileStoreRuntimeReader,
   resolveExternalCliOverlayOptions,
@@ -903,11 +901,13 @@ export function createAuthProfileStoreRuntime(
     try {
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
         assertPersonalAuthProfileRuntime();
-        return updatePersonalAuthProfileStore({
-          profileId: params.profileId,
-          updater: params.updater,
-          stateDir: params.stateDir,
-        });
+        return (
+          (await withPersonalAuthProfileStore(
+            params.profileId,
+            (owner) => owner.update(params.updater),
+            params.stateDir,
+          )) ?? { version: AUTH_STORE_VERSION, profiles: {} }
+        );
       }
       return await runAuthProfileWriteTransactionAsync(
         agentDir,

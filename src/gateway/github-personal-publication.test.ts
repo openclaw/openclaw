@@ -699,7 +699,7 @@ describe("personal publication authority and recovery", () => {
     client = { ...client, connId: "cold-browser" };
     runtime.client = client;
     const discovered = await rpc("sessions.github.options");
-    expect(discovered[0]).toBe(true);
+    expect(discovered[0], JSON.stringify(discovered[2])).toBe(true);
     expect(discovered[1].pendingPersonal).toMatchObject({
       result: { requestId: result.requestId, status: "needs_confirmation" },
       confirmation: {
