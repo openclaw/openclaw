@@ -367,13 +367,17 @@ vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
-vi.mock("../infra/node-shell.js", () => ({
-  buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
-  buildNodeCommandInvocation: vi.fn((command: string) => ({
-    argv: ["/bin/sh", "-lc", "bun ./script.ts"],
-    rawCommand: command,
-  })),
-}));
+vi.mock("../infra/node-shell.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/node-shell.js")>();
+  return {
+    ...actual,
+    buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
+    buildNodeCommandInvocation: vi.fn((command: string) => ({
+      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
+      rawCommand: command,
+    })),
+  };
+});
 
 vi.mock("../infra/system-run-approval-context.js", () => ({
   parsePreparedSystemRunPayload: parsePreparedSystemRunPayloadMock,

@@ -1,6 +1,6 @@
 import path from "node:path";
 import {
-  evaluateExecAllowlistWithAuthorization,
+  evaluateExecAllowlist,
   type ExecAllowlistAnalysis,
   type ExecSegmentSatisfiedBy,
 } from "../infra/exec-approvals-allowlist.js";
@@ -12,6 +12,11 @@ import { resolveUnpinnedAutoApprovalEligibility } from "../infra/exec-auto-appro
 import { resolveExecWrapperTrustPlan } from "../infra/exec-wrapper-trust-plan.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 
+// Mirrors the node's shell-free branch of evaluateSystemRunAllowlist: analyze the argv, then
+// evaluate it with evaluateExecAllowlist. The node takes platform and env from its own
+// process; the Gateway passes the node's platform and a PATH-less env so its own host
+// never leaks into the decision. Safe bins and skill bins are node-local, so the precheck
+// grants nothing through them and can only be stricter than the node.
 export async function evaluateNodeDirectArgvAllowlist(params: {
   argv: string[];
   allowlist: ExecAllowlistEntry[];
@@ -26,33 +31,18 @@ export async function evaluateNodeDirectArgvAllowlist(params: {
     env: params.env,
     platform: params.platform,
   });
-  if (!analysis.ok) {
-    return {
-      analysisOk: false,
-      allowlistSatisfied: false,
-      allowlistMatches: [],
-      segments: analysis.segments,
-      segmentAllowlistEntries: [],
-      segmentSatisfiedBy: [],
-    };
-  }
-  const evaluation = await evaluateExecAllowlistWithAuthorization({
-    analysis,
-    allowlist: params.allowlist,
-    safeBins: new Set(),
-    cwd: params.cwd,
-    env: params.env,
-    platform: params.platform,
-    trustedSafeBinDirs: params.trustedSafeBinDirs,
-  });
   return {
-    analysisOk: true,
-    allowlistSatisfied: evaluation.allowlistSatisfied,
-    allowlistMatches: evaluation.allowlistMatches,
-    segments: evaluation.segments ?? analysis.segments,
-    segmentAllowlistEntries: evaluation.segmentAllowlistEntries,
-    segmentSatisfiedBy: evaluation.segmentSatisfiedBy,
-    ...(evaluation.authorizationPlan ? { authorizationPlan: evaluation.authorizationPlan } : {}),
+    ...evaluateExecAllowlist({
+      analysis,
+      allowlist: params.allowlist,
+      safeBins: new Set(),
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
+    }),
+    analysisOk: analysis.ok,
+    segments: analysis.segments,
   };
 }
 

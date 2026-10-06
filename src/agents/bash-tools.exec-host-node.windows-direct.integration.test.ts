@@ -3,7 +3,8 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { formatExecCommand } from "../infra/system-run-command.js";
 import { resolveWindowsDirectCommandArgv } from "../infra/windows-direct-command.js";
 import { handleInvoke } from "../node-host/invoke.js";
@@ -22,21 +23,29 @@ import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 
 const rpc = vi.hoisted(() => vi.fn());
-vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: rpc,
-  readGatewayCallOptions: vi.fn(() => ({})),
-}));
-vi.mock("./tools/nodes-utils.js", () => ({
-  listNodes: async () => [
-    {
-      nodeId: "win-node",
-      connected: true,
-      platform: "win32",
-      commands: ["system.run", "system.run.prepare"],
-    },
-  ],
-  resolveNodeIdFromList: () => "win-node",
-}));
+vi.mock("./tools/gateway.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools/gateway.js")>();
+  return {
+    ...actual,
+    callGatewayTool: rpc,
+    readGatewayCallOptions: vi.fn(() => ({})),
+  };
+});
+vi.mock("./tools/nodes-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./tools/nodes-utils.js")>();
+  return {
+    ...actual,
+    listNodes: async () => [
+      {
+        nodeId: "win-node",
+        connected: true,
+        platform: "win32",
+        commands: ["system.run", "system.run.prepare"],
+      },
+    ],
+    resolveNodeIdFromList: () => "win-node",
+  };
+});
 
 const ACCENTED_ARGUMENT = "deux mots é";
 const SPECIAL_ARGUMENT = 'a & b | c < d > e ^ f (g) 50% %PATH% !x! say "hi"\nline 2 é';
