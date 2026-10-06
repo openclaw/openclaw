@@ -19,7 +19,10 @@ import {
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { captureIncognitoSessionTopology } from "./session-incognito-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "./session-store-read-candidates.js";
 import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
 import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import { withSessionHistoryWorkerDatabases } from "./session-transcript-worker-runtime.js";
@@ -269,10 +272,7 @@ export async function readPlacementSessionIdentityEvidence(
     });
     inventoryRead.assertRegistryCurrent();
     for (const candidate of candidates) {
-      if (
-        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-        candidate.physicalPath
-      ) {
+      if (!isSessionStoreReadCandidateCurrent(candidate)) {
         throw new Error("Session store alias changed during discovery; retry the read.");
       }
     }
