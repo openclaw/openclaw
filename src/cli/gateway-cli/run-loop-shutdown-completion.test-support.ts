@@ -361,7 +361,9 @@ export function registerShutdownCompletionTests({
       await withShutdownClock(async ({ captureSignal, close, runtime }) => {
         if (closeFails) {
           close.mockImplementationOnce(async () => {
-            await new Promise<void>((resolve) => setTimeout(resolve, deadlineMs - 1_000));
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, deadlineMs - 1_000);
+            });
             throw new Error("close owner failed");
           });
         }

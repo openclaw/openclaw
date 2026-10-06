@@ -364,7 +364,7 @@ process.send("parked");`,
       setPlatform("freebsd");
       process.env.OPENCLAW_SUPERVISOR_MODE = "external";
       await withIsolatedSignals(async ({ captureSignal }) => {
-        const { runtime, exited } = await createSignaledLoopHarness();
+        const { exited } = await createSignaledLoopHarness();
         const restartSignal = captureSignal("SIGUSR2");
 
         restartSignal();
