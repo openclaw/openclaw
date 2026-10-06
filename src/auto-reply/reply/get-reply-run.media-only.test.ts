@@ -456,11 +456,10 @@ async function useActualSystemEventDrain() {
 }
 
 function requireRunReplyAgentCall(index = 0) {
-  const call = vi.mocked(runReplyAgent).mock.calls.at(index)?.[0];
-  if (!call) {
-    throw new Error(`runReplyAgent call ${index} missing`);
-  }
-  return call;
+  return expectDefined(
+    vi.mocked(runReplyAgent).mock.calls.at(index)?.[0],
+    `runReplyAgent call ${index}`,
+  );
 }
 
 describe("runPreparedReply media-only handling", () => {

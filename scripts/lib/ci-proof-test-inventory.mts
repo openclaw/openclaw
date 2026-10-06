@@ -1205,6 +1205,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/main-session-recovery/main-session-restart-recovery-admission.test.ts",
   "src/agents/main-session-recovery/main-session-restart-recovery-marking.test.ts",
   "src/agents/main-session-recovery/main-session-restart-recovery.test.ts",
+  "src/agents/main-session-recovery/main-session-startup-recovery.test.ts",
   "src/agents/mcp-auth-profile.integration.test.ts",
   "src/agents/mcp-config-mutation.test.ts",
   "src/agents/mcp-connection-resolver.test.ts",

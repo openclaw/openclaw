@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
@@ -143,11 +144,7 @@ const { tempDirs, sessionKeys, createSessionStoreFile } = createReplyAgentSessio
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function mockCallArgs(mock: ReturnType<typeof vi.fn>, label: string, callIndex = 0): unknown[] {
-  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
-  if (!call) {
-    throw new Error(`expected ${label} mock call ${callIndex}`);
-  }
-  return call;
+  return expectDefined(mock.mock.calls[callIndex], `${label} mock call ${callIndex}`);
 }
 
 function requireStoredSessionEntry(storePath: string, sessionKey = "main"): SessionEntry {
