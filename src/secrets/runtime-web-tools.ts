@@ -8,6 +8,8 @@ import { sortPluginEntriesForAutoDetect } from "../plugins/plugin-entry-order.js
 import type {
   PluginWebFetchProviderEntry,
   PluginWebSearchProviderEntry,
+  WebFetchCredentialResolutionSource,
+  WebSearchCredentialResolutionSource,
 } from "../plugins/types.js";
 import {
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts,
@@ -68,6 +70,10 @@ const loadRuntimeWebToolsManifest = createLazyRuntimeSurface(
 );
 
 type FetchConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["web"]>["fetch"];
+
+type SecretResolutionSource =
+  | WebSearchCredentialResolutionSource
+  | WebFetchCredentialResolutionSource;
 
 type RuntimeWebProviderFailure = Omit<RuntimeWebUnavailableProvider, "contractDigest"> & {
   contractDigest?: string;
@@ -389,7 +395,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   contractDigest: string;
   providerFailuresByRefKey: RuntimeWebProviderFailureByRefKey;
   forceColdRefKeys?: ReadonlySet<string>;
-}): Promise<SecretResolutionResult> {
+}): Promise<SecretResolutionResult<SecretResolutionSource>> {
   // Provider credential callbacks retain their shipped unknown-valued input contract.
   const ref = coerceSecretRef(params.value, params.defaults);
 
@@ -418,7 +424,7 @@ async function resolveSecretInputWithEnvFallback(params: {
   }
 
   let resolvedFromRef: string | undefined;
-  let unresolvedRefReason: SecretResolutionResult["unresolvedRefReason"];
+  let unresolvedRefReason: SecretResolutionResult<SecretResolutionSource>["unresolvedRefReason"];
 
   if (params.kind === "fetch" && ref.source === "env" && !params.envVars.includes(ref.id)) {
     throw new Error(`${params.path} SecretRef is not allowed for this provider.`);
