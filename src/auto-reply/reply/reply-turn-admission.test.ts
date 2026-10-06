@@ -7,6 +7,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   resetDiagnosticRunActivityForTest,
   RUN_STALE_TAKEOVER_MS,
@@ -501,9 +502,14 @@ it("adopts a source-keyed command reservation into the target run slot", async (
   expect(mutationRan).toBe(true);
 });
 it("skips adoption without waiting when the target run slot is owned", async () => {
-  const storePath = store();
   const blocker = operation();
   blocker.setPhase("running");
+  const storePath = store({
+    restartRecoveryRuns: [
+      { runId: "active-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+    ],
+  });
+  const before = loadSessionEntry({ storePath, sessionKey });
   const reservation = operation({ sessionKey: sourceKey, sessionId: "source-session" });
   const result = await admit({
     storePath,
@@ -521,6 +527,7 @@ it("skips adoption without waiting when the target run slot is owned", async () 
   expect(replyRunRegistry.get(sourceKey)).toBe(reservation);
   expect(replyRunRegistry.get(sessionKey)).toBe(blocker);
   expect(reservation.result).toBeNull();
+  expect(loadSessionEntry({ storePath, sessionKey })).toEqual(before);
   blocker.complete();
   reservation.complete();
 });

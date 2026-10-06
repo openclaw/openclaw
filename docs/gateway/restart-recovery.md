@@ -587,6 +587,11 @@ derive `running` and `queued` from the live run registry and queue owner.
 Restart-aborted runs record `interrupted`, an interruption reason, and their end
 time while retaining the recovery owner's claims.
 
+New input follows the live reply owner's queue policy. Without a live reply, durable execution
+fences must have terminal evidence before admission can retire them. Successful
+final delivery clears its pending intent and any unclaimed recovery route while
+preserving newer execution or delivery claims.
+
 Before readiness, startup invokes the shared Doctor transform to normalize older
 persisted `running` or `queued` values to `interrupted` once, except verified legacy
 yields retain an unset outcome so their child continuation keeps ownership. It logs
@@ -771,6 +776,8 @@ durable channel-ingress claims can restore message-action authority. A resumed
 run keeps the original source-delivery mode and source correlation, including
 requester identity and any same-channel/thread restriction, so the same receipt
 remains authoritative even if another restart happens during recovery. A
+message-tool-only delivery policy also survives run admission and model fallback;
+private final text never becomes a pending automatic reply. A
 message-tool-only turn without reconstructable channel authority is tombstoned
 because OpenClaw cannot safely mint message-action authority without the
 original channel-ingress claim. The terminal notice directs the user to start a

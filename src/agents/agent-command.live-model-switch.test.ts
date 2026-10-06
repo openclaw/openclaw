@@ -3007,7 +3007,9 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
             to: "discord:dm:123",
             accountId: "main",
           },
-          restartRecoveryDeliveryRunId: "session-1",
+          restartRecoveryRuns: [{ runId: "session-1", lifecycleGeneration: "test-generation" }],
+          restartRecoveryDeliveryRunId: undefined,
+          restartRecoveryDeliverySourceRunId: undefined,
         }),
       }),
     );

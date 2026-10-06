@@ -253,7 +253,7 @@ describe("createChatSendMessageInjectionStarter admission fence", () => {
     "rechecks terminal admission after awaited projection: %s",
     async (change, { signal }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const initial = { sessionId: "session-1", status: "running" as const, updatedAt: 1 };
+        const initial = { sessionId: "session-1", updatedAt: 1 };
         const sessionKey = `agent:main:dashboard:projection-${change.replaceAll(" ", "-")}`;
         const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
         const scope = { agentId: "main", sessionKey, storePath };

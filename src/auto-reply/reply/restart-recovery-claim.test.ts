@@ -184,10 +184,7 @@ describe("createReplyRestartRecoveryClaimController", () => {
           const event = {
             runId: executionRunId,
             lifecycleGeneration,
-            sessionKey: scope.sessionKey,
             sessionId: entry.sessionId,
-            stream: "lifecycle" as const,
-            seq: 1,
             ts: startedAt,
           };
           await persistGatewaySessionLifecycleEvent({
@@ -200,7 +197,6 @@ describe("createReplyRestartRecoveryClaimController", () => {
             ...scope,
             event: {
               ...event,
-              seq: 2,
               ts: startedAt + 10,
               data: {
                 phase: "end",

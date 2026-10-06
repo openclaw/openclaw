@@ -88,9 +88,7 @@ class ReplyOperationChangedDuringAdmissionError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 
-async function releaseReplyRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
+async function releaseReplyRecoveryOwner(lease: MainSessionRecoveryOwnerLease | undefined) {
   try {
     return await releaseMainSessionRecoveryOwner(lease);
   } catch (error) {
@@ -423,8 +421,9 @@ export async function admitReplyTurn(
             ((hasMainSessionRecoveryClaim(admittedSessionEntry) &&
               admittedSessionEntry.abortedLastRun === true) ||
               (params.kind !== "heartbeat" &&
-                admittedSessionEntry.mainRestartRecovery !== undefined &&
-                admittedSessionEntry.restartRecoveryRuns !== undefined) ||
+                admittedSessionEntry.restartRecoveryRuns !== undefined &&
+                (admittedSessionEntry.mainRestartRecovery !== undefined ||
+                  !replyRunRegistry.get(params.sessionKey))) ||
               admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
             isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
           const gatewayContext = resolveGatewayContext?.();

@@ -845,11 +845,12 @@ describe("runReplyAgent active steering", () => {
       modelHasVision: true,
     });
     expect(warning).toHaveBeenCalledWith("steering rejected; applying follow-up policy", {
-      reason: "source-operation-pending",
-      disposition: "followup-queued",
+      reason: "tool_authority_mismatch",
+      disposition: "followup-policy",
       channel: "whatsapp",
-      sessionId: "session",
+      sessionId: provided.sessionId,
       runId: undefined,
+      activeRunId: undefined,
     });
   });
 
