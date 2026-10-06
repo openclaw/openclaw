@@ -8,7 +8,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveXAccount, type ResolvedXAccount } from "./accounts.js";
 import { XAllowlistChangedError } from "./allowlist.js";
-import { parseXPost, parseXPostEnvelope, type XPostEnvelope } from "./api.js";
+import { parseXPostEnvelope, type XPostEnvelope } from "./api.js";
 import { getXApi, getXTokenState } from "./client.js";
 import { runXEvents, waitForXBudgetReset, type XCursorState, type XEventStatus } from "./events.js";
 import {
@@ -93,12 +93,7 @@ export async function startXAccount(ctx: ChannelGatewayContext<ResolvedXAccount>
   }
   const ingress = createChannelIngressMonitor<XPostEnvelope, string, IngressPayload>({
     queue,
-    inspect: ({ post }) => {
-      if (!parseXPost(post)) {
-        throw new InvalidXEvent("Invalid X mention envelope");
-      }
-      return { eventId: post.id, laneKey: post.conversation_id };
-    },
+    inspect: ({ post }) => ({ eventId: post.id, laneKey: post.conversation_id }),
     payload: {
       storage: "raw-event",
       version: 1,

@@ -204,14 +204,7 @@ function isLineEventAdmitted(access: ResolvedChannelMessageIngress): boolean {
 async function resolveLineEventAdmission(
   event: MessageEvent | PostbackEvent | JoinEvent,
   context: LineHandlerContext,
-): Promise<{
-  access: ResolvedChannelMessageIngress;
-  resolveBoundAccess: (
-    contextBinding?: ChannelIngressContextBinding,
-  ) => Promise<ResolvedChannelMessageIngress>;
-  mentions?: LineInboundMentionAccess;
-  preparedRoute?: PreparedLineInboundRoute;
-} | null> {
+) {
   const { cfg, account } = context;
   const { userId, groupId, roomId, isGroup } = getLineSourceInfo(event.source);
   const senderId = userId ?? "";
