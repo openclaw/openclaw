@@ -102,13 +102,24 @@ export async function executeWorkerTurn(
       agentId: placement.agentId,
     });
     if (!policy.allows(modelRef)) {
-      throw new Error("Model is not approved for this worker agent");
+      throw new Error(
+        `Worker-local inference cannot use ${modelRef.provider}/${modelRef.model} for agent ` +
+          `${placement.agentId}. Allow that model in the agent model policy or choose an allowed model.`,
+      );
     }
-    if (
-      !environment.nodeDeviceId ||
-      !bootstrapReceipt.protocolFeatures.includes(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE)
-    ) {
-      throw new Error("Worker inference requires a matching capable paired-node worker build");
+    if (!environment.nodeDeviceId) {
+      throw new Error(
+        "Worker-local inference requires a paired device profile. Set " +
+          "cloudWorkers.profiles.<id>.settings.device to a connected node.",
+      );
+    }
+    if (!bootstrapReceipt.protocolFeatures.includes(WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE)) {
+      throw new Error(
+        `Worker-local inference is unavailable on paired device ${environment.nodeDeviceId}. ` +
+          "Update and restart its OpenClaw node host, use a non-Windows host with " +
+          'nodeHost.workerRuns.isolation set to "none", and configure a compatible ' +
+          "models.providers model with a usable node-local credential.",
+      );
     }
   }
   await recoverWorkspaceBeforeTurn({ ...params, signal: turn.abortSignal });
