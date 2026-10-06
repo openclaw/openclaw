@@ -389,77 +389,136 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     ).toEqual([retainedId]);
   });
 
-  it("rejects a retained edit still awaiting Telegram admission once the draft retires", async () => {
-    // The account scheduler is where an edit waits before network admission.
-    http.bot.api.config.use(
-      getOrCreateAccountThrottler(http.token, () =>
-        apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
-      ).transformer,
-    );
-    let draft:
-      | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
-      | undefined;
-    let parentCallbacks: ReplyResolverOptions | undefined;
-    await dispatchProgressTurn(
-      async (options) => {
-        parentCallbacks = options;
-        await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
-        await waitForBotApiCall((call) => call.method === "sendMessage");
-      },
-      {
-        mode: "progress",
-        toolProgress: true,
-        finalReply: setReplyPayloadMetadata(
-          { text: "Waiting for delegated work." },
-          {
-            progressContinuation: {
-              adopt: (candidate) => {
-                draft = candidate;
-                return true;
+  it.each([false, true])(
+    "rejects a retained edit still awaiting Telegram admission once the draft retires (retried: %s)",
+    async (retried) => {
+      // The account scheduler is where an edit waits before network admission.
+      http.bot.api.config.use(
+        getOrCreateAccountThrottler(http.token, () =>
+          apiThrottler({ global: {}, group: { maxConcurrent: 1 }, out: { maxConcurrent: 1 } }),
+        ).transformer,
+      );
+      let draft:
+        | Parameters<NonNullable<ReplyDispatchRuntimeInfo["adoptProgressDraft"]>>[0]
+        | undefined;
+      let parentCallbacks: ReplyResolverOptions | undefined;
+      await dispatchProgressTurn(
+        async (options) => {
+          parentCallbacks = options;
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+        },
+        {
+          mode: "progress",
+          toolProgress: true,
+          finalReply: setReplyPayloadMetadata(
+            { text: "Waiting for delegated work." },
+            {
+              progressContinuation: {
+                adopt: (candidate) => {
+                  draft = candidate;
+                  return true;
+                },
+                close: () => undefined,
               },
-              close: () => undefined,
             },
-          },
+          ),
+        },
+      );
+      const [retainedId] = [...visibleMessages.keys()];
+      assert(retainedId !== undefined && draft);
+      const isEditWith =
+        (title: string) => (call: { method: string; fields: Record<string, unknown> }) =>
+          call.method === "editMessageText" && String(call.fields.text).includes(title);
+      const pushChild = (title: string) =>
+        draft?.push({
+          itemId: "late-child",
+          kind: "subagent",
+          title,
+          phase: "update",
+          status: "running",
+        });
+      // Requests entering the account scheduler, before any queue wait.
+      const entered: string[] = [];
+      http.bot.api.config.use((previous, method, payload, signal) => {
+        entered.push(`${method}:${JSON.stringify(payload)}`);
+        return previous(method, payload, signal);
+      });
+      // A queued turn's card holds this chat's request lane, so the retained edit
+      // under test waits in the account scheduler, not on the network.
+      const held = {
+        predicate: (call: { method: string }) => call.method === "sendMessage",
+        arrived: Promise.withResolvers<void>(),
+        release: Promise.withResolvers<void>(),
+      };
+      http.holdNextCall = held;
+      const startQueuedTurn = async () => {
+        await parentCallbacks?.onQueuedFollowupAdmitted?.();
+        return emitToolStart(parentCallbacks, {
+          name: "web_search",
+          phase: "start",
+          toolCallId: "queued",
+        });
+      };
+      let queuedTool: Promise<unknown>;
+      if (retried) {
+        // The second update arrives while the first edit is in flight, so a
+        // scheduled flush retries it after its first attempt fails, with no new
+        // update to carry authority.
+        const first = {
+          arrived: Promise.withResolvers<void>(),
+          release: Promise.withResolvers<void>(),
+        };
+        const second = {
+          arrived: Promise.withResolvers<void>(),
+          release: Promise.withResolvers<void>(),
+        };
+        let secondFailed = false;
+        http.respondToCall = async (call) => {
+          if (isEditWith("Late child first")(call)) {
+            first.arrived.resolve();
+            await first.release.promise;
+            return undefined;
+          }
+          if (secondFailed || !isEditWith("Late child second")(call)) {
+            return undefined;
+          }
+          secondFailed = true;
+          second.arrived.resolve();
+          await second.release.promise;
+          return { error_code: 500, description: "Internal Server Error: fixture" };
+        };
+        pushChild("Late child first");
+        await first.arrived.promise;
+        pushChild("Late child second");
+        await vi.advanceTimersByTimeAsync(2_000);
+        first.release.resolve();
+        await second.arrived.promise;
+        queuedTool = startQueuedTurn();
+        await expect
+          .poll(() => entered.some((entry) => entry.includes("Web Search")), { timeout: 5_000 })
+          .toBe(true);
+        second.release.resolve();
+        await held.arrived.promise;
+      } else {
+        queuedTool = startQueuedTurn();
+        await held.arrived.promise;
+        pushChild("Late child second");
+      }
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(
+        entered.filter(
+          (entry) => entry.startsWith("editMessageText:") && entry.includes("Late child second"),
         ),
-      },
-    );
-    const [retainedId] = [...visibleMessages.keys()];
-    assert(retainedId !== undefined && draft);
-
-    // A queued turn's card holds this chat's request lane, so the retained edit
-    // below waits in the account scheduler, not on the network.
-    const held = {
-      predicate: (call: { method: string }) => call.method === "sendMessage",
-      arrived: Promise.withResolvers<void>(),
-      release: Promise.withResolvers<void>(),
-    };
-    http.holdNextCall = held;
-    await parentCallbacks?.onQueuedFollowupAdmitted?.();
-    const queuedTool = emitToolStart(parentCallbacks, {
-      name: "web_search",
-      phase: "start",
-      toolCallId: "queued",
-    });
-    await held.arrived.promise;
-    const callsBeforeLateEdit = calls.length;
-    draft.push({
-      itemId: "late-child",
-      kind: "subagent",
-      title: "Late child update",
-      phase: "update",
-      status: "running",
-    });
-    await vi.advanceTimersByTimeAsync(2_000);
-    draft.retire();
-    held.release.resolve();
-    await queuedTool;
-    await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
-    expect(
-      calls
-        .slice(callsBeforeLateEdit)
-        .filter((call) => String(call.fields.text).includes("Late child update")),
-    ).toEqual([]);
-  });
+      ).toHaveLength(retried ? 2 : 1);
+      draft.retire();
+      held.release.resolve();
+      await queuedTool;
+      await expect.poll(() => visibleMessages.has(retainedId), { timeout: 5_000 }).toBe(false);
+      // Only a failed attempt made before retirement ever reached Telegram.
+      expect(calls.filter(isEditWith("Late child second"))).toHaveLength(retried ? 1 : 0);
+    },
+  );
 
   it("shows compaction transitions and retires progress only after the final is accepted", async () => {
     const snapshots: string[] = [];

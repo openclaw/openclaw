@@ -170,6 +170,9 @@ export function createTelegramDraftStream(params: {
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
   let pendingPlatformSendAuthorization: (() => void) | undefined;
+  // Counts requested updates: callers may reuse one assertion, so an earlier
+  // attempt must not settle the authority a newer update still needs.
+  let requestedUpdates = 0;
   let generation = 0;
   let finalPagePlan: { pages: TelegramTextDeliveryPage[]; nextPageIndex: number } | undefined;
   // Generations whose in-flight FIRST send was superseded by a reposition
@@ -240,9 +243,11 @@ export function createTelegramDraftStream(params: {
       await pendingPlatformSendDispatch();
       pendingPlatformSendDispatch = undefined;
     }
+    // Authority belongs to the pending update, not to one attempt: a skipped or
+    // failed attempt keeps it, so every retry rechecks it until the update lands
+    // or a newer one replaces it.
     const assertPlatformSendAuthorized = pendingPlatformSendAuthorization;
     assertPlatformSendAuthorized?.();
-    pendingPlatformSendAuthorization = undefined;
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -407,8 +412,17 @@ export function createTelegramDraftStream(params: {
 
     const previousSentPreviewKey = lastSentPreviewKey;
     lastSentPreviewKey = renderedPreviewKey;
+    const updateAtSend = requestedUpdates;
+    const settleAuthorization = () => {
+      if (requestedUpdates === updateAtSend) {
+        pendingPlatformSendAuthorization = undefined;
+      }
+    };
     try {
       const sent = await sendMessageTransportPreview(page, sendGeneration, disableLinkPreview);
+      if (sent) {
+        settleAuthorization();
+      }
       if (sendGeneration !== generation) {
         return true;
       }
@@ -423,6 +437,7 @@ export function createTelegramDraftStream(params: {
       const isEdit = typeof streamMessageId === "number";
       if (isEdit && isTelegramMessageNotModifiedError(err)) {
         // Telegram already shows exactly this text; count the edit as delivered.
+        settleAuthorization();
         consecutivePreviewFailures = 0;
         streamMessageSnapshot = toDraftSnapshot(page);
         return true;
@@ -620,6 +635,7 @@ export function createTelegramDraftStream(params: {
     lastRequestedText = text;
     pendingPlatformSendDispatch = onPlatformSendDispatch;
     pendingPlatformSendAuthorization = assertPlatformSendAuthorized;
+    requestedUpdates += 1;
     updateDraft(text);
   };
 

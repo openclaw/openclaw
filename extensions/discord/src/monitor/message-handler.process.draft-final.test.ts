@@ -21,7 +21,6 @@ import {
   runProcessDiscordMessage,
   registerDiscordProcessTestLifecycle,
   createNonTerminalToolWarningPayload,
-  dispatchBufferedReplyForTest,
   runInPartialStreamMode,
 } from "./message-handler.process.test-harness.js";
 import type { DispatchInboundParams } from "./message-handler.process.test-harness.js";
