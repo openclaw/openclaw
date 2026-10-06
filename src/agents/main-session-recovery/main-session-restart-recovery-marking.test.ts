@@ -66,7 +66,10 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
     for (const agentId of ["main", "worker"]) {
       const sessionKey = `agent:${agentId}:main`;
       const sessionId = `${agentId}-session`;
-      await replaceSessionEntry({ agentId, sessionKey }, { sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { agentId, sessionKey },
+        { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: `${agentId}-run` },
+      );
       await persistGatewaySessionLifecycleEvent({
         agentId,
         sessionKey,
@@ -78,7 +81,6 @@ it("keeps healthy stores recoverable when an earlier startup mark fails", async 
         },
       });
       expect(loadSessionEntry({ agentId, sessionKey })).toMatchObject({
-        status: "running",
         lifecycleRunId: `${agentId}-run`,
         abortedLastRun: false,
       });
@@ -136,7 +138,10 @@ it.each(["before", "after"] as const)(
       const sessionId = "owned-session";
       const runId = "owned-run";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      await replaceSessionEntry({ sessionKey }, { sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { sessionKey },
+        { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: runId },
+      );
       await persistGatewaySessionLifecycleEvent({
         sessionKey,
         event: { ts: 1, sessionId, runId, data: { phase: "start", startedAt: 1 } },
@@ -191,7 +196,10 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
     const sessionId = "retained-session";
     const runId = "retained-run";
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
-    await replaceSessionEntry({ sessionKey }, { sessionId, updatedAt: 1 });
+    await replaceSessionEntry(
+      { sessionKey },
+      { sessionId, updatedAt: 1, restartRecoveryDeliveryRunId: runId },
+    );
     await persistGatewaySessionLifecycleEvent({
       sessionKey,
       event: { ts: 1, sessionId, runId, data: { phase: "start", startedAt: 1 } },
@@ -236,7 +244,11 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
     for (const agentId of ["main", "cleaner"]) {
       await replaceSessionEntry(
         { agentId, sessionKey: `agent:${agentId}:main` },
-        { sessionId: `${agentId}-orphan`, status: "running", updatedAt: 1 },
+        {
+          sessionId: `${agentId}-orphan`,
+          restartRecoveryDeliveryRunId: `${agentId}-run`,
+          updatedAt: 1,
+        },
       );
     }
     const copyPath = openOpenClawAgentDatabase({ agentId: "cleaner" }).path;
@@ -264,7 +276,6 @@ it("marks healthy startup orphans while leaving a refused secondary database unt
         await discoverRestartRecoveryStoreTargets({
           cfg,
           stateDir: state.stateDir,
-          statuses: ["running"],
         })
       ).map((target) => target.agentId),
     ).toEqual(["main"]);
@@ -286,7 +297,7 @@ it("marks only the closing Gateway's exact active admissions", async () => {
       const sessionKey = `agent:main:${name}`;
       await replaceSessionEntry(
         { storePath, sessionKey },
-        { sessionId: name, status: "running", updatedAt: Date.now() },
+        { sessionId: name, updatedAt: Date.now() },
       );
       admissions.push(
         await beginSessionWorkAdmission({
@@ -326,10 +337,7 @@ it.each(["release", "completed", "rotation"] as const)(
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        { sessionId, status: "running", updatedAt: Date.now() },
-      );
+      await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
       admission = await beginSessionWorkAdmission({
         scope: storePath,
         identities: [sessionKey, sessionId],
@@ -396,10 +404,7 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
     resetTriggered: false,
   });
   try {
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      { sessionId, status: "running", updatedAt: Date.now() },
-    );
+    await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
     await withPluginRuntimeGatewayContextResolver(otherGatewayContext, async () => {
       const admission = await admitReplyTurn({
         sessionKey,
@@ -490,7 +495,7 @@ it("keeps another active session recoverable when one owner releases after batch
       counts: { marked: 1, skipped: 1 },
       error: undefined,
       survivingAdmissionActive: true,
-      survivingStatus: "running",
+      survivingStatus: "interrupted",
       survivingRestartMarker: true,
     });
   } finally {

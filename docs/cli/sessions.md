@@ -277,8 +277,13 @@ openclaw sessions --all-agents tail --follow
 ```
 
 `openclaw sessions tail` renders recent runtime trajectory events as compact
-progress lines. Without `--session-key`, it tails running sessions first, then
-the latest stored session. `--tail <count>` controls how many existing events
+progress lines. Without `--session-key`, it asks the configured Gateway for
+running sessions and tails matching local sessions first, then falls back to
+the most recently active stored session. If the Gateway is unreachable, it prints
+`Gateway unreachable: showing the most recently active session`. An explicit
+`--store` skips the Gateway lookup, orders by activity, and prints
+`explicit store: ordered by activity`. An explicit `--session-key` selects only
+that local session without a Gateway lookup. `--tail <count>` controls how many existing events
 print before follow mode; default `80`, and `0` starts at the current end.
 `--follow` keeps watching the selected SQLite-backed sessions. Session keys use
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
@@ -315,7 +320,12 @@ The file list in text and JSON output reports only artifacts written to the bund
 
 ## Cleanup maintenance
 
-Run maintenance now instead of waiting for the next write cycle:
+Run maintenance now instead of waiting for the next write cycle. Without
+`--store`, cleanup delegates to the reachable Gateway. Destructive local cleanup
+requires exclusive offline maintenance ownership; if a Gateway or another live
+owner holds the state, the command names that owner and refuses. Run cleanup
+without `--store` to use the Gateway, or stop the Gateway and other owners first.
+Dry-run previews remain available while the Gateway is running:
 
 ```bash
 openclaw sessions cleanup --dry-run
@@ -479,8 +489,8 @@ Review the preview, then apply cleanup and compact the copied database:
 )
 ```
 
-Explicit `--store` cleanup stays local. Doctor requires its target inside `OPENCLAW_STATE_DIR`
-and no Gateway using that state directory; the live Gateway can continue using
+Explicit `--store` cleanup stays local. Destructive cleanup and Doctor require their targets inside `OPENCLAW_STATE_DIR`
+and exclusive ownership of that state directory; the live Gateway can continue using
 its separate original state. Set `--session-sqlite-agent` to the copied database's
 owner; an explicit Doctor store selector otherwise defaults to `main`.
 

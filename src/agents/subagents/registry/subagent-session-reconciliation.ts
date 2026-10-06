@@ -8,20 +8,16 @@ import {
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { getAgentRunContext, listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
+import { getAgentRunContext } from "../../../infra/agent-run-registry.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
 import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
-import {
-  hasRetainedRequiredCompletionDelivery,
-  isSettledSubagentRequesterHistory,
-} from "./subagent-delivery-state.js";
+import { hasRetainedRequiredCompletionDelivery } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
@@ -144,12 +140,8 @@ export function resolveCompletionFromSessionEntry(
   opts?: { notBeforeMs?: number },
 ): SubagentSessionCompletion | null {
   const status = sessionEntry?.status;
-  // Startup interruption has no terminal event timestamp and cannot settle the registry.
-  if (
-    status === "running" ||
-    status === "interrupted" ||
-    !isFreshForRun(sessionEntry, opts?.notBeforeMs)
-  ) {
+  // Interruption leaves registry settlement with the recovery owner.
+  if (status === "interrupted" || !isFreshForRun(sessionEntry, opts?.notBeforeMs)) {
     return null;
   }
   let outcome: SubagentRunOutcome;
@@ -230,25 +222,4 @@ export async function resolveSubagentSessionStartedAt(params: {
       ? freshSessionStartedAt(entry, params.notBeforeMs)
       : undefined,
   );
-}
-
-/** Child records retain their session; completed descendant history does not own its requester. */
-export function hasLiveSubagentSessionRecoveryOwner(params: {
-  sessionKey: string;
-  sessionId: string;
-}): boolean {
-  const key = params.sessionKey;
-  if (listAgentRunsForSession(params).length > 0) {
-    return true;
-  }
-  for (const run of subagentRuns.values()) {
-    if (
-      run.childSessionKey === key ||
-      ((run.requesterSessionKey === key || run.controllerSessionKey === key) &&
-        !isSettledSubagentRequesterHistory(run))
-    ) {
-      return true;
-    }
-  }
-  return false;
 }

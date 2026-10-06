@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import {
   getSqliteReadOperationRevision,
   type SqliteReadOperationRevision,
@@ -56,6 +57,13 @@ export function readExistingAgentSchemaMeta(db: DatabaseSync): ExistingAgentSche
   };
   // Ownership is row data: schema facts alone cannot witness a foreign owner change.
   if (revision) {
+    if (!admitted) {
+      // Weak reader references can keep closed keys alive through a long microtask drain.
+      const unregister = registerNodeSqliteDisposeCallback(db, () => {
+        admittedMetadata.delete(db);
+        unregister();
+      });
+    }
     admittedMetadata.set(db, { ...revision, metadata: { ...metadata } });
   }
   return metadata;

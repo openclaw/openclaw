@@ -21,6 +21,7 @@ import type { TelegramMessageContext } from "./bot-message-context.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramNativeQuoteCandidateByMessageId } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
+import type { TelegramDraftStream } from "./draft-stream.js";
 import type { LaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import type {
   DraftLaneState,
@@ -136,6 +137,7 @@ export type TelegramDraftStateSlice = {
   answerLane: DraftLaneState;
   reasoningLane: DraftLaneState;
   lanes: Record<LaneName, DraftLaneState>;
+  createAnswerStream: () => TelegramDraftStream;
   streamDeliveryEnabled: boolean;
   streamReasoningInProgressDraft: boolean;
   disableBlockStreaming: boolean | undefined;

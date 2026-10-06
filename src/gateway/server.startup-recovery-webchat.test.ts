@@ -30,6 +30,7 @@ import { resolvePhysicalSessionStorePath } from "../config/sessions/session-stor
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
   getSessionWorkAdmissionOwnerRelease,
@@ -37,6 +38,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { countPendingQueueItems } from "../utils/queue-helpers.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -143,6 +145,18 @@ it(
     let recovery: ReturnType<typeof recoverRestartAbortedMainSessions> | undefined;
     let replacementOwner: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
     let gatewayContext: GatewayRequestContext | undefined;
+    let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>> | undefined;
+    const followupDrains: Promise<unknown>[] = [];
+    const runDetached = gatewayWorkAdmission.runWithGatewayDetachedWorkContinuation;
+    const drainSpy = vi
+      .spyOn(gatewayWorkAdmission, "runWithGatewayDetachedWorkContinuation")
+      .mockImplementation((run, origin) => {
+        const pending = runDetached(run, origin);
+        if (origin === "session:followup-drain") {
+          followupDrains.push(pending);
+        }
+        return pending;
+      });
 
     try {
       const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
@@ -212,6 +226,8 @@ it(
       }
       await gateway.server.startupSettled;
       const client = gateway.client;
+      const execution = await observeGatewayRunExecution();
+      requestExecution = execution;
 
       const warmupRunId = "startup-recovery-warmup";
       await client.request("agent", {
@@ -231,8 +247,9 @@ it(
         {
           sessionId,
           updatedAt: Date.now() - 10_000,
-          status: "running",
+          status: "interrupted",
           abortedLastRun: true,
+          mainRestartRecovery: { cycleId: "before-reset", revision: 1, chargedAttempts: 0 },
         },
       );
       clearSessionStoreCacheForTest();
@@ -316,16 +333,15 @@ it(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
-        // The started ACK precedes dispatch inserting the turn into the followup
-        // queue; agent.wait reports the queued registration once insertion commits.
-        await expect(
-          client.request(
-            "agent.wait",
-            { runId, timeoutMs: 30_000 },
-            // The transport must outlive the server's long-poll budget under runner load.
-            { timeoutMs: 60_000 },
-          ),
-        ).resolves.toMatchObject({ runId, status: "pending", timeoutPhase: "queue" });
+        // The ACK precedes queue admission, which no longer completes the run.
+        // Join dispatch before taking an immediate observation of queued custody.
+        await execution.waitForDispatch(runId);
+        await expect(client.request("agent.wait", { runId, timeoutMs: 0 })).resolves.toMatchObject({
+          runId,
+          status: "pending",
+          timeoutPhase: "queue",
+          providerStarted: false,
+        });
       };
       const readInFlightRunIds = () =>
         [...(getExistingFollowupQueue(sessionKey)?.inFlight ?? [])].map((item) => item.messageId);
@@ -373,7 +389,11 @@ it(
       await vi.waitFor(() => expect(targetRequests).toHaveLength(2), { timeout: 30_000 });
       expect(targetRequests[1]).toContain(survivorMessage);
       expect(targetRequests[1]).not.toContain(canceledMessage);
-      await vi.waitFor(() => expect(getExistingFollowupQueue(sessionKey)).toBeUndefined());
+      // Provider arrival precedes the detached drain's final queue deletion.
+      for (const drain of followupDrains) {
+        await drain;
+      }
+      expect(getExistingFollowupQueue(sessionKey)).toBeUndefined();
       await expect(
         client.request("agent.wait", { runId: survivorRunId, timeoutMs: 30_000 }),
       ).resolves.toMatchObject({ status: "ok" });
@@ -390,8 +410,9 @@ it(
       );
       await patchSessionEntryCore({ storePath, sessionKey }, (entry) => ({
         ...entry,
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
+        mainRestartRecovery: { cycleId: "after-reset", revision: 1, chargedAttempts: 0 },
         updatedAt: Date.now() - 10_000,
       }));
       await addRecoveryChild(currentChildMarker);
@@ -566,6 +587,9 @@ it(
           providerServer.close(() => resolve());
         });
       }
+      await requestExecution?.restore();
+      await Promise.allSettled(followupDrains);
+      drainSpy.mockRestore();
       subagentRuns.delete(originalChildMarker);
       subagentRuns.delete(currentChildMarker);
       subagentRuns.delete(batchChildMarker);
