@@ -5,7 +5,7 @@ export class GatewayTestClientCleanupError extends AggregateError {}
 
 /** Own acquisition until hello-ok, without imposing identity or protocol defaults. */
 export async function acquireGatewayTestClient(
-  options: Omit<GatewayClientOptions, "onConnectError" | "onClose">,
+  options: Omit<GatewayClientOptions, "onConnectError">,
   wait: {
     timeoutMs: number;
     timeoutMessage: string;
