@@ -14,10 +14,10 @@ import {
   mutateSubagentRuns,
   SubagentRegistryVersionConflictError,
 } from "./subagent-registry-persistence.js";
+import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import type { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "./subagent-registry.store.sqlite.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";

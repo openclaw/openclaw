@@ -38,6 +38,7 @@ import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runti
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { resolveAuthStorePathForDisplay } from "./auth-profiles/paths.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
+import { withWorkerAuthProfileWrites } from "./auth-profiles/runtime-scope.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles/store-runtime.js";
 import { preserveResolvedSecretBackedCredentials } from "./auth-profiles/store.js";
@@ -584,9 +585,8 @@ if (parentPort) {
           let attempted: WorkerGeneration | undefined;
           try {
             const work = new AsyncWorkScope();
-            const result = await withClawInstallSchemaVersionFacts(
-              request.clawInstallSchemaVersions,
-              () =>
+            const result = await withWorkerAuthProfileWrites(value.input.env, work, () =>
+              withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
                 work.run(() =>
                   runCatalogRequest(value, request, work, async () => {
                     if (previous?.fingerprint === fingerprint) {
@@ -595,6 +595,7 @@ if (parentPort) {
                     return (attempted = await prepareWorkerGeneration(value));
                   }),
                 ),
+              ),
             );
             if (attempted && result.status === "ok") {
               contexts.set(workspaceDir, { fingerprint, prepared: attempted });

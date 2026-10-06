@@ -129,12 +129,9 @@ export async function importLegacySessionRecords(
   }
 }
 
-function prepareRestoredSessionIndex(params: {
-  target: SessionStoreTarget;
-  env: NodeJS.ProcessEnv;
-  expectedIndexIdentity?: MigrationArtifactIdentity;
-  recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
-}): (() => void) | undefined {
+function prepareRestoredSessionIndex(
+  params: Parameters<typeof importLegacySessionRecords>[0],
+): (() => void) | undefined {
   const { expectedIndexIdentity, recoveryInventory, target } = params;
   if (!expectedIndexIdentity || !recoveryInventory) {
     return undefined;

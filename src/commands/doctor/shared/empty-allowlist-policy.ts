@@ -1,15 +1,16 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChannelDoctorEmptyAllowlistAccountContext } from "../../../channels/plugins/types.adapters.js";
+import type {
+  ChannelDoctorAdapter,
+  ChannelDoctorEmptyAllowlistAccountContext,
+} from "../../../channels/plugins/types.adapters.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import type { DoctorAccountRecord, DoctorAllowFromList } from "../types.js";
 import { hasAllowFromEntries } from "./allowlist.js";
 
-type CollectEmptyAllowlistPolicyWarningsParams = ChannelDoctorEmptyAllowlistAccountContext & {
-  doctorFixCommand: string;
-  shouldSkipDefaultEmptyGroupAllowlistWarning: (
-    params: ChannelDoctorEmptyAllowlistAccountContext,
-  ) => boolean;
-};
+type CollectEmptyAllowlistPolicyWarningsParams = ChannelDoctorEmptyAllowlistAccountContext &
+  Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">> & {
+    doctorFixCommand: string;
+  };
 
 export function resolveDoctorAccountDmAccess(
   account: DoctorAccountRecord,

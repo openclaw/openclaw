@@ -8,6 +8,13 @@ export function isSessionNodePayloadSelect(sql: string): boolean {
   return /^select \*(?:, [\s\S]+)? from "session_nodes"(?:\s|$)/i.test(sql);
 }
 
+/** Entry data belongs to the agent writer; shared-store admission and roles have separate owners. */
+export function isSessionEntryDataSql(sql: string): boolean {
+  return /\b(?:session_nodes|session_entry_snapshots|session_windows|session_participants|session_key_contract|transcript_events)\b/i.test(
+    sql,
+  );
+}
+
 /** Capture SQL during execution; closing a connection invalidates its statement getters. */
 export function observeSqliteReadSql(prototype: StatementSync): {
   queries: string[];

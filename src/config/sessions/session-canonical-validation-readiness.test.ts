@@ -8,14 +8,12 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
-import {
-  closeOpenClawAgentDatabases,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";

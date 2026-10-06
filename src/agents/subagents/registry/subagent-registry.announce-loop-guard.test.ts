@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => ({
   onAgentEvent: vi.fn(),
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
-  loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
+  loadSubagentRegistryFromSqlite: vi.fn<() => Map<string, SubagentRunRecord>>(() => new Map()),
   persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
@@ -71,21 +71,26 @@ vi.mock("../../../infra/agent-events.js", () => ({
   registerAgentEventLifecycleRotationHandler: vi.fn(),
 }));
 
-vi.mock("./subagent-registry.store.sqlite.js", () => ({
-  loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
-}));
-
+// mock-isolation: Keep loop timing independent of native snapshots and worker startup.
 vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
   getActiveOpenClawStateDatabaseReadSnapshot: () => undefined,
+  withOpenClawStateDatabaseReadSnapshot: async <T>(operation: () => Promise<T>) =>
+    await operation(),
   executeExistingOpenClawStateRead: vi.fn<
     typeof import("../../../state/openclaw-state-db-readonly.js").executeExistingOpenClawStateRead
   >(async (_options, command) => {
-    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+    expect(command).toEqual({ type: "subagents.runs", scope: { kind: "page", after: undefined } });
+    const runs = mocks.loadSubagentRegistryFromSqlite();
     return {
       ok: true,
       type: "subagents.runs",
       sourceAdmitted: true,
-      runs: mocks.loadSubagentRegistryFromSqlite(),
+      runs,
+      versions: new Map([...runs.keys()].map((runId) => [runId, "fixture-version"])),
+      page: {
+        order: [...runs].map(([runId, entry]) => [runId, entry.createdAt] as const),
+        nextRunId: null,
+      },
     };
   }),
 }));

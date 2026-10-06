@@ -1,6 +1,7 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -8,13 +9,8 @@ import { ExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
 import type { SessionsImportOptions } from "../sessions-import.js";
 
-type SessionsListCliOptions = {
-  json?: boolean;
+type SessionsListCliOptions = Omit<Parameters<typeof sessionsCommand>[0], "limit"> & {
   verbose?: boolean;
-  store?: string;
-  agent?: string;
-  allAgents?: boolean;
-  active?: string;
   limit?: string;
 };
 

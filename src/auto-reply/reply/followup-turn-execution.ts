@@ -430,7 +430,7 @@ export async function executeFollowupTurn(params: {
       turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
-      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      await turn.operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(turn.queued));
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&

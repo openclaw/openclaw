@@ -51,7 +51,7 @@ function resolveConfiguredDoctorSessionStateRoute(params: {
   agentId: string;
   cfg: OpenClawConfig;
   sessionKey: string;
-}): DoctorSessionRouteState {
+}) {
   const { agentId } = params;
   const primary = resolveDefaultModelForAgent({ cfg: params.cfg, agentId });
   const configuredModelRefs = new Set([modelKey(primary.provider, primary.model)]);
@@ -109,11 +109,7 @@ function entryMayContainPluginSessionRouteState(
   );
 }
 
-type DoctorSessionRouteState = {
-  defaultProvider: string;
-  configuredModelRefs: string[];
-  runtime: string;
-};
+type DoctorSessionRouteState = ReturnType<typeof resolveConfiguredDoctorSessionStateRoute>;
 
 type DoctorSessionRouteStateRepair = {
   key: string;
@@ -128,16 +124,15 @@ type DoctorSessionRouteStateManualReview = {
   message: string;
 };
 
-type DoctorSessionRouteStateScan = {
-  repairs: DoctorSessionRouteStateRepair[];
-  manualReview: DoctorSessionRouteStateManualReview[];
-};
+type DoctorSessionRouteStateScan = ReturnType<
+  ReturnType<typeof createPluginSessionStateDoctorScanner>["result"]
+>;
 
 function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
   overrideProvider?: unknown;
   overrideModel?: unknown;
-}): { provider: string; model: string } | null {
+}): ReturnType<typeof parseModelRef> {
   const overrideModel = normalizeString(params.overrideModel);
   if (!overrideModel) {
     return null;
@@ -327,7 +322,7 @@ export function createPluginSessionStateDoctorScanner(params: {
         }
       }
     },
-    result(): DoctorSessionRouteStateScan {
+    result() {
       return { repairs, manualReview };
     },
   };

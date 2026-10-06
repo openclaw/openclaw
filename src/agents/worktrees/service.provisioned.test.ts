@@ -337,12 +337,20 @@ describe("ManagedWorktreeService provisioned state", () => {
     await fs.writeFile(path.join(created.path, "settings.local"), "synthetic local\n");
     await fs.mkdir(path.join(created.path, "ignored"));
     await fs.writeFile(path.join(created.path, "ignored", "cache.txt"), "rebuildable\n");
-    const commands = vi.spyOn(commandSpawner, "spawnCommandWithInvocation");
+    const textCommands = vi.spyOn(gitExec, "executeGitCommand");
+    const byteCommands = vi.spyOn(gitExec, "executeGitCommandBytes");
+    const bufferedCommands = vi.spyOn(gitExec, "executeGitCommandBuffered");
     try {
       await service.remove({ id: created.id, reason: "test" });
-      const broad = commands.mock.calls
-        .map(([argv]) => argv)
-        .filter((argv) => argv[0] === "git" && !argv.includes("--"));
+      const broad = [
+        ...textCommands.mock.calls,
+        ...byteCommands.mock.calls,
+        ...bufferedCommands.mock.calls,
+      ]
+        .map(([, args]) => args)
+        .filter((args) => !args.includes("--"));
+      expect(broad.some((args) => args.includes("ls-files"))).toBe(true);
+      expect(broad.some((args) => args.includes("ls-tree"))).toBe(true);
       expect(
         broad.filter((argv) => argv.includes("ls-files") && !argv.includes("--others")).length,
       ).toBeLessThanOrEqual(1);
@@ -358,7 +366,9 @@ describe("ManagedWorktreeService provisioned state", () => {
         broad.filter((argv) => argv.includes("ls-tree") && argv.includes("-r")).length,
       ).toBeLessThanOrEqual(2);
     } finally {
-      commands.mockRestore();
+      textCommands.mockRestore();
+      byteCommands.mockRestore();
+      bufferedCommands.mockRestore();
     }
     const restored = await service.restore({ id: created.id });
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
@@ -377,18 +387,18 @@ describe("ManagedWorktreeService provisioned state", () => {
 
   it("preserves the checkout when HEAD changes during snapshot preparation", async () => {
     const created = await service.create({ repoRoot: repo, name: "head-change", baseRef: "HEAD" });
-    const runCommand = commandRunner.runCommandBuffersWithTimeout;
+    const runCommand = gitExec.executeGitCommandBytes;
     let changed = false;
     const commands = vi
-      .spyOn(commandRunner, "runCommandBuffersWithTimeout")
-      .mockImplementation(async (...args) => {
-        if (args[0][0] === "git" && args[0].includes("read-tree") && !changed) {
+      .spyOn(gitExec, "executeGitCommandBytes")
+      .mockImplementation(async (cwd, args, options) => {
+        if (args.includes("read-tree") && !changed) {
           changed = true;
           await fs.writeFile(path.join(created.path, "later.txt"), "later commit\n");
           await git(created.path, "add", "later.txt");
           await git(created.path, "commit", "-m", "advance HEAD during preparation");
         }
-        return await runCommand(...args);
+        return await runCommand(cwd, args, options);
       });
     try {
       await expect(service.remove({ id: created.id, reason: "test" })).rejects.toThrow(
@@ -911,19 +921,13 @@ describe("ManagedWorktreeService provisioned state", () => {
       } else {
         await fs.rm(localPath);
       }
-      const runCommand = commandRunner.runCommandBuffersWithTimeout;
+      const runCommand = gitExec.executeGitCommandBytes;
       let disappeared = false;
       let reappeared = false;
-      const commandSpy = vi.spyOn(commandRunner, "runCommandBuffersWithTimeout");
-      commandSpy.mockImplementation(async (...args) => {
-        const argv = args[0];
-        if (
-          child &&
-          argv[0] === "git" &&
-          argv.includes("read-tree") &&
-          argv.at(-1) === originalHead
-        ) {
-          const result = await runCommand(...args);
+      const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
+      commandSpy.mockImplementation(async (cwd, args, options) => {
+        if (child && args.includes("read-tree") && args.at(-1) === originalHead) {
+          const result = await runCommand(cwd, args, options);
           expect(result.code).toBe(0);
           expect(disappeared).toBe(false);
           await fs.rm(localPath);
@@ -931,11 +935,10 @@ describe("ManagedWorktreeService provisioned state", () => {
           return result;
         }
         if (
-          argv[0] === "git" &&
-          argv.includes("update-index") &&
-          argv.includes("--add") &&
-          argv.includes("--remove") &&
-          argv.includes("--stdin")
+          args.includes("update-index") &&
+          args.includes("--add") &&
+          args.includes("--remove") &&
+          args.includes("--stdin")
         ) {
           if (child) {
             expect(disappeared).toBe(true);
@@ -945,7 +948,7 @@ describe("ManagedWorktreeService provisioned state", () => {
           await fs.writeFile(localPath, contents);
           reappeared = true;
         }
-        return await runCommand(...args);
+        return await runCommand(cwd, args, options);
       });
 
       try {

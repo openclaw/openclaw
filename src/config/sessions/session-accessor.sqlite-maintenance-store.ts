@@ -118,12 +118,14 @@ export function applySessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
   return prepareSessionEntryMaintenanceInDatabase(
     database,
     params,
     () => (preservation ??= readPreservation()),
+    refreshCandidates,
   )(database, onArchived);
 }
 
@@ -132,6 +134,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): (
   database: OpenClawAgentDatabase,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
@@ -265,7 +268,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
-        snapshot: readPreservation(),
+        snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
         store: selectedEntries,
         baseKeys: currentBaseKeys,
       });

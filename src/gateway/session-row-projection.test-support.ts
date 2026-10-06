@@ -13,8 +13,8 @@ import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   create as createSessionRow,
   sort as sortSessionRows,
-  type SelectionChange,
 } from "./session-row-projection-record.js";
+import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -42,7 +42,7 @@ export function createSessionRowProjectionFixture(params: {
   const storePath = params.storePath ?? "";
   const rowContext = params.rowContext ?? buildSessionListRowMetadataContext({ now: Date.now() });
   const rows = new Map<string, Row>();
-  const selectionListeners = new Set<(change: SelectionChange) => void>();
+  const revisions = createSessionRowProjectionRevisions(rows, new Map());
   const store = { ...params.store };
   let revision = 0;
   let revisionToken = {};
@@ -83,9 +83,8 @@ export function createSessionRowProjectionFixture(params: {
     delete store[key];
     revision++;
     revisionToken = {};
-    for (const listener of selectionListeners) {
-      listener({ kind: "reset" });
-    }
+    revisions.publishSelection();
+    revisions.publishFacts();
     if (!entry || entry.incognito || isIncognitoSessionKey(key)) {
       rows.delete(id(fields));
       return;
@@ -157,9 +156,8 @@ export function createSessionRowProjectionFixture(params: {
     return sortSessionRows(selected, query.sortBy);
   };
   const projection: SessionRowProjection = {
-    onSelectionChange(listener) {
-      selectionListeners.add(listener);
-    },
+    onSelectionChange: revisions.onSelectionChange,
+    onFactsChange: revisions.onFactsChange,
     observeGeneration() {
       const observedRevision = revision;
       let active = true;
@@ -297,10 +295,7 @@ export function createSessionRowProjectionFixture(params: {
       revision++;
       revisionToken = {};
       rows.clear();
-      for (const listener of selectionListeners) {
-        listener({ kind: "reset" });
-      }
-      selectionListeners.clear();
+      revisions.dispose();
     },
   };
   return Object.assign(projection, { setEntry });

@@ -42,7 +42,7 @@ export function registerSuspensionHandoffLifecycleTests() {
       const context = {
         cron,
         hostLifecycle: host.capability,
-        logGateway: { warn: vi.fn() },
+        logGateway: { warn: vi.fn(), info: vi.fn() },
         chatAbortControllers: new Map(),
         chatQueuedTurns: new Map(),
       } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"];

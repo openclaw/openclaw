@@ -12,7 +12,10 @@ import {
   assertCurrentStateRuntimeSchema,
   assertNoLegacyStateRuntimeRepair,
 } from "./openclaw-state-db-fast-path.js";
-import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
+import {
+  assertOpenClawStateRuntimeIntegrity,
+  type OpenClawStateIntegrityPolicy,
+} from "./openclaw-state-db-integrity-admission.js";
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
@@ -64,6 +67,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
   let publishIntegrity: (() => void) | undefined;
   const schemaCookie = runSqliteDeferredTransactionSync(
@@ -80,12 +84,17 @@ export function assertExistingOpenClawStateRuntimeSchema(
       if (cached?.cookie !== currentCookie) {
         cached?.unregister();
         validatedSchemas.delete(database);
+      }
+      if (cached?.cookie !== currentCookie || integrityPolicy === "require-proof") {
         publishIntegrity = assertOpenClawStateRuntimeIntegrity(
           database,
           pathname,
           { schemaVersion: currentCookie, userVersion },
           integrity,
+          integrityPolicy,
         );
+      }
+      if (cached?.cookie !== currentCookie) {
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
         assertNoLegacyStateRuntimeRepair(database, pathname);

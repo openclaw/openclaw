@@ -31,14 +31,6 @@ type GatewayStatusSummary = {
 
 type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
-type ResolvedGatewayStatus = {
-  gateway: GatewayStatusSummary;
-  daemonPort: number;
-  cliPort: number;
-  probeUrl: string;
-  probeUrlOverride: string | null;
-};
-
 function appendProbeNote(
   existing: string | undefined,
   extra: string | undefined,
@@ -85,7 +77,7 @@ export async function resolveGatewayStatusSummary(params: {
   commandProgramArguments?: string[];
   rpcUrlOverride?: string;
   localPortOverride?: number;
-}): Promise<ResolvedGatewayStatus> {
+}) {
   const portFromArgs = parseTcpPortFromArgs(params.commandProgramArguments);
   const daemonPort =
     params.localPortOverride ??
@@ -131,18 +123,19 @@ export async function resolveGatewayStatusSummary(params: {
   probeNote = appendProbeNote(probeNote, bindHostWarning);
   probeNote = appendProbeNote(probeNote, tailnetWarning);
 
+  const gateway: GatewayStatusSummary = {
+    bindMode,
+    bindHost,
+    customBindHost,
+    ...(tlsEnabled ? { tlsEnabled } : {}),
+    port: daemonPort,
+    portSource,
+    probeUrl: diagnosticProbeUrl,
+    ...(controlUiLinks ? { controlUiLinks } : {}),
+    ...(probeNote ? { probeNote } : {}),
+  };
   return {
-    gateway: {
-      bindMode,
-      bindHost,
-      customBindHost,
-      ...(tlsEnabled ? { tlsEnabled } : {}),
-      port: daemonPort,
-      portSource,
-      probeUrl: diagnosticProbeUrl,
-      ...(controlUiLinks ? { controlUiLinks } : {}),
-      ...(probeNote ? { probeNote } : {}),
-    },
+    gateway,
     daemonPort,
     cliPort: resolveGatewayPort(params.cliCfg, process.env),
     probeUrl,

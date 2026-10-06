@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
 import { commandError, runGit, listGitWorktrees } from "./git.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
@@ -62,6 +63,29 @@ function heldByThisProcess(state: LockState): boolean {
 }
 
 type LockOptions = Pick<NonNullable<Parameters<typeof runGit>[2]>, "signal" | "beforeRun">;
+
+/** A pending ref owns recovery even after its remover exits or registry activity changes. */
+export async function assertManagedWorktreeRemovalComplete(
+  record: Pick<ManagedWorktreeRecord, "id" | "repoRoot">,
+  options?: LockOptions,
+): Promise<void> {
+  const pending = await runGit(
+    record.repoRoot,
+    ["show-ref", "--verify", "--quiet", `refs/openclaw/removals/${record.id}`],
+    options,
+  );
+  options?.signal?.throwIfAborted();
+  options?.beforeRun?.();
+  if (pending.termination !== "exit" || (pending.code !== 0 && pending.code !== 1)) {
+    throw commandError("git show-ref --verify pending removal", pending);
+  }
+  if (pending.code === 0) {
+    throw new WorktreeRemovalContentionError(
+      "busy",
+      "Worktree removal is incomplete; recover its preserved snapshot before continuing",
+    );
+  }
+}
 
 async function runLock(record: ManagedWorktreeRecord, options?: LockOptions) {
   return await runGit(

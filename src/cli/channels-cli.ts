@@ -32,10 +32,7 @@ type AddChannelSetupOptionsParams = {
   includeAll?: boolean;
 };
 
-type ChannelSetupOptionRegistration = {
-  preserveLegacyDefaults: boolean;
-  dropEmptyLegacyDefaultsForAttributeNames: ReadonlySet<string>;
-};
+type ChannelSetupOptionRegistration = Awaited<ReturnType<typeof addChannelSetupOptions>>;
 
 const LEGACY_CHANNEL_SETUP_OPTIONS: readonly ChannelSetupCliOption[] = [
   { flags: "--token <token>", description: "Channel token or credential payload" },
@@ -105,10 +102,7 @@ function shouldRegisterChannelSetupOptions(
   return commandPath[0] === "channels" && commandPath[1] === "add";
 }
 
-async function addChannelSetupOptions(
-  command: Command,
-  params: AddChannelSetupOptionsParams = {},
-): Promise<ChannelSetupOptionRegistration> {
+async function addChannelSetupOptions(command: Command, params: AddChannelSetupOptionsParams = {}) {
   const { resolveChannelSetupCliOptionMetadata } =
     await import("../channels/plugins/cli-add-options.js");
   const selected = params.channelId?.trim().toLowerCase();
