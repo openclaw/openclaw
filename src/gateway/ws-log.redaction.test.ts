@@ -71,6 +71,7 @@ test("skips the default pattern walk for WS frames without candidate substrings"
 
 test.each([
   ["ordinary response completed", "ordinary response completed"],
+  ["sk-abcdefghijklmnopqrstuvwxyz123456", "sk-abc…3456"],
   ["prefixSG.abcdefghijk.abcdefghijk", "prefixSG.abc…hijk"],
   [{ token: "sk-abcdefghijklmnopqrstuvwxyz123456" }, '{"token":"sk-abc…3456"}'],
   [new Error("password=synthetic-value"), "Error: password=***"],
