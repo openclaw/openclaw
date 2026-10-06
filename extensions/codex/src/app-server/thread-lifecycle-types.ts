@@ -161,4 +161,6 @@ export type CodexStartThreadContext = CodexThreadRequestContext & {
   preserveExistingBinding: boolean;
   rotatedContextEngineBinding: boolean;
   replacementPredecessor?: CodexAppServerThreadBinding;
+  /** Diagnostic cause captured with the staged predecessor, never a policy input. */
+  replacementOperation?: string;
 };

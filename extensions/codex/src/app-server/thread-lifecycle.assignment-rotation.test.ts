@@ -170,6 +170,54 @@ async function fixture() {
 }
 
 describe("native assignment custody across ordinary parent rotation", () => {
+  it("names a loading-mode change when native ownership refuses rotation", async () => {
+    const f = await fixture();
+    await f.store.mutate(f.identity, {
+      kind: "patch",
+      threadId: f.parent.threadId,
+      patch: { preserveNativeModel: true },
+    });
+    const before = f.readState();
+    assert(before?.state === "active" && before.binding.model && before.binding.modelProvider);
+    await expect(
+      startOrResumeThread({
+        ...f.options,
+        params: {
+          ...f.options.params,
+          expectedSessionRuntimeOwnership: {
+            model: "native",
+            auth: "host",
+            modelRef: {
+              model: before.binding.model,
+              provider: before.binding.modelProvider,
+            },
+          },
+        },
+        dynamicTools: [
+          {
+            type: "namespace",
+            name: "openclaw",
+            description: "Test tools",
+            tools: [
+              {
+                type: "function",
+                name: "message",
+                description: "Test message",
+                deferLoading: true,
+                inputSchema: { type: "object", properties: {}, additionalProperties: false },
+              },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toThrow(
+      "Codex native model ownership prevents changing its dynamic tool loading mode.",
+    );
+    expect(f.readState()).toEqual(before);
+    expect(f.request.mock.calls.filter(([method]) => method === "thread/start")).toHaveLength(1);
+    expect(f.releasePredecessor).not.toHaveBeenCalled();
+  });
+
   it("keeps imported assignments until the ordinary replacement commits", async () => {
     const f = await fixture();
     const before = f.readState();
@@ -256,7 +304,7 @@ describe("native assignment custody across ordinary parent rotation", () => {
         {
           start: "Successor start rejected",
           revoked: "agent harness host capability is no longer active",
-          conflict: "Codex thread binding changed while committing a fresh thread: parent-1",
+          conflict: "Codex thread binding changed while changing MCP configuration: parent-1",
         }[failure],
       );
       expect(f.readState()).toEqual(expected);
