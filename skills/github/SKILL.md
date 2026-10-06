@@ -63,12 +63,21 @@ a stacked PR also merges or queues its open downstack PRs, which need their own
 review and authorization.
 
 ```bash
-gh api --method PUT repos/owner/repo/pulls/55/merge-async \
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  --method PUT repos/owner/repo/pulls/55/merge-async \
   -H 'X-GitHub-Api-Version: 2026-03-10' \
   -f sha=REVIEWED_HEAD_SHA -f merge_method=squash -f merge_action=direct_merge
-gh api repos/owner/repo/pulls/55/merge-async/REQUEST_UUID \
+gh api -H 'X-Octopool-Require: merge-async-v1' \
+  repos/owner/repo/pulls/55/merge-async/REQUEST_UUID \
   -H 'X-GitHub-Api-Version: 2026-03-10' -H 'Cache-Control: max-age=0'
 ```
+
+Keep the Octopool guard header first after `api`. Protected older wrappers reject
+it before they can rewrite merge authority; use an Octopool build containing
+[the async guard](https://github.com/openclaw/octopool/pull/231) if it is refused.
+The supported wrapper preserves SHA/method/action/bypass and only rewrites commit
+text. Native `gh` can pass the header through. Do not remove it, disable policy,
+or select a raw binary to work around a rejection.
 
 Retain `details.uuid` from a `202` response before polling. `pending` means wait;
 `merged` includes `details.sha`, which still needs final PR/head verification.

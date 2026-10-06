@@ -29,6 +29,15 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       },
     });
     expect(f.state().asyncPolls).toBe(1);
+    const asyncCalls = f
+      .state()
+      .calls.filter((call) =>
+        call.some((arg) => arg.startsWith("repos/fixture/repo/pulls/123/merge-async")),
+      );
+    expect(asyncCalls).toHaveLength(2);
+    for (const call of asyncCalls) {
+      expect(call.slice(1, 4)).toEqual(["api", "-H", "X-Octopool-Require: merge-async-v1"]);
+    }
     expect(f.state().posts).toBe(0);
     expect(existsSync(f.worktree)).toBe(true);
 

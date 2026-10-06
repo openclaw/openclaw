@@ -144,6 +144,13 @@ Acceptance and `enqueued` are not merge completion. Failed, expired, conflicting
 or lost responses never authorize automatic resubmission or another transport.
 Existing auto/queue/admin and GraphQL-quota routes keep their own contracts; the
 explicit prior-CI admin route below still uses the synchronous `/merge` endpoint.
+Async PUT and status GET prepend `-H 'X-Octopool-Require: merge-async-v1'` as the first
+API option, before `--hostname`. This requires the structural async merge guard in
+[Octopool PR #231](https://github.com/openclaw/octopool/pull/231): older protected wrappers reject the marker before rewriting or native
+GitHub I/O. Upgrade Octopool if refused; never remove the marker or replay an
+uncertain intent. Native `gh` and empty rewrite policies pass the harmless header
+through without rewriting authority. No Worker deployment or credential change
+is required. Checking a response after dispatch cannot replace this guard.
 The shared GitHub subprocess owner stages internal
 `--input -` payload bytes in a private temporary file, keeps child stdin empty,
 and removes the file after synchronous completion. Keep the explicit SHA even

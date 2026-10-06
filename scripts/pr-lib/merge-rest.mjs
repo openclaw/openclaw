@@ -594,13 +594,17 @@ function mergeBody(value) {
 }
 
 function asyncMergeResponse(repo, pr, head, uuid, payload) {
+  const args = apiArgs(repo, `/pulls/${pr}/merge-async${uuid ? `/${uuid}` : ""}`, [
+    "--include",
+    ...(uuid ? [] : ["--method", "PUT", "--input", "-"]),
+  ]);
+  // Old protected Octopool rejects this header before generic JSON rewriting.
+  // Keep it first: older parsers can delegate on an unknown flag like --hostname.
+  args.splice(1, 0, "-H", "X-Octopool-Require: merge-async-v1");
   let raw;
   try {
     raw = execPrGh(
-      apiArgs(repo, `/pulls/${pr}/merge-async${uuid ? `/${uuid}` : ""}`, [
-        "--include",
-        ...(uuid ? [] : ["--method", "PUT", "--input", "-"]),
-      ]),
+      args,
       { encoding: "utf8", ...(uuid ? {} : { input: JSON.stringify(payload) }) },
       "plain",
     );
