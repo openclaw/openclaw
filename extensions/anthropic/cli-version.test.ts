@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
@@ -235,4 +238,101 @@ it("recognizes environment OAuth credentials while an explicit API key wins", as
   });
   await wrapper?.(model, context);
   expect(request.base.mock.calls[1]?.[2]?.headers?.["user-agent"]).toBe("claude-cli/2.1.400");
+});
+
+describe("installed CLI changes without restart", () => {
+  let directory: string;
+  let executable: string;
+  const install = (content: string) => {
+    const staged = `${executable}.next`;
+    fs.writeFileSync(staged, content, { mode: 0o755 });
+    fs.renameSync(staged, executable);
+  };
+
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-version-"));
+    executable = path.join(directory, "claude");
+    install("first");
+    vi.mocked(resolveClaudeTerminalExecutable).mockReturnValue({ executable });
+  });
+  afterEach(() => {
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("probes again after the executable file is replaced", async () => {
+    const runner = vi
+      .fn<CommandRunner>()
+      .mockResolvedValueOnce(versionResult("2.1.400 (Claude Code)"))
+      .mockResolvedValueOnce(versionResult("2.1.401 (Claude Code)"));
+    const fixture = register(runner);
+    const request = capture(fixture.provider, "wrapStreamFn");
+    await request.run();
+    await request.run();
+    install("second release");
+    await request.run();
+    await request.run();
+    expect(request.base.mock.calls.map((call) => call[2]?.headers?.["user-agent"])).toEqual([
+      "claude-cli/2.1.400",
+      "claude-cli/2.1.400",
+      "claude-cli/2.1.401",
+      "claude-cli/2.1.401",
+    ]);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failed probe after the retry interval instead of keeping the floor", async () => {
+    vi.useFakeTimers();
+    const runner = vi
+      .fn<CommandRunner>()
+      .mockRejectedValueOnce(new Error("synthetic launch failure"))
+      .mockResolvedValueOnce(versionResult("2.1.400 (Claude Code)"));
+    const fixture = register(runner);
+    const request = capture(fixture.provider, "wrapStreamFn");
+    await request.run();
+    await vi.advanceTimersByTimeAsync(59_999);
+    await request.run();
+    expect(runner).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    await request.run();
+    expect(request.base.mock.calls.map((call) => call[2]?.headers)).toEqual([
+      oauthOptions.headers,
+      oauthOptions.headers,
+      { ...oauthOptions.headers, "user-agent": "claude-cli/2.1.400" },
+    ]);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("probes a replaced executable at once after a failed probe", async () => {
+    vi.useFakeTimers();
+    const runner = vi
+      .fn<CommandRunner>()
+      .mockRejectedValueOnce(new Error("synthetic launch failure"))
+      .mockResolvedValueOnce(versionResult("2.1.401 (Claude Code)"));
+    const fixture = register(runner);
+    const request = capture(fixture.provider, "wrapStreamFn");
+    await request.run();
+    await request.run();
+    expect(runner).toHaveBeenCalledOnce();
+    install("fixed release");
+    await request.run();
+    expect(request.base.mock.calls.map((call) => call[2]?.headers)).toEqual([
+      oauthOptions.headers,
+      oauthOptions.headers,
+      { ...oauthOptions.headers, "user-agent": "claude-cli/2.1.401" },
+    ]);
+    expect(runner).toHaveBeenCalledTimes(2);
+  });
+
+  it("finds a CLI that appears on PATH after the first request", async () => {
+    vi.useFakeTimers();
+    vi.mocked(resolveClaudeTerminalExecutable).mockReturnValueOnce(undefined);
+    const fixture = register();
+    const request = capture(fixture.provider, "wrapStreamFn");
+    await request.run();
+    expect(fixture.runCommandWithTimeout).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    await request.run();
+    expect(request.base.mock.calls[1]?.[2]?.headers?.["user-agent"]).toBe("claude-cli/2.1.400");
+    expect(resolveClaudeTerminalExecutable).toHaveBeenCalledTimes(2);
+  });
 });
