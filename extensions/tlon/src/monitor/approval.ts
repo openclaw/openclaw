@@ -18,6 +18,7 @@ export function createPendingApproval(
     type: params.type,
     requestingShip: params.requestingShip,
     ...(params.clubId !== undefined ? { clubId: params.clubId } : {}),
+    ...(params.verifiedDirect === true ? { verifiedDirect: true } : {}),
     channelNest: params.channelNest,
     groupFlag: params.groupFlag,
     messagePreview:

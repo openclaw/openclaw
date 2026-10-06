@@ -487,7 +487,8 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       from: isGroup ? `tlon:group:${channelNest}` : `tlon:${senderId}`,
       sender: {
         id: senderId,
-        name: senderShip,
+        // Club authors are unverified, so the display name must not match name-based allowlists.
+        name: clubId === undefined ? senderShip : senderId,
         roles: [senderRole],
       },
       conversation: {
@@ -654,6 +655,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         }
         // A club-originated request replays with the same club-scoped, non-owner identity.
         const clubId = !isGroup ? approval.clubId : undefined;
+        // DM requests stored before provenance was recorded may be group DM claims; approving
+        // still allowlists the ship, but the unverifiable message is not replayed.
+        if (!isGroup && clubId === undefined && approval.verifiedDirect !== true) {
+          runtime.log?.(
+            `[tlon] Not replaying pre-upgrade DM request from ${approval.requestingShip}: sender provenance unknown`,
+          );
+          return;
+        }
         const replaySenderId =
           clubId === undefined
             ? approval.requestingShip
@@ -966,7 +975,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             type: "dm",
             requestingShip: senderShip,
             messagePreview: sliceUtf16Safe(messageText, 0, 100),
-            ...(isClubMessage ? { clubId } : {}),
+            ...(isClubMessage ? { clubId } : { verifiedDirect: true }),
             // Never store a club message claiming the owner for replay, even as a non-owner.
             ...(isClubMessage && isOwner(senderShip)
               ? {}

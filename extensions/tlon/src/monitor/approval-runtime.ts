@@ -172,6 +172,12 @@ export function createTlonApprovalRuntime(params: {
       if (approval.originalMessage) {
         existing.originalMessage = approval.originalMessage;
         existing.messagePreview = approval.messagePreview;
+        // The stored message now comes from this request, so its provenance must follow it.
+        if (approval.verifiedDirect === true) {
+          existing.verifiedDirect = true;
+        } else {
+          delete existing.verifiedDirect;
+        }
       }
       runtime.log?.(
         `[tlon] Updated existing approval for ${approval.requestingShip} (${approval.type}) - re-sending notification`,

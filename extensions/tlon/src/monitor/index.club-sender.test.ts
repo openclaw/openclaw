@@ -122,12 +122,13 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
       const [context] = inboundRuntimeMock.buildContext.mock.calls[0] as [
         {
           from: string;
-          sender: { id: string; roles: string[] };
+          sender: { id: string; name: string; roles: string[] };
           extra: { SenderRole: string; CommandAuthorized: boolean };
         },
       ];
       expect(context.sender.id).not.toBe(OWNER);
       expect(context.sender.id).toBe(`club:${CLUB_ID}:${OWNER}`);
+      expect(context.sender.name).toBe(`club:${CLUB_ID}:${OWNER}`);
       expect(context.from).toBe(`tlon:club:${CLUB_ID}:${OWNER}`);
       expect(context.sender.roles).toEqual(["user"]);
       expect(context.extra.SenderRole).toBe("user");
@@ -253,6 +254,74 @@ describe("monitorTlonProvider club (group DM) sender identity", () => {
         ([params]) => (params as { subject: { stableId: string } }).subject.stableId,
       );
       expect(subjects).not.toContain(OWNER);
+    });
+  });
+  it.each([
+    ["pre-upgrade (no provenance)", {}, false],
+    ["verified 1:1", { verifiedDirect: true }, true],
+  ])(
+    "replays a stored %s DM approval only when its sender is verified",
+    async (_name, marker, replays) => {
+      startMonitorDefaults({
+        pendingApprovals: [
+          {
+            id: "dm-legacy",
+            type: "dm",
+            requestingShip: "~bus",
+            timestamp: 1,
+            ...marker,
+            originalMessage: {
+              messageId: "~bus/old",
+              messageText: "old",
+              messageContent: [],
+              timestamp: 1,
+            },
+          },
+        ],
+      });
+      ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+      await withMonitor(async () => {
+        sseClientMock.poke.mockClear();
+        await chatSubscription().event(
+          chatEvent({ whom: OWNER, author: OWNER, text: "approve dm-legacy", id: "~nec/11" }),
+        );
+        const allowlistWrite = sseClientMock.poke.mock.calls
+          .map(([payload]) => (payload as { json?: Record<string, unknown> }).json?.["put-entry"])
+          .map((entry) => entry as { "entry-key"?: string; value?: unknown } | undefined)
+          .find((entry) => entry?.["entry-key"] === "dmAllowlist");
+        expect(allowlistWrite?.value).toEqual(["~bus"]);
+        if (replays) {
+          expect(inboundRuntimeMock.buildContext).toHaveBeenCalledWith(
+            expect.objectContaining({ sender: expect.objectContaining({ id: "~bus" }) }),
+          );
+        } else {
+          expect(inboundRuntimeMock.buildContext).not.toHaveBeenCalled();
+          expect(inboundRuntimeMock.dispatch).not.toHaveBeenCalled();
+        }
+      });
+    },
+  );
+
+  it("marks new 1:1 DM approvals as verified and club approvals as not", async () => {
+    startMonitorDefaults();
+    ingressMock.receive.mockResolvedValue({ kind: "ignored" });
+    await withMonitor(async () => {
+      await chatSubscription().event(
+        chatEvent({ whom: "~bus", author: "~bus", text: "hi", id: "~bus/12" }),
+      );
+      await chatSubscription().event(
+        chatEvent({ whom: CLUB_ID, author: "~bus", text: "hi", id: "~bus/13" }),
+      );
+      const pendingWrite = sseClientMock.poke.mock.calls
+        .map(([payload]) => (payload as { json?: Record<string, unknown> }).json?.["put-entry"])
+        .map((entry) => entry as { "entry-key"?: string; value?: unknown } | undefined)
+        .findLast((entry) => entry?.["entry-key"] === "pendingApprovals");
+      const pending = JSON.parse(String(pendingWrite?.value)) as Array<Record<string, unknown>>;
+      expect(pending).toHaveLength(2);
+      expect(pending[0]).toMatchObject({ requestingShip: "~bus", verifiedDirect: true });
+      expect(pending[0]?.clubId).toBeUndefined();
+      expect(pending[1]).toMatchObject({ requestingShip: "~bus", clubId: CLUB_ID });
+      expect(pending[1]?.verifiedDirect).toBeUndefined();
     });
   });
 });
