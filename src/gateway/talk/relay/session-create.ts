@@ -211,6 +211,7 @@ export function createTalkRealtimeRelaySession(
     },
     speak: (message) => {
       if (getActiveRelay()) {
+        params.operatorAuthority?.assertCurrent();
         bridgeRef.current?.sendUserMessage?.(message);
       }
     },
@@ -245,6 +246,7 @@ export function createTalkRealtimeRelaySession(
             }
             return runControl.handleDelegationInput!(text, (message) => {
               if (getActiveRelay() === relay) {
+                params.operatorAuthority?.assertCurrent();
                 respond(message);
               }
             });
@@ -616,6 +618,7 @@ export function createTalkRealtimeRelaySession(
   };
   const relay: RelaySession = {
     getToolAuthorityOverlay: consultRunner.getToolAuthorityOverlay,
+    operatorAuthority: params.operatorAuthority,
     id: relaySessionId,
     connId: params.connId,
     context: params.context,

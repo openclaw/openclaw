@@ -182,6 +182,7 @@ export function prepareTalkClientControlAuthority(params: {
   config: OpenClawConfig;
   sessionTarget: PreparedTalkSessionTarget;
   authority: TalkAgentConsultAuthority;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   source?: "reply" | "attempt";
   agentRuntime: ReturnType<typeof createPluginRuntime>["agent"];
 }) {
@@ -195,7 +196,7 @@ export function prepareTalkClientControlAuthority(params: {
     ...params.authority,
   });
   if (params.source !== "reply") {
-    return prepared.toolAuthorityOverlay;
+    return { ...prepared.toolAuthorityOverlay, operatorAuthority: params.operatorAuthority };
   }
   if (!params.authority.replyCaller) {
     throw new Error("Talk chat caller authority is unavailable");
@@ -203,17 +204,20 @@ export function prepareTalkClientControlAuthority(params: {
   // GA consultation uses the normal authenticated chat ingress. Direct voice
   // has no trace/client/reviewer capabilities and must never inherit these.
   const ctx = params.authority.replyCaller;
-  return resolveInboundReplyToolAuthorityOverlay({
-    ctx,
-    sessionEntry: prepared.sessionEntry,
-    senderIsOwner: resolveCommandAuthorization({
+  return {
+    ...resolveInboundReplyToolAuthorityOverlay({
       ctx,
-      cfg: params.config,
-      commandAuthorized: false,
-    }).senderIsOwner,
-    toolsAllow: params.authority.toolsAllow,
-    disableTools: false,
-  });
+      sessionEntry: prepared.sessionEntry,
+      senderIsOwner: resolveCommandAuthorization({
+        ctx,
+        cfg: params.config,
+        commandAuthorized: false,
+      }).senderIsOwner,
+      toolsAllow: params.authority.toolsAllow,
+      disableTools: false,
+    }),
+    operatorAuthority: params.operatorAuthority,
+  };
 }
 
 export function createTalkClientAgentConsultRunner(params: {
@@ -573,6 +577,7 @@ export function createTalkClientAgentConsultRunner(params: {
           config: params.config,
           sessionTarget: params.sessionTarget,
           authority,
+          operatorAuthority: params.operatorAuthority,
           source: registration.toolAuthority.source,
           agentRuntime: getAgentRuntime(),
         });
@@ -694,6 +699,7 @@ export function createTalkClientAgentConsultRunner(params: {
         config: params.config,
         sessionTarget: params.sessionTarget,
         authority: currentAuthority,
+        operatorAuthority: params.operatorAuthority,
         source,
         agentRuntime: getAgentRuntime(),
       }),

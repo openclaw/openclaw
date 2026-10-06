@@ -65,7 +65,7 @@ Successful node payloads expose `{callId, sessionKey?, status}` with status `rin
 ## Verification
 
 ```sh
-node --test contrib/incoming-calls/*.test.mjs
+pnpm test test/scripts/incoming-calls-*.test.mjs
 ```
 
 Tests exercise the full operator workflow against a synthetic RPC owner: offline/ambiguous selection, capsule limits/tampering, no-inference preparation, exact node dispatch, uncertainty reconciliation, replay suppression, expiration, session isolation, and error redaction. Actual-entrypoint tests cover selected-installation SDK resolution, PATH lookup, signed-device options, pin/auth failures, and no session creation for an offline node. They do not ring a real phone or access a paid voice endpoint. Real device audibility, background reachability, screen-off notifications, and Bluetooth require separate device proof.

@@ -270,6 +270,7 @@ export class TalkRealtimeRelayOutputOwnership {
 }
 
 export type RelaySession = {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",

@@ -11,7 +11,7 @@ import { toolingIsolatedTestFiles } from "./vitest.tooling-isolated-paths.mjs";
 import { boundaryTestFiles } from "./vitest.unit-paths.mjs";
 
 export function createToolingVitestConfig(env?: Record<string, string | undefined>) {
-  const config = createScopedVitestConfig(["test/**/*.test.ts", "src/scripts/**/*.test.ts"], {
+  const config = createScopedVitestConfig(["test/**/*.test.{ts,mjs}", "src/scripts/**/*.test.ts"], {
     env,
     exclude: [
       ...databaseWorkerCoreTestFiles,

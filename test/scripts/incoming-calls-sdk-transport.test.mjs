@@ -3,16 +3,18 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { test } from "vitest";
 
-const cli = fileURLToPath(new URL("./incoming-call.mjs", import.meta.url));
+const cli = fileURLToPath(
+  new URL("../../contrib/incoming-calls/incoming-call.mjs", import.meta.url),
+);
 const gateway = "wss://gateway.example:18789";
 
 function installation(t, name = "selected") {
-  // openclaw-temp-dir: allow Node's standalone test runner owns and removes this synthetic installation.
+  // openclaw-temp-dir: allow The test context owns and removes this synthetic installation.
   const root = mkdtempSync(join(tmpdir(), `incoming-call-${name}-`));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
+  t.onTestFinished(() => rmSync(root, { recursive: true, force: true }));
   const pkg = join(root, "node_modules", "openclaw");
   mkdirSync(pkg, { recursive: true });
   writeFileSync(

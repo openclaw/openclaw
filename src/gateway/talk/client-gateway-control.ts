@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { ReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import { formatErrorMessage as formatError, readErrorName } from "../../infra/errors.js";
 import {
@@ -88,6 +89,7 @@ export function createTalkClientGatewayControlOwner(params: {
     "broadcastToConnIds" | "logGateway" | "chatAbortControllers"
   >;
   assertConnectionOpen?: () => void;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   runToolAgentConsult: ReusableTalkAgentConsult;
   runAgentConsult: LifecycleBoundTalkAgentConsult;
   appendTranscript: (entry: {
@@ -439,6 +441,7 @@ export function createTalkClientGatewayControlOwner(params: {
     assertOpen: () => {
       signal.throwIfAborted();
       params.assertConnectionOpen?.();
+      params.operatorAuthority?.assertCurrent();
     },
     runAgentConsult,
     control: {

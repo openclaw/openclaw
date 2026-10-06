@@ -516,6 +516,7 @@ export function prepareTalkRealtimeRelayAgentControl(
     scope: { kind: "voice-session", voiceSessionId: session.id },
     assertCurrent: () => {
       params.assertCurrent?.();
+      session.operatorAuthority?.assertCurrent();
       if (relaySessions.get(session.id) !== session) {
         throw new Error("Realtime relay session closed while steering the agent run");
       }
@@ -523,6 +524,7 @@ export function prepareTalkRealtimeRelayAgentControl(
   });
   return async () => {
     params.assertCurrent?.();
+    session.operatorAuthority?.assertCurrent();
     if (relaySessions.get(session.id) !== session) {
       throw new Error("Realtime relay session closed while steering the agent run");
     }
@@ -542,6 +544,8 @@ export function prepareTalkRealtimeRelayAgentControl(
     if (relaySessions.get(session.id) !== session) {
       throw new Error("Realtime relay session closed while steering the agent run");
     }
+    params.assertCurrent?.();
+    session.operatorAuthority?.assertCurrent();
     const turnId = ensureRelayTurn(session);
     const providerSubmission = submitRelayAgentControlProviderResults(session, result, turnId);
     if (providerSubmission?.completion) {

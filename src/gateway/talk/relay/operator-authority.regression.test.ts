@@ -1,4 +1,5 @@
 import { AsyncResource } from "node:async_hooks";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
@@ -22,7 +23,10 @@ import { captureAgentRunTerminalWriteContext } from "../../../infra/agent-run-te
 import * as terminalWrites from "../../../infra/agent-run-terminal-writes.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import type { RealtimeVoiceAgentConsultRunner } from "../../../talk/provider-types.js";
+import type {
+  RealtimeVoiceAgentConsultRunner,
+  RealtimeVoiceBridgeCreateRequest,
+} from "../../../talk/provider-types.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -32,7 +36,12 @@ import {
   createContext,
   createOperatorClient,
 } from "../../server-plugin-in-process-dispatch.test-support.js";
-import { controlBridge } from "../client-gateway-control.test-support.js";
+import { createTalkClientGatewayControlOwner } from "../client-gateway-control.js";
+import {
+  controlBridge,
+  controlContext,
+  sessionTarget,
+} from "../client-gateway-control.test-support.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import { drainRelayTestSessions } from "./index.test-support.js";
 import { closeRelaySession } from "./operations.js";
@@ -137,6 +146,7 @@ describe("Talk relay operator authority across setup and consult lifetimes", () 
     );
     capturedAuthority = captured.authority;
     let consult: RealtimeVoiceAgentConsultRunner | undefined;
+    let handleDelegationInput: RealtimeVoiceBridgeCreateRequest["handleDelegationInput"];
     try {
       const result = withPluginRuntimeGatewayRequestScope(
         {
@@ -158,7 +168,8 @@ describe("Talk relay operator authority across setup and consult lifetimes", () 
               id: "relay-authority-test",
               label: "Relay authority test",
               isConfigured: () => true,
-              createBridge: ({ runAgentConsult, onClose }) => {
+              createBridge: ({ runAgentConsult, onClose, handleDelegationInput: handleInput }) => {
+                handleDelegationInput = handleInput;
                 if (options.constructionFailure === "throw") {
                   throw new Error("provider construction failed");
                 }
@@ -179,6 +190,7 @@ describe("Talk relay operator authority across setup and consult lifetimes", () 
       activeRelaySessions.set(result.relaySessionId, connId);
       return {
         context,
+        handleDelegationInput,
         consult: expectDefined(consult, "bound provider consult"),
         relay: expectDefined(relaySessions.get(result.relaySessionId), "active relay"),
         authority: captured.authority,
@@ -202,6 +214,64 @@ describe("Talk relay operator authority across setup and consult lifetimes", () 
     await closeRelaySession(call.relay, "completed");
     expect(call.authority.assertCurrent).toThrow("no longer active");
     await expect(call.consult({ prompt: "late request" })).rejects.toThrow("session is closed");
+  });
+
+  it("does not speak control replies after the retained operator source is revoked", async () => {
+    const call = await createCall();
+    call.revoke();
+    const respond = vi.fn();
+    expect(call.handleDelegationInput?.("status", respond)).toBe("control");
+    await nextEventLoopTurn();
+    expect(respond).not.toHaveBeenCalled();
+  });
+
+  it("fences awaited native provider replies with the retained real operator authority", async () => {
+    const call = await createCall();
+    const entered = createDeferredCore();
+    const finish = createDeferredCore();
+    const respond = vi.fn();
+    const owner = createTalkClientGatewayControlOwner({
+      voiceSessionId: "native-operator-revocation",
+      connId: "native-operator-revocation",
+      sessionTarget,
+      controlSource: "delegation",
+      context: controlContext(),
+      operatorAuthority: call.authority,
+      runToolAgentConsult: vi.fn(async () => ({ text: "unexpected" })),
+      runAgentConsult: vi.fn(async () => ({ text: "unexpected" })),
+      appendTranscript: vi.fn(async () => undefined),
+      flushTranscript: vi.fn(async () => undefined),
+      closeLogicalSession: vi.fn(async () => undefined),
+      controlAgentRun: async () => {
+        entered.resolve();
+        await finish.promise;
+        return {
+          ok: true,
+          mode: "status",
+          sessionKey: sessionTarget.canonicalKey,
+          active: false,
+          message: "No active request.",
+          speak: true,
+          show: true,
+          suppress: false,
+        };
+      },
+    });
+    owner.control.bindBridge(controlBridge());
+    await owner.adoptProvider(vi.fn(async () => undefined));
+    owner.activate();
+    try {
+      expect(owner.control.handleDelegationInput?.("status", respond)).toBe("control");
+      await entered.promise;
+      call.revoke();
+      finish.resolve();
+      await nextEventLoopTurn();
+      expect(respond).not.toHaveBeenCalled();
+      expect(owner.assertOpen).toThrow("no longer active");
+    } finally {
+      finish.resolve();
+      await owner.close();
+    }
   });
 
   it("reproduces the original custody failure when the call does not retain setup authority", async () => {

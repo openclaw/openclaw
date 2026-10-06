@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import {
   buildCapsule,
   createRpc,
@@ -8,7 +8,7 @@ import {
   ring,
   selectNode,
   status,
-} from "./incoming-call.mjs";
+} from "../../contrib/incoming-calls/incoming-call.mjs";
 
 const CALL = "12345678-1234-4234-8234-123456789abc";
 const NOW = 1800000000000;

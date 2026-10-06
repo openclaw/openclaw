@@ -273,6 +273,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
             sessionTarget: target,
             connId: ownerConnId!,
             context,
+            operatorAuthority: capturedOperator?.authority,
             assertConnectionOpen: () => {
               const currentConnections = context.getClientConnIds?.(
                 (candidate) => candidate === client,
