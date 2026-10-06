@@ -421,6 +421,14 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
           );
 
           const contextPromptTokens = promptTokens + toolUseTokens;
+          const countsAreValid = [
+            promptTokens,
+            cacheRead,
+            candidatesTokens,
+            thoughtTokens,
+            toolUseTokens,
+            totalTokens,
+          ].every((count) => Number.isFinite(count) && count >= 0);
           output.usage = {
             input: Math.max(0, promptTokens - cacheRead) + toolUseTokens,
             output: outputTokens,
@@ -430,9 +438,9 @@ export async function runGoogleInteractionsLifecycle<T extends GoogleApiType>(pa
             totalTokens,
             contextUsage:
               typeof usage.total_input_tokens === "number" &&
+              countsAreValid &&
               contextPromptTokens > 0 &&
-              cacheRead <= promptTokens &&
-              Number.isFinite(totalTokens + outputTokens)
+              cacheRead <= promptTokens
                 ? {
                     state: "available",
                     promptTokens: contextPromptTokens,

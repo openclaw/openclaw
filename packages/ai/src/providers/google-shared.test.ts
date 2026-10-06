@@ -289,12 +289,20 @@ describe("Google stream projection", () => {
     });
   });
 
-  it("keeps context usage unavailable when Gemini omits the prompt token count", async () => {
+  it.each([
+    { candidatesTokenCount: 5, totalTokenCount: 5 },
+    {
+      promptTokenCount: 41000,
+      toolUsePromptTokenCount: -40000,
+      candidatesTokenCount: 12,
+      totalTokenCount: 1012,
+    },
+  ])("keeps context usage unavailable for incomplete or malformed usage %#", async (usage) => {
     const { output } = await runFixture([
       response({
         parts: [{ text: "hello" }],
         finishReason: FinishReason.STOP,
-        usageMetadata: { candidatesTokenCount: 5, totalTokenCount: 5 },
+        usageMetadata: usage,
       }),
     ]);
     expect(output.usage.contextUsage).toEqual({ state: "unavailable" });

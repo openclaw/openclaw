@@ -172,6 +172,9 @@ export async function consumeGoogleGenerateContentStream(params: {
         chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens;
       sawPromptTokenCount ||= typeof chunk.usageMetadata.promptTokenCount === "number";
       const contextPromptTokens = promptTokens + toolUsePromptTokens;
+      const countsAreValid = [...Object.values(knownUsage), totalTokens].every(
+        (count) => Number.isFinite(count) && count >= 0,
+      );
       params.output.usage = {
         ...createEmptyTransportUsage(),
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
@@ -179,7 +182,10 @@ export async function consumeGoogleGenerateContentStream(params: {
         cacheRead,
         totalTokens,
         contextUsage:
-          sawPromptTokenCount && contextPromptTokens > 0 && cacheRead <= promptTokens
+          sawPromptTokenCount &&
+          countsAreValid &&
+          contextPromptTokens > 0 &&
+          cacheRead <= promptTokens
             ? {
                 state: "available",
                 promptTokens: contextPromptTokens,
