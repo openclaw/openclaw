@@ -26,6 +26,10 @@ const RESUME_CHECK_MS = 25;
 // ws waits 30s for a close acknowledgement. A silent peer would hold the
 // desktop or portal command that long after the local target has already ended.
 const STREAM_CLOSE_ACK_MS = 5_000;
+// ws.close() can return while the last payload and the close frame are still
+// queued. The library allows 30s for that flush. The short acknowledgement
+// budget starts only after those bytes have left the WebSocket buffer.
+const STREAM_CLOSE_FLUSH_MS = 30_000;
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -103,6 +107,7 @@ function createNodeStreamSplice(params: {
   ws: WebSocket;
   streamName: string;
   diagnostics: NodeStreamDiagnostics;
+  closeAckMs?: number;
 }) {
   let resumeTimer: ReturnType<typeof setInterval> | undefined;
   let closeAckTimer: ReturnType<typeof setTimeout> | undefined;
@@ -173,10 +178,13 @@ function createNodeStreamSplice(params: {
       params.diagnostics.trigger ??= "target-close";
       stopInbound();
       if (params.socket.readableEnded && params.ws.readyState === WEBSOCKET_OPEN) {
-        // Queued frames still flush inside ws.close(). The library then waits
-        // 30s for the acknowledgement; retire this command sooner.
+        // close() queues the final frames and returns before they are written.
+        // Wait for that outbound buffer to drain, then apply the short
+        // acknowledgement budget. A stuck flush keeps the library's 30s allowance.
         params.ws.close();
-        closeAckTimer = setTimeout(() => {
+        const closeAckMs = params.closeAckMs ?? STREAM_CLOSE_ACK_MS;
+        const flushDeadline = Date.now() + STREAM_CLOSE_FLUSH_MS;
+        const retireUnacknowledged = () => {
           closeAckTimer = undefined;
           finish("websocket-close");
           if (
@@ -185,7 +193,18 @@ function createNodeStreamSplice(params: {
           ) {
             params.ws.terminate();
           }
-        }, STREAM_CLOSE_ACK_MS);
+        };
+        const armCloseAck = () => {
+          if (settled) {
+            return;
+          }
+          if (params.ws.bufferedAmount > 0 && Date.now() < flushDeadline) {
+            closeAckTimer = setTimeout(armCloseAck, RESUME_CHECK_MS);
+            return;
+          }
+          closeAckTimer = setTimeout(retireUnacknowledged, closeAckMs);
+        };
+        armCloseAck();
       } else {
         finish("target-close");
       }
@@ -218,6 +237,7 @@ export async function runNodeStreamTransport(params: {
   streamName: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
+  closeAckMs?: number;
 }): Promise<void> {
   const socket = "stream" in params.target ? params.target.stream : new net.Socket();
   // Loopback peers may send immediately; retain their first bytes until metadata is accepted.
@@ -280,6 +300,7 @@ export async function runNodeStreamTransport(params: {
       ws,
       streamName: params.streamName,
       diagnostics,
+      closeAckMs: params.closeAckMs,
     });
     await sendAttachMetadata(ws, params.metadata);
     void params.emitStatus?.(`${params.streamName} stream attached\n`).catch(() => undefined);

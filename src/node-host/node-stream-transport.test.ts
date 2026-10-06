@@ -406,24 +406,21 @@ describe("node stream close acknowledgement", () => {
       metadata: { ok: true },
       streamName: "desktop",
       signal: controller.signal,
+      closeAckMs: 40,
     }).catch((error: unknown) => {
       failure = error;
     });
     try {
       await gotFrame.promise;
-      const closeStarted = Date.now();
       targetPeer?.end();
       const settled = await Promise.race([
         running.then(() => "settled" as const),
         new Promise<"pending">((resolve) => {
-          setTimeout(() => resolve("pending"), 15_000);
+          setTimeout(() => resolve("pending"), 2_000);
         }),
       ]);
       expect(settled).toBe("settled");
       expect(failure).toBeUndefined();
-      const elapsed = Date.now() - closeStarted;
-      expect(elapsed).toBeGreaterThanOrEqual(4_000);
-      expect(elapsed).toBeLessThan(15_000);
       await expect
         .poll(async () => {
           await logCapture.flush();
@@ -441,6 +438,99 @@ describe("node stream close acknowledgement", () => {
       controller.abort();
       await running;
       targetPeer?.destroy();
+      await new Promise<void>((resolve) => {
+        targetServer.close(() => resolve());
+      });
+      await new Promise<void>((resolve) => {
+        gateway.close(() => resolve());
+      });
+    }
+  });
+
+  it("keeps the command alive while the close frame is still queued", async () => {
+    const gotFrame = createDeferred();
+    let gatewaySocket: net.Socket | undefined;
+    const gateway = net.createServer((socket) => {
+      gatewaySocket = socket;
+      let buffer = Buffer.alloc(0);
+      let upgraded = false;
+      socket.on("data", (chunk: Buffer) => {
+        if (upgraded) {
+          gotFrame.resolve();
+          return;
+        }
+        buffer = Buffer.concat([buffer, chunk]);
+        const headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd === -1) {
+          return;
+        }
+        const key = /^Sec-WebSocket-Key: ([^\r\n]+)/m
+          .exec(buffer.subarray(0, headerEnd).toString("latin1"))?.[1]
+          ?.trim();
+        if (!key) {
+          socket.destroy();
+          return;
+        }
+        const accept = createHash("sha1")
+          .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+          .digest("base64");
+        socket.write(
+          "HTTP/1.1 101 Switching Protocols\r\n" +
+            "Upgrade: websocket\r\n" +
+            "Connection: Upgrade\r\n" +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+        );
+        upgraded = true;
+      });
+    });
+    await new Promise<void>((resolve) => {
+      gateway.listen(0, "127.0.0.1", resolve);
+    });
+    const gatewayPort = (gateway.address() as AddressInfo).port;
+    let targetPeer: net.Socket | undefined;
+    const targetServer = net.createServer((peer) => {
+      targetPeer = peer;
+    });
+    await new Promise<void>((resolve) => {
+      targetServer.listen(0, "127.0.0.1", resolve);
+    });
+    const targetPort = (targetServer.address() as AddressInfo).port;
+    const controller = new AbortController();
+    const running = runNodeStreamTransport({
+      gatewayUrl: `ws://127.0.0.1:${gatewayPort}`,
+      attachPath: `/node-desktop/attach?ticket=${ticket}`,
+      expectedAttachPath: "/node-desktop/attach",
+      target: { port: targetPort },
+      metadata: { ok: true },
+      streamName: "desktop",
+      signal: controller.signal,
+      closeAckMs: 40,
+    });
+    try {
+      await gotFrame.promise;
+      gatewaySocket?.pause();
+      targetPeer?.write(Buffer.alloc(4 * 1024 * 1024, 7));
+      targetPeer?.end();
+      const whilePaused = await Promise.race([
+        running.then(() => "settled" as const),
+        new Promise<"pending">((resolve) => {
+          setTimeout(() => resolve("pending"), 200);
+        }),
+      ]);
+      expect(whilePaused).toBe("pending");
+      gatewaySocket?.resume();
+      const settled = await Promise.race([
+        running.then(() => "settled" as const),
+        new Promise<"pending">((resolve) => {
+          setTimeout(() => resolve("pending"), 2_000);
+        }),
+      ]);
+      expect(settled).toBe("settled");
+    } finally {
+      controller.abort();
+      await running.catch(() => undefined);
+      targetPeer?.destroy();
+      gatewaySocket?.destroy();
       await new Promise<void>((resolve) => {
         targetServer.close(() => resolve());
       });
