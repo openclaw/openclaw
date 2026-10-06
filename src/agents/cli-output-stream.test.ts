@@ -880,16 +880,34 @@ describe("createCliJsonlStreamingParser", () => {
     expect(commentaryTexts).toEqual(expectedCommentary);
   });
 
-  it("reports each replayed compaction lifecycle record once per stream", () => {
+  it("delivers every event in a lifecycle batch from one source line", () => {
     const compactionDeltas: unknown[] = [];
-    const autoBoundary = (uuid: string) =>
-      JSON.stringify({
-        type: "system",
-        subtype: "compact_boundary",
-        compact_metadata: { trigger: "auto" },
-        uuid,
-        session_id: "session-replay",
-      });
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+      },
+      providerId: "claude-cli",
+      // A hook may report a full cycle for one input line: the batch contract
+      // requires every event in the returned array to reach the consumer.
+      parseJsonlLifecycleEvent: () => [
+        { kind: "compaction", phase: "start" },
+        { kind: "compaction", phase: "end", completed: true },
+      ],
+      onAssistantDelta: () => undefined,
+      onCompaction: (delta) => compactionDeltas.push(delta),
+    });
+
+    parser.push('{"type":"system","subtype":"status","status":"compacting"}\n');
+    parser.finish();
+
+    expect(compactionDeltas).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
+  });
+
+  it("preserves repeated identical compaction records across cycles", () => {
+    const compactionDeltas: unknown[] = [];
+    const statusLine = '{"type":"system","subtype":"status","status":"compacting"}';
     const parser = createCliJsonlStreamingParser({
       backend: {
         command: "claude",
@@ -898,29 +916,21 @@ describe("createCliJsonlStreamingParser", () => {
       },
       providerId: "claude-cli",
       parseJsonlLifecycleEvent: (line) => {
-        const parsed = JSON.parse(line) as {
-          subtype?: unknown;
-          compact_metadata?: { trigger?: unknown };
-        };
-        return parsed.subtype === "compact_boundary" &&
-          parsed.compact_metadata?.trigger === "auto"
-          ? { kind: "compaction", phase: "end", completed: true }
+        const parsed = JSON.parse(line) as { subtype?: unknown; status?: unknown };
+        return parsed.subtype === "status" && parsed.status === "compacting"
+          ? { kind: "compaction", phase: "start" }
           : null;
       },
       onAssistantDelta: () => undefined,
       onCompaction: (delta) => compactionDeltas.push(delta),
     });
 
-    const first = autoBoundary("boundary-uuid-1");
-    const second = autoBoundary("boundary-uuid-2");
-    // A resumed or retried stream replays history byte-identically: the first
-    // boundary recurs, then a genuinely new compaction follows it.
-    parser.push([first, first, second].join("\n"));
+    // Two operator-driven compactions emit byte-identical status records; both
+    // cycles must reach the consumer. Replay freshness is the owning
+    // transport's decision, not the shared parser's.
+    parser.push([statusLine, statusLine].join("\n"));
     parser.finish();
 
-    expect(compactionDeltas).toEqual([
-      { phase: "end", completed: true },
-      { phase: "end", completed: true },
-    ]);
+    expect(compactionDeltas).toEqual([{ phase: "start" }, { phase: "start" }]);
   });
 });

@@ -84,10 +84,6 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let sawTerminalResult = false;
   let sawClaudeSyntheticNoResponse = false;
   const toolTracker = createToolUseTracker();
-  // Source lines that already produced a compaction lifecycle event in this
-  // stream. A resumed or retried stream replays history byte-identically; each
-  // compaction is reported once no matter how many times its record recurs.
-  const reportedCompactionLifecycleLines = new Set<string>();
   const outputLimits = CLI_STREAM_JSON_OUTPUT_LIMITS;
   // Classification is keyed on consumer presence so reclassified pre-tool text
   // always has a destination; a separate enable flag let it be dropped (#92092).
@@ -249,12 +245,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           observeSessionId(parsed);
         }
         for (const event of lifecycle.events) {
-          if (event.kind === "compaction") {
-            if (reportedCompactionLifecycleLines.has(line)) {
-              continue;
-            }
-            reportedCompactionLifecycleLines.add(line);
-          }
+          // Deliver every event in the batch exactly as the owning backend
+          // reported it. Replay identity and freshness are the owning
+          // transport's decision, not the shared parser's: the Anthropic
+          // transport already drops pre-input-start output through its
+          // msg_lifecycle_v1 guard, and blanket source-line suppression would
+          // silently drop completions and legitimate repeated cycles.
           params.onCompaction?.(cliOutputLifecycle.projectCliBackendLifecycleEvent(event));
         }
       }
