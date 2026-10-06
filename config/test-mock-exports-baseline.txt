@@ -6425,7 +6425,6 @@
 ["src/commands/models/list.probe.targets.test.ts","../../secrets/resolve.js","28150dce08bed824d8e7229243c7213c2c9edbb7ba8bfe5ff0659605179e6fb8",1]
 ["src/commands/models/list.probe.targets.test.ts","../status-all/format.js","4ecda4578fc62356c44de1004cce3446449584d07749c089404c3b418c6c8f5a",1]
 ["src/commands/models/list.probe.targets.test.ts","./shared.js","c8342d59668d77fad108f88a6423ef884d18c65959e5f533f891cd458c088571",1]
-["src/commands/models/list.probe.test.ts","../../agents/auth-profiles.js","896f43d222c919a01ecd5edd38c73992577fb71b45f0fcb70b2fac06ffe58f3d",1]
 ["src/commands/models/list.probe.test.ts","../../agents/embedded-agent.js","88be0738b1e3303956ba6959f581b97e1492229c70a6acb6ce43c9eabce7bfa5",1]
 ["src/commands/models/list.probe.test.ts","../../agents/embedded-agent.js","de3d999394ae1ddeaf6b7611911c3432b9df5ed6b90f999a97450a4202344d79",1]
 ["src/commands/models/list.probe.test.ts","../../agents/model-auth.js","5c3ff7fe33ca4ff9de33bd7d984df3cf17683a739ff95a9c491435147e61a84e",1]

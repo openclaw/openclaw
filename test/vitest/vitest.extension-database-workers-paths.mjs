@@ -6,6 +6,7 @@ export const databaseWorkerExtensionTestRoots = [
 ];
 
 export const databaseWorkerExtensionTestFiles = [
+  "extensions/codex/src/app-server/auth-refresh-authority.integration.test.ts",
   "extensions/agentsapi/agentsapi-attempt.test.ts",
   "extensions/agentsapi/agentsapi-harness.persistence.test.ts",
   "extensions/codex/src/migration/provider.auth.test.ts",
