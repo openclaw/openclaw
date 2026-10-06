@@ -41,7 +41,6 @@ import { logVerbose } from "../../globals.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
-import { prefixSystemMessage } from "../../infra/system-message.js";
 import { markDiagnosticSessionProgress } from "../../logging/diagnostic.js";
 import {
   stripExtractedFileImageMetadata,
@@ -74,6 +73,7 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import type { AcpDispatchDeliveryParams } from "./dispatch-acp-delivery.types.js";
 import { finalizeAcpTurnOutput } from "./dispatch-acp-finalize.js";
+import { resolveAcpTurnText } from "./dispatch-acp-prompt.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { appendRecentHistoryImageContext } from "./history-media.js";
 import { hasInboundMediaForUnderstanding } from "./inbound-media.js";
@@ -676,17 +676,6 @@ export async function tryDispatchAcpReplyCore(
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();
     await assertPreparedConversationBindingRouteCurrent(params.ctx);
-    let text = turnPromptText;
-    if (params.sourceReplyDeliveryMode === "message_tool_only") {
-      const guidance = prefixSystemMessage(
-        [
-          "Source channel delivery is private by default for this turn.",
-          "Normal ACP final output will not be automatically posted to the source channel.",
-          "To send visible output, use message(action=send). The target defaults to the current source channel.",
-        ].join(" "),
-      );
-      text = turnPromptText ? `${guidance}\n\n${turnPromptText}` : guidance;
-    }
     const turnInput: Parameters<typeof acpManager.runTurn>[0] = {
       admittedRunContext,
       cfg: params.cfg,
@@ -696,7 +685,10 @@ export async function tryDispatchAcpReplyCore(
         inputProvenance: params.ctx.InputProvenance,
         sessionEffects: params.ctx.InboundEventKind === "room_event" ? "internal" : "visible",
       }).actorType,
-      text,
+      text: resolveAcpTurnText({
+        promptText: turnPromptText,
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      }),
       attachments: attachments.length > 0 ? attachments : undefined,
       mode: "prompt",
       requestId,

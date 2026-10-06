@@ -354,17 +354,12 @@ function* planSuspiciousConfigRead(
         })
       : undefined);
   const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: current.bytes,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
+    ...current,
     parsed,
     lastKnownGood: backupBaseline,
   });
-  if (suspicious.length === 0) {
-    return null;
-  }
   const suspiciousSignature = `${current.hash}:${suspicious.join(",")}`;
-  if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
+  if (suspicious.length === 0 || entry.lastObservedSuspiciousSignature === suspiciousSignature) {
     return null;
   }
   backupRaw ??= (yield createConfigBackupReadEffect(deps, backupPath)) as string | null;
