@@ -278,7 +278,7 @@ describe("CLI attempt execution", () => {
   }
 
   beforeEach(async () => {
-    homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR"]);
+    homeEnvSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "CLAUDE_CONFIG_DIR"]);
     setTestEnvValue("OPENCLAW_STATE_DIR", suiteRoot);
     tmpDir = await fixtureRoot.make();
     runCliAgentMock.mockReset();
@@ -1385,6 +1385,48 @@ describe("CLI attempt execution", () => {
     });
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("session-cli");
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("finds the native transcript under CLAUDE_CONFIG_DIR instead of resetting the binding", async () => {
+    // Regression: the Gateway forwards CLAUDE_CONFIG_DIR to the spawned `claude`, which
+    // writes `$CLAUDE_CONFIG_DIR/projects/<key>/<sessionId>.jsonl`. The probe used to
+    // read `$HOME/.claude/projects` only, so a healthy session was logged as
+    // `reason=transcript-missing` and its binding cleared on every turn.
+    const sessionKey = "agent:main:direct:claude-config-dir-transcript";
+    const cliSessionId = "config-dir-claude-session";
+    const homeDir = path.join(tmpDir, "home-without-transcripts");
+    const configDir = path.join(tmpDir, "gateway-claude-config");
+    setTestEnvValue("HOME", homeDir);
+    setTestEnvValue("CLAUDE_CONFIG_DIR", configDir);
+    const projectsDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: tmpDir,
+      env: { HOME: homeDir, CLAUDE_CONFIG_DIR: configDir },
+    });
+    expect(projectsDir.startsWith(path.join(configDir, "projects"))).toBe(true);
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+    const sessionEntry = makeClaudeCliSessionEntry("openclaw-config-dir-sid", cliSessionId);
+    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
+    runCliAgentMock.mockImplementationOnce(async () => {
+      // The binding must still be intact when the CLI turn starts: no reset happened.
+      expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(cliSessionId);
+      expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
+      return makeCliResult("resumed reply", cliSessionId);
+    });
+
+    await runCli();
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(claudeBinding(sessionStore[sessionKey])?.sessionId).toBe(cliSessionId);
+    expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
   });
 
   it("keeps the bound claude-cli session id as the reuse candidate when the native transcript is missing (so reseed can recover)", async () => {
