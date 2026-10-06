@@ -64,11 +64,7 @@ export class UrbitSSEClient {
   }> = [];
   eventHandlers = new Map<
     number,
-    {
-      event?: (data: unknown) => Promise<void> | void;
-      err?: (error: unknown) => void;
-      quit?: () => void;
-    }
+    Omit<Parameters<UrbitSSEClient["subscribe"]>[0], "app" | "path">
   >();
   aborted = false;
   streamController: AbortController | null = null;

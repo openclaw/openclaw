@@ -8,6 +8,22 @@ export type ChatOutboxHostProjection = {
   retryable: Set<string>;
 };
 
+export function reconcileChatOutboxProjection(
+  state: ChatOutboxHostProjection,
+  durableIds: ReadonlySet<string>,
+  observeDurable: (id: string) => void,
+): void {
+  durableIds.forEach((id) => {
+    state.durableSeen.add(id);
+    observeDurable(id);
+  });
+  for (const local of state.byScope.values()) {
+    local.queue = local.queue.filter(
+      (item) => durableIds.has(item.id) || isActiveLocal(state, item),
+    );
+  }
+}
+
 /** Merge pane presentation only; the outbox owner retains custody and authority. */
 export function projectChatOutboxItem(item: ChatQueueItem, local: ChatQueueItem): ChatQueueItem {
   const projected: ChatQueueItem = { ...item };

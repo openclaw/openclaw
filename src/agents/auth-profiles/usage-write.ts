@@ -326,10 +326,7 @@ export async function withAuthProfileUsage<T>(
               context,
               async (scope) =>
                 publish(await scope.execute({ type: "authProfiles.usage", input }), () =>
-                  scope.execute({
-                    type: "authProfiles.read",
-                    input: { artifactPreserving: false },
-                  }),
+                  readSharedAuthProfileRows(context, false),
                 ),
               {
                 assertCurrent,

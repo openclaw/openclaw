@@ -144,55 +144,96 @@ afterAll(() => {
   observed.clearTimeout.mockRestore();
 });
 
-it("dedupes prewarm through history custody without extending idle retirement", async () => {
-  await rotateDatabaseWorkers(historyLane);
-  observed.rotate.mockClear();
+it.each([historyLane, maintenanceLane])(
+  "dedupes $name prewarm custody without extending idle retirement",
+  async (lane) => {
+    await rotateDatabaseWorkers(lane);
+    observed.rotate.mockClear();
+    const request = input();
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+    const first = prewarmSessionHistoryWorker(request.database, lane);
+    const second = prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    expect(lane.pending).toBe(1);
+    expect(isSessionHistoryWorkerCold(lane)).toBe(false);
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([first, second]);
+    expect(lane.pending).toBe(0);
+    expect(observed.unregister).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+    expect(observed.unregister).toHaveBeenCalledOnce();
+    expect(isSessionHistoryWorkerCold(lane)).toBe(true);
+
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+  },
+);
+
+it.each([historyLane, maintenanceLane])(
+  "settles failed and revoked $name prewarms without rejecting callers",
+  async (lane) => {
+    const request = input();
+    observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
+    await expect(prewarmSessionHistoryWorker(request.database, lane)).resolves.toBeUndefined();
+    expect(lane.pending).toBe(0);
+    expect(observed.rotate).toHaveBeenCalledOnce();
+
+    const reply = createDeferredCore<unknown>();
+    observed.run.mockReturnValueOnce(reply.promise);
+    const pending = prewarmSessionHistoryWorker(request.database, lane);
+    const resource = observed.resources.at(-1)!;
+    resource.revoke();
+    reply.resolve({ ok: true, value: { kind: "prewarm" } });
+    await expect(pending).resolves.toBeUndefined();
+    await resource.close();
+    expect(lane.pending).toBe(0);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, lane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+  },
+);
+
+it("joins only the matching lane prewarm and prepares its replacement after retirement", async () => {
   const request = input();
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  expect(isSessionHistoryWorkerCold()).toBe(true);
-  const first = prewarmSessionHistoryWorker(request.database);
-  const second = prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  expect(historyLane.pending).toBe(1);
-  expect(isSessionHistoryWorkerCold()).toBe(false);
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await Promise.all([first, second]);
-  expect(historyLane.pending).toBe(0);
-  expect(observed.unregister).not.toHaveBeenCalled();
+  const history = createDeferredCore<unknown>();
+  const maintenance = createDeferredCore<unknown>();
+  observed.run.mockReturnValueOnce(history.promise).mockReturnValueOnce(maintenance.promise);
+  const preparingHistory = prewarmSessionHistoryWorker(request.database);
+  const preparingMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  const joiningMaintenance = prewarmSessionHistoryWorker(request.database, maintenanceLane);
+  try {
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(historyLane.pending).toBe(1);
+    expect(maintenanceLane.pending).toBe(1);
 
-  await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS - 1);
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledOnce();
-  await vi.advanceTimersByTimeAsync(1);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-  expect(observed.unregister).toHaveBeenCalledOnce();
-  expect(isSessionHistoryWorkerCold()).toBe(true);
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    await preparingHistory;
+    expect(historyLane.pending).toBe(0);
+    expect(maintenanceLane.pending).toBe(1);
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingMaintenance, joiningMaintenance]);
 
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(2);
-});
-
-it("settles failed and revoked prewarms without rejecting callers", async () => {
-  const request = input();
-  observed.run.mockRejectedValueOnce(new Error("worker unavailable"));
-  await expect(prewarmSessionHistoryWorker(request.database)).resolves.toBeUndefined();
-  expect(historyLane.pending).toBe(0);
-  expect(observed.rotate).toHaveBeenCalledOnce();
-
-  const reply = createDeferredCore<unknown>();
-  observed.run.mockReturnValueOnce(reply.promise);
-  const pending = prewarmSessionHistoryWorker(request.database);
-  const resource = observed.resources.at(-1)!;
-  resource.revoke();
-  reply.resolve({ ok: true, value: { kind: "prewarm" } });
-  await expect(pending).resolves.toBeUndefined();
-  await resource.close();
-  expect(historyLane.pending).toBe(0);
-  observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
-  await prewarmSessionHistoryWorker(request.database);
-  expect(observed.run).toHaveBeenCalledTimes(3);
+    await rotateDatabaseWorkers(maintenanceLane);
+    await prewarmSessionHistoryWorker(request.database);
+    expect(observed.run).toHaveBeenCalledTimes(2);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(true);
+    observed.run.mockResolvedValue({ ok: true, value: { kind: "prewarm" } });
+    await prewarmSessionHistoryWorker(request.database, maintenanceLane);
+    expect(observed.run).toHaveBeenCalledTimes(3);
+    expect(isSessionHistoryWorkerCold(maintenanceLane)).toBe(false);
+  } finally {
+    history.resolve({ ok: true, value: { kind: "prewarm" } });
+    maintenance.resolve({ ok: true, value: { kind: "prewarm" } });
+    await Promise.all([preparingHistory, preparingMaintenance, joiningMaintenance]);
+  }
 });
 
 it("maintenance cleanup preserves foreground custody with an older sequence", async () => {

@@ -17,12 +17,6 @@ const AUTH_PROFILE_MODES = new Set<AuthProfileConfig["mode"]>([
   "token",
 ]);
 
-type AuthProfileConfigProtectionResult = {
-  config: OpenClawConfig;
-  repairs: string[];
-  warnings: string[];
-};
-
 function normalizeMode(value: unknown): AuthProfileConfig["mode"] | null {
   return typeof value === "string" && AUTH_PROFILE_MODES.has(value as AuthProfileConfig["mode"])
     ? (value as AuthProfileConfig["mode"])
@@ -46,11 +40,7 @@ function extractProviderFromProfileId(profileId: string): string | null {
   return normalizeProviderId(profileId.slice(0, colon)) || null;
 }
 
-function collectActiveAuthHints(config: OpenClawConfig): {
-  activeProviders: Set<string>;
-  explicitProfileIds: Set<string>;
-  explicitProfileProviders: Map<string, Set<string>>;
-} {
+function collectActiveAuthHints(config: OpenClawConfig) {
   const activeProviders = new Set<string>();
   const explicitProfileIds = new Set<string>();
   const explicitProfileProviders = new Map<string, Set<string>>();
@@ -158,7 +148,7 @@ export function ensureConfigAuthProfiles(
 export function protectActiveAuthProfileConfig(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
-}): AuthProfileConfigProtectionResult {
+}) {
   const { activeProviders, explicitProfileIds, explicitProfileProviders } = collectActiveAuthHints(
     params.before,
   );

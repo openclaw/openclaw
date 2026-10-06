@@ -32,7 +32,10 @@ import {
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
-import type { SessionListTargetLookup } from "./session-list-target.js";
+import type {
+  SessionListModelFactsLookup,
+  SessionListTargetLookup,
+} from "./session-list-target.js";
 import type {
   SessionActorProfileIdentity,
   SessionListActiveRunProjector,
@@ -74,6 +77,7 @@ export type SessionListFilterParams = {
   entries: Iterable<SessionEntryPair>;
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
+  getModelFacts?: SessionListModelFactsLookup;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -283,6 +287,7 @@ export function* filterSessionEntries(
         identityNames: params.identityNames,
         now,
         getTarget: params.getTarget,
+        getModelFacts: params.getModelFacts,
         modelCatalog: params.modelCatalog instanceof Map ? params.modelCatalog : undefined,
         getRowContext,
         projectActiveRun: params.projectActiveRun,

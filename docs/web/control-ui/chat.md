@@ -26,13 +26,59 @@ A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
 the row shows **Outcome unknown**. Partial output alone does not finish a tool.
 
-When the parent turn has ended but subagents are still active, the chat shows
-**Waiting on subagents**. A single active child already loaded in the pane can
-be opened from its name beside the indicator. Elapsed time appears when the
-loaded history records a yield after the parent's last run began.
-Successful `sessions_yield` calls leave a quiet **Handed off and waiting** marker
-with a timestamp; it changes to **Resumed** when the conversation continues.
-Private continuation context stays hidden.
+While a turn is still working and has subagents running, its working indicator
+ends with their count, such as **3 subagents running**, and counts down as they
+finish. Child sessions that are not subagents are not part of that count.
+
+When a turn hands off with `sessions_yield` and its subagents are still active,
+the working indicator stays under that reply and reads **Waiting on 3
+subagents**, counting down as they finish. When one is left it shows that
+subagent's name, which opens its session. Elapsed time counts from the handoff.
+If the turn ended without a handoff while subagents are still active, the same
+line follows the finished reply without elapsed time. Child sessions that are
+not subagents are counted without names once no subagent is left, as **Waiting
+on 2 sessions**. Once everything it waited on has finished, the line goes away
+until the agent resumes. Tool rows you opened stay open through the handoff. A
+successful `sessions_yield` leaves no marker in the transcript, and its private
+continuation context stays hidden.
+
+When the last subagent finishes, the wait line ends and the block stays as it
+is, without a working indicator, until the turn resumes. Its answer then
+continues in that same block, with one footer at the end. Tool activity that
+resumes with nothing written in between joins the activity row from before the
+handoff. In dashboard sessions, tool activity recorded after the resumed
+answer, such as the step that sent it, joins the activity before that answer,
+so the answer stays last; a step that failed there stays where it happened. The
+working indicator
+and the closing **Done in…** line then
+describe the whole request: time since you asked, including the wait, and
+output tokens from the runs in that block. The token count is left out when the
+pane did not see all of those runs, for example after a reload during the wait.
+When the loaded transcript does not show your request leading straight into that
+block, for example when the request is older than the loaded history, both
+lines describe the resumed run alone. A message you send after the handoff
+starts a block of its own, with that run's own clock and closing line.
+
+In the tool activity, a subagent's launch row shows the label its launch gave
+it, when it gave one, rather than its instructions, followed by **running**
+while it works and by its duration once it has finished. A subagent that failed
+or timed out reads **failed** instead, and one that was stopped reads
+**stopped**. Selecting the name opens that subagent's session; the rest of the
+row still expands the launch's details. Collapsed activity counts subagents on
+their own, such as **1 other operation · 3 subagents**. A launch that was
+refused started no subagent and is counted with the other operations. While the
+step in progress has no title of its own, the collapsed row keeps showing that
+count. A launch that opens a
+child session in its own right, such as one asked for with `visible`, is not a
+subagent: its row and its place in that count stay those of an ordinary
+operation.
+
+The running count, the wait's count and name, and a launch row's state and link
+come from the session's subagent list. Until the pane has loaded it, the working
+indicator shows no count and a wait reads **Waiting on subagents**; a launch
+row whose subagent is not in the list shows its name alone. The pane does not
+load that list when
+[Swarm is turned off](/tools/swarm) with `tools.swarm: false`.
 
 When your role or session policy blocks messages, the composer is disabled and
 shows the reason before you try to send. This includes sandbox requirements,
@@ -768,7 +814,9 @@ visible results, so a page opened after an inline widget appears after that widg
 Failed tool results after the last answer stay visible outside
 the disclosure until a later answer follows them. This is display grouping, not a
 change to stored history. Live turns, search results, and turns without an answer
-stay expanded. User messages,
+stay expanded. So does a turn that handed off with `sessions_yield`, whether it
+is waiting, has resumed, or never did: its activity stays in place, and once it
+resumes the closing line reports the request. User messages,
 forwarded inputs, and structural markers remain boundaries for grouping.
 Selecting the author's name on a reply's **Replying to** line scrolls to the
 original message and briefly highlights it, first opening its containing

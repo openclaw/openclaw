@@ -59,13 +59,6 @@ type StoredBoard = {
 const ensuredBoardDatabases = new WeakSet<DatabaseSync>();
 const BOARD_WRITE_BATCH_SIZE = 64;
 
-// Read-only connections cannot run the lazy DDL, and a pre-existing v13 DB has
-// no board tables until the first write. Reads must treat that as "no boards",
-// not "no such table".
-function boardTablesPresent(database: Pick<OpenClawAgentDatabase, "db">): boolean {
-  return tableExists(database.db, "board_widgets");
-}
-
 export function ensureBoardSchema(database: BoardDatabaseHandle): void {
   if (ensuredBoardDatabases.has(database.db)) {
     return;
@@ -300,7 +293,9 @@ export function readBoardSessionKeys(
   database: BoardDatabaseHandle,
   sessionKeys: readonly string[],
 ): Set<string> {
-  if (sessionKeys.length === 0 || !boardTablesPresent(database)) {
+  // Read-only connections cannot run the lazy DDL; pre-existing v13 databases
+  // have no board tables until their first write.
+  if (sessionKeys.length === 0 || !tableExists(database.db, "board_widgets")) {
     return new Set();
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);
@@ -318,7 +313,7 @@ export function readBoardSnapshotWithHtmlViewMetadata(
   database: BoardDatabaseHandle,
   sessionKey: string,
 ): BoardSnapshotWithHtmlViewMetadata | undefined {
-  if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
     return undefined;
   }
   const stored = readStoredBoard(database, sessionKey);
@@ -331,7 +326,7 @@ export function readBoardWidgetDocument(
   name: string,
   contentKind?: "mcp-app",
 ) {
-  if (!hasBoardSession(database, sessionKey) || !boardTablesPresent(database)) {
+  if (!hasBoardSession(database, sessionKey) || !tableExists(database.db, "board_widgets")) {
     return undefined;
   }
   const db = getNodeSqliteKysely<BoardDatabase>(database.db);

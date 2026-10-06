@@ -1,16 +1,5 @@
 import type { HeapSpaceInfo } from "node:v8";
-
-export type WorkerRequestKind =
-  | "identity"
-  | "avatar"
-  | "catalog"
-  | "transcript"
-  | "sqlite_read"
-  | "sqlite_writer"
-  | "state_read"
-  | "cron"
-  | "compute"
-  | "other";
+import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type DiagnosticWorkerRequestFields = {
   type: "worker.request";

@@ -495,6 +495,8 @@ function prepareStream(
     options?: EmbeddedAgentQueueMessageOptions,
     assertCurrent?: () => void,
     authorityKind: InputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    prepareCurrent?: () => Promise<void>,
+    compatAssertCurrent = assertCurrent,
   ) => {
     const canInjectMessage = composeInjectionGuard(assertCurrent);
     if (!canInjectMessage()) {
@@ -511,7 +513,8 @@ function prepareStream(
         options,
         attempt.sessionKey,
         canInjectMessage,
-        questionAuthority(assertCurrent, authorityKind),
+        questionAuthority(compatAssertCurrent, authorityKind),
+        prepareCurrent,
       );
     } finally {
       activeQueueAdmissions--;
@@ -546,7 +549,16 @@ function prepareStream(
     queueMessage,
     claimPendingUserInputAnswer,
     cancelPendingUserInput,
-  };
+    queueMessageAsync: (text, options, preparation, kind) =>
+      queueMessage(
+        text,
+        options,
+        preparation.assertCurrent,
+        kind,
+        preparation.prepareCurrent,
+        preparation.compatAssertCurrent,
+      ),
+  } satisfies NonNullable<EmbeddedAgentQueueHandle["messageInjectionV2"]>;
   const heartbeatReplyOperation =
     attempt.replyOperation?.turnKind === "heartbeat" ? attempt.replyOperation : undefined;
   const applyPermissionMode = input.applyPermissionMode;

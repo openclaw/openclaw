@@ -88,15 +88,6 @@ function prepareWorkerRuntime(
 }
 
 describe("node-host worker manifest", () => {
-  it("allows environment-managed processes to force worker hosting without durable config", async () => {
-    const prepared = await prepareWorkerRuntime(undefined, {
-      enabled: false,
-      forceWorkerRuns: true,
-    });
-
-    expect(prepared.workerHostingEnabled).toBe(true);
-  });
-
   it("keeps container hosting opted out without probing an engine or reporting a failure", async () => {
     const prepared = await prepareWorkerRuntime("container", { enabled: false });
     const onWorkerHostingDisabled = vi.fn();

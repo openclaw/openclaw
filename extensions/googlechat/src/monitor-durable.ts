@@ -1,17 +1,11 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
-type GoogleChatDurableReplyOptions = {
-  to: string;
-  replyToId?: string | null;
-  threadId?: string;
-};
-
 export function resolveGoogleChatDurableReplyOptions(params: {
   payload: ReplyPayload;
   infoKind: string;
   spaceId: string;
   hasTypingMessage: boolean;
-}): GoogleChatDurableReplyOptions | false {
+}) {
   if (params.infoKind !== "final" || params.hasTypingMessage) {
     return false;
   }

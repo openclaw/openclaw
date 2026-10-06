@@ -313,11 +313,13 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     });
     store.lastGood = { openai: profileId };
     saveAuthProfileStore(store, mainAgentDir);
-    openOpenClawAgentDatabase({
-      agentId: "main",
-      path: resolveAuthProfileDatabasePath(mainAgentDir),
-    }).db.exec("ALTER TABLE auth_profile_state DROP COLUMN updated_at");
-    getOAuthApiKeyMock.mockRejectedValueOnce(new Error("refresh_token_reused"));
+    getOAuthApiKeyMock.mockImplementationOnce(async () => {
+      openOpenClawAgentDatabase({
+        agentId: "main",
+        path: resolveAuthProfileDatabasePath(mainAgentDir),
+      }).db.exec("ALTER TABLE auth_profile_state DROP COLUMN updated_at");
+      throw new Error("refresh_token_reused");
+    });
     const failure = await resolveApiKeyForProfile({
       store,
       profileId,
@@ -326,5 +328,6 @@ describe("resolveApiKeyForProfile fallback to main agent", () => {
     expect(failure).toBeInstanceOf(OAuthRefreshFailureError);
     expect(String(failure)).toContain("refresh_token_reused");
     expect(String(failure)).not.toContain("no column named updated_at");
+    expect(getOAuthApiKeyMock).toHaveBeenCalledOnce();
   });
 });

@@ -62,26 +62,32 @@ describe("runCommand", () => {
 
   it.runIf(process.platform !== "win32")("force-kills cancelled command trees", async () => {
     const controller = new AbortController();
-    const startedAt = Date.now();
-    const cancelling = setTimeout(() => controller.abort(), 25);
-    try {
-      const result = await runCommand(
-        [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
-        undefined,
-        undefined,
-        undefined,
-        controller.signal,
-      );
+    const run = processExec.runCommandWithTimeout;
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation((argv, options) =>
+      run(argv, {
+        ...(typeof options === "number" ? { timeoutMs: options } : options),
+        // Cancel only once the real child has installed its signal handler.
+        onOutputChunk: () => controller.abort(),
+      }),
+    );
+    const result = await runCommand(
+      [
+        process.execPath,
+        "-e",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
+      ],
+      undefined,
+      undefined,
+      undefined,
+      controller.signal,
+    );
 
-      expect(result).toMatchObject({
-        timedOut: false,
-        success: false,
-        error: expect.stringMatching(/^Command terminated by signal SIG(?:TERM|KILL)$/),
-      });
-      expect(Date.now() - startedAt).toBeLessThan(2_000);
-    } finally {
-      clearTimeout(cancelling);
-    }
+    expect(result).toMatchObject({
+      timedOut: false,
+      success: false,
+      stdout: "ready",
+      error: "Command terminated by signal SIGKILL",
+    });
   });
 
   describe("working directory failures", () => {

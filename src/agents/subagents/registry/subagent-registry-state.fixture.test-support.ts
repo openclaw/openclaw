@@ -1,12 +1,38 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
+} from "../../../state/openclaw-state-db.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
-import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { bindSubagentRunRecord, rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
+
+/** Inspect fixture storage independently of resident projections and worker transport. */
+export function loadSubagentRegistryFromSqlite(
+  database: Pick<OpenClawStateDatabase, "db"> = openOpenClawStateDatabase(),
+): Map<string, SubagentRunRecord> {
+  const rows = executeSqliteQuerySync(
+    database.db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(database.db)
+      .selectFrom("subagent_runs")
+      .selectAll()
+      .orderBy("created_at", "asc")
+      .orderBy("run_id", "asc"),
+  ).rows;
+  const runs = new Map<string, SubagentRunRecord>();
+  for (const row of rows) {
+    const entry = rowToSubagentRunRecord(row);
+    if (entry) {
+      runs.set(entry.runId, entry);
+    }
+  }
+  return runs;
+}
 
 function writeSubagentRunValues(
   values: readonly SubagentRunSqliteRow[],

@@ -65,10 +65,7 @@ async function loadGitHubPublicationPullRequests(params: GitHubPublicationPullRe
 function parseGitHubPublicationPullRequests(raw: string) {
   let pages: unknown[];
   try {
-    pages = raw
-      .trim()
-      .split(/\r?\n/u)
-      .map((page) => JSON.parse(page));
+    pages = raw.split(/\r?\n/u).map((page) => JSON.parse(page));
   } catch (error) {
     throw new Error("GitHub pull request lookup returned invalid JSON.", { cause: error });
   }

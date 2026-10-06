@@ -96,16 +96,7 @@ type MSTeamsMessageTarget = {
   messageId: string;
 };
 
-type GetMessageMSTeamsResult = {
-  id: string;
-  text: string | undefined;
-  from: GraphMessage["from"];
-  createdAt: string | undefined;
-};
-
-export async function getMessageMSTeams(
-  params: MSTeamsMessageTarget,
-): Promise<GetMessageMSTeamsResult> {
+export async function getMessageMSTeams(params: MSTeamsMessageTarget) {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
@@ -175,15 +166,9 @@ type ListPinsMSTeamsParams = {
   to: string;
 };
 
-type ListPinsMSTeamsResult = {
-  pins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }>;
-};
-
 const LIST_PINS_MAX_PAGES = 10;
 
-export async function listPinsMSTeams(
-  params: ListPinsMSTeamsParams,
-): Promise<ListPinsMSTeamsResult> {
+export async function listPinsMSTeams(params: ListPinsMSTeamsParams) {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const conv = resolveConversationPath(conversationId);
@@ -196,7 +181,8 @@ export async function listPinsMSTeams(
   }
 
   const path = `${conv.basePath}/pinnedMessages?$expand=message`;
-  const allPins: ListPinsMSTeamsResult["pins"] = [];
+  const allPins: Array<{ id: string; pinnedMessageId: string; messageId?: string; text?: string }> =
+    [];
 
   let res = await fetchGraphJson<GraphResponse<GraphPinnedMessage>>({ token, path });
   let pages = 1;
@@ -247,10 +233,6 @@ type ReactionSummary = {
   users: Array<{ id: string; displayName?: string }>;
 };
 
-type ListReactionsMSTeamsResult = {
-  reactions: ReactionSummary[];
-};
-
 // Graph reaction writes use beta and prefer delegated auth, falling back to
 // app-only auth when delegated credentials are unavailable.
 async function mutateMessageReaction(
@@ -283,9 +265,7 @@ export function unreactMessageMSTeams(params: ReactMessageMSTeamsParams): Promis
  * List reactions on a message, grouped by type.
  * Uses Graph v1.0 (reactions are included in the message resource).
  */
-export async function listReactionsMSTeams(
-  params: MSTeamsMessageTarget,
-): Promise<ListReactionsMSTeamsResult> {
+export async function listReactionsMSTeams(params: MSTeamsMessageTarget) {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
@@ -332,11 +312,6 @@ type SearchMessagesMSTeamsParams = {
   limit?: number;
 };
 
-type SearchMessagesMSTeamsResult = {
-  messages: GetMessageMSTeamsResult[];
-  truncated: boolean;
-};
-
 const SEARCH_DEFAULT_LIMIT = 25;
 const SEARCH_MAX_LIMIT = 50;
 const SEARCH_PAGE_SIZE = 50;
@@ -365,9 +340,7 @@ function matchesSearchSender(message: GraphMessage, from: string | undefined): b
  * Graph does not support collection `$search` here, so filter bounded pages
  * locally without widening the read to the account's global message index.
  */
-export async function searchMessagesMSTeams(
-  params: SearchMessagesMSTeamsParams,
-): Promise<SearchMessagesMSTeamsResult> {
+export async function searchMessagesMSTeams(params: SearchMessagesMSTeamsParams) {
   const token = await resolveGraphToken(params.cfg);
   const conversationId = await resolveGraphConversationId(params.to);
   const { basePath } = resolveConversationPath(conversationId);
@@ -377,7 +350,7 @@ export async function searchMessagesMSTeams(
     ? Math.min(Math.max(Math.floor(rawLimit), 1), SEARCH_MAX_LIMIT)
     : SEARCH_DEFAULT_LIMIT;
   const query = params.query.trim().toLowerCase();
-  const messages: SearchMessagesMSTeamsResult["messages"] = [];
+  const messages: Awaited<ReturnType<typeof getMessageMSTeams>>[] = [];
   let nextUrl: string | undefined;
   let truncated = false;
 

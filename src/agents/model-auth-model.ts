@@ -133,22 +133,22 @@ export async function hasAvailableAuthForProvider(params: {
   const inlineUnusableUntil = authConfig.resolveInlineProviderApiKeyCooldownUntil(store, provider);
   const inlineProviderApiKeyUsable =
     typeof inlineUnusableUntil !== "number" || inlineUnusableUntil <= Date.now();
-  const envAuth = authConfig.resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
-  if (
-    envAuth &&
+  const isUsableSource = (source: string) =>
+    !authConfig.isConfigBackedInlineProviderApiKey({ cfg, provider, source, store }) ||
+    inlineProviderApiKeyUsable;
+  const allowsAuth = (mode: ResolvedProviderAuth["mode"], authFlow?: string) =>
     isAuthModeAllowedForModel({
       provider,
       modelApi: params.modelApi,
       modelBaseUrl: params.modelBaseUrl,
-      mode: envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    }) &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg,
-      provider,
-      source: envAuth.source,
-      store,
-    }) ||
-      inlineProviderApiKeyUsable)
+      mode,
+      authFlow,
+    });
+  const envAuth = authConfig.resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
+  if (
+    envAuth &&
+    allowsAuth(envAuth.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key") &&
+    isUsableSource(envAuth.source)
   ) {
     return true;
   }
@@ -163,16 +163,7 @@ export async function hasAvailableAuthForProvider(params: {
     provider,
     workspaceDir: params.workspaceDir,
   });
-  if (
-    syntheticLocalAuth &&
-    (!authConfig.isConfigBackedInlineProviderApiKey({
-      cfg,
-      provider,
-      source: syntheticLocalAuth.source,
-      store,
-    }) ||
-      inlineProviderApiKeyUsable)
-  ) {
+  if (syntheticLocalAuth && isUsableSource(syntheticLocalAuth.source)) {
     return true;
   }
   const order = resolveAuthProfileOrder({
@@ -198,14 +189,10 @@ export async function hasAvailableAuthForProvider(params: {
       const candidateType = candidateCredential?.type;
       if (
         candidateType &&
-        !isAuthModeAllowedForModel({
-          provider,
-          modelApi: params.modelApi,
-          modelBaseUrl: params.modelBaseUrl,
-          mode: authConfig.profileTypeToAuthMode(candidateType),
-          authFlow:
-            candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined,
-        })
+        !allowsAuth(
+          authConfig.profileTypeToAuthMode(candidateType),
+          candidateCredential?.type === "oauth" ? candidateCredential.authFlow : undefined,
+        )
       ) {
         continue;
       }
@@ -219,13 +206,10 @@ export async function hasAvailableAuthForProvider(params: {
       const mode = resolved?.profileType ?? credential?.type;
       if (
         resolved &&
-        isAuthModeAllowedForModel({
-          provider,
-          modelApi: params.modelApi,
-          modelBaseUrl: params.modelBaseUrl,
-          mode: mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
-          authFlow: credential?.type === "oauth" ? credential.authFlow : undefined,
-        })
+        allowsAuth(
+          mode ? authConfig.profileTypeToAuthMode(mode) : "api-key",
+          credential?.type === "oauth" ? credential.authFlow : undefined,
+        )
       ) {
         return true;
       }

@@ -261,7 +261,7 @@ function modeAllowed(
 }
 
 function normalizeModelIdForProvider(provider: string, modelId: string): string | undefined {
-  const trimmed = splitTrailingAuthProfile(modelId).model.trim();
+  const trimmed = splitTrailingAuthProfile(modelId).model;
   if (!trimmed) {
     return undefined;
   }
@@ -702,13 +702,11 @@ export function createModelAuthAvailabilityResolver(
     }
     if (binding.kind === "marker") {
       if (binding.evidence === "environment" && typeof apiKey === "string") {
-        return {
-          availability: modeAllowed(provider, target, configuredBearerMode)
-            ? hasSecret(env[apiKey.trim()])
-            : false,
-          selectedAuthMode: configuredBearerMode,
-          evidence: "environment",
-        };
+        return withMode(
+          configuredBearerMode,
+          "environment",
+          modeAllowed(provider, target, configuredBearerMode) && hasSecret(env[apiKey.trim()]),
+        );
       }
       if (!modeAllowed(provider, target, configuredBearerMode)) {
         return withMode(configuredBearerMode, binding.evidence, false);
@@ -728,11 +726,7 @@ export function createModelAuthAvailabilityResolver(
     }
     if (apiKeyRef) {
       if (!isValidSecretRef(apiKeyRef) || !modeAllowed(provider, target, configuredBearerMode)) {
-        return {
-          availability: false,
-          selectedAuthMode: configuredBearerMode,
-          evidence: "provider-config",
-        };
+        return withMode(configuredBearerMode, "provider-config", false);
       }
       const available = resolveSecretRefReadOnlyAvailability(apiKeyRef, params.cfg, env);
       const runtimeAvailable = Boolean(
@@ -1097,7 +1091,7 @@ export function createModelAuthAvailabilityResolver(
       return { availability: false, routeResolution };
     }
     if (routeResolution.kind === "indeterminate") {
-      const rejection = automaticSourceRejection(provider, ref, prepareAuthTarget(provider, ref));
+      const rejection = automaticSourceRejection(provider, ref, baseTarget);
       return { ...(rejection ?? { availability: undefined }), routeResolution };
     }
     if (!modelLock && !awsSdkTerminal && basePolicy.binding.kind === "profile-incompatible") {
@@ -1375,12 +1369,7 @@ export function createModelAuthAvailabilityResolver(
     const syntheticSubscriptionRoute = routeResolution.routes.find(
       (route) => route.authRequirement === "subscription",
     );
-    if (
-      syntheticCodexOwnsAuth &&
-      evaluation.availability !== true &&
-      synthetic.has("codex") &&
-      syntheticSubscriptionRoute
-    ) {
+    if (syntheticCodexOwnsAuth && evaluation.availability !== true && syntheticSubscriptionRoute) {
       return {
         availability: undefined,
         routeResolution,

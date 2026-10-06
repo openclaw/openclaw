@@ -4,7 +4,6 @@ import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { SqliteSnapshotCleanupError } from "../../../infra/sqlite-readonly-location-cleanup.js";
 import type { DatabasePathIdentity } from "../../../infra/sqlite-worker-identity.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
-import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import {
   isStateDatabaseReadAdmissionInvalidatedError,
   type OpenClawStateDatabaseReadAdmission,
@@ -29,9 +28,10 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../../../state/openclaw-state-worker-error.js";
-import { immutableSubagentRun } from "./subagent-registry-memory.js";
+import { freezeSubagentRunReadRecord, immutableSubagentRun } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { rememberSubagentRunVersion } from "./subagent-registry.store.codec.js";
+import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
@@ -62,7 +62,7 @@ type SubagentRunsCacheState<T extends SubagentRunReadRecord> = (
 
 export type SubagentRunsCache<T extends SubagentRunReadRecord> = {
   state: SubagentRunsCacheState<T>;
-  load?: () => Map<string, T>;
+  retainRetiredPublications?: boolean;
   copy: (entry: SubagentRunRecord) => T;
   project: (entry: SubagentRunRecord) => T;
 };
@@ -156,7 +156,7 @@ export function rememberSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
       throw error;
     }
     // Read retirement cannot turn committed publication into a write failure.
-    if (!cache.load) {
+    if (!cache.retainRetiredPublications) {
       cache.state = {};
       return;
     }
@@ -236,7 +236,7 @@ export function getPersistedSubagentRunsSnapshot<T extends SubagentRunReadRecord
   prepared?: OpenClawStateReadContext,
 ): Map<string, T> | null {
   let admission: OpenClawStateDatabaseReadAdmission | undefined;
-  if (!cache.load) {
+  if (!cache.retainRetiredPublications) {
     const context = prepared ?? captureOpenClawStateReadContext();
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
@@ -273,18 +273,7 @@ export function loadPersistedSubagentRunsForRead<T extends SubagentRunReadRecord
   if (cached) {
     return cached;
   }
-  if (!cache.load) {
-    throw new Error("Subagent session-list facts must be prepared before synchronous reads");
-  }
-  const runs = applySubagentRunChanges(cache.load(), cache.state.changes);
-  runs.forEach(freezeJsonSnapshot);
-  const admission = captureSubagentFactsAdmission();
-  cache.state = {
-    snapshot: runs,
-    admission,
-    sourceIdentity: admission?.identity.key,
-  };
-  return runs;
+  throw new Error("Subagent registry facts must be prepared before synchronous reads");
 }
 
 export function assertSubagentReadContext(context: OpenClawStateWorkerContext): void {
@@ -304,37 +293,21 @@ export function getSubagentRunsSnapshot<T extends SubagentRunReadRecord>(
     context?: OpenClawStateReadContext;
     load?: () => Iterable<T>;
     selectCached?: (lookup: SubagentSessionReadLookup) => readonly string[];
-    fresh?: boolean;
     matches: (entry: SubagentRunReadRecord) => boolean;
   },
 ): Map<string, T> {
-  if (
-    shouldReadPersistedSubagentRuns() &&
-    !cache.load &&
-    !getPersistedSubagentRunsSnapshot(cache, scope?.context)
-  ) {
-    throw new Error("Subagent session-list facts must be prepared before synchronous reads");
-  }
   const merged = new Map<string, T>();
   if (shouldReadPersistedSubagentRuns()) {
-    try {
-      // Scoped reads use indexed SQL until a complete owner snapshot is available.
-      const cached =
-        scope?.load && !scope.fresh ? getPersistedSubagentRunsSnapshot(cache, scope.context) : null;
-      const cachedRows =
-        cached && scope?.selectCached
-          ? indexedSnapshotRows(cached, scope.selectCached(getSessionListLookup(cache, cached)))
-          : cached?.values();
-      const persisted = scope?.load
-        ? (cachedRows ?? scope.load())
-        : loadPersistedSubagentRunsForRead(cache, scope?.context).values();
-      for (const entry of persisted) {
-        if (!scope || scope.matches(entry)) {
-          merged.set(entry.runId, entry);
-        }
+    const cached = loadPersistedSubagentRunsForRead(cache, scope?.context);
+    const persisted = scope?.load
+      ? scope.load()
+      : scope?.selectCached
+        ? indexedSnapshotRows(cached, scope.selectCached(getSessionListLookup(cache, cached)))
+        : cached.values();
+    for (const entry of persisted) {
+      if (!scope || scope.matches(entry)) {
+        merged.set(entry.runId, entry);
       }
-    } catch {
-      // Ignore disk read failures and fall back to local memory.
     }
   }
   if (shouldReadPersistedSubagentRuns()) {
@@ -379,13 +352,16 @@ export async function readCompactSubagentRuns(context: OpenClawStateWorkerContex
       cause: hydrateOpenClawStateWorkerError(failure, { includeOrdinary: true }),
     });
   }
-  reply.runs.forEach(freezeJsonSnapshot);
+  reply.runs.forEach(freezeSubagentRunReadRecord);
   return reply.runs;
 }
 
 export async function readFullSubagentRuns(
   context: OpenClawStateWorkerContext,
-  scope: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
+  scope: Exclude<
+    Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>["scope"],
+    { kind: "page" }
+  >,
   options: { current?: boolean } = {},
 ) {
   if (scope.kind === "ids" && scope.runIds.length === 0) {
@@ -403,14 +379,6 @@ export async function readFullSubagentRuns(
   }
   if (!reply.ok || reply.type !== "subagents.runs" || reply.projection === "maintenance") {
     throw new Error("Unexpected subagent registry read result");
-  }
-  if (
-    options.current &&
-    scope.kind === "all" &&
-    reply.versions &&
-    [...reply.versions].some(([runId, version]) => version !== null && !reply.runs.has(runId))
-  ) {
-    throw new Error("Canonical subagent restore found an unreadable durable row");
   }
   for (const [runId, entry] of reply.runs) {
     const version = reply.versions?.get(runId);
@@ -561,7 +529,7 @@ export async function consumeFreshSubagentRuns<T>(
       while (true) {
         assertSubagentReadContext(context);
         const revision = fill.committedRevision;
-        const runs = await readFullSubagentRuns(context, { kind: "all" }, { current: true });
+        const runs = await readAllSubagentRunsInWorker(context);
         assertSubagentReadContext(context);
         if (cache.state.pending !== fill) {
           throw new Error("Subagent restore lost its accepted read owner");

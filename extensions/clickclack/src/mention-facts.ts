@@ -4,12 +4,6 @@ import {
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
-type ClickClackMentionFacts = {
-  canDetectMention: boolean;
-  wasMentioned: boolean;
-  hasAnyMention?: boolean;
-};
-
 const CLICKCLACK_MENTION_PATTERN = /(?:^|[^a-z0-9_@-])@([a-z0-9][a-z0-9_-]{1,31})(?![a-z0-9_-])/giu;
 
 function buildLocalMentionRegexes(params: {
@@ -51,7 +45,7 @@ export function resolveClickClackMentionFacts(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   channelId?: string;
-}): ClickClackMentionFacts {
+}) {
   const { isDirect, body, mentionPatterns, botHandle, cfg, agentId, channelId } = params;
 
   if (isDirect) {

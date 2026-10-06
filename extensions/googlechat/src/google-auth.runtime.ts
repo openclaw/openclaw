@@ -25,10 +25,7 @@ type GoogleAuthTransportOptions = NonNullable<
 >;
 type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
 type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
-type TlsOptions = {
-  cert?: ConnectionOptions["cert"];
-  key?: ConnectionOptions["key"];
-};
+type TlsOptions = Pick<ConnectionOptions, "cert" | "key">;
 type ProxyAgentLike = {
   connectOpts?: TlsOptions;
   proxy: URL;

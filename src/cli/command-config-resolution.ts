@@ -1,6 +1,5 @@
 // Command config resolver that combines secret materialization with optional plugin auto-enable.
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
-import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   type CommandSecretResolutionMode,
@@ -15,11 +14,7 @@ export async function resolveCommandConfigWithSecrets(
     autoEnable?: boolean;
     env?: NodeJS.ProcessEnv;
   },
-): Promise<{
-  resolvedConfig: OpenClawConfig;
-  effectiveConfig: OpenClawConfig;
-  diagnostics: string[];
-}> {
+) {
   const { runtime, autoEnable, env, ...resolution } = params;
   const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway(resolution);
   if (runtime) {

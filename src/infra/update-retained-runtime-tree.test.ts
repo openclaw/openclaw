@@ -73,6 +73,7 @@ it.each([
           configSchema: { type: "object" },
           providerCatalogEntry: "src/catalog.ts",
           capabilityCatalogEntry: "src/capabilities.ts",
+          skills: ["./skills"],
           controlUi,
           themes: [
             {
@@ -105,6 +106,10 @@ it.each([
       ["src/catalog.ts", "export const providers = [];\n"],
       ["src/catalog.js", "export const providers = [];\n"],
       ["src/capabilities.ts", "export const capabilities = {};\n"],
+      [
+        "skills/fixture/SKILL.md",
+        "---\nname: fixture\ndescription: Retained runtime fixture\n---\n",
+      ],
       ["provider-policy-api.ts", "export const policy = {};\n"],
       ["assets/icon.png", "fixture icon"],
       ["assets/activity.svg", '<svg xmlns="http://www.w3.org/2000/svg"/>'],

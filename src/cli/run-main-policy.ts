@@ -12,9 +12,10 @@ import {
 } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type {
-  PluginManifestCommandAliasRecord,
-  PluginManifestToolOwnerRecord,
-} from "../plugins/manifest-command-aliases.js";
+  resolveManifestCommandAliasOwner,
+  resolveManifestCliCommandSurfaceOwner,
+  resolveManifestToolOwner,
+} from "../plugins/manifest-command-aliases.runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isSimpleCommandHelpInvocation } from "./argv.js";
 import {
@@ -225,18 +226,9 @@ export function resolveMissingPluginCommandMessage(
   pluginId: string,
   config?: OpenClawConfig,
   options?: {
-    resolveCommandAliasOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestCommandAliasRecord | undefined;
-    resolveToolOwner?: (params: {
-      toolName: string | undefined;
-      config?: OpenClawConfig;
-    }) => PluginManifestToolOwnerRecord | undefined;
-    resolveCliCommandSurfaceOwner?: (params: {
-      command: string | undefined;
-      config?: OpenClawConfig;
-    }) => string | undefined;
+    resolveCommandAliasOwner?: typeof resolveManifestCommandAliasOwner;
+    resolveToolOwner?: typeof resolveManifestToolOwner;
+    resolveCliCommandSurfaceOwner?: typeof resolveManifestCliCommandSurfaceOwner;
   },
 ): string | null {
   const normalizedPluginId = normalizeLowercaseStringOrEmpty(pluginId);

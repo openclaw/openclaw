@@ -71,20 +71,6 @@ function normalizeSnippet(text: string): string {
   return `${truncateUtf16Safe(normalized, MAX_SNIPPET_CHARS - 1).trimEnd()}...`;
 }
 
-function buildSearchQuery(args: unknown): string {
-  const parsed = parseRealtimeVoiceAgentConsultArgs(args);
-  return [parsed.question, parsed.context].filter(Boolean).join("\n\n");
-}
-
-function resolveLabels(
-  labels?: Partial<RealtimeVoiceFastContextLabels>,
-): RealtimeVoiceFastContextLabels {
-  return {
-    audienceLabel: labels?.audienceLabel?.trim() || "person",
-    contextName: labels?.contextName?.trim() || "OpenClaw memory context",
-  };
-}
-
 function buildContextText(params: {
   query: string;
   hits: FastContextHit[];
@@ -132,49 +118,40 @@ async function lookupFastContext(params: {
   context: MemoryCallerContext;
   callerSuppliedLiveness: boolean;
 }): Promise<FastContextLookupResult> {
-  const { getActiveMemoryProviderCore, isActiveMemoryProviderNative } =
-    await import("../plugins/memory-runtime.js");
-  if (!isActiveMemoryProviderNative({ cfg: params.cfg, agentId: params.agentId })) {
-    return await lookupLegacyFastContext(params);
-  }
-  // A native provider reads only under the live call's owner-held liveness. Callers
-  // released before liveness existed get the unavailable outcome, never a provider read.
-  if (!params.callerSuppliedLiveness) {
-    return { status: "unavailable", error: "caller supplied no request liveness" };
-  }
-  const memory = await getActiveMemoryProviderCore({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    context: params.context,
-  });
-  if (!memory.provider) {
-    return { status: "unavailable", error: memory.error ?? "no active memory provider" };
-  }
-  try {
-    const { hits } = await memory.provider.search({
-      query: params.query,
-      maxResults: params.config.maxResults,
-      sources: params.config.sources,
+  const {
+    authorizeActiveMemorySearchHits,
+    getActiveMemoryProviderCore,
+    getActiveMemorySearchManagerCore,
+    isActiveMemoryProviderNative,
+  } = await import("../plugins/memory-runtime.js");
+  if (isActiveMemoryProviderNative({ cfg: params.cfg, agentId: params.agentId })) {
+    // A native provider reads only under the live call's owner-held liveness. Callers
+    // released before liveness existed get the unavailable outcome, never a provider read.
+    if (!params.callerSuppliedLiveness) {
+      return { status: "unavailable", error: "caller supplied no request liveness" };
+    }
+    const memory = await getActiveMemoryProviderCore({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      context: params.context,
     });
-    params.context.assertCurrent();
-    return { status: "hits", hits: hits.map(toNativeFastContextHit) };
-  } finally {
-    await memory.provider.close();
-    params.context.assertCurrent();
+    if (!memory.provider) {
+      return { status: "unavailable", error: memory.error ?? "no active memory provider" };
+    }
+    try {
+      const { hits } = await memory.provider.search({
+        query: params.query,
+        maxResults: params.config.maxResults,
+        sources: params.config.sources,
+      });
+      params.context.assertCurrent();
+      return { status: "hits", hits: hits.map(toNativeFastContextHit) };
+    } finally {
+      await memory.provider.close();
+      params.context.assertCurrent();
+    }
   }
-}
 
-// Legacy runtimes keep their manager search, hit authorization, and line-range locations.
-async function lookupLegacyFastContext(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  sessionKey: string;
-  config: RealtimeVoiceFastContextConfig;
-  query: string;
-  context: MemoryCallerContext;
-}): Promise<FastContextLookupResult> {
-  const { authorizeActiveMemorySearchHits, getActiveMemorySearchManagerCore } =
-    await import("../plugins/memory-runtime.js");
   // The memory runtime owns whether memory/session search is active for this
   // agent. Talk only consumes the current manager when it is already available.
   const memory = await getActiveMemorySearchManagerCore({
@@ -230,8 +207,12 @@ export async function resolveRealtimeVoiceFastContextConsult(params: {
     return { handled: false };
   }
 
-  const labels = resolveLabels(params.labels);
-  const query = buildSearchQuery(params.args);
+  const labels = {
+    audienceLabel: params.labels?.audienceLabel?.trim() || "person",
+    contextName: params.labels?.contextName?.trim() || "OpenClaw memory context",
+  };
+  const parsed = parseRealtimeVoiceAgentConsultArgs(params.args);
+  const query = [parsed.question, parsed.context].filter(Boolean).join("\n\n");
   // The lookup's own lifetime ends on return or timeout; aborting it cancels
   // provider work still in flight instead of letting it outlive the request.
   const lookupLifetime = new AbortController();

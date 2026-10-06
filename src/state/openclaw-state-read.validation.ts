@@ -209,7 +209,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.childSessionKey === "string") ||
       (input.command.type === "subagents.runs" &&
         isRecord(input.command.scope) &&
-        (input.command.scope.kind === "all" ||
+        ((input.command.scope.kind === "page" &&
+          (input.command.scope.after === undefined ||
+            typeof input.command.scope.after === "string")) ||
           input.command.scope.kind === "maintenance" ||
           (input.command.scope.kind === "session" &&
             typeof input.command.scope.sessionKey === "string") ||
@@ -388,6 +390,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       isWorkspaceJournalReadCommand(input.command) ||
       input.command.type === "workers.placementRecoveryCandidates" ||
       input.command.type === "workers.placementPreservation" ||
+      (input.command.type === "workers.placementEnvironmentOwner" &&
+        typeof input.command.environmentId === "string") ||
       (input.command.type === "workers.placementPendingResults" &&
         (input.command.sessionId === undefined || typeof input.command.sessionId === "string")) ||
       (input.command.type === "workers.placementProjection" &&

@@ -75,35 +75,8 @@ type ReleaseVerifyBetaArgs = {
   };
 };
 
-type NpmViewFields = {
-  version?: string;
-  distTagVersion?: string;
-  integrity?: string;
-  tarball?: string;
-};
-
-type WorkflowRunSummary = {
-  id: string;
-  runAttempt?: number;
-  label: string;
-  url?: string;
-  durationSeconds?: number;
-  bootstrapEvidence?: {
-    targetSha: string;
-    workflowSha: string;
-    workflowPath: string;
-    producerRunAttempt: string;
-    terminalRunAttempt: string;
-    readbackArtifactId: string;
-    readbackArtifactDigest: string;
-    packageArtifactId: string;
-    packageArtifactDigest: string;
-    packageCount: number;
-    clawhubToolchainIntegrity: string;
-    clawhubToolchainSha256: string;
-    clawhubToolchainVersion: string;
-  };
-};
+type WorkflowRunSummary = ReturnType<typeof verifyWorkflowRun> &
+  Partial<Pick<ReturnType<typeof validateClawHubBootstrapEvidence>, "bootstrapEvidence">>;
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
@@ -556,11 +529,7 @@ function requireString(value: unknown, label: string): string {
   return stringValue;
 }
 
-function readTrustedClawHubToolchainIdentity(): {
-  clawhubToolchainIntegrity: string;
-  clawhubToolchainSha256: string;
-  clawhubToolchainVersion: string;
-} {
+function readTrustedClawHubToolchainIdentity() {
   const lockPath = resolve(TRUSTED_TOOLING_ROOT, ".github/release/clawhub-cli/package-lock.json");
   const lockBytes = readFileSync(lockPath);
   const lock = parseJson(lockBytes.toString("utf8"), "trusted ClawHub CLI package-lock.json");
@@ -667,7 +636,7 @@ function parseJson(raw: string, label: string): unknown {
   }
 }
 
-export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields {
+export function parseNpmViewFields(raw: string, distTag: string) {
   const value = parseJson(raw, "npm view");
   const entries = resolveNpmJsonEntries(value);
   const parsed = entries.length === 1 && isJsonRecord(entries[0]) ? entries[0] : value;
@@ -963,11 +932,7 @@ function createNpmBetaFloorError(errors: readonly string[]): Error {
   );
 }
 
-async function verifyNpmPackage(
-  packageName: string,
-  version: string,
-  distTag: string,
-): Promise<NpmViewFields> {
+async function verifyNpmPackage(packageName: string, version: string, distTag: string) {
   const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
@@ -1081,7 +1046,7 @@ function verifyWorkflowRun(params: {
   rerunFailed?: boolean;
   acceptFailedRun?: (run: JsonRecord, jobs: JsonRecord[]) => boolean;
   observe?: (run: JsonRecord, failedJobCount: number) => void;
-}): WorkflowRunSummary {
+}) {
   const raw = runReleaseVerifierCommand("gh", [
     "run",
     "view",
@@ -1256,17 +1221,7 @@ function requireArtifactWorkflowRun(
   }
 }
 
-function requireClawHubBootstrapRunBinding(
-  run: unknown,
-  expectedRunId: string,
-): {
-  headSha: string;
-  run: JsonRecord;
-  runAttempt: number;
-  runId: number;
-  terminalRunAttempt: string;
-  workflowPath: string;
-} {
+function requireClawHubBootstrapRunBinding(run: unknown, expectedRunId: string) {
   if (!isJsonRecord(run)) {
     throw new Error("Plugin ClawHub New run metadata is invalid.");
   }
@@ -1308,12 +1263,7 @@ function requireClawHubBootstrapRunBinding(
 function requireClawHubReadbackArtifactBinding(
   artifact: unknown,
   run: ReturnType<typeof requireClawHubBootstrapRunBinding>,
-): {
-  artifactDigest: string;
-  artifactId: number;
-  artifactName: string;
-  artifactSizeBytes: number;
-} {
+) {
   if (!isJsonRecord(artifact)) {
     throw new Error("Plugin ClawHub New readback artifact metadata is invalid.");
   }
@@ -1415,7 +1365,7 @@ export function validateClawHubBootstrapEvidence(params: {
   readbackArchiveSha256: string;
   packageArtifact: unknown;
   evidence: unknown;
-}): WorkflowRunSummary {
+}) {
   const runBinding = requireClawHubBootstrapRunBinding(params.run, params.runId);
   const { headSha, terminalRunAttempt, workflowPath } = runBinding;
   const runId = String(runBinding.runId);
@@ -1680,7 +1630,7 @@ async function verifyClawHubBootstrapRun(params: {
   version: string;
   expectedPackages: string[];
   observeAttempt?: (run: ReturnType<typeof requireClawHubBootstrapRunBinding>) => void;
-}): Promise<WorkflowRunSummary> {
+}) {
   const run = readGitHubApiJson(
     params.repo,
     `actions/runs/${params.runId}`,
@@ -1976,34 +1926,31 @@ export async function verifyBetaRelease(
     }));
     if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
       diagnostic.start("pluginClawHubBootstrap");
-      workflowRuns.push(
-        await verifyClawHubBootstrapRun({
-          repo: args.repo,
-          runId: args.workflowRuns.pluginClawHubBootstrap,
-          releaseSha: requireCommitSha(args.releaseSha, "release SHA"),
-          version: args.version,
-          expectedPackages: args.clawHubBootstrapPlugins,
-          observeAttempt: (run) => {
-            Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
-              runAttempt: run.terminalRunAttempt,
-              status: "completed",
-              conclusion: "success",
-            });
-            diagnostic.save();
-          },
-        }),
-      );
-      const bootstrap = workflowRuns.at(-1)?.bootstrapEvidence;
-      if (bootstrap) {
-        Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
-          runAttempt: bootstrap.terminalRunAttempt,
-          producerRunAttempt: bootstrap.producerRunAttempt,
-          readbackArtifactId: bootstrap.readbackArtifactId,
-          packageArtifactId: bootstrap.packageArtifactId,
-          status: "completed",
-          conclusion: "success",
-        });
-      }
+      const run = await verifyClawHubBootstrapRun({
+        repo: args.repo,
+        runId: args.workflowRuns.pluginClawHubBootstrap,
+        releaseSha: requireCommitSha(args.releaseSha, "release SHA"),
+        version: args.version,
+        expectedPackages: args.clawHubBootstrapPlugins,
+        observeAttempt: (attempt) => {
+          Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+            runAttempt: attempt.terminalRunAttempt,
+            status: "completed",
+            conclusion: "success",
+          });
+          diagnostic.save();
+        },
+      });
+      workflowRuns.push(run);
+      const bootstrap = run.bootstrapEvidence;
+      Object.assign(diagnostic.data.children.pluginClawHubBootstrap, {
+        runAttempt: bootstrap.terminalRunAttempt,
+        producerRunAttempt: bootstrap.producerRunAttempt,
+        readbackArtifactId: bootstrap.readbackArtifactId,
+        packageArtifactId: bootstrap.packageArtifactId,
+        status: "completed",
+        conclusion: "success",
+      });
       diagnostic.success("pluginClawHubBootstrap");
     }
     verifyChild("openclawNpm", "OpenClaw NPM Release", () => {

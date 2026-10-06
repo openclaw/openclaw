@@ -37,16 +37,6 @@ type NodeStreamCloseTrigger =
 
 type NodeStreamDiagnostics = { trigger?: NodeStreamCloseTrigger };
 
-function websocketDataBuffer(data: RawData): Buffer {
-  if (Buffer.isBuffer(data)) {
-    return data;
-  }
-  if (Array.isArray(data)) {
-    return Buffer.concat(data);
-  }
-  return Buffer.from(data);
-}
-
 function attachWebSocketUrl(params: {
   gatewayUrl: string;
   attachPath: string;
@@ -115,7 +105,12 @@ function createNodeStreamSplice(params: {
       );
       return;
     }
-    if (!params.socket.write(websocketDataBuffer(data))) {
+    const buffer = Buffer.isBuffer(data)
+      ? data
+      : Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.from(data);
+    if (!params.socket.write(buffer)) {
       params.ws.pause();
     }
   };

@@ -329,6 +329,7 @@ async function migrateAgentDatabase(params: {
       agentId: params.agentId,
       database,
       pathname: params.pathname,
+      signal: params.maintenance.signal,
       start: { generation: "", sessionId: "" },
       verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
       onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),

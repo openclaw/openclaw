@@ -3,7 +3,6 @@ import {
   resolveChannelMediaMaxBytes,
   type MSTeamsConfig,
   type OpenClawConfig,
-  type PluginRuntime,
 } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import {
@@ -15,7 +14,6 @@ import { resolveMSTeamsAccount } from "./channel-config.js";
 import {
   resolveMSTeamsSdkCloudOptions,
   validateMSTeamsProactiveServiceUrlBoundary,
-  type MSTeamsSdkCloudOptions,
 } from "./cloud.js";
 import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
 import type {
@@ -26,7 +24,6 @@ import { formatUnknownError } from "./errors.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
 import { resolveMSTeamsReplyPolicy, resolveMSTeamsRouteConfig } from "./policy.js";
 import { getMSTeamsRuntime } from "./runtime.js";
-import type { MSTeamsApp } from "./sdk.js";
 import { createMSTeamsTokenProvider, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -38,22 +35,7 @@ type MSTeamsProactiveReplyTarget =
   | { replyStyle: "thread"; threadActivityId: string }
   | { replyStyle: "top-level"; threadActivityId?: never };
 
-export type MSTeamsProactiveContext = {
-  conversationId: string;
-  ref: StoredConversationReference;
-  app: MSTeamsApp;
-  log: ReturnType<PluginRuntime["logging"]["getChildLogger"]>;
-  /** The type of conversation: personal (1:1), groupChat, or channel */
-  conversationType: MSTeamsConversationType;
-  /** Teams SDK cloud/service endpoint used to validate proactive sends. */
-  sdkCloudOptions: MSTeamsSdkCloudOptions;
-  /** Token provider for Graph API / SharePoint operations */
-  tokenProvider: MSTeamsAccessTokenProvider;
-  /** SharePoint site ID for file uploads in group chats/channels */
-  sharePointSiteId?: string;
-  /** Resolved media max bytes from config (default: 100MB) */
-  mediaMaxBytes?: number;
-} & MSTeamsProactiveReplyTarget;
+export type MSTeamsProactiveContext = Awaited<ReturnType<typeof resolveMSTeamsSendContext>>;
 
 function resolveMSTeamsProactiveReplyTarget(params: {
   cfg?: MSTeamsConfig;
@@ -146,10 +128,7 @@ async function findConversationReference(recipient: {
   return found ? { conversationId: found.conversationId, ref: found.reference } : null;
 }
 
-export async function resolveMSTeamsSendContext(params: {
-  cfg: OpenClawConfig;
-  to: string;
-}): Promise<MSTeamsProactiveContext> {
+export async function resolveMSTeamsSendContext(params: { cfg: OpenClawConfig; to: string }) {
   const msteamsCfg = params.cfg.channels?.msteams;
 
   if (!msteamsCfg?.enabled) {
@@ -233,7 +212,7 @@ export async function resolveMSTeamsSendContext(params: {
   const storedConversationType = normalizeLowercaseStringOrEmpty(
     safeRef.conversation?.conversationType ?? "",
   );
-  const conversationType =
+  const conversationType: MSTeamsConversationType =
     storedConversationType === "personal" || storedConversationType === "channel"
       ? storedConversationType
       : "groupChat";
