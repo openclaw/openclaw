@@ -9,7 +9,7 @@ import type { SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import {
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -215,7 +215,7 @@ export async function runSessionCollaborationWrite<
     return await runOpenClawAgentWriteAdmission(
       options,
       () =>
-        withOpenClawAgentDatabaseAsync(
+        withOpenClawAgentDatabaseRuntime(
           options,
           async (database) => {
             const { db } = database;

@@ -6,7 +6,7 @@ import {
   openOpenClawAgentSqliteWorkerStore,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { DREAMS_FILENAMES, readDreamsFile } from "./dreaming-dreams-file.js";
@@ -50,7 +50,7 @@ async function executeOriginCommand<Key extends "record" | "delete">(
         assertOriginal?.();
         assertAdmission();
       };
-      return withOpenClawAgentDatabaseAsync(
+      return withOpenClawAgentDatabaseRuntime(
         options,
         async ({ db }) => {
           const worker = await openOpenClawAgentSqliteWorkerStore<MemoryEntryOriginOperations>(
@@ -75,7 +75,7 @@ async function executeOriginCommand<Key extends "record" | "delete">(
 }
 
 function captureOriginReadTarget(
-  options: Parameters<typeof withOpenClawAgentDatabaseAsync>[0],
+  options: Parameters<typeof withOpenClawAgentDatabaseRuntime>[0],
 ): MemoryOriginReadTarget {
   return {
     agentId: options.agentId,
@@ -90,7 +90,7 @@ export async function listMemoryEntryOrigins(
     sessionIds?: readonly string[];
     entryKeys?: readonly string[];
   },
-  options?: Parameters<typeof withOpenClawAgentDatabaseAsync>[0],
+  options?: Parameters<typeof withOpenClawAgentDatabaseRuntime>[0],
 ): Promise<MemoryEntryOrigin[]> {
   if (params.sessionIds?.length === 0 || params.entryKeys?.length === 0) {
     return [];

@@ -21,6 +21,7 @@ import {
   isRequesterCompletionCohortCurrent,
   isRequesterYieldCohortMember,
   isRequesterSettleWakeForRun,
+  sameRequesterSettleBatch,
 } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
@@ -287,12 +288,7 @@ export async function markRequesterTurnYieldedInRuns(params: {
           params.requesterAgentId,
           requesterTurnRunId,
         );
-        if (
-          selected.length !== selectedEntries.length ||
-          selected.some(
-            (entry) => !selectedEntries.some((old) => isSameSubagentRunOwner(old, entry)),
-          )
-        ) {
+        if (!sameRequesterSettleBatch(selected, selectedEntries)) {
           throw new SubagentRegistryMutationRejectedError(
             "Requester yield membership changed before admission",
           );

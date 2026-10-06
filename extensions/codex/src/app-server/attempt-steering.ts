@@ -1,10 +1,13 @@
 import {
   embeddedAgentLog,
   type AgentMessage,
+  cancelPendingAgentQuestionForSession,
+  claimPendingAgentQuestionAnswer,
   type queueAgentHarnessMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { hasPromptImageInput } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   isCodexAppServerIndeterminateRequestCancellationError,
   isCodexAppServerIndeterminateTransportError,
@@ -17,6 +20,61 @@ type AgentHarnessQueueMessageOptions = NonNullable<Parameters<typeof queueAgentH
 export type CodexSteeringPreparation = Parameters<
   NonNullable<NativeSessionBindingAuthority["withPreparedCurrent"]>
 >[1][number];
+export type CodexQuestionInputAuthority = NonNullable<
+  Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"]
+>;
+
+export function createCodexQuestionInputHandlers(sessionKey: string, assertActive: () => void) {
+  const questionAuthority = (
+    kind: CodexQuestionInputAuthority["kind"],
+    assertSource: (() => void) | undefined,
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ): CodexQuestionInputAuthority => ({
+    kind,
+    toolAuthorityPreparation,
+    assertCurrent: () => {
+      assertSource?.();
+      assertActive();
+    },
+  });
+  const claimPendingUserInputAnswer = async (
+    text: string,
+    optionsLocal?: CodexSteeringQueueOptions,
+    assertCurrent?: () => void,
+    authorityKind: CodexQuestionInputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ) => {
+    if (optionsLocal?.isInboundUserMessage !== true || hasPromptImageInput(optionsLocal)) {
+      return false;
+    }
+    assertActive();
+    return await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text,
+      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
+      sourceRecorder: optionsLocal.userTurnTranscriptRecorder,
+      // Older supported hosts use the ordinary-question callback. Current hosts
+      // prefer the recorder owner so staged secret inputs commit before consumption.
+      persist: optionsLocal.userTurnTranscriptRecorder
+        ? async () => {
+            await optionsLocal.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    });
+  };
+  const cancelPendingUserInput = (
+    resolvedBy: string,
+    assertCurrent?: () => void,
+    authorityKind: CodexQuestionInputAuthority["kind"] = assertCurrent ? "source-bound" : "run",
+    toolAuthorityPreparation?: CodexSteeringPreparation,
+  ) =>
+    cancelPendingAgentQuestionForSession({
+      sessionKey,
+      resolvedBy,
+      authority: questionAuthority(authorityKind, assertCurrent, toolAuthorityPreparation),
+    });
+  return { claimPendingUserInputAnswer, cancelPendingUserInput };
+}
 
 export class CodexSteeringAcceptedUnconfirmedError extends Error {
   constructor(message: string, options?: ErrorOptions) {

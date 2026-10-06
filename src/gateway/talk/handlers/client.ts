@@ -11,6 +11,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
 import { createPluginRuntime } from "../../../plugins/runtime/index.js";
+import { withOpenClawAgentDatabaseRuntime } from "../../../state/openclaw-agent-db.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
@@ -98,6 +99,13 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       let confirmationGrant: ClientVoiceConfirmationGrant | undefined;
       let voiceSessionId: string;
       try {
+        await withOpenClawAgentDatabaseRuntime(
+          { agentId },
+          () => undefined,
+          () => request.sessionMutationAuthorization?.assertCurrent(),
+          request.signal,
+        );
+        request.sessionMutationAuthorization?.assertCurrent();
         // Shipped clients may consult without ever creating a voice session (old app,
         // restarted gateway, ambiguous open records). Implicitly create one instead of
         // erroring so confirmation and mutation evidence stay always-on.

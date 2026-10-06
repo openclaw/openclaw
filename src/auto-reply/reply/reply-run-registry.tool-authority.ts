@@ -1,6 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
+import {
+  bindReplyToolAuthorityCallerRead,
+  prepareReplyToolAuthorityCallerRead,
+} from "../../agents/harness/host-private-capabilities.js";
 import type {
   ReplyOperation,
   ReplyToolAuthoritySnapshot,
@@ -311,5 +314,34 @@ export function createReplyOperationToolAuthority(lifecycle: {
       return prepared;
     },
   };
+  bindReplyToolAuthorityCallerRead(
+    result.projectToolAuthorityFingerprintAsync,
+    async (caller, expected, _route, assertActive) => {
+      const selected = snapshot;
+      const selectedRoute = route;
+      const assertOwner = lifecycle.captureCurrent();
+      const assertCurrent = () => {
+        assertActive();
+        assertOwner();
+        if (
+          !selected ||
+          !selectedRoute ||
+          snapshot !== selected ||
+          route !== selectedRoute ||
+          fingerprint !== expected
+        ) {
+          throw new Error("question creator reply authority is no longer active");
+        }
+      };
+      assertCurrent();
+      return await prepareReplyToolAuthorityCallerRead(
+        selected?.projectAsync,
+        caller,
+        expected,
+        selectedRoute,
+        assertCurrent,
+      );
+    },
+  );
   return result;
 }

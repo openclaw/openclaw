@@ -48,6 +48,7 @@ export type ChatFastModeSelectState = {
   disabled: boolean;
   /** Resolved speed label, separate from the saved preference. */
   label: string;
+  hint?: string;
   /** Value the toggle commits when clicked. */
   nextValue: ChatFastModeSelectValue;
   supported: boolean;
@@ -481,6 +482,11 @@ export function resolveChatFastModeSelectState(
       : active
         ? "off"
         : "on";
+  const requestedTier =
+    effectiveMode === "ultrafast" ? "ultrafast" : active ? "priority" : undefined;
+  const observation = selectedEntries
+    .map(({ runtime }) => runtime?.serviceTierObservation)
+    .find((value) => value && value.requestedTier === requestedTier);
   return {
     active,
     currentOverride,
@@ -494,6 +500,14 @@ export function resolveChatFastModeSelectState(
       input.stream !== null ||
       !input.gatewayAvailable,
     label,
+    hint: observation
+      ? observation.responseTier
+        ? t("chat.modelControls.tierDowngrade", {
+            requested: label,
+            served: observation.responseTier,
+          })
+        : t("chat.modelControls.tierRejected", { requested: label })
+      : undefined,
     nextValue,
     supported,
     ultrafastSupported: ultrafastUnavailable ? false : ultrafastOffered || undefined,

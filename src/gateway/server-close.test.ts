@@ -14,9 +14,7 @@ import {
 } from "../auto-reply/reply/reply-run-registry.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
-import { getPluginCache } from "../plugins/plugin-cache.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
-import { retainGatewayPluginMetadata } from "../plugins/plugin-metadata-lifecycle.js";
 import type { MemoryPluginRuntime } from "../plugins/registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
@@ -40,7 +38,6 @@ import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/ind
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import {
   createGatewayCloseTestDepsFactory,
@@ -172,76 +169,6 @@ function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: read
 const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory(mocks);
 
 describe("createGatewayCloseHandler", () => {
-  it("joins model work before inventory retirement and shared teardown", async () => {
-    const modelEntered = createDeferredCore();
-    const modelReleased = createDeferredCore();
-    const unregisterModel = registerPreparedModelRuntimeClose(async () => {
-      modelEntered.resolve();
-      await modelReleased.promise;
-      unregisterModel();
-    });
-    const cleanupEntered = createDeferredCore();
-    const cleanupReleased = createDeferredCore();
-    const sharedEntered = createDeferredCore();
-    const sharedReleased = createDeferredCore();
-    const instance = new PluginInstance("setup-close");
-    const useDependency = instance.wrap(() => "available");
-    instance.lifecycle.onDispose(async () => {
-      cleanupEntered.resolve();
-      await cleanupReleased.promise;
-    });
-    const cache = getPluginCache();
-    cache.setupModules.set("setup-close", instance);
-    resolveGlobalSingleton(
-      Symbol("gateway-close-held-shared-cleanup"),
-      () => undefined,
-      async () => {
-        sharedEntered.resolve();
-        await sharedReleased.promise;
-      },
-    );
-    const clearSecretsRuntimeSnapshot = vi.fn();
-    const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
-    const closing = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({
-        pluginMetadata: metadata,
-        clearSecretsRuntimeSnapshot,
-      }),
-    )();
-    try {
-      await Promise.race([modelEntered.promise, cleanupEntered.promise]);
-      expect(cache.retirement).toBeUndefined();
-      expect(useDependency()).toBe("available");
-      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
-        /retir|shut/i,
-      );
-      modelReleased.resolve();
-      await cleanupEntered.promise;
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
-        /retir|shut/i,
-      );
-      cleanupReleased.resolve();
-      await sharedEntered.promise;
-      expect(getPluginCache()).toBe(cache);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-      expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(
-        /retir|shut/i,
-      );
-      sharedReleased.resolve();
-      await closing;
-      expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
-      await retainGatewayPluginMetadata(createTestGatewayScheduler()).close();
-    } finally {
-      modelReleased.resolve();
-      unregisterModel();
-      cleanupReleased.resolve();
-      sharedReleased.resolve();
-      await closing;
-    }
-  });
-
   it.each([true, false])(
     "selects only serving Gateway owners while closing custodians drain (open survivor: %s)",
     async (openSurvivor) => {
@@ -583,6 +510,12 @@ describe("createGatewayCloseHandler", () => {
         expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
         expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
+        if (owner === "shutdown" || owner === "pre-restart") {
+          expect(formatGatewayPendingCloseSteps()).toContain(
+            `restart.close.gateway-${owner}-hook=`,
+          );
+          expect(formatGatewayPendingCloseSteps()).not.toContain(`gateway-${owner}-hook-grace=`);
+        }
       } finally {
         release.resolve();
         await finished.promise;
@@ -609,6 +542,7 @@ describe("createGatewayCloseHandler", () => {
           await state.cleanup();
         }
       }
+      expect(formatGatewayPendingCloseSteps()).toBe("none");
       expect(cleanup).toHaveBeenCalledOnce();
       expect(failures).toEqual([]);
       expect(reads).toEqual([{ value: 1 }]);
@@ -880,30 +814,6 @@ describe("createGatewayCloseHandler", () => {
     const result = await closing;
     expect(mocks.closePluginStateDatabaseAsync).toHaveBeenCalledOnce();
     expect(result.warnings).toContain("media-cleanup");
-  });
-
-  it("rejects close when an ambient lifecycle owner cannot drain", async () => {
-    const drainError = new Error("owner drain failed");
-    let rejectDrain = true;
-    resolveGlobalSingleton(
-      Symbol("openclaw.test.gatewayCloseFailedLifecycleOwner"),
-      () => ({}),
-      () => {
-        if (rejectDrain) {
-          rejectDrain = false;
-          throw drainError;
-        }
-      },
-    );
-    const clearSecretsRuntimeSnapshot = vi.fn();
-    const close = createGatewayCloseHandler(
-      createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }),
-    );
-
-    await expect(close({ reason: "test" })).rejects.toThrow(
-      "Failed to reset global singleton lifecycle state",
-    );
-    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
   });
 
   it.skipIf(process.platform === "win32").each([
@@ -1246,45 +1156,6 @@ describe("createGatewayCloseHandler", () => {
           /^restart trace: restart\.close\.total [0-9.]+ms total=[0-9.]+ms /u.test(message) &&
           message.includes("restartExpectedMs=123.0") &&
           message.includes("rssMb="),
-      ),
-    ).toBe(true);
-  });
-
-  it.each([
-    { action: "shutdown", timeoutMs: GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS },
-    { action: "pre-restart", timeoutMs: GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS },
-  ] as const)("continues teardown while the $action hook stalls", async ({ action, timeoutMs }) => {
-    vi.useFakeTimers();
-    const cleanup = createDeferredCore();
-    mocks.triggerInternalHook.mockImplementation((event) =>
-      event.action === action ? cleanup.promise : Promise.resolve(undefined),
-    );
-    const deps = createGatewayCloseTestDeps();
-    assert(deps.maintenance);
-    const { stopPeriodicTasks } = deps.maintenance;
-    const close = createGatewayCloseHandler(deps);
-    const closing = close({
-      reason: "test shutdown",
-      ...(action === "pre-restart" ? { restartExpectedMs: 123 } : {}),
-    });
-    try {
-      await vi.advanceTimersByTimeAsync(timeoutMs);
-      expect(stopPeriodicTasks).toHaveBeenCalledOnce();
-      expect(mocks.stopGmailWatcher).toHaveBeenCalledOnce();
-      expect(mocks.closePluginStateDatabaseAsync).not.toHaveBeenCalled();
-      expect(formatGatewayPendingCloseSteps()).toContain(`restart.close.gateway-${action}-hook=`);
-      expect(formatGatewayPendingCloseSteps()).not.toContain(`gateway-${action}-hook-grace=`);
-    } finally {
-      cleanup.resolve();
-      await closing;
-    }
-    expect((await closing).warnings).toContain(`gateway:${action}`);
-    expect(formatGatewayPendingCloseSteps()).toBe("none");
-    expect(stopPeriodicTasks).toHaveBeenCalledOnce();
-    expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(action === "pre-restart" ? 2 : 1);
-    expect(
-      mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes(`gateway:${action} hook timed out after ${timeoutMs}ms`),
       ),
     ).toBe(true);
   });

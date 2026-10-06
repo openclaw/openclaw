@@ -57,6 +57,8 @@ const enModelControls = {
       standard: "Standard",
       fast: "Fast",
       ultrafast: "Ultrafast",
+      tierDowngrade: "{requested} requested, currently served as {served}",
+      tierRejected: "{requested} requested, currently unavailable",
       searchModels: "Search models",
       noMatchingModels: "No models match your search",
       configureModels: "Configure models",

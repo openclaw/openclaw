@@ -36,9 +36,11 @@ function createRequesterWakeReceiptHolds(
     reconcile: { entered: createDeferred<CapturedMember[]>(), release: createDeferred() },
   };
   const mutate = completionStore.mutateRequesterSettleWakeBatch;
-  const transitionPublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
-  const completePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
-  const reconcilePublication = createDeferred<Awaited<ReturnType<typeof mutate>>>();
+  const publications = {
+    transition: createDeferred<Awaited<ReturnType<typeof mutate>>>(),
+    complete: createDeferred<Awaited<ReturnType<typeof mutate>>>(),
+    reconcile: createDeferred<Awaited<ReturnType<typeof mutate>>>(),
+  };
   let failCompletePublication = options.failCompletePublication === true;
   const mutationScope = new AsyncLocalStorage<{
     entries: readonly SubagentRunRecord[];
@@ -48,6 +50,7 @@ function createRequesterWakeReceiptHolds(
     mutationScope.run(
       { entries: params.entries, phase: params.committed ? "reconcile" : params.operation.kind },
       async () => {
+        const publication = publications[params.committed ? "reconcile" : params.operation.kind];
         try {
           const result = await mutate({
             ...params,
@@ -59,20 +62,10 @@ function createRequesterWakeReceiptHolds(
               }
             },
           });
-          (params.committed
-            ? reconcilePublication
-            : params.operation.kind === "transition"
-              ? transitionPublication
-              : completePublication
-          ).resolve(result);
+          publication.resolve(result);
           return result;
         } catch (error) {
-          (params.committed
-            ? reconcilePublication
-            : params.operation.kind === "transition"
-              ? transitionPublication
-              : completePublication
-          ).reject(error);
+          publication.reject(error);
           throw error;
         }
       },
@@ -147,17 +140,15 @@ function createRequesterWakeReceiptHolds(
     holds.reconcile.release.resolve();
     holds.outcome.release.resolve();
   };
-  void transitionPublication.promise.catch(() => {});
-  void completePublication.promise.catch(() => {});
-  void reconcilePublication.promise.catch(() => {});
+  for (const publication of Object.values(publications)) {
+    void publication.promise.catch(() => {});
+  }
   for (const hold of Object.values(holds)) {
     void hold.entered.promise.catch(() => {});
   }
   return {
     ...holds,
-    transitionPublication,
-    completePublication,
-    reconcilePublication,
+    publications,
     executions,
     releaseAll,
   };
@@ -441,7 +432,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         );
         try {
           heldReceipts.transition.release.resolve();
-          await expect(heldReceipts.transitionPublication.promise).resolves.toEqual({
+          await expect(heldReceipts.publications.transition.promise).resolves.toEqual({
             applied: true,
             publication: "published",
           });
@@ -626,7 +617,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
         }
         held.complete.release.resolve();
         if (change === "source-change") {
-          await expect(held.completePublication.promise).rejects.toMatchObject({
+          await expect(held.publications.complete.promise).rejects.toMatchObject({
             outcome: "committed",
             publication: "superseded",
           });
@@ -638,7 +629,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           expect(getRequesterWakeCalls()).toHaveLength(0);
           process.env.OPENCLAW_STATE_DIR = originalStateDir;
         } else if (change === "callback-failure") {
-          await expect(held.completePublication.promise).rejects.toMatchObject({
+          await expect(held.publications.complete.promise).rejects.toMatchObject({
             outcome: "committed",
             publication: "published",
           });
@@ -646,7 +637,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           expect(registry.getSubagentRunByRunId(runId)).toBeUndefined();
           expect(getGatewayContextResolver(entry)).toBeDefined();
         } else {
-          await expect(held.completePublication.promise).resolves.toEqual({
+          await expect(held.publications.complete.promise).resolves.toEqual({
             applied: true,
             publication: "published",
           });
@@ -660,7 +651,7 @@ export function registerRequesterWakeReceiptBoundaryTests({
           await vi.advanceTimersByTimeAsync(30_000);
           await held.reconcile.entered.promise;
           held.reconcile.release.resolve();
-          await expect(held.reconcilePublication.promise).resolves.toEqual({
+          await expect(held.publications.reconcile.promise).resolves.toEqual({
             applied: true,
             publication: "published",
           });

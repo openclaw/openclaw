@@ -6815,7 +6815,6 @@
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../../state/openclaw-agent-db-readonly-scope.js","2042dfd612e592d16c212a7e8c3621dad5dfcab44d9cfca626d2b4013add005d",1]
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../../state/openclaw-agent-db-readonly.js","cb1fa61e6fa2a49cf65880f6fd8162dfb9ac28845a1189852832d7cc7aed59e4",1]
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../../state/openclaw-agent-db-transaction.js","85ca4f823720590c577c75739e6e928d3f340ef9d67c4ead8e2b9cfbca2f55e7",1]
-["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../../state/openclaw-agent-db.js","5418c7bf0bd72774841b1591ec9c0e0a027ccdde324d027c85d9a259cea61bc0",1]
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../future-version-guard.js","7038f02fa1c58d8001e6984e65a674ff42a7db6ce2472f417af1497f4b819108",1]
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","../paths.js","72a97b0a36b758ca2867f677a1cebcaf3a137c57981ea1aac47c89f809a4a762",1]
 ["src/config/sessions/session-accessor.sqlite-entry.env-capture.test.ts","./internal-session-key.js","e424ff3bdf9a818fac3a29b428536f7c78f0e92b16e917175e4b56143d0c64bd",1]

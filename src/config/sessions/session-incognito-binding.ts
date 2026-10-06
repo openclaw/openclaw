@@ -322,11 +322,15 @@ export function withIncognitoSessionEntrySummaries<T>(
   binding: IncognitoSessionBinding,
   consume: (entries: SessionEntrySummary[]) => Promise<T>,
 ): Promise<T> {
-  let assertSnapshot = () => binding.actor.assertReadable();
+  const assertCurrent = () => {
+    binding.admissionSignal?.throwIfAborted();
+    binding.actor.assertReadable();
+  };
+  let assertSnapshot = assertCurrent;
   return binding.actor.sessions
     .withSharedState(async () => {
       const result = await binding.actor.sessions.list(
-        { assertCurrent: () => binding.actor.assertReadable() },
+        { assertCurrent },
         { projection: "list" },
         binding.admissionSignal,
       );
@@ -337,7 +341,6 @@ export function withIncognitoSessionEntrySummaries<T>(
       return value;
     })
     .then((result) => {
-      binding.admissionSignal?.throwIfAborted();
       assertSnapshot();
       return result;
     });

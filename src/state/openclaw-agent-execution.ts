@@ -17,6 +17,7 @@ import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import * as creationClaims from "./agent-creation-claim.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
@@ -26,6 +27,8 @@ import {
   AgentDatabaseExecutionAdmissionClosedError,
   type AgentDatabaseExecutionFileIdentity,
   type AgentDatabaseExecutionScope,
+  type AgentDatabaseFileExecutionOwner,
+  type AgentDatabaseNativeGeneration,
   type AgentDatabaseRequestExecutionSource,
   type OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
@@ -38,7 +41,6 @@ import {
   createAgentDatabaseNativeGeneration,
   supportsAgentDatabaseExecutionScope,
   supportsOpenClawAgentDatabaseExecution,
-  type AgentDatabaseNativeGeneration,
 } from "./openclaw-agent-execution-native.js";
 import {
   observeOpenClawDatabaseMaintenanceResource,
@@ -57,26 +59,12 @@ import {
 
 export { supportsOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution-native.js";
 
-type ExecutionOwner = {
-  readonly kind: "file";
-  readonly agentId: string;
-  readonly sharedDatabaseKey: string;
-  borrow(
-    pathname: string,
-    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
-    expectedCreationIdentity?: DatabasePathIdentity,
-    requestedPath?: string,
-  ): OpenClawAgentDatabaseExecution;
-  closeIdle(): Promise<void>;
-  close(): Promise<void>;
-};
-
 const log = createSubsystemLogger("state/agent-db");
 // References are derived; the canonical agent and shared resource owners govern retirement.
 const executionState = resolveGlobalSingleton<{
-  owners: Map<string, ExecutionOwner | IncognitoAgentExecutionOwner>;
+  owners: Map<string, AgentDatabaseFileExecutionOwner | IncognitoAgentExecutionOwner>;
   // The slot stays occupied during eviction and after failed cleanup.
-  idle?: ExecutionOwner;
+  idle?: AgentDatabaseFileExecutionOwner;
 }>(Symbol.for("openclaw.agentDatabaseExecutionOwners"), () => ({ owners: new Map() }));
 const executions = executionState.owners;
 const runInExecutionOwnerContext = AsyncLocalStorage.snapshot();
@@ -99,6 +87,7 @@ function captureFileAgentDatabaseExecution(
 ): OpenClawAgentDatabaseExecution {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = resolveOpenClawAgentSqlitePath(options);
+  creationClaims.assertAgentCreationClaimAliases(options);
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     throw new Error("This agent database scope still requires its existing native owner");
   }
@@ -178,6 +167,7 @@ function createAgentDatabaseExecution(
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
+  const creationClaim = creationClaims.captureAgentCreationClaim(options);
   const aliases = new Map<string, () => void>();
   const assertAgentAdmitted = captureAgentDatabaseAdmission(agentId, { env: context.environment });
   let retired = false;
@@ -228,6 +218,7 @@ function createAgentDatabaseExecution(
     }
     context.admission.assertCurrent();
     assertAgentAdmitted();
+    creationClaim?.assertCurrent();
   };
   const closeNative = (expected?: AgentDatabaseNativeGeneration): Promise<void> => {
     if (expected && generation !== expected) {
@@ -331,6 +322,7 @@ function createAgentDatabaseExecution(
             fileIdentity ??= Object.freeze({ ...received });
           },
           fileIdentity ? undefined : creatingTarget,
+          creationClaim?.witness,
         );
         generation = created;
       }
@@ -409,7 +401,7 @@ function createAgentDatabaseExecution(
       throw error;
     }
   }
-  const owner: ExecutionOwner = {
+  const owner: AgentDatabaseFileExecutionOwner = {
     kind: "file",
     agentId,
     get sharedDatabaseKey() {
@@ -679,16 +671,19 @@ function createAgentDatabaseExecution(
     }
     // Cleanup keeps captured locators even if a symlink is later removed or retargeted.
     const register = () =>
-      registerOpenClawAgentDatabaseAsyncResource({
-        agentId,
-        path: alias,
-        revoke() {
-          revoked = true;
-          retired = true;
-          clearIdleTimer();
+      registerOpenClawAgentDatabaseAsyncResource(
+        {
+          agentId,
+          path: alias,
+          revoke() {
+            revoked = true;
+            retired = true;
+            clearIdleTimer();
+          },
+          close: () => owner.close(),
         },
-        close: () => owner.close(),
-      });
+        options,
+      );
     // One claim owns the executor; later aliases only select that owner for cleanup.
     const unregister =
       aliases.size === 0 ? register() : runOutsideOpenClawDatabaseMaintenanceScope(register);

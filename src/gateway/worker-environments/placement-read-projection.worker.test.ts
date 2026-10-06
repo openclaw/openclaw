@@ -283,39 +283,71 @@ describe("worker placement read projection", () => {
     }
   });
 
-  it("keeps maintenance observations fenced until their placement publication settles", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const placement = await store.startDispatch({
-      sessionId: "settling-placement",
-      sessionKey: "agent:main:settling-placement",
-      agentId: "main",
-    });
-    const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
-    for (const settlement of ["rollback", "commit", "invalidate"] as const) {
-      const prepared = await store.prepareMaintenancePlacements();
-      try {
-        const publication = stagePlacementTurnClaimWorkerPublication(identity, placement);
-        expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-        publication[settlement]();
-        if (settlement === "rollback") {
-          expect(() => prepared.assertCurrent()).not.toThrow();
-        } else {
-          expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
-        }
-      } finally {
-        prepared.release();
+  it.each(["local", "worker-turn", "remote-exec"] as const)(
+    "fences inventory and session observations during %s publication settlement",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-settlement-"));
+      const database = openOpenClawStateDatabase();
+      const store = createWorkerSessionPlacementStore({ database });
+      const session = {
+        sessionId: "settling-placement",
+        sessionKey: "agent:main:settling-placement",
+        agentId: "main",
+      };
+      if (kind !== "local") {
+        await activePlacement(database, session.sessionId, kind);
       }
-    }
-    const closing = await store.prepareMaintenancePlacements();
-    try {
-      await closeOpenClawStateDatabaseAsync();
-      expect(() => closing.assertCurrent()).toThrow();
-    } finally {
-      closing.release();
-    }
-  });
+      const current = store.get(session.sessionId);
+      await store.claimTurn({
+        ...session,
+        owner: current?.state === "active" ? placementTurnOwner(current) : { kind: "local" },
+        claimId: "settling-claim",
+        runId: "settling-run",
+      });
+      const placement = store.get(session.sessionId)!;
+      const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
+      for (const settlement of ["rollback", "commit", "invalidate"] as const) {
+        const prepared = await store.prepareMaintenancePlacements();
+        const sessionRead = await store.prepareRuntimeRefresh(session.sessionId);
+        const publication = stagePlacementTurnClaimWorkerPublication(
+          identity,
+          placement,
+          undefined,
+          placement.state,
+        );
+        try {
+          if (kind === "local") {
+            prepared.assertCurrent();
+          } else {
+            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+          }
+          expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+          publication[settlement]();
+          if (kind === "local" || settlement === "rollback") {
+            prepared.assertCurrent();
+          } else {
+            expect(() => prepared.assertCurrent()).toThrow("placement inventory changed");
+          }
+          if (settlement === "rollback") {
+            sessionRead.assertCurrent();
+          } else {
+            expect(() => sessionRead.assertCurrent()).toThrow("placement authority changed");
+          }
+        } finally {
+          publication.rollback();
+          sessionRead.release();
+          prepared.release();
+        }
+      }
+      const closing = await store.prepareMaintenancePlacements();
+      try {
+        await closeOpenClawStateDatabaseAsync();
+        expect(() => closing.assertCurrent()).toThrow();
+      } finally {
+        closing.release();
+      }
+    },
+  );
 
   it("derives inference from the bound snapshot without rewriting it", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-inference-snapshot-"));

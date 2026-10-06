@@ -7,7 +7,10 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withAcquiredIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
+import {
+  withAcquiredIncognitoSessionBinding,
+  withIncognitoSessionEntrySummaries,
+} from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
@@ -133,6 +136,37 @@ it("acquires only requested actors and releases the captured root after the cons
       async ({ actor }) => actor.path,
     ),
   ).toBe(pathname);
+});
+
+it("refuses summary disclosure when admission ends after the worker read", async () => {
+  const actor = await open();
+  const sessionKey = "agent:main:dashboard:incognito-summary-cancellation";
+  await actor.sessions.create(authority, {
+    sessionKey,
+    entry: { sessionId: "summary-cancellation", updatedAt: 1, incognito: true },
+  });
+  const admission = new AbortController();
+  const disclosed: string[] = [];
+  const list = actor.sessions.list.bind(actor.sessions);
+  const listing = vi.spyOn(actor.sessions, "list").mockImplementation(async (...args) => {
+    const result = await list(...args);
+    // Cancel after the real worker read settles, before its consumer resumes.
+    admission.abort(new Error("summary admission ended"));
+    return result;
+  });
+  try {
+    await expect(
+      withIncognitoSessionEntrySummaries(
+        { actor, admissionSignal: admission.signal },
+        async (summaries) => {
+          disclosed.push(...summaries.map((summary) => summary.sessionKey));
+        },
+      ),
+    ).rejects.toThrow("summary admission ended");
+    expect(disclosed).toEqual([]);
+  } finally {
+    listing.mockRestore();
+  }
 });
 
 it("keeps concurrent creators viable when the initiating opening is cancelled", async () => {
