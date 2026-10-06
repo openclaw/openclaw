@@ -85,8 +85,8 @@ struct RootSidebar: View {
         self.pinnedPagesStorage = RootTabs.pinnedSidebarPagesStorage(pages)
     }
 
-    /// Brand header with compact global actions. Connection and Settings live
-    /// together in the footer so the header stays focused on navigation.
+    /// Brand header with compact global actions. Settings stays a quiet
+    /// footer affordance so the header can stay focused on navigation.
     private var brandHeader: some View {
         HStack(spacing: 4) {
             HStack(spacing: 8) {
@@ -343,6 +343,8 @@ struct RootSidebar: View {
                     Image(systemName: "xmark.circle.fill")
                         .font(OpenClawType.subhead)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(String(localized: "Clear session search"))
@@ -434,7 +436,7 @@ struct RootSidebar: View {
                 } label: {
                     Image(systemName: "square.and.pencil")
                         .font(OpenClawType.captionSemiBold)
-                        .frame(width: 40, height: 32)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -477,7 +479,7 @@ struct RootSidebar: View {
                             .tint(OpenClawSidebarPalette.accent)
                     } else if mainSession?.unread == true {
                         Circle()
-                            .fill(OpenClawSidebarPalette.accent)
+                            .fill(OpenClawSidebarPalette.unread)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
@@ -500,7 +502,6 @@ struct RootSidebar: View {
         }
     }
 
-    /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
         VStack(spacing: 0) {
             self.separator
@@ -661,7 +662,7 @@ struct RootSidebar: View {
                         .lineLimit(1)
                     if session.unread == true {
                         Circle()
-                            .fill(OpenClawSidebarPalette.accent)
+                            .fill(OpenClawSidebarPalette.unread)
                             .frame(width: 7, height: 7)
                             .accessibilityHidden(true)
                     }
