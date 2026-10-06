@@ -3,8 +3,9 @@ import {
   type ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { getOrCreatePromise } from "../../../src/shared/lazy-promise.js";
-import { currentThemeBranding, neutralMarkSvg } from "../components/neutral-mark.ts";
+import { neutralMarkSvg } from "../components/neutral-mark-svg.ts";
 import { applyControlUiOperatorSeamColor } from "./control-ui-presentation.ts";
+import { currentThemeBranding } from "./theme-branding.ts";
 
 export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;

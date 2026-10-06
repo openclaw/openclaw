@@ -316,7 +316,11 @@ export const SETTINGS_SEARCH_TARGETS = {
     labelKey: "configView.appearance.tabIcon.title",
     search: "?section=__appearance__",
     hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.tabIcon}`,
-    searchKeys: ["configView.appearance.tabIcon.source", "configView.appearance.tabIcon.agent"],
+    searchKeys: [
+      "configView.appearance.tabIcon.source",
+      "configView.appearance.tabIcon.agent",
+      "configView.appearance.tabIcon.lobsterdex",
+    ],
     aliases: "favicon browser tab icon agent avatar image",
   },
   appearanceTextSize: {

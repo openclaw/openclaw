@@ -39,7 +39,7 @@ describe("user preference protocol schemas", () => {
       "system",
     );
 
-    for (const tabIcon of ["default", "agent"]) {
+    for (const tabIcon of ["default", "agent", "lobster:crimson", `lobster:${"a".repeat(48)}`]) {
       expect(normalizeUiAppearancePreference(UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, tabIcon)).toBe(
         tabIcon,
       );
@@ -57,6 +57,12 @@ describe("user preference protocol schemas", () => {
       [UI_APPEARANCE_PREFERENCE_KEYS.fontUi, "Geist, sans-serif"],
       [UI_APPEARANCE_PREFERENCE_KEYS.fontChat, { family: "lora" }],
       [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "custom"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:Crimson"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:crimson\n"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:../crimson"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "lobster:https://example.com/icon.png"],
+      [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, `lobster:${"a".repeat(49)}`],
       [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, "Agent"],
       [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, " agent "],
       [UI_APPEARANCE_PREFERENCE_KEYS.tabIcon, null],
