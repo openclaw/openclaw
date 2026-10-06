@@ -109,9 +109,7 @@ describe("source-bound chat history page cursors", () => {
           }
         }
       }
-      expect([...seen].toSorted()).toEqual(
-        Array.from({ length: 13 }, (_, index) => `message-${index}`).toSorted(),
-      );
+      expect(seen).toEqual(new Set(Array.from({ length: 13 }, (_, index) => `message-${index}`)));
       expect(await transcriptHash()).toBe(before);
 
       await upsertSessionEntryCore(

@@ -63,6 +63,29 @@ describe("enrichChatHistoryCompactionMarkers", () => {
 });
 
 describe("chat history source-row byte limits", () => {
+  it("keeps oversized cursor identities inside the response byte limit", () => {
+    const messageId = "x".repeat(1_000_000);
+    const page = prepareChatHistoryResponsePage(
+      {
+        messages: [
+          { role: "assistant", content: "Visible", __openclaw: { id: messageId, seq: 2 } },
+        ],
+        anchor: {
+          sessionId: "bounded-cursor",
+          source: "source",
+          hasOlder: true,
+          hasNewer: true,
+          oldestMessageId: messageId,
+          newestMessageId: messageId,
+        },
+      },
+      { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
+    );
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThan(1_000_000);
+    expect(page.olderCursor).toBeUndefined();
+    expect(page.newerCursor).toBeUndefined();
+  });
+
   it.each([undefined, "sibling-1"])(
     "keeps a fetchable reference for oversized CLI siblings (anchor=%s)",
     (messageId) => {

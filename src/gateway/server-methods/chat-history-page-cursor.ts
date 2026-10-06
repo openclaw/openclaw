@@ -7,6 +7,7 @@ import type {
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 const PREFIX = "history-page:";
+const MAX_CURSOR_CHARS = 4096;
 const cursorSchema = z.object({
   sessionId: z.string().min(1).max(1024),
   source: z.string().min(1).max(128),
@@ -14,8 +15,12 @@ const cursorSchema = z.object({
   direction: z.enum(["older", "newer"]),
 });
 
-export function encodeChatHistoryPageCursor(cursor: ChatHistoryPageCursor): string {
-  return PREFIX + Buffer.from(JSON.stringify(cursor)).toString("base64url");
+function encodeChatHistoryPageCursor(cursor: ChatHistoryPageCursor): string | undefined {
+  if (!cursorSchema.safeParse(cursor).success) {
+    return undefined;
+  }
+  const encoded = PREFIX + Buffer.from(JSON.stringify(cursor)).toString("base64url");
+  return encoded.length <= MAX_CURSOR_CHARS ? encoded : undefined;
 }
 
 /** Undefined is a delta cursor; null is a malformed page cursor. Neither grants access. */
@@ -25,7 +30,7 @@ export function decodeChatHistoryPageCursor(
   if (!cursor?.startsWith(PREFIX)) {
     return undefined;
   }
-  if (cursor.length > 4096) {
+  if (cursor.length > MAX_CURSOR_CHARS) {
     return null;
   }
   try {

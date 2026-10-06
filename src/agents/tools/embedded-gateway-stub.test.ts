@@ -3,10 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHistoryPage } from "../../config/sessions/session-history-types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  decodeChatHistoryPageCursor,
-  encodeChatHistoryPageCursor,
-} from "../../gateway/server-methods/chat-history-page-cursor.js";
+import { decodeChatHistoryPageCursor } from "../../gateway/server-methods/chat-history-page-cursor.js";
 import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -427,6 +424,20 @@ describe("embedded gateway stub", () => {
     const messages = [
       { role: "assistant", content: "earlier", __openclaw: { id: "message-2", seq: 2 } },
     ];
+    const initial = prepareChatHistoryResponsePage(
+      {
+        messages: [
+          { role: "assistant", content: "Anchor", __openclaw: { id: cursor.messageId, seq: 3 } },
+        ],
+        anchor: {
+          sessionId: cursor.sessionId,
+          source: cursor.source,
+          hasOlder: true,
+          hasNewer: false,
+        },
+      },
+      { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: cursor.messageId },
+    );
     runtime.readChatHistoryPage.mockResolvedValueOnce({
       messages,
       anchor: {
@@ -443,7 +454,7 @@ describe("embedded gateway stub", () => {
       olderCursor: string;
     }>({
       method: "chat.history",
-      params: { sessionKey: "agent:main:main", cursor: encodeChatHistoryPageCursor(cursor) },
+      params: { sessionKey: "agent:main:main", cursor: initial.olderCursor },
     });
     expect(result.messages).toEqual(messages);
     expect(result.sessionId).toBe(cursor.sessionId);
