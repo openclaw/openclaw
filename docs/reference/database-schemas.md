@@ -36,6 +36,10 @@ Session row-facts reads reuse a canonical continuation's existing transaction
 instead of nesting a savepoint. Reads without an active transaction still open
 one so entry metadata, board presence, and transcript watermarks share a snapshot.
 
+Transcript watermarks select the rewrite generation and cold-or-hot sequence in
+one indexed statement on that snapshot. Session entry writes batch their saved
+snapshot fields in one upsert, preserving per-field revision triggers and rollback.
+
 Canonical main-key policy reads reuse the existing reader admission's value only within a current read operation. The connection owner tracks local SQL mutations, including raw and trigger-driven writes; its mutation revision, admitted schema facts, and observed foreign-commit version invalidate that value. Transactions, pinned snapshots, native mutation callbacks, and authorizer-controlled reads continue querying the policy. Continuation authority remains with canonical session admission.
 
 The Gateway does not schedule daily full-database scans. Admission-requested
