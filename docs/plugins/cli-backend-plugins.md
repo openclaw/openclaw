@@ -498,6 +498,7 @@ Supported bridge modes:
 | `claude-config-file`     | CLIs that accept an MCP config file                              |
 | `codex-config-overrides` | CLIs that accept config overrides on argv                        |
 | `gemini-system-settings` | CLIs that read MCP settings from their system settings directory |
+| `muse-system-settings` | CLIs that read `muse/settings.json` under `XDG_CONFIG_HOME` (auth symlinked, never copied) |
 
 Only enable the bridge when the CLI can actually consume it. If the CLI has
 its own built-in tool layer that cannot be disabled, set `nativeToolMode:

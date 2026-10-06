@@ -84,7 +84,8 @@ export type PluginTextTransforms = {
 export type CliBundleMcpMode =
   | "claude-config-file"
   | "codex-config-overrides"
-  | "gemini-system-settings";
+  | "gemini-system-settings"
+  | "muse-system-settings";
 
 export type CliBackendPrepareExecutionContext = {
   config?: OpenClawConfig;
@@ -424,6 +425,7 @@ type CliBackendPluginBase = {
    * - Claude: `--strict-mcp-config --mcp-config`
    * - Codex: `-c mcp_servers=...`
    * - Gemini: system-level `settings.json`
+   * - Muse: staged `XDG_CONFIG_HOME` with `muse/settings.json`
    */
   bundleMcpMode?: CliBundleMcpMode;
   normalizeConfig?: (

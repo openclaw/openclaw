@@ -42,6 +42,7 @@ import {
   writeGeminiSystemSettings,
   writeGeminiWebSearchDisabledSettings,
 } from "./bundle-mcp-gemini.js";
+import { writeMuseMcpCaptureSettings, writeMuseSystemSettings } from "./bundle-mcp-muse.js";
 import { injectBundleMcpBackendArgs, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
 type PreparedCliBundleMcpConfig = {
@@ -284,6 +285,16 @@ async function prepareModeSpecificBundleMcpConfig(params: {
     };
   }
 
+  if (params.mode === "muse-system-settings") {
+    const settings = await writeMuseSystemSettings(cliConfig, params.env);
+    return {
+      backend: params.backend,
+      ...fingerprints,
+      env: settings.env,
+      cleanup: settings.cleanup,
+    };
+  }
+
   const runtimeConfig = resolveOpenClawMcpEnvTemplates(cliConfig, params.env) as BundleMcpConfig;
   const claudeConfig: BundleMcpConfig = {
     mcpServers: Object.fromEntries(
@@ -315,6 +326,11 @@ async function prepareCliWebSearchDisabled(params: {
   env?: Record<string, string>;
 }): Promise<PreparedCliBundleMcpConfig> {
   const fingerprint = sha256Hex("web-search-disabled-v1");
+  if (params.mode === "muse-system-settings") {
+    // Muse has no web-search toggle at this layer; native tools are disabled
+    // per run by the backend's own argv.
+    return { backend: params.backend, env: params.env, mcpConfigHash: fingerprint, mcpResumeHash: fingerprint };
+  }
   if (params.mode === "gemini-system-settings") {
     const settings = await writeGeminiWebSearchDisabledSettings(params.env);
     return {
@@ -546,6 +562,18 @@ export async function prepareCliBundleMcpCaptureAttempt(params: {
       inheritedEnv: params.env,
       captureKey: params.captureKey,
     });
+  }
+  if ((params.mode ?? "claude-config-file") === "muse-system-settings") {
+    const settings = await writeMuseMcpCaptureSettings({
+      inheritedEnv: params.env,
+      captureKey: params.captureKey,
+    });
+    return {
+      env: {
+        ...settings.env,
+        OPENCLAW_MCP_CLI_CAPTURE_KEY: params.captureKey,
+      },
+    };
   }
   if ((params.mode ?? "claude-config-file") === "claude-config-file") {
     const mcpConfigPath =
