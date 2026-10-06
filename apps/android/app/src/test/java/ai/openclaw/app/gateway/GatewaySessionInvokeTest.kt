@@ -559,13 +559,13 @@ class GatewaySessionInvokeTest {
   }
 
   @Test
-  fun disconnectReportsFireAndForgetErrorsAfterAcceptedFramesDrain() =
+  fun fireAndForgetFailuresPreserveTransportOriginAndAcceptedPeerRejection() =
     runBlocking {
       for (peerRejects in listOf(false, true)) {
         val json = testJson()
         val connected = CompletableDeferred<Unit>()
         val requestSeen = CompletableDeferred<Pair<WebSocket, String>>()
-        val errors = CopyOnWriteArrayList<GatewaySession.ErrorShape>()
+        val errors = CopyOnWriteArrayList<GatewayRequestFailure>()
         val entryGate = RpcCallbackEntryGate()
         val responsePumpHeld = CompletableDeferred<Job?>()
         val releaseResponsePump = CountDownLatch(1)
@@ -596,6 +596,21 @@ class GatewaySessionInvokeTest {
           connectNodeSession(harness.session, server.port)
           awaitConnectedOrThrow(connected, lastDisconnect, server)
           val lease = requireNotNull(harness.session.captureRequestLease())
+          if (!peerRejects) {
+            val timeoutFailure = CompletableDeferred<GatewayRequestFailure>()
+            harness.session.sendRequestFrameForEndpoint(
+              expectedEndpointStableId = harness.session.currentEndpointStableId(),
+              method = "unanswered.frame",
+              paramsJson = null,
+              // Immediate expiration exercises local timeout classification without a real timer.
+              timeoutMs = 0,
+              onError = { timeoutFailure.complete(it) },
+            )
+            val failure = withTimeout(TEST_TIMEOUT_MS) { timeoutFailure.await() }
+            assertTrue(failure is GatewayRequestOutcomeUnknown)
+            assertEquals("request timeout", failure.message)
+            assertTrue("A request timeout must not retire the connection", lease.isCurrent())
+          }
           assertTrue(
             requireNotNull(serverWebSocket.get()).send("""{"type":"event","event":"test.block.responses","payload":{}}"""),
           )
@@ -618,7 +633,7 @@ class GatewaySessionInvokeTest {
 
           if (peerRejects) {
             assertTrue(
-              peer.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"RATE_LIMITED","message":"slow down"}}"""),
+              peer.send("""{"type":"res","id":"$id","ok":false,"error":{"code":"UNAVAILABLE","message":"provider unavailable"}}"""),
             )
           }
           assertTrue(peer.close(1000, "done"))
@@ -640,8 +655,14 @@ class GatewaySessionInvokeTest {
           assertTrue("app scope must remain alive until after callback verification", harness.sessionJob.isActive)
           assertEquals("onError must be delivered exactly once; peerRejects=$peerRejects", 1, errors.size)
           val error = errors.single()
-          assertEquals(if (peerRejects) "RATE_LIMITED" else "UNAVAILABLE", error.code)
-          assertEquals(if (peerRejects) "slow down" else "Gateway disconnected before response", error.message)
+          if (peerRejects) {
+            assertTrue(error is GatewayRequestRejected)
+            assertEquals("UNAVAILABLE", (error as GatewayRequestRejected).gatewayError.code)
+            assertEquals("provider unavailable", error.gatewayError.message)
+          } else {
+            assertTrue(error is GatewayRequestOutcomeUnknown)
+            assertEquals("Gateway disconnected before response", error.message)
+          }
         } finally {
           releaseResponsePump.countDown()
           entryGate.release.countDown()

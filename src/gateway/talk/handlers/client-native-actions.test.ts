@@ -723,7 +723,7 @@ describe("native Talk action ownership through public plugin registration", () =
           text,
           mode: "steer",
         });
-        expect(result).toMatchObject({ ok: true, queued: true });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, queued: true });
         expect(queueMessage).toHaveBeenCalledOnce();
         expect(queueMessage.mock.calls[0]?.[0]).toBe(text);
         expect(queueMessage.mock.calls[0]?.[1]?.userTurnTranscriptRecorder).toBeUndefined();

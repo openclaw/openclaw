@@ -1510,7 +1510,7 @@ describe("test-projects build admission", () => {
       args[0] === infraConfig
         ? include
         : args[0] === toolingConfig
-          ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
+          ? (include ?? ["test/**/*.test.{ts,mjs}", "src/scripts/**/*.test.ts"])
           : args,
     ]);
     if (borrowed && original) {

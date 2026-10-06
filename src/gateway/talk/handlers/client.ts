@@ -32,6 +32,7 @@ import {
   resolveClientVoiceSessionOrigin,
   resolveOpenClientVoiceSessionId,
 } from "../../../talk/client-voice-session.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
@@ -281,7 +282,15 @@ export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.steer": defineValidatedGatewayHandler(
     "talk.client.steer",
     validateTalkClientSteerParams,
-    async ({ params, respond, client, context, sessionMutationAuthorization }) => {
+    async ({
+      params,
+      respond,
+      client,
+      context,
+      hasCurrentClientAuthority,
+      sessionMutationAuthorization,
+    }) => {
+      let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
         const target =
           sessionMutationAuthorization?.talkSessionTarget ??
@@ -304,6 +313,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        capturedOperator = await captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+        });
         const result = await controlRealtimeVoiceAgentRun({
           sessionKey: target.canonicalKey,
           runTarget,
@@ -313,6 +327,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
               agentRuntime: createPluginRuntime().agent,
               sessionTarget: target,
               source: runTarget.toolAuthoritySource,
+              operatorAuthority: capturedOperator?.authority,
               authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
             }),
           text: params.text,
@@ -334,6 +349,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             formatForLog(err),
           ),
         );
+      } finally {
+        capturedOperator?.release();
       }
     },
   ),

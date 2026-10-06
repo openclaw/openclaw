@@ -23,7 +23,6 @@ import {
 } from "../../../talk/client-voice-confirmation.js";
 import { noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance } from "../../../talk/client-voice-confirmation.test-support.js";
 import { clientVoiceSessionTesting } from "../../../talk/client-voice-session.test-support.js";
-import { resolveRealtimeVoiceProviderCapabilities } from "../../../talk/provider-resolver.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAgentConsultRunner,
@@ -59,9 +58,11 @@ import {
 import {
   createIdleRelayProvider,
   createRelayAgentConfig,
+  createTrackedTalkRealtimeRelaySession,
   makeRelayTransport,
 } from "./index.test-support.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
+import { defineRelayOpeningGreetingTests } from "./opening-greeting.test-support.js";
 import { closeRelaySession } from "./operations.js";
 import { usePersistentRelayTestState } from "./session-state.test-support.js";
 import { drainingRelaySessions, relaySessions } from "./state.js";
@@ -81,47 +82,10 @@ const providerErrorCases = [
   ["unavailable", { status: 503, message: "raw-unavailable-marker" }, RELAY_UNAVAILABLE_ERROR],
 ] as const;
 
-type RelaySessionParams = Parameters<typeof createTalkRealtimeRelaySessionRaw>[0];
-type RelayFixtureDefaults = "connId" | "providerConfig" | "instructions" | "tools";
-
-function createTalkRealtimeRelaySession(
-  params: Omit<RelaySessionParams, "sessionTarget" | "controlSource" | RelayFixtureDefaults> &
-    Partial<Pick<RelaySessionParams, RelayFixtureDefaults>> & { sessionKey?: string },
-): ReturnType<typeof createTalkRealtimeRelaySessionRaw> {
-  const {
-    sessionKey,
-    connId = "conn-1",
-    providerConfig = {},
-    instructions = "brief",
-    tools = [],
-    ...request
-  } = params;
-  const cfg = params.cfg ?? { agents: { entries: { main: {} } } };
-  const capabilities = resolveRealtimeVoiceProviderCapabilities({
-    provider: params.provider,
-    providerConfig,
-    cfg,
-    model: params.model,
-    surface: "gateway-relay",
-  });
-  const session = createTalkRealtimeRelaySessionRaw({
-    ...request,
-    connId,
-    providerConfig,
-    instructions,
-    tools,
-    controlSource: capabilities?.handlesAgentConsult === true ? "delegation" : "transcript",
-    capabilities,
-    context: {
-      ...request.context,
-      chatAbortControllers: request.context.chatAbortControllers ?? new Map(),
-    },
-    cfg,
-    sessionTarget: prepareTalkSessionTarget(cfg, sessionKey ?? "agent:main:main"),
-  });
-  activeRelaySessions.set(session.relaySessionId, connId);
-  return session;
-}
+const createTalkRealtimeRelaySession = createTrackedTalkRealtimeRelaySession.bind(
+  undefined,
+  activeRelaySessions,
+);
 
 function createOwnedTalkRunControllers() {
   const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
@@ -213,6 +177,7 @@ describe("talk realtime relay helpers", () => {
 
 describe("talk realtime gateway relay", () => {
   const { cleanupIsolatedRelayState } = usePersistentRelayTestState(activeRelaySessions);
+  defineRelayOpeningGreetingTests(createTalkRealtimeRelaySession);
 
   it.each([
     [
