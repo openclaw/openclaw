@@ -225,11 +225,12 @@ export function projectSessionModelCatalog(
   const ownership = readSessionRuntimeOwnership({ ...readParams, config });
   const nativeAuth = ownership?.auth === "native";
   const entry = readParams.sessionEntry;
+  const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
   const workerAuth =
     readParams.workerInference === "worker" &&
     !entry?.modelOverride?.trim() &&
     !entry?.agentRuntimeOverride?.trim() &&
-    !(entry?.authProfileOverride?.trim() && entry.authProfileOverrideSource === "user");
+    !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
   if (!nativeAuth && !workerAuth) {
     return models;
   }

@@ -24,12 +24,16 @@ export type NodeWorkerNativeInferenceSnapshot = {
 function resolvedHeaders(
   providerHeaders: Record<string, unknown> | undefined,
   modelHeaders: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+): Record<string, string> | null | undefined {
   const values = { ...providerHeaders, ...modelHeaders };
-  if (Object.values(values).some((value) => typeof value !== "string")) {
-    return undefined;
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(values)) {
+    if (typeof value !== "string") {
+      return null;
+    }
+    resolved[key] = value;
   }
-  return Object.keys(values).length > 0 ? (values as Record<string, string>) : undefined;
+  return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
 function resolveProviderCredential(params: {
@@ -77,11 +81,8 @@ export function snapshotNodeWorkerNativeInference(
       if (input.some((kind) => kind !== "text" && kind !== "image")) {
         continue;
       }
-      const headers = resolvedHeaders(
-        provider.headers as Record<string, unknown> | undefined,
-        configured.headers,
-      );
-      if (provider.headers && !headers) {
+      const headers = resolvedHeaders(provider.headers, configured.headers);
+      if (headers === null) {
         continue;
       }
       const parsed = NativeRuntimeModelSchema.safeParse({
@@ -140,13 +141,33 @@ export function projectNodeWorkerNativeInference(
 }
 
 /** Diagnostic scrubbing covers every projected credential and configured header value. */
-export function nodeWorkerNativeInferenceSecrets(
-  snapshot: NodeWorkerNativeInferenceSnapshot,
-): string[] {
+function nodeWorkerNativeInferenceSecrets(snapshot: NodeWorkerNativeInferenceSnapshot): string[] {
   return [
     ...[...snapshot.models.values()].flatMap(({ model, credential }) => [
       credential,
       ...Object.values(model.headers ?? {}),
     ]),
   ].filter((value) => value.length > 0);
+}
+
+export function nodeWorkerNativeInferenceSecretsForDescriptor(
+  snapshot: NodeWorkerNativeInferenceSnapshot | undefined,
+  descriptor: WorkerLaunchDescriptor,
+): string[] {
+  return descriptor.assignment.inference === "runtime-local" && snapshot
+    ? nodeWorkerNativeInferenceSecrets(snapshot)
+    : [];
+}
+
+export function assertNodeWorkerNativeInferenceAvailable(
+  snapshot: NodeWorkerNativeInferenceSnapshot | undefined,
+  descriptor: WorkerLaunchDescriptor,
+): void {
+  if (descriptor.assignment.inference !== "runtime-local") {
+    return;
+  }
+  if (!snapshot) {
+    throw new Error("Node worker native inference requires node-local startup configuration");
+  }
+  projectNodeWorkerNativeInference(snapshot, descriptor);
 }

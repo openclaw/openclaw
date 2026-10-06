@@ -11,10 +11,6 @@ import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools
 import type { EmbeddedAttemptSteeringLease } from "../../agents/embedded-agent-runner/run/attempt-prompt-build.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
-import {
-  loadManifestModelCatalog,
-  overlayConfiguredModelCatalog,
-} from "../../agents/model-catalog.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
@@ -22,7 +18,6 @@ import {
   releasePendingAgentSteeringItems,
 } from "../../agents/subagents/registry/subagent-registry.js";
 import { createLibrarySkillWorkshopTool } from "../../agents/tools/skill-workshop-tool-library.js";
-import { resolveProviderThinkingLevel } from "../../auto-reply/thinking.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
 import { logInfo } from "../../logger.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
@@ -32,7 +27,6 @@ import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcr
 import { createWorkerPlacementTools } from "../../worker/worker-placement-tools.js";
 import { prepareGitHubPublicationAvailability } from "../github-publication-availability.js";
 import { requireCurrentWorkerTurnEnvironment, StaleWorkerBuildError } from "./admission.js";
-import { resolveApprovedWorkerModel } from "./inference-model.js";
 import { workerInferencePlacement } from "./inference-placement.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -41,7 +35,6 @@ import {
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
-import { boundedWorkerError } from "./worker-error.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 import { prepareWorkerGitHubBinding } from "./worker-github-binding.js";
@@ -53,6 +46,7 @@ import {
   type WorkerTurnEnvironmentService,
 } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
+import { prepareWorkerTurnModel } from "./worker-turn-model.js";
 import {
   assertSupportedTurn,
   captureWorkerTurnInputAuthority,
@@ -210,20 +204,14 @@ export async function executeWorkerTurn(
   const { manager, history, userMessageAlreadyPersisted } = context;
   let baseLeafId = context.baseLeafId;
 
-  const approvedModel = await resolveApprovedWorkerModel({
+  const { model, reasoning, transcriptPolicy } = await prepareWorkerTurnModel({
     target: transcriptTarget,
     modelRef,
     runtimeSnapshot: preparedRuntime.snapshot,
-    signal: turn.abortSignal,
+    inferencePlacement,
+    turn,
     assertCurrent: assertContextCurrent,
   });
-  if (!approvedModel) {
-    throw new Error("Worker model is not approved for this session");
-  }
-  if ("error" in approvedModel) {
-    throw new Error(boundedWorkerError(approvedModel.error, 256));
-  }
-  const model = approvedModel.prepared.model;
 
   assertContextCurrent();
   const credential = await waitForTurnOperation({
@@ -251,23 +239,6 @@ export async function executeWorkerTurn(
       placement.activeOwnerEpoch,
     )) === true;
   const launchToolNames = await tunnel.readLaunchToolNames();
-  const reasoning = resolveProviderThinkingLevel({
-    provider: modelRef.provider,
-    model: modelRef.model,
-    catalog:
-      turn.thinkLevel === "ultra"
-        ? overlayConfiguredModelCatalog({
-            catalog: loadManifestModelCatalog({
-              config: turn.config ?? {},
-              workspaceDir: turn.workspaceDir,
-            }),
-            config: turn.config ?? {},
-            workspaceDir: turn.workspaceDir,
-          })
-        : undefined,
-    agentRuntime: "openclaw",
-    level: turn.thinkLevel,
-  });
   const desktop = await prepareWorkerDesktopLaunchPlan({
     desktop: environment.desktop,
     protocolFeatures: bootstrapReceipt.protocolFeatures,
@@ -493,7 +464,7 @@ export async function executeWorkerTurn(
       toolRuntime,
       identity: connectionIdentity,
       manager,
-      transcriptPolicy: approvedModel.transcriptPolicy,
+      transcriptPolicy,
       history,
       contextEngine: contextEngineAdmission.contextEngine,
       contextEnginePluginId:

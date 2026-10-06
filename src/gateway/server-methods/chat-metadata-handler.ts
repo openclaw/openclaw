@@ -104,11 +104,7 @@ export async function resolveChatMetadataReadParams(
         : undefined;
       assertVisible();
       assertRequestCurrent();
-      if (!session.isCurrentAtResponse()) {
-        throw new PreparedModelRuntimePublicationSupersededError(
-          "Session changed while preparing its metadata. Retry the request.",
-        );
-      }
+      read.assertCurrent();
       return {
         agentId: resolveSessionAgentId({
           sessionKey: params.sessionKey,

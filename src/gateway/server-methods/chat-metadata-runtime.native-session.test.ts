@@ -69,6 +69,21 @@ describe("gateway chat metadata native session ownership", () => {
         config,
       ),
     ).toEqual(models);
+    for (const authProfileOverrideSource of [undefined, "user-link"] as const) {
+      expect(
+        projectSessionModelCatalog(
+          {
+            ...scope,
+            sessionEntry: {
+              authProfileOverride: "openai:personal",
+              ...(authProfileOverrideSource ? { authProfileOverrideSource } : {}),
+            },
+          },
+          models,
+          config,
+        ),
+      ).toEqual(models);
+    }
   });
 
   test.each([false, true])(

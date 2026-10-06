@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { completeWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { assertNativeInferenceAssignment } from "../worker/native-inference-startup.js";
 import {
-  nodeWorkerNativeInferenceSecrets,
+  nodeWorkerNativeInferenceSecretsForDescriptor,
   projectNodeWorkerNativeInference,
   snapshotNodeWorkerNativeInference,
 } from "./node-worker-native-inference.js";
@@ -84,6 +84,12 @@ describe("node worker inference config projection", () => {
     expect(startup.config.models[0]?.api).toBe("openai-completions");
   });
 
+  it("accepts an empty provider header map", () => {
+    const source = config([model("model-1")]);
+    source.models!.providers!["provider-1"]!.headers = {};
+    expect(snapshotNodeWorkerNativeInference(source, {})).toBeDefined();
+  });
+
   it("rejects a selected model that is absent from the node config", () => {
     const workspace = tempDirs.make("node-native-missing-model-");
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
@@ -94,7 +100,8 @@ describe("node worker inference config projection", () => {
 
   it("captures credentials and header bytes for child diagnostics", () => {
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    expect(new Set(nodeWorkerNativeInferenceSecrets(snapshot))).toEqual(
+    const assignment = descriptor(tempDirs.make("node-native-secrets-"));
+    expect(new Set(nodeWorkerNativeInferenceSecretsForDescriptor(snapshot, assignment))).toEqual(
       new Set([credential, providerHeader, modelHeader]),
     );
   });
