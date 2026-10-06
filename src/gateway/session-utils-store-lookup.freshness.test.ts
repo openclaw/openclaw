@@ -6,7 +6,10 @@ import * as sessionEntryReaders from "../config/sessions/session-entry-read-runt
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
+import {
+  runOpenClawAgentWriteAdmission,
+  SQLITE_SESSION_WRITER_QUEUES,
+} from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   resolveGatewaySessionStoreTargetWithStore,
@@ -135,6 +138,8 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
       .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
       .mockImplementation(async (inputs, consume, options) => {
         await Promise.all(writes);
+        // Writer results settle before their FIFO drain releases the idle lane.
+        await SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.drainPromise;
         return readEntries(
           inputs,
           (prepared) => {
