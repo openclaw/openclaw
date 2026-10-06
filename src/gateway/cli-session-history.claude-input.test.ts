@@ -2,10 +2,25 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { buildCliSessionDriftNote } from "../agents/cli-session.js";
+import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import { applySessionHints } from "../auto-reply/reply/body.js";
+import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
+import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
+import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.js";
 import { classifyClaudeCliHistoryLine } from "./cli-session-history.claude-activity.js";
-import { readClaudeCliFallbackSeed } from "./cli-session-history.claude.js";
-import { buildLegacyReseedPrompt } from "./cli-session-history.test-support.js";
+import {
+  parseClaudeCliHistoryEntry,
+  readClaudeCliFallbackSeed,
+} from "./cli-session-history.claude.js";
+import {
+  buildLegacyReseedPrompt,
+  claudeUser,
+  mergeImportedChatHistoryMessages,
+  withClaudeProjectsDir,
+} from "./cli-session-history.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const userTurn = (uuid: string, content: string) => ({
@@ -22,6 +37,172 @@ const boundary = (content = "Conversation compacted") => ({
   type: "system",
   subtype: "compact_boundary",
   content,
+});
+
+const internalInputs = [
+  ["resume", buildCliSessionDriftNote(["system-prompt"])],
+  [
+    "subagent",
+    `${
+      buildInterSessionPromptContext({
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:worker",
+        sourceChannel: "internal",
+        sourceTool: "subagent_settle",
+      }).text
+    }\nReview completed.`,
+  ],
+  [
+    "compact-command",
+    "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
+  ],
+  ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
+  ["exec", buildExecEventPrompt(["Exec completed (example, code 0) :: done"])],
+  [
+    "exec-with-queued-system-event",
+    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
+  ],
+  [
+    "exec-after-interrupted-run",
+    applySessionHints({
+      baseBody: buildExecEventPrompt(["Exec completed (example, code 0) :: done"]),
+      abortedLastRun: true,
+    }),
+  ],
+  [
+    "sessions-send",
+    `${
+      buildInterSessionPromptContext({
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:cron:job:run:1",
+        sourceTool: "sessions_send",
+      }).text
+    }\n[build-events] done`,
+  ],
+] as const;
+// The display projection already rewrites or hides these even on canonical rows,
+// so only the imported copy is asserted.
+const internalWakeInputs = [
+  ["heartbeat", `${HEARTBEAT_PROMPT}\nCurrent time: Saturday`],
+  ["system_turn", formatSystemTurnPrompt("Your previous turn was interrupted.")],
+  [
+    "system_turn",
+    `[Tue 2026-09-22 16:00 GMT+8] ${formatSystemTurnPrompt("Your previous turn was interrupted.")}`,
+  ],
+] as const;
+
+function parseImportedUser(content: string | unknown[]) {
+  return parseClaudeCliHistoryEntry(claudeUser(content), "native-session", 1, new Map(), {
+    reseedMode: "recover",
+  });
+}
+
+// Native SDK rows do not retain the canonical input provenance. Exercise both
+// native encodings; real local turns must win even when quoting the exact envelope.
+describe("Claude imported internal inputs", () => {
+  it.each(internalInputs)("hides %s copies without hiding real user messages", (_kind, text) => {
+    for (const content of [text, [{ type: "text", text }]]) {
+      const imported = parseImportedUser(content);
+      expect(projectChatDisplayMessages([imported])).toEqual([]);
+      expect(
+        classifyClaudeCliHistoryLine({
+          line: JSON.stringify(claudeUser(content)),
+          cliSessionId: "native-session",
+          sourceLineNumber: 1,
+        }).humanTurn,
+      ).toBe(false);
+      const quoted = parseImportedUser(`Please explain this:\n${text}`);
+      expect(projectChatDisplayMessages([quoted])).toHaveLength(1);
+      const human = { role: "user", content, timestamp: 1 };
+      const merged = mergeImportedChatHistoryMessages({
+        localMessages: [human],
+        importedMessages: imported ? [{ ...imported, timestamp: 2 }] : [],
+      });
+      expect(projectChatDisplayMessages(merged)).toMatchObject([{ role: "user", content }]);
+    }
+  });
+
+  it.each(["string", "text-block"])(
+    "removes the resume decorator, not its real %s user turn",
+    (encoding) => {
+      const text = `${buildCliSessionDriftNote(["system-prompt", "prompt-tools"])}\n\nreal question`;
+      const image = {
+        type: "image",
+        source: { type: "base64", media_type: "image/png", data: "aa" },
+      };
+      const content = encoding === "string" ? text : [{ type: "text", text }, image];
+      const message = parseImportedUser(content);
+      expect(message?.content).toEqual(
+        encoding === "string" ? "real question" : [{ type: "text", text: "real question" }, image],
+      );
+      expect(message?.display).not.toBe(false);
+      expect(message?.provenance).toBeUndefined();
+      expect(
+        parseImportedUser(
+          "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",
+        )?.content,
+      ).toContain("This is a quote.");
+    },
+  );
+
+  it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
+    const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
+    expect(parseImportedUser(text)).toMatchObject(internal);
+    expect(
+      parseImportedUser(`System: [2026-10-03 08:56:29 GMT+8] Gateway restart ok\n\n${text}`),
+    ).toMatchObject(internal);
+  });
+
+  it.each([
+    "[foo] [System] Please explain this tag.",
+    "System: Please preserve this log\n\nExplain it",
+    "System: Please explain this log\n\n[System] This is the line I am asking about.",
+    "Explain this log:\n```text\nlog\n```\n\nSystem: [2026-10-04 13:15:44 GMT+8] evidence\n\nWhat failed?",
+  ])("leaves the look-alike human message %j untouched", (text) => {
+    const message = parseImportedUser(text);
+    expect(message).toMatchObject({ content: text });
+    expect(message?.display).not.toBe(false);
+    expect(message?.provenance).toBeUndefined();
+  });
+
+  it.each(["", 'Conversation info: ⟦openclaw:ctx⟧\n```json\n{"a":1}\n```\n\n'])(
+    "drops queued system event lines from a real user turn",
+    (context) => {
+      for (const stamp of ["2026-10-04 13:15:44 GMT+8", "2026-10-04T05:15:44Z", "unknown-time"]) {
+        const events = `System: [${stamp}] Model switched.\nSystem: more\n\n`;
+        expect(parseImportedUser(`${context}${events}real question`)?.content).toBe(
+          `${context}real question`,
+        );
+      }
+      const untouched = "real question\n\nSystem: quoted log line\n\nmore";
+      expect(parseImportedUser(untouched)).toMatchObject({ content: untouched });
+    },
+  );
+
+  it("hides decorated internal rows through JSONL import, merge and the common client history projection", async () => {
+    await withClaudeProjectsDir(async ({ filePath, readMessages }) => {
+      const note = buildCliSessionDriftNote(["prompt-tools"]);
+      await fs.writeFile(
+        filePath,
+        [
+          claudeUser("real question", { uuid: "human" }),
+          ...internalInputs.map(([kind, text]) =>
+            claudeUser(kind === "resume" ? text : `${note}\n\n${text}`, { uuid: kind }),
+          ),
+        ]
+          .map((entry) => JSON.stringify(entry))
+          .join("\n"),
+      );
+      const messages = mergeImportedChatHistoryMessages({
+        localMessages: [],
+        importedMessages: await readMessages(),
+      });
+      expect(projectChatDisplayMessages(messages)).toMatchObject([
+        { role: "user", content: "real question" },
+      ]);
+      expect(projectChatDisplayMessages(messages)).toHaveLength(1);
+    });
+  });
 });
 
 describe("Claude history activity rows", () => {
