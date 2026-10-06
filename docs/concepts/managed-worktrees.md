@@ -120,6 +120,8 @@ On Windows, point `worktreeRoot` at a directory on a ReFS volume, such as `D:\wo
 
 OpenClaw maintains one reusable source-only template per repository and destination root. It rebuilds the template when the requested commit or checkout policy changes, and cleanup retires templates unused for seven days. Git continues to own worktree registration, indexes, and branches; the filesystem backend supplies the shared file contents.
 
+Private Git index copies for template checkouts and safety snapshots prefer native copy-on-write, including on APFS, and fall back to independent byte copies when cloning is unavailable. Snapshot indexes retain the source index's timestamp boundary so Git still detects edits made within the filesystem's timestamp resolution.
+
 New checkouts with no file data, including empty session workspaces, use normal Git checkout without preparing or cloning a template.
 
 If template cleanup cannot acquire its allocation lease or read its cache, OpenClaw logs a warning and continues ordinary worktree and snapshot cleanup. A later cleanup pass retries template retirement.
