@@ -461,8 +461,7 @@ describe("node stream close acknowledgement", () => {
     }
   });
 
-  it("waits out a large forward instead of the short close acknowledgement", async () => {
-    const payload = Buffer.alloc(200 * 1024, 7);
+  async function expectFlushBudget(payload: Buffer) {
     const gateway = createHttpServer();
     const wss = new WebSocketServer({ server: gateway });
     let receivedSevens = 0;
@@ -471,7 +470,11 @@ describe("node stream close acknowledgement", () => {
         if (!isBinary) {
           return;
         }
-        const buffer = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
+        const buffer = Array.isArray(data)
+          ? Buffer.concat(data)
+          : data instanceof ArrayBuffer
+            ? Buffer.from(new Uint8Array(data))
+            : data;
         for (const byte of buffer) {
           if (byte === 7) {
             receivedSevens += 1;
@@ -540,5 +543,13 @@ describe("node stream close acknowledgement", () => {
         gateway.close(() => resolve());
       });
     }
+  }
+
+  it("waits out a small forward instead of the short close acknowledgement", async () => {
+    await expectFlushBudget(Buffer.alloc(1024, 7));
+  });
+
+  it("waits out a large forward instead of the short close acknowledgement", async () => {
+    await expectFlushBudget(Buffer.alloc(200 * 1024, 7));
   });
 });

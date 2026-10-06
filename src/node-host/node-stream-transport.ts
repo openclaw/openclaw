@@ -31,9 +31,8 @@ const STREAM_CLOSE_ACK_MS = 5_000;
 // budget starts only after those bytes have left the WebSocket buffer.
 const STREAM_CLOSE_FLUSH_MS = 30_000;
 // bufferedAmount === 0 means the kernel accepted the bytes, not that the
-// gateway has read them. A short ack after a large forward completes the
-// node command, the gateway retires the stream, and the unread tail is lost.
-const LONG_CLOSE_ACK_AFTER_BYTES = 64 * 1024;
+// gateway has read them. A short ack after any forward completes the node
+// command, the gateway retires the stream, and a slow proxy drops the tail.
 const streamLog = createSubsystemLogger("node-host/stream");
 
 type NodeStreamCloseTrigger =
@@ -212,9 +211,7 @@ function createNodeStreamSplice(params: {
             return;
           }
           const ackDelay =
-            forwardedBytes > LONG_CLOSE_ACK_AFTER_BYTES
-              ? Math.max(closeAckMs, STREAM_CLOSE_FLUSH_MS)
-              : closeAckMs;
+            forwardedBytes > 0 ? Math.max(closeAckMs, STREAM_CLOSE_FLUSH_MS) : closeAckMs;
           cancelCloseAck = scheduleCloseAck(retireUnacknowledged, ackDelay);
         };
         armCloseAck();
