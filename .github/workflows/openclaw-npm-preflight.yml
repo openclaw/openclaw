@@ -212,6 +212,7 @@ jobs:
             --policy .release-harness/.github/actions/git-owner/release-ancestry.py
 
       - name: Setup ripgrep for source checks
+        timeout-minutes: 10
         uses: ./.release-harness/.github/actions/setup-ripgrep
 
       - name: Check source, test types, and architecture

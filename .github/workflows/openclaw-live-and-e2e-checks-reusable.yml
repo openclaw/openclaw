@@ -4755,6 +4755,7 @@ jobs:
 
       - name: Install Chromium for native live browser tests
         if: steps.selection.outputs.run == 'true' && matrix.suite_id == 'native-live-test'
+        timeout-minutes: 15
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore
@@ -5238,6 +5239,7 @@ jobs:
 
       - name: Install Chromium for A-K live browser tests
         if: contains(matrix.profiles, inputs.release_test_profile) && matrix.suite_id == 'native-live-extensions-a-k' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
+        timeout-minutes: 15
         uses: ./.release-harness/.github/actions/setup-playwright-chromium
         with:
           cache-mode: restore

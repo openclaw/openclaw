@@ -114,6 +114,7 @@ jobs:
 
       - name: Warm Playwright Chromium
         if: runner.os == 'Linux'
+        timeout-minutes: 15
         uses: ./.github/actions/setup-playwright-chromium
         with:
           cache-mode: read-write
