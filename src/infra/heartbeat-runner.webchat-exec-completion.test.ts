@@ -218,6 +218,12 @@ it.each(visibleCompletions)(
           .mockResolvedValue(completionPayload(marker));
         expect((await runProjectionWake(scenario, reply, wake)).status).toBe("ran");
         expect(reply).toHaveBeenCalledOnce();
+        expect(reply.mock.calls[0]?.[0]).toMatchObject({
+          From: "heartbeat",
+          To: undefined,
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+        });
         expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
         const messages = await readProjectionMessages(scenario);
         expect(messages).toHaveLength(publishes ? 1 : 0);
