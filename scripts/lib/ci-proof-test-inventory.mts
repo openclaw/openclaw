@@ -1960,6 +1960,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-config-flow.gateway-bind-persistence.test.ts",
   "src/commands/doctor-config-flow.include-refusal.test.ts",
   "src/commands/doctor-config-flow.legacy-composition.test.ts",
+  "src/commands/doctor-config-flow.session-store-owner.test.ts",
   "src/commands/doctor-config-flow.test.ts",
   "src/commands/doctor-config-flow.validation-refusal.test.ts",
   "src/commands/doctor-config-flow.workspace-persistence.test.ts",
