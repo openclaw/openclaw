@@ -193,8 +193,6 @@
 ["extensions/browser/src/browser/routes/agent.snapshot.timeout.test.ts","../screenshot.js","23076ae52a24976473ae0477fc0b1cc7e33aeb71d7b838eaef204be667ad1b54",1]
 ["extensions/browser/src/browser/routes/agent.state.dashboard-ownership.test.ts","../pw-ai-module.js","5eb7adfa1c137fd205c191e37f7a55f660053d58a51156f9d9c71b6a918de561",1]
 ["extensions/browser/src/browser/routes/basic.existing-session.test.ts","../chrome-mcp.js","6bae77d2dd7467e41687425e3ddfb27989b1cba68dfd0bfc7e163201eee6175a",1]
-["extensions/browser/src/browser/routes/basic.import-domains.test.ts","../chrome-mcp.js","d71a97fa6c1be85ce7b51d8ecc44a1a7c8768af8df970757c1067debad3d9aac",1]
-["extensions/browser/src/browser/routes/basic.import-domains.test.ts","../profiles-service.js","6f7391be2b368034327a1d0e7ca8483e86b17f5c06282b931c72459833adcd6e",1]
 ["extensions/browser/src/browser/routes/basic.lifecycle-admission.test.ts","../profiles-service.js","1de0c8fc960dd3837cf089488ab261d6fff791dfee7b7ef3ed2cdb3c0bc2a0b3",1]
 ["extensions/browser/src/browser/routes/dispatcher.abort.test.ts","./index.js","fe77f6eb1ceaad00b3dad5886ebb6bf159776a7e28c08481d4b05e394c0f40d7",1]
 ["extensions/browser/src/browser/routes/dispatcher.path-normalization.test.ts","./index.js","b11e081638376a67cce7c3a120b8d30f1a7aeab1555efaea9a62459c43648233",1]
