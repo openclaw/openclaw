@@ -1,0 +1,21 @@
+name: Admission lifecycle investigation
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  lifecycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node-env
+        with:
+          node-version: '26.10.0'
+          install-bun: 'false'
+      - name: Pinned identity and focused boundary tests
+        run: |
+          git rev-parse HEAD
+          /usr/bin/time -p pnpm test src/agents/harness/context-engine-turn-outbox.test.ts src/agents/embedded-agent-runner/run/attempt-prompt-submit.admission.test.ts --maxWorkers=1

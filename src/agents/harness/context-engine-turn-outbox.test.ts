@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   appendTranscriptMessage,
+  resolveSessionTranscriptDatabasePath,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type {
@@ -21,6 +22,7 @@ import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { resolveAgentRunSessionTarget } from "../run-session-target.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import { drainPendingContextEngineTurnsBeforeRun } from "./context-engine-turn-attempt.js";
 import { openContextEngineTurnOutboxWorkerStore } from "./context-engine-turn-outbox-store.js";
@@ -163,6 +165,39 @@ async function createTranscript(sessionId: string, content = "current") {
 }
 
 describe("context-engine turn outbox", () => {
+  it.each([
+    ["ordinary", "agent:main:telegram:direct:synthetic"],
+    ["child", "agent:main:subagent:synthetic"],
+    ["requester-settle", "agent:main:telegram:direct:synthetic-settle"],
+  ])("preserves prepared identity through real delayed recorder persistence (%s)", async (kind, sessionKey) => {
+    const stateDir = createStateDir();
+    const supplied = {
+      agentId: "main",
+      sessionId: `isolated-${kind}`,
+      sessionKey,
+      storePath: path.join(stateDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(supplied, { sessionId: supplied.sessionId, updatedAt: 1 });
+    const target = await resolveAgentRunSessionTarget({
+      ...supplied,
+      config: {},
+      missingSessionKey: "resolve-existing",
+      sessionTarget: supplied,
+    });
+    const message = { role: "user" as const, content: "synthetic input", timestamp: 1 };
+    const recorder = createUserTurnTranscriptRecorder({ message, target });
+    const lease = createLease(createEngine(async () => ({ status: "committed" })));
+    await drainPendingContextEngineTurnsBeforeRun({ admission: undefined, lease, recorder, sessionTarget: target });
+    expect(recorder.getAdmissionReceipt()).toBeUndefined();
+    await recorder.persistApproved();
+    await recorder.waitForRuntimePersistence();
+    const admission = recorder.getAdmissionReceipt();
+    expect(admission).toBeDefined();
+    expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+    expect(admission).toMatchObject({ agentId: target.agentId, sessionId: target.sessionId, sessionKey: target.sessionKey });
+    console.info("admission-lifecycle-equality", JSON.stringify({ scenario: kind, agentId: admission?.agentId === target.agentId, sessionId: admission?.sessionId === target.sessionId, sessionKey: admission?.sessionKey === target.sessionKey, storePath: admission?.storePath === resolveSessionTranscriptDatabasePath(target) }));
+  });
+
   it("retries only transcript failures that can make progress", () => {
     expect(isRetryableContextEngineTurnReadFailure("projection-unavailable")).toBe(true);
     expect(isRetryableContextEngineTurnReadFailure("too-large")).toBe(false);
