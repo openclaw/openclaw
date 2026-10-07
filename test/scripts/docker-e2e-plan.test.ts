@@ -23,6 +23,7 @@ import {
 } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import {
+  UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
   listRecordedFirstHopSourceVersions,
   updateFirstHopCompatLaneName,
 } from "../../scripts/lib/update-first-hop-lanes.mjs";
@@ -68,7 +69,8 @@ function copyCurrentScenarioMetadata(targetRoot: string) {
 }
 
 const firstHopSourceVersions = listRecordedFirstHopSourceVersions();
-const firstHopLaneNames = firstHopSourceVersions.map(updateFirstHopCompatLaneName);
+const sourceFirstHopLaneNames = firstHopSourceVersions.map(updateFirstHopCompatLaneName);
+const firstHopLaneNames = [...sourceFirstHopLaneNames, UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE];
 
 function planFor(
   overrides: Partial<Parameters<typeof resolveDockerE2ePlan>[0]> = {},
@@ -379,8 +381,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         selectedLaneNames: parseLaneSelection("update-first-hop-compat"),
         upgradeSurvivorTargetRoot: targetRoot,
       });
-      expect(plan.lanes.map((lane) => lane.name)).toEqual(firstHopLaneNames);
-      expect(plan.omittedUnsupportedLanes).toEqual([]);
+      expect(plan.lanes.map((lane) => lane.name)).toEqual(sourceFirstHopLaneNames);
+      expect(plan.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
     },
   );
 
@@ -401,7 +403,53 @@ describe("scripts/lib/docker-e2e-plan", () => {
       upgradeSurvivorTargetRoot: targetRoot,
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([updateFirstHopCompatLaneName(oldest)]);
-    expect(plan.omittedUnsupportedLanes).toEqual(newer.map(updateFirstHopCompatLaneName));
+    expect(plan.lanes[0]?.timeoutMs).toBe(3_500_000);
+    expect(plan.omittedUnsupportedLanes).toEqual([
+      ...newer.map(updateFirstHopCompatLaneName),
+      UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+    ]);
+  });
+
+  it("keeps source hops and gates post-convergence proof on candidate admission", () => {
+    for (const version of firstHopSourceVersions) {
+      expect(findLaneByName(updateFirstHopCompatLaneName(version))?.command).toBe(
+        `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=source OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+      );
+    }
+    const targetRoot = tempDirs.make("openclaw-first-hop-admission-target-");
+    writeFileSync(
+      join(targetRoot, "package.json"),
+      JSON.stringify({ openclaw: { updateAdmissionProtocol: 1 } }),
+    );
+    const plan = planFor({
+      selectedLaneNames: [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(plan.lanes.map(summarizeLane)).toEqual([
+      {
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=missing-load-path OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 3_500_000,
+        weight: 2,
+      },
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
+
+    writeFileSync(
+      join(targetRoot, "package.json"),
+      JSON.stringify({ openclaw: { updateAdmissionProtocol: 2 } }),
+    );
+    const unsupported = planFor({
+      selectedLaneNames: [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE],
+      upgradeSurvivorTargetRoot: targetRoot,
+    });
+    expect(unsupported.lanes).toEqual([]);
+    expect(unsupported.omittedUnsupportedLanes).toEqual([UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE]);
   });
 
   it.each([
@@ -919,6 +967,10 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       profile: RELEASE_PATH_PROFILE,
       releaseChunk: "package-update-openai",
     });
+    const packageRestartAuth = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update-restart-auth",
+    });
     const packageUpdateCore = planFor({
       includeOpenWebUI: true,
       profile: RELEASE_PATH_PROFILE,
@@ -987,7 +1039,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "codex-on-demand",
       "release-typed-onboarding",
       "root-managed-vps-upgrade",
-      "update-restart-auth",
     ]);
     expect(
       packageInstallOpenAi.lanes
@@ -1005,7 +1056,9 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         weight: 3,
       },
     ]);
-    expect(packageInstallOpenAi.lanes.slice(-2).map(summarizeLane)).toEqual([
+    expect(
+      [...packageInstallOpenAi.lanes.slice(-1), ...packageRestartAuth.lanes].map(summarizeLane),
+    ).toEqual([
       {
         command: trustedUpgradeSurvivorCommand(
           "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS=1",
@@ -1116,7 +1169,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         weight: 3,
       },
       ...firstHopSourceVersions.map((version) => ({
-        command: `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
+        command: `OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=source OPENCLAW_UPDATE_FIRST_HOP_SOURCE_VERSIONS=${version} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat`,
         imageKind: "bare",
         live: false,
         name: updateFirstHopCompatLaneName(version),
@@ -1125,6 +1178,17 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         timeoutMs: 3_500_000,
         weight: 2,
       })),
+      {
+        command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_UPDATE_FIRST_HOP_SCENARIO=missing-load-path OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE,
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 3_500_000,
+        weight: 2,
+      },
     ]);
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).toEqual(["plugins"]);
     expect(pluginsRuntimeServices.lanes.map(summarizeLane)).toEqual([
@@ -1327,6 +1391,15 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
       "plugin-update",
       "openwebui",
     ]);
+  });
+
+  it("keeps restart auth exactly once in the legacy package/update aggregate", () => {
+    const aggregate = planFor({
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+
+    expect(aggregate.lanes.filter((lane) => lane.name === "update-restart-auth")).toHaveLength(1);
   });
 
   it("includes OpenWebUI exactly once in each legacy plugin aggregate", () => {

@@ -17,10 +17,14 @@ const DOCKER_E2E_CHUNKS = [
   },
   {
     chunk_id: "package-update-openai",
-    label: "package/update OpenAI and recovery",
-    // Five weight-3 npm lanes serialize at limit 5: 30m + 30m + 20m + 25m + 43m.
-    // The 10m chat lane overlaps; add 10m for setup/artifacts => 158m, round to 160m.
-    timeout_minutes: 160,
+    label: "package/update OpenAI",
+    timeout_minutes: 60,
+    profiles: "beta minimum stable full",
+  },
+  {
+    chunk_id: "package-update-restart-auth",
+    label: "package/update restart auth",
+    timeout_minutes: 55,
     profiles: "beta minimum stable full",
   },
   {
@@ -37,15 +41,6 @@ const DOCKER_E2E_CHUNKS = [
     // Hosted passes measured 766-911s and 484-1632s per lane: 15m + 4 x 28m + 10m
     // setup/artifacts = 137m, round to 150m. At 60m, 3 of 6 full candidates cancelled.
     timeout_minutes: 150,
-    profiles: "beta minimum stable full",
-  },
-  {
-    chunk_id: "package-update-self-upgrade",
-    label: "package/update self-upgrade",
-    // Each lane runs multiple updates measured at 540-720s each; retain its 3500s budget.
-    // Six weight-2 lanes need three waves at npm limit 5. Budget the weight-3 survivor
-    // separately despite overlap: 3 x 3500s + 20m survivor + 10m setup/artifacts = 205m.
-    timeout_minutes: 210,
     profiles: "beta minimum stable full",
   },
   {
