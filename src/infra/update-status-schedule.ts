@@ -39,12 +39,12 @@ export function getGatewayUpdateSchedule(
     ...(campaign ? { campaign } : {}),
   };
   const install = currentUpdateCheckLifecycle().installStatus;
-  return install?.status.error?.timeoutMs
+  return install && (install.status.error?.timeoutMs || install.status.installKind === "immutable")
     ? withUpdateInstallStatus(result, install.status, true, install.installReceipt, install.root)
     : result;
 }
 
-/** Refreshes the read-only Dev checkout comparison used by update.status. */
+/** Refreshes read-only checkout and immutable-generation facts used by update.status. */
 export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
   const lifecycle = currentUpdateCheckLifecycle();
   const pending = lifecycle.refreshes.get(cfg);
@@ -71,16 +71,23 @@ export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
           (schedule === scheduleAtStart || schedule?.channel === channel)
         );
       };
-      if (channel !== "dev" || !isCurrent()) {
+      if (
+        (channel !== "dev" && lifecycle.installStatus?.status.installKind !== "immutable") ||
+        !isCurrent()
+      ) {
         return;
       }
       const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
       if (!isCurrent()) {
         return;
       }
-      // An explicit successful refresh repairs the lifecycle's failed discovery,
-      // so later automatic checks can resume without another cold probe.
-      if (lifecycle.installStatus?.status.error && !status.error) {
+      // Repair failed discovery and invalidate generation facts when the adopted
+      // installation or prepared receipt changes, including loss of ownership.
+      if (
+        (lifecycle.installStatus?.status.error && !status.error) ||
+        lifecycle.installStatus?.status.installKind === "immutable" ||
+        status.installKind === "immutable"
+      ) {
         lifecycle.installStatus = { root, status, installReceipt };
       }
       const schedule = getUpdateSchedule();

@@ -16,5 +16,5 @@ export function isStaticallyChannelConfigured(
       return true;
     }
   }
-  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId));
+  return hasMeaningfulChannelConfigShallow(resolveChannelConfigRecord(cfg, channelId), channelId);
 }

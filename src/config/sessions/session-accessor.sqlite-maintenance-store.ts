@@ -80,7 +80,7 @@ export function refreshSessionPlannerStatisticsInDatabase(database: OpenClawAgen
 
 export function emptySessionEntryMaintenancePlan(): SessionEntryMaintenancePlan {
   return {
-    archivedSessionKeys: [],
+    archivedEntries: [],
     entryRemovals: [],
     stateDeletePlans: [],
     archived: 0,
@@ -118,12 +118,14 @@ export function applySessionEntryMaintenanceInDatabase(
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryMaintenancePlan {
   let preservation: SessionMaintenancePreservationSnapshot | undefined;
   return prepareSessionEntryMaintenanceInDatabase(
     database,
     params,
     () => (preservation ??= readPreservation()),
+    refreshCandidates,
   )(database, onArchived);
 }
 
@@ -132,6 +134,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): (
   database: OpenClawAgentDatabase,
   onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
@@ -175,7 +178,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,
@@ -266,7 +268,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
       const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
-        snapshot: readPreservation(),
+        snapshot: refreshCandidates ? refreshCandidates(selectedKeys) : readPreservation(),
         store: selectedEntries,
         baseKeys: currentBaseKeys,
       });
@@ -276,8 +278,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
         );
       }
     }
-    const archivedSessionKeys: string[] = [];
-    const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
+    const archivedEntries: SessionEntryMaintenancePlan["archivedEntries"] = [];
     for (const key of archivedKeys) {
       const previousEntry = selectedEntries[key];
       const planned = store[key];
@@ -292,14 +293,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       delete entry.archivedBy;
       writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
       onArchived?.(key, previousEntry, entry);
-      archivedSessionKeys.push(key);
-      if (entry.worktree) {
-        archivedWorktrees.push({
-          entry: structuredClone(entry),
-          sessionKey: key,
-          storePath: params.storePath,
-        });
-      }
+      archivedEntries.push({ sessionKey: key, sessionId: entry.sessionId });
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {
       const expectedEntry = selectedEntries[sessionKey];
@@ -308,8 +302,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
     stageSessionEntryMaintenanceAgeFact(database.db, ageFact);
     if (removals.length === 0) {
       return {
-        archivedSessionKeys,
-        ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+        archivedEntries,
         entryRemovals: [],
         stateDeletePlans: [],
         archived,
@@ -351,8 +344,7 @@ export function prepareSessionEntryMaintenanceInDatabase(
       }
     }
     return {
-      archivedSessionKeys,
-      ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
+      archivedEntries,
       entryRemovals: removals,
       stateDeletePlans: deletePlans,
       archived,

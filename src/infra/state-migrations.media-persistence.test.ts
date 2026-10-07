@@ -15,6 +15,7 @@ import {
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as integrityWorker from "./sqlite-integrity-worker.js";
@@ -37,6 +38,42 @@ afterEach(() => {
 });
 
 describe("legacy media persistence doctor migration", () => {
+  it("reports skipped embedding cache rows as recoverable Doctor warnings after a schema-21 upgrade", async () => {
+    const stateDir = makeTempDir(tempDirs, "memory-cache-migration-warning-");
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const pathname = createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 21 });
+    const database = new (requireNodeSqlite().DatabaseSync)(pathname);
+    try {
+      database.exec(`INSERT INTO memory_embedding_cache
+        (rowid, provider, model, provider_key, hash, embedding, dims, updated_at) VALUES
+        (7, 'p', 'm', 'k', 'oversized', '[1]' || replace(hex(zeroblob(524288)), '0', ' '), 1, 1),
+        (8, 'p', 'm', 'k', 'malformed', 'invalid', 1, 1),
+        (9, 'p', 'm', 'k', 'valid', '[1]', 1, 1)`);
+    } finally {
+      database.close();
+    }
+    const result = await migrateLegacyMediaPersistence({ env });
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.warnings).toEqual([
+      expect.stringContaining("Skipped 2 memory_embedding_cache rows"),
+    ]);
+    expect(result.warnings[0]).toContain("7, 8");
+    const migrated = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
+    try {
+      expect(migrated.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        migrated
+          .prepare("SELECT rowid, typeof(embedding) AS storage FROM memory_embedding_cache")
+          .all(),
+      ).toEqual([{ rowid: 9, storage: "blob" }]);
+    } finally {
+      migrated.close();
+    }
+    expect(await migrateLegacyMediaPersistence({ env })).toEqual({ changes: [], warnings: [] });
+  });
+
   it("cancels pending integrity before migrating the agent schema", async () => {
     const stateDir = makeTempDir(tempDirs, "media-persistence-interruption-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
@@ -65,10 +102,12 @@ describe("legacy media persistence doctor migration", () => {
       expect(await Promise.race([checking, migration.then(() => false)])).toBe(true);
     } finally {
       controller.abort(interruption);
-      await migration;
-      check.mockRestore();
+      try {
+        await expect(migration).rejects.toBe(interruption);
+      } finally {
+        check.mockRestore();
+      }
     }
-    expect((await migration).warnings.join("\n")).toContain("Doctor interrupted by SIGTERM");
     const database = new (requireNodeSqlite().DatabaseSync)(pathname, { readOnly: true });
     try {
       expect(database.prepare("PRAGMA user_version").get()?.user_version).toBe(21);
@@ -227,7 +266,26 @@ describe("legacy media persistence doctor migration", () => {
     writeArchive(compressedArchive, [conflict], true);
 
     const before = readDatabaseSnapshot(databasePath);
-    const result = await migrateLegacyMediaPersistence({ env });
+    const sql = observeMainThreadSql();
+    let result: Awaited<ReturnType<typeof migrateLegacyMediaPersistence>>;
+    try {
+      result = await migrateLegacyMediaPersistence({ env });
+      const statements = sql.calls.flatMap((call) =>
+        call.mock.calls.map(([statement]) => statement),
+      );
+      expect(statements).toContain("PRAGMA data_version");
+      expect(
+        statements.filter(
+          (statement) =>
+            typeof statement === "string" &&
+            /\bsum\s*\(/iu.test(statement) &&
+            /\b(?:transcript_events|trajectory_runtime_events)\b/iu.test(statement) &&
+            !/\bwhere\b/iu.test(statement),
+        ),
+      ).toEqual([]);
+    } finally {
+      sql.restore();
+    }
     expect(result.warnings).toEqual([]);
     expect(result.changes).toHaveLength(4);
     expect(result.changes).toEqual(
@@ -525,6 +583,7 @@ describe("legacy media persistence doctor migration", () => {
       env,
       eventsBySession: { drift: [event] },
     });
+    let afterForeignCommit: ReturnType<typeof readDatabaseSnapshot> | undefined;
     const transcriptDrift = await migrateLegacyMediaPersistence({
       env,
       hooks: {
@@ -539,10 +598,15 @@ describe("legacy media persistence doctor migration", () => {
             )
             .run("drift");
           writer.close();
+          afterForeignCommit = readDatabaseSnapshot(databasePath);
         },
       },
     });
-    expect(transcriptDrift.warnings.join("\n")).toContain("source changed");
+    expect(transcriptDrift.warnings.join("\n")).toContain(
+      "source changed before migration transaction",
+    );
+    expect(transcriptDrift.changes).toEqual([]);
+    expect(readDatabaseSnapshot(databasePath)).toEqual(afterForeignCommit);
     expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
 
     const trajectoryWriter = new DatabaseSync(databasePath);
@@ -572,15 +636,21 @@ describe("legacy media persistence doctor migration", () => {
             )
             .run(
               JSON.stringify({
-                data: { messagesSnapshot: [{ role: "user", MediaPath: "/changed.png" }] },
+                // A same-length replacement leaves the retired fingerprints unchanged.
+                data: { messagesSnapshot: [{ role: "user", MediaPath: "/new.png" }] },
               }),
               "drift",
             );
           writer.close();
+          afterForeignCommit = readDatabaseSnapshot(databasePath);
         },
       },
     });
-    expect(trajectoryDrift.warnings.join("\n")).toContain("trajectory source changed");
+    expect(trajectoryDrift.warnings.join("\n")).toContain(
+      "source changed before migration transaction",
+    );
+    expect(trajectoryDrift.changes).toEqual([]);
+    expect(readDatabaseSnapshot(databasePath)).toEqual(afterForeignCommit);
     expect(readDatabaseSnapshot(databasePath).version.user_version).toBe(PREVIOUS_VERSION);
 
     const archivePath = path.join(

@@ -17,12 +17,14 @@ import { registerExecutionTimeoutTests } from "./update-command-execution-timeou
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as readiness from "./update-command-readiness.js";
+import { registerServiceCollectionTests } from "./update-command-service-collection.test-support.js";
 import * as publication from "./update-command-service-revalidation.js";
 
 const { bindExecutionGuards, executionParams, inspectOrStopService, mocks, successfulUpdate } =
   await import("./update-command-execution.test-support.js");
 
 describe("mutable update execution", () => {
+  registerServiceCollectionTests();
   it.each(
     (["root", "include"] as const).flatMap((source) =>
       (["after-validation", "after-stop", "after-git-transfer"] as const).flatMap((phase) =>

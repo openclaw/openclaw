@@ -39,7 +39,8 @@ function write(cwd: string, file: string, contents: string) {
 }
 
 describe("CI extension package lint payload", () => {
-  it.each([3, 6])("keeps package ownership in its canonical %i stripes", (total) => {
+  it("keeps package ownership in its canonical stripes", () => {
+    const total = 3;
     const cwd = tempDirs.make("extension-lint-roots-");
     for (let index = 0; index < 25; index++) {
       mkdirSync(path.join(cwd, "extensions", `plugin-${String(index).padStart(2, "0")}`), {

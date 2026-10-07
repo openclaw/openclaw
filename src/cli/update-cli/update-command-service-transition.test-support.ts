@@ -9,11 +9,11 @@ import { VERSION } from "../../version.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { runUpdateFinalizationDoctorInFreshProcess } from "./update-command-fresh-doctor.js";
 import { serviceUpdateResult } from "./update-command-service-recovery.test-support.js";
+import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-revalidation.js";
 import { createShippedUnresolvedServiceStop } from "./update-command-service-state.test-support.js";
 import {
   maybeRestartService,
   maybeStopManagedServiceBeforeMutableUpdate,
-  revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service.js";
 
 export const preservedActivationCases = [
@@ -149,6 +149,10 @@ export function registerInstallRootTransitionTests(getFixture: () => InstallRoot
       let servingBuildId = "previous-build";
       if (mode === "git") {
         mocks.health.mockImplementation(async ({ port, expectedBuildId }) => ({
+          outcome:
+            mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId)
+              ? "ready"
+              : "failed",
           healthy: mocks.running && (!expectedBuildId || expectedBuildId === servingBuildId),
           staleGatewayPids: [],
           runtime: {

@@ -37,10 +37,7 @@ export class DiscordEntityCache {
   constructor(
     private readonly params: {
       client: StructureClient;
-      rest: RequestClient | (() => RequestClient);
-      ttlMs?: number;
-      maxEntries?: number;
-      sweepIntervalMs?: number;
+      rest: () => RequestClient;
     },
   ) {}
 
@@ -50,28 +47,28 @@ export class DiscordEntityCache {
 
   async fetchUser(id: string): Promise<User> {
     return await this.fetchCached(`user:${id}`, async () => {
-      const raw = await getUser(this.rest, id);
+      const raw = await getUser(this.params.rest(), id);
       return new User(this.params.client, raw);
     });
   }
 
   async fetchChannel(id: string) {
     return await this.fetchCached(`channel:${id}`, async () => {
-      const raw = await getChannel(this.rest, id);
+      const raw = await getChannel(this.params.rest(), id);
       return channelFactory(this.params.client, raw);
     });
   }
 
   async fetchGuild(id: string): Promise<Guild> {
     return await this.fetchCached(`guild:${id}`, async () => {
-      const raw = await getGuild(this.rest, id);
+      const raw = await getGuild(this.params.rest(), id);
       return new Guild(this.params.client, raw);
     });
   }
 
   async fetchMember(guildId: string, userId: string): Promise<GuildMember> {
     return await this.fetchCached(`member:${guildId}:${userId}`, async () => {
-      const raw = await getGuildMember(this.rest, guildId, userId);
+      const raw = await getGuildMember(this.params.rest(), guildId, userId);
       return new GuildMember(this.params.client, raw);
     });
   }
@@ -105,35 +102,33 @@ export class DiscordEntityCache {
   }
 
   private async fetchCached<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
-    const ttl = this.params.ttlMs ?? DEFAULT_REST_CACHE_TTL_MS;
     const rawNow = Date.now();
     const now = asDateTimestampMs(rawNow);
-    if (ttl > 0) {
-      const cached = this.entries.get(key) as CacheEntry<T> | undefined;
-      if (cached && now !== undefined && cached.expiresAt > now) {
-        return cached.value;
-      }
-      if (cached) {
-        this.entries.delete(key);
-      }
+    const cached = this.entries.get(key) as CacheEntry<T> | undefined;
+    if (cached && now !== undefined && cached.expiresAt > now) {
+      return cached.value;
+    }
+    if (cached) {
+      this.entries.delete(key);
     }
     const value = await fetcher();
-    if (ttl > 0) {
-      const expiresAt = resolveExpiresAtMsFromDurationMs(ttl, { nowMs: rawNow });
-      if (expiresAt !== undefined) {
-        if (now !== undefined) {
-          this.maybeSweepExpired(now);
-        }
-        this.entries.set(key, { expiresAt, value });
-        this.enforceMaxEntries();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(DEFAULT_REST_CACHE_TTL_MS, {
+      nowMs: rawNow,
+    });
+    if (expiresAt !== undefined) {
+      if (now !== undefined) {
+        this.maybeSweepExpired(now);
+      }
+      this.entries.set(key, { expiresAt, value });
+      if (this.entries.size > DEFAULT_MAX_ENTRIES) {
+        this.entries.delete(this.entries.keys().next().value!);
       }
     }
     return value;
   }
 
   private maybeSweepExpired(now: number): void {
-    const interval = this.params.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
-    if (now - this.lastSweepAt < interval) {
+    if (now - this.lastSweepAt < DEFAULT_SWEEP_INTERVAL_MS) {
       return;
     }
     this.lastSweepAt = now;
@@ -142,25 +137,5 @@ export class DiscordEntityCache {
         this.entries.delete(key);
       }
     }
-  }
-
-  private enforceMaxEntries(): void {
-    const max = this.params.maxEntries ?? DEFAULT_MAX_ENTRIES;
-    if (this.entries.size <= max) {
-      return;
-    }
-    const toRemove = this.entries.size - max;
-    let removed = 0;
-    for (const key of this.entries.keys()) {
-      if (removed >= toRemove) {
-        break;
-      }
-      this.entries.delete(key);
-      removed += 1;
-    }
-  }
-
-  private get rest(): RequestClient {
-    return typeof this.params.rest === "function" ? this.params.rest() : this.params.rest;
   }
 }

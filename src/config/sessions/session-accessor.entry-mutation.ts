@@ -14,8 +14,6 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { loadSessionEntry, patchSessionEntryCore } from "./session-accessor.entry.js";
 import { createSessionEntryWithTranscriptInScope } from "./session-accessor.sqlite-creation.js";
 import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
-import "./session-accessor.sqlite-entry.js";
-import "./session-accessor.sqlite-parent-session.js";
 import { prepareSessionEntryReplacementDatabase } from "./session-accessor.sqlite-replacement-worker.js";
 import {
   captureLifecycleDatabaseScope,
@@ -35,8 +33,13 @@ import type {
   SessionEntryCreateWithTranscriptPrepareResult,
   SessionEntryCreateWithTranscriptOptions,
 } from "./session-accessor.types.js";
+import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
-import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
+import {
+  assertSessionStoreReadCandidate,
+  captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
+} from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -70,12 +73,9 @@ function captureSessionEntryDatabasePreparation(
   const shared = captureOpenClawStateWorkerContext({ env: target.env });
   const candidates = [target, ...relatedScopes.map(captureScope)].flatMap((related) =>
     captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map(
-      (candidate) => ({
-        path: candidate.path,
-        physicalPath: candidate.physicalPath,
-        scope: candidate.scope,
-        identity: readDatabasePathIdentitySync(candidate.path),
-      }),
+      // Each capture returns fresh candidate objects, so attaching the identity in place is safe.
+      (candidate) =>
+        Object.assign(candidate, { identity: readDatabasePathIdentitySync(candidate.path) }),
     ),
   );
   const releases: Array<() => void> = [];
@@ -94,8 +94,7 @@ function captureSessionEntryDatabasePreparation(
       const isCreating = candidate.path === creatingPath || candidate.physicalPath === creatingPath;
       const isPrepared = candidate.path === preparedPath || candidate.physicalPath === preparedPath;
       if (
-        captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-          candidate.physicalPath ||
+        !isSessionStoreReadCandidateCurrent(candidate) ||
         (!(isCreating && candidate.identity.key.startsWith("path:")) &&
           !isDeepStrictEqual(
             readDatabasePathIdentitySync(candidate.path),
@@ -171,11 +170,19 @@ function captureSessionEntryDatabasePreparation(
       ) {
         return undefined;
       }
-      const original = candidates.find(
+      let original = candidates.find(
         (candidate) => candidate.path === resolved.path || candidate.physicalPath === resolved.path,
       );
       if (!original) {
-        throw new Error("Session creation lost its originally captured database target");
+        // A held custom-store family may allocate a new suffix. Never adopt an
+        // unobserved existing file or a target outside that original family.
+        assertSessionStoreReadCandidate(resolved.path, candidates);
+        const identity = readDatabasePathIdentitySync(resolved.path);
+        if (!identity.key.startsWith("path:")) {
+          throw new Error("Session creation lost its originally captured database target");
+        }
+        original = { ...captureSessionStoreReadCandidate(resolved.path), identity };
+        candidates.push(original);
       }
       return {
         options,
@@ -377,8 +384,9 @@ export async function createSessionEntryWithTranscript<TError = string>(
   const storePath = resolveSessionStorePathForScope(captured);
   const agentId = captured.agentId ?? resolveAgentIdFromSessionKey(captured.sessionKey);
   const target = { ...captured, agentId, storePath };
+  const incognito = captureIncognitoSessionBinding(target);
   const resolved = captureLifecycleDatabaseScope(
-    isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target),
+    isMainThread && !incognito ? await prepareSqliteScope(target) : resolveSqliteScope(target),
   );
   return createSessionEntryWithTranscriptInScope(resolved, createEntry, options);
 }

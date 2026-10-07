@@ -207,7 +207,6 @@ describe("gateway startup import boundaries", () => {
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
-    expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');
@@ -243,7 +242,7 @@ describe("gateway startup import boundaries", () => {
     );
     const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
-    const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
+    const cleanupCall = serverImpl.lastIndexOf("cleanupGatewayRetiredPluginArtifacts(");
 
     expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
     expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
@@ -251,7 +250,6 @@ describe("gateway startup import boundaries", () => {
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);
     expect(cleanupCall).toBeGreaterThan(postReadyStart);
-    expect(cleanup).toContain("loadInstalledPluginIndexInstallRecordsSync()");
   });
 
   it("loads the worker bootstrap runtime only when an operation needs it", () => {

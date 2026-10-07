@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   ElevatedLevel,
@@ -58,7 +59,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
-import { patchSessionStatusModel } from "./session-status-model.js";
+import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -75,7 +76,6 @@ import {
   type SessionStatusDeliveryContextDetails,
   type SessionStatusOriginDetails,
 } from "./session-status-tool.schema.js";
-import { assertSessionStatusVisible } from "./session-status-visibility.js";
 import {
   formatSessionToolAccessDenial,
   resolveCurrentSessionClientAlias,
@@ -87,8 +87,6 @@ import {
 } from "./sessions-helpers.js";
 
 const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
-
-type ActiveStatusModelIdentity = { provider?: string; model: string };
 
 type SessionStatusRouteDetails = {
   origin?: SessionStatusOriginDetails;
@@ -189,49 +187,6 @@ function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): st
 \`\`\`json
 ${JSON.stringify(details, null, 2)}
 \`\`\``;
-}
-
-function resolveActiveStatusModelIdentity(params: {
-  activeModelId?: string;
-  activeModelProvider?: string;
-  isImplicitCurrentRequest: boolean;
-  isSemanticCurrentRequest: boolean;
-  liveSessionKeys: ReadonlySet<string>;
-  modelRaw?: string;
-  resolvedKey: string;
-  resolvedAgentId: string;
-  requesterAgentId: string;
-}): ActiveStatusModelIdentity | undefined {
-  const activeModelId = params.activeModelId?.trim();
-  if (
-    !activeModelId ||
-    params.modelRaw !== undefined ||
-    (!params.isSemanticCurrentRequest && !params.isImplicitCurrentRequest) ||
-    params.resolvedAgentId !== params.requesterAgentId ||
-    !params.liveSessionKeys.has(params.resolvedKey.trim())
-  ) {
-    return undefined;
-  }
-  const activeModelProvider = params.activeModelProvider?.trim();
-  return activeModelProvider
-    ? { provider: activeModelProvider, model: activeModelId }
-    : { model: activeModelId };
-}
-
-function withActiveStatusModelIdentity(
-  entry: SessionEntry,
-  identity: ActiveStatusModelIdentity,
-): SessionEntry {
-  const next: SessionEntry = {
-    ...entry,
-    model: identity.model,
-    ...(identity.provider ? { modelProvider: identity.provider } : {}),
-  };
-  delete next.providerOverride;
-  delete next.modelOverride;
-  delete next.modelOverrideSource;
-  delete next.modelOverrideRouteResolution;
-  return next;
 }
 
 export function createSessionStatusTool(opts?: {
@@ -436,6 +391,7 @@ export function createSessionStatusTool(opts?: {
       let resolved = deferTargetOwnerResolution
         ? undefined
         : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
+      resolved = isPromiseLike(resolved) ? await resolved : resolved;
 
       if (
         !resolved &&
@@ -498,6 +454,7 @@ export function createSessionStatusTool(opts?: {
             mainKey,
           });
           resolved = readStatusEntry(requestedKeyInput);
+          resolved = isPromiseLike(resolved) ? await resolved : resolved;
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
@@ -505,10 +462,12 @@ export function createSessionStatusTool(opts?: {
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
         resolved = readStatusEntry(effectiveRequesterLookupKey, false);
+        resolved = isPromiseLike(resolved) ? await resolved : resolved;
       }
 
       if (!resolved && requestedKeyInput === "current") {
         resolved = readStatusEntry(requestedKeyInput, true);
+        resolved = isPromiseLike(resolved) ? await resolved : resolved;
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -517,6 +476,7 @@ export function createSessionStatusTool(opts?: {
           mainKey,
         })) {
           resolved = readStatusEntry(fallbackKey, true);
+          resolved = isPromiseLike(resolved) ? await resolved : resolved;
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;
@@ -569,17 +529,27 @@ export function createSessionStatusTool(opts?: {
         requestedKeyInput,
       );
       let scopedResolved = resolved;
-      const assertStatusVisible = () =>
-        assertSessionStatusVisible({
-          selection: operatorSelection,
-          resolved: scopedResolved,
-          agentId,
-          requesterAgentId,
-          currentSessionKey: opts?.runSessionKey?.trim() ?? effectiveRequesterLookupKey,
-          normalizeSessionKey: normalizeVisibilityTargetSessionKey,
-          requestedKey: requestedKeyInput,
-          gatewayCall,
+      const assertStatusVisible = async () => {
+        operatorSelection.assertCurrent();
+        const currentSessionKey = opts?.runSessionKey?.trim() ?? effectiveRequesterLookupKey;
+        if (
+          !operatorSelection.operatorAuthority ||
+          !scopedResolved.persisted ||
+          (agentId === requesterAgentId &&
+            normalizeVisibilityTargetSessionKey(scopedResolved.key, agentId) ===
+              normalizeVisibilityTargetSessionKey(currentSessionKey, requesterAgentId))
+        ) {
+          return;
+        }
+        const described = await gatewayCall<{ session: { sessionId?: string } | null }>({
+          method: "sessions.describe",
+          params: { key: scopedResolved.key, agentId },
         });
+        operatorSelection.assertCurrent();
+        if (described.session?.sessionId !== scopedResolved.entry.sessionId) {
+          throw new Error(`Session not visible from session tools: ${requestedKeyInput}`);
+        }
+      };
       await assertStatusVisible();
 
       return await runWithScopedSessionAccess({
@@ -609,7 +579,6 @@ export function createSessionStatusTool(opts?: {
             changedModel = patched.changedModel;
           }
 
-          const isImplicitCurrentRequest = requestedKeyParam === undefined;
           const liveSessionKeys = new Set(
             [
               opts?.runSessionKey,
@@ -620,17 +589,19 @@ export function createSessionStatusTool(opts?: {
               .map((value) => value?.trim())
               .filter((value): value is string => Boolean(value)),
           );
-          const activeModelIdentity = resolveActiveStatusModelIdentity({
-            activeModelId: opts?.activeModelId,
-            activeModelProvider: opts?.activeModelProvider,
-            isImplicitCurrentRequest,
-            isSemanticCurrentRequest,
-            liveSessionKeys,
-            modelRaw,
-            resolvedKey: scopedResolved.key,
-            resolvedAgentId: agentId,
-            requesterAgentId,
-          });
+          const activeModelId = opts?.activeModelId?.trim();
+          const activeModelProvider = opts?.activeModelProvider?.trim();
+          const activeModelIdentity =
+            activeModelId &&
+            modelRaw === undefined &&
+            (isSemanticCurrentRequest || requestedKeyParam === undefined) &&
+            agentId === requesterAgentId &&
+            liveSessionKeys.has(scopedResolved.key.trim())
+              ? {
+                  model: activeModelId,
+                  ...(activeModelProvider ? { provider: activeModelProvider } : {}),
+                }
+              : undefined;
           const runtimeModelIdentity =
             activeModelIdentity ??
             resolveSessionModelIdentityRef(
@@ -774,4 +745,3 @@ export function createSessionStatusTool(opts?: {
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

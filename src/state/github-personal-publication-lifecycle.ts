@@ -8,6 +8,7 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { createSqliteWorkerWriteAdmission } from "../infra/sqlite-worker-store.js";
 import type {
@@ -29,7 +30,11 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<
-  (assertCurrent?: () => void, sessionEntryCurrent?: SessionEntryCurrentCheck) => Promise<void>
+  (options?: {
+    assertCurrent?: () => void;
+    sessionEntryCurrent?: SessionEntryCurrentCheck;
+    retainedSessionKeys?: ReadonlySet<string>;
+  }) => Promise<void>
 > {
   params.assertCurrent?.();
   const context = captureOpenClawStateWorkerContext({ env: params.env });
@@ -45,7 +50,11 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
     { assertCurrent: params.assertCurrent, existingOnly: true },
   )) ?? { personal: [], repository: [] };
   params.assertCurrent?.();
-  return async (assertCurrent, sessionEntryCurrent) => {
+  return async ({ assertCurrent, sessionEntryCurrent, retainedSessionKeys } = {}) => {
+    const selectedKeys = new Set(input.sessionKeys.filter((key) => !retainedSessionKeys?.has(key)));
+    if (selectedKeys.size === 0) {
+      return;
+    }
     const assertAdmission = () => {
       context.admission.assertCurrent();
       assertCurrent?.();
@@ -56,9 +65,19 @@ export async function preparePersonalGitHubSessionReceiptDeletion(params: {
         scope.execute({
           type: "githubPublication.deleteSessionReceipts",
           input: {
-            ...input,
-            generations,
-            receipts,
+            agentId: input.agentId,
+            sessionKeys: [...selectedKeys],
+            generations: generations.filter((generation) =>
+              selectedKeys.has(generation.sessionKey),
+            ),
+            receipts: {
+              personal: receipts.personal.filter((receipt) =>
+                selectedKeys.has(receipt.session_key),
+              ),
+              repository: receipts.repository.filter((receipt) =>
+                selectedKeys.has(receipt.session_key),
+              ),
+            },
             sessionEntryCurrentSource: sessionEntryCurrent?.source,
           },
         }),
@@ -90,7 +109,7 @@ export function readSessionReceiptDeletionIdentitiesInDatabase(
             .selectFrom(table)
             .select(["request_id", "session_id", "session_key", "created_at_ms"])
             .where("agent_id", "=", params.agentId)
-            .where("session_key", "in", params.sessionKeys),
+            .where("session_key", "in", sqliteStringSet(params.sessionKeys)),
         ).rows
       : [];
   return {
@@ -118,6 +137,15 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
   if (existing.length === 0 || params.sessionKeys.length === 0) {
     return;
   }
+  // Repeated key/id pairs retain the first captured lifecycle revision.
+  const generations = new Map(
+    params.generations
+      .toReversed()
+      .map((generation) => [
+        JSON.stringify([generation.sessionKey, generation.sessionId]),
+        generation,
+      ]),
+  );
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSessionEntryCurrentAdmission(
@@ -147,10 +175,8 @@ export function deletePersonalGitHubSessionReceiptsInDatabase(
             ) {
               return true;
             }
-            const generation = params.generations.find(
-              (candidate) =>
-                candidate.sessionKey === receipt.session_key &&
-                candidate.sessionId === receipt.session_id,
+            const generation = generations.get(
+              JSON.stringify([receipt.session_key, receipt.session_id]),
             );
             if (!generation) {
               return false;

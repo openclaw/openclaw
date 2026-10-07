@@ -27,6 +27,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
 ): ArchivedSessionEvictionBatch {
   const limit = Math.max(1, params.limit ?? DISK_EVICTABLE_ARCHIVE_BATCH_SIZE);
   const candidates: ArchivedSessionEvictionBatch["candidates"] = [];
+  const preserveKeys = new Set(params.liveSessionKeys);
   let cursor = params.after;
   while (candidates.length < limit) {
     const db = getSessionKysely(database.db);
@@ -65,6 +66,7 @@ export function readDiskEvictableArchivedSessionBatchInDatabase(
           key: row.session_key,
           entry,
           preserveRecentMs: params.preserveRecentMs,
+          preserveKeys,
         })
       ) {
         candidates.push({ archivedAt: row.archived_at, entry, sessionKey: row.session_key });

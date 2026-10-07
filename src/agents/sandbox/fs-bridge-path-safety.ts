@@ -67,8 +67,6 @@ type RunCommand = (
   script: string,
   options?: {
     args?: string[];
-    stdin?: Buffer | string;
-    allowFailure?: boolean;
     signal?: AbortSignal;
   },
 ) => Promise<{ stdout: Buffer }>;
@@ -199,13 +197,9 @@ export class SandboxFsPathGuard {
     signal?: AbortSignal,
   ): Promise<string> {
     const resolved = await this.resolveCanonicalReadTarget(target, "authorize file reads", signal);
-    return this.policyPathForHostIdentity(resolved.target, resolved.canonicalHostPath);
-  }
-
-  private policyPathForHostIdentity(target: SandboxResolvedFsPath, observedPath: string): string {
     return this.policyPathForCanonicalHostIdentity(
-      target,
-      resolveIdentityPathViaExistingAncestorSync(observedPath),
+      resolved.target,
+      resolveIdentityPathViaExistingAncestorSync(resolved.canonicalHostPath),
     );
   }
 

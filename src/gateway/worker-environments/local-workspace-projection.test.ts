@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -12,13 +12,19 @@ import {
   closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   withLocalWorkspaceProjection,
   withSettledLocalWorkspace,
 } from "./local-workspace-projection.js";
-import { localWorkspaceStore } from "./local-workspace-store.js";
+import * as workspaceStore from "./local-workspace-store.js";
+import { withLocalWorkspaceStore } from "./local-workspace-store.js";
+import {
+  observeLocalWorkspaceStoreSql,
+  readLocalWorkspaceProjection,
+} from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 
 let root: string;
@@ -33,6 +39,24 @@ async function expectMissing(directory: string, ...parts: string[]) {
   await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
 }
 
+function observeAcknowledgedUpdate(
+  observe: (row: workspaceStore.LocalWorkspaceProjection) => void,
+) {
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  return vi.spyOn(workspaceStore, "withLocalWorkspaceStore").mockImplementation((params, run) =>
+    withStore(params, (store) =>
+      run({
+        ...store,
+        update: async (row, patch, authority) => {
+          const acknowledged = await store.update(row, patch, authority);
+          observe(acknowledged);
+          return acknowledged;
+        },
+      }),
+    ),
+  );
+}
+
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -41,6 +65,7 @@ const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 beforeAll(() => {
   stateRoot = suiteDirs.make("openclaw-local-projection-state-");
+  openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateRoot } });
 });
 
 beforeEach(async () => {
@@ -95,12 +120,14 @@ afterEach(async () => {
   // Retain the physical database and its reader worker; remove only this case's
   // ownership. The store refuses deletion while a receipt or journal is pending.
   revoked = false;
-  const store = localWorkspaceStore();
-  const row = store.get(owner.worktree.id);
-  if (row) {
-    store.delete(row, owner.assertCurrent);
-    await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
-  }
+  vi.restoreAllMocks();
+  await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    const row = store.get();
+    if (row) {
+      await store.delete(row);
+      await fs.rm(path.dirname(row.projection_path), { recursive: true, force: true });
+    }
+  });
   deleteRegistryWorktree(process.env, owner.worktree.id);
   if (process.env.OPENCLAW_STATE_DIR !== stateRoot) {
     await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath());
@@ -110,6 +137,35 @@ afterEach(async () => {
 });
 
 describe("local sandbox workspace reconciliation", () => {
+  it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", async () => {
+    const sql = observeLocalWorkspaceStoreSql();
+    try {
+      sql.calibrate();
+      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      await fs.writeFile(path.join(projection, "source.txt"), "worker-persisted edit\n");
+      await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+      expect(await readText(owner.worktree.path, "source.txt")).toBe("worker-persisted edit\n");
+      const baseline = await withLocalWorkspaceStore(
+        { worktreeId: owner.worktree.id },
+        async (store) => {
+          const row = store.get()!;
+          const value = row.baseline_json + " ".repeat(6 * 1024 * 1024);
+          await store.update(row, {
+            baseline_json: value,
+            baseline_ref: "sha256:" + createHash("sha256").update(value).digest("hex"),
+          });
+          return value;
+        },
+      );
+      await withLocalWorkspaceProjection(owner, async (state) => {
+        expect(state.current().baseline_json).toBe(baseline);
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
   it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
     "edits and runs Git in a real required Podman sandbox across turns",
     ({ signal }) =>
@@ -126,14 +182,12 @@ describe("local sandbox workspace reconciliation", () => {
   it("installs additive owner state without changing the database version", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     const [
-      { openOpenClawStateDatabase },
       { tableExists },
       { OPENCLAW_STATE_SCHEMA_SQL },
       { FIRST_USE_STATE_TABLES },
       { extractSqliteTableSchema },
       { assertSqliteSchemaContains },
     ] = await Promise.all([
-      import("../../state/openclaw-state-db.js"),
       import("../../state/openclaw-state-db-schema-helpers.js"),
       import("../../state/openclaw-state-schema.js"),
       import("../../state/openclaw-state-db-contract.js"),
@@ -159,22 +213,42 @@ describe("local sandbox workspace reconciliation", () => {
       }),
     ).not.toThrow();
     await closeOpenClawStateDatabaseAsync();
-    expect(localWorkspaceStore().get(owner.worktree.id)?.session_id).toBe(owner.sessionId);
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.session_id).toBe(
+      owner.sessionId,
+    );
   });
 
   it("seeds independent source-only Git and reconciles edits without host metadata or ignored secrets", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, "source.txt")).toBe("original\n");
+    await fs.mkdir(path.join(owner.worktree.path, "src/lib"), { recursive: true });
+    await fs.writeFile(path.join(owner.worktree.path, "src/lib/source.ts"), "nested seed");
+    await git(owner.worktree.path, "add", "src/lib/source.ts");
+    await git(owner.worktree.path, "commit", "--quiet", "-m", "nested seed");
+    await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "canonical edit\n");
+    await fs.writeFile(path.join(owner.worktree.path, "untracked.txt"), "admitted source\n");
+    const manifests = await import("./workspace-manifest-worker.js");
+    const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
+    let projection: string;
+    try {
+      projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
+      expect(
+        capture.mock.calls.filter(([input]) => input.root !== owner.worktree.path),
+      ).toHaveLength(1);
+    } finally {
+      capture.mockRestore();
+    }
+    expect(await readText(projection, "src/lib/source.ts")).toBe("nested seed");
+    expect(await readText(projection, "source.txt")).toBe("canonical edit\n");
+    expect(await readText(projection, "untracked.txt")).toBe("admitted source\n");
     expect((await fs.lstat(path.join(projection, ".git"))).isDirectory()).toBe(true);
     expect(await git(projection, "rev-parse", "--git-common-dir")).toBe(".git");
     await expectMissing(projection, ".env.local");
     expect(await readText(projection, ".git", "config")).not.toContain("credential");
     await expectMissing(projection, ".git", "objects", "info", "alternates");
     await fs.writeFile(path.join(projection, "source.txt"), "guest edit\n");
-    await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
     expect(await readText(owner.worktree.path, "source.txt")).toBe("guest edit\n");
     expect(await readText(owner.worktree.repoRoot, "source.txt")).toBe("original\n");
-    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
     expect(await git(projection, "status", "--porcelain")).toContain("source.txt");
   });
 
@@ -215,22 +289,26 @@ describe("local sandbox workspace reconciliation", () => {
     owner.worktree.repoFingerprint = (
       await service.resolveRepositoryIdentity(owner.worktree.path)
     ).fingerprint;
-    insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
+    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
     await git(owner.worktree.repoRoot, "config", "--unset-all", "credential.helper");
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     await fs.writeFile(path.join(projection, ".gitignore"), "");
     await fs.writeFile(path.join(projection, "guest-new.txt"), "guest source");
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
+    await fs.writeFile(path.join(projection, "source.txt"), "retained guest edit\n");
     const removed = await service.remove({
       id: owner.worktree.id,
       reason: "de-ignore archive",
     });
+    expect(removed.removed).toBe(true);
+    expect(removed.snapshotRef).toBeTruthy();
     const tree = removed.snapshotRef!;
     await service.restore({ id: owner.worktree.id });
     await closeOpenClawStateDatabaseAsync();
     // Canonical archives retain host data, but restoring it is not guest admission.
     expect(await readText(owner.worktree.path, ".env.local")).toBe("host-only-secret");
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+    expect(await readText(owner.worktree.path, "source.txt")).toBe("retained guest edit\n");
+    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
     await expectMissing(projection, ".env.local");
     const paths = await git(owner.worktree.repoRoot, "ls-tree", "-r", "--name-only", tree);
     expect(paths).toContain(".env.local");
@@ -348,16 +426,6 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
-  it("seeds a committed nested source tree with a complete manifest namespace", async () => {
-    await fs.mkdir(path.join(owner.worktree.path, "src/lib"), { recursive: true });
-    await fs.writeFile(path.join(owner.worktree.path, "src/lib/source.ts"), "nested seed");
-    await git(owner.worktree.path, "add", "src/lib/source.ts");
-    await git(owner.worktree.path, "commit", "--quiet", "-m", "nested seed");
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await readText(projection, "src/lib/source.ts")).toBe("nested seed");
-    await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-  });
-
   it("keeps eligible nested project content and accepted empty directories across turns", async () => {
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     await fs.mkdir(path.join(projection, ".openclaw/sandbox-skills/skills"), { recursive: true });
@@ -379,73 +447,83 @@ describe("local sandbox workspace reconciliation", () => {
     await expect(
       withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical")),
     ).rejects.toThrow("conflict");
-    expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBeTruthy();
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
     expect(await readText(projection, "source.txt")).toBe("guest conflict\n");
     expect(await readText(owner.worktree.path, "source.txt")).toBe("human conflict\n");
     await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "original\n");
     await withLocalWorkspaceProjection(owner, (state) => state.settle());
     expect(await readText(owner.worktree.path, "source.txt")).toBe("guest conflict\n");
-    expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBeNull();
+    expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
   });
 
-  it("recovers the persisted rollback journal after authority closes during acceptance", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "interrupted guest edit\n");
-    const interrupted = {
-      ...owner,
-      assertCurrent: () => {
-        if (
-          readFileSync(path.join(owner.worktree.path, "source.txt"), "utf8") ===
-          "interrupted guest edit\n"
-        ) {
-          revoked = true;
+  it.each(["acceptance", "accepted-result cleanup"] as const)(
+    "recovers durable state when authority closes during %s",
+    async (phase) => {
+      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      const edit = "interrupted guest edit\n";
+      const accepted = phase === "accepted-result cleanup";
+      await fs.writeFile(path.join(projection, "source.txt"), edit);
+      const acknowledgement = accepted
+        ? observeAcknowledgedUpdate((row) => {
+            if (row.pending_ref && row.pending_target === null) {
+              revoked = true;
+            }
+          })
+        : undefined;
+      const interrupted = {
+        ...owner,
+        assertCurrent: () => {
+          if (
+            !accepted &&
+            readFileSync(path.join(owner.worktree.path, "source.txt"), "utf8") === edit
+          ) {
+            revoked = true;
+          }
+          owner.assertCurrent();
+        },
+      };
+      await expect(
+        withLocalWorkspaceProjection(interrupted, (state) => state.synchronize("canonical")),
+      ).rejects.toThrow(accepted ? "revoked" : undefined);
+      acknowledgement?.mockRestore();
+      if (accepted) {
+        expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+          pending_ref: expect.any(String),
+          pending_target: null,
+          journal_json: null,
+        });
+        await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "later human edit\n");
+      } else {
+        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.journal_json).toBeTruthy();
+        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeTruthy();
+      }
+      revoked = false;
+      if (accepted) {
+        const pendingRef = (await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref;
+        const preservedProjection = projection + "-preserved";
+        await fs.rename(projection, preservedProjection);
+        try {
+          await expect(
+            withLocalWorkspaceProjection(owner, (state) => state.prepare()),
+          ).rejects.toThrow();
+          expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(
+            pendingRef,
+          );
+        } finally {
+          await fs.rename(preservedProjection, projection);
         }
-        owner.assertCurrent();
-      },
-    };
-    await expect(
-      withLocalWorkspaceProjection(interrupted, (state) => state.synchronize("canonical")),
-    ).rejects.toThrow();
-    expect(localWorkspaceStore().get(owner.worktree.id)?.journal_json).toBeTruthy();
-    expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBeTruthy();
-    revoked = false;
-    closeOpenClawStateDatabase();
-    await withLocalWorkspaceProjection(owner, (state) => state.settle());
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("interrupted guest edit\n");
-    expect(localWorkspaceStore().get(owner.worktree.id)).toMatchObject({
-      journal_json: null,
-      pending_ref: null,
-    });
-  });
-
-  it("recovers accepted-result cleanup without replaying an already accepted edit", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "accepted guest edit\n");
-    const interrupted = {
-      ...owner,
-      assertCurrent: () => {
-        const row = localWorkspaceStore().get(owner.worktree.id);
-        if (row?.pending_ref && row.pending_target === null) {
-          revoked = true;
-        }
-        owner.assertCurrent();
-      },
-    };
-    await expect(
-      withLocalWorkspaceProjection(interrupted, (state) => state.synchronize("canonical")),
-    ).rejects.toThrow("revoked");
-    expect(localWorkspaceStore().get(owner.worktree.id)).toMatchObject({
-      pending_ref: expect.any(String),
-      pending_target: null,
-      journal_json: null,
-    });
-    await fs.writeFile(path.join(owner.worktree.path, "source.txt"), "later human edit\n");
-    revoked = false;
-    closeOpenClawStateDatabase();
-    await withLocalWorkspaceProjection(owner, (state) => state.settle());
-    expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBeNull();
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("later human edit\n");
-  });
+      }
+      closeOpenClawStateDatabase();
+      await withLocalWorkspaceProjection(owner, (state) => state.settle());
+      expect(await readText(owner.worktree.path, "source.txt")).toBe(
+        accepted ? "later human edit\n" : edit,
+      );
+      expect(await readLocalWorkspaceProjection(owner.worktree.id)).toMatchObject({
+        journal_json: null,
+        pending_ref: null,
+      });
+    },
+  );
 
   it("retirement preserves a same-name replacement browser after quiescence", async () => {
     const [{ insertRegistryWorktree }, registry, engine] = await Promise.all([
@@ -453,7 +531,7 @@ describe("local sandbox workspace reconciliation", () => {
       import("../../agents/sandbox/registry.js"),
       import("../../agents/sandbox/container-engine.js"),
     ]);
-    insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
+    await insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
     const entry = {
       containerName: "retirement-owned",
@@ -514,25 +592,6 @@ describe("local sandbox workspace reconciliation", () => {
     }
   });
 
-  it("settles edits before managed snapshot removal and preserves them after restore", async () => {
-    const [{ insertRegistryWorktree }, { ManagedWorktreeService }] = await Promise.all([
-      import("../../agents/worktrees/registry.js"),
-      import("../../agents/worktrees/service.js"),
-    ]);
-    const service = new ManagedWorktreeService();
-    const identity = await service.resolveRepositoryIdentity(owner.worktree.path);
-    owner.worktree.repoFingerprint = identity.fingerprint;
-    insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [] });
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "retained guest edit\n");
-    const removed = await service.remove({ id: owner.worktree.id, reason: "test-archive" });
-    expect(removed.removed).toBe(true);
-    expect(removed.snapshotRef).toBeTruthy();
-    await service.restore({ id: owner.worktree.id });
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("retained guest edit\n");
-    expect(await withLocalWorkspaceProjection(owner, (state) => state.prepare())).toBe(projection);
-  });
-
   it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     "preserves accepted ignored files, symlinks and empty directories through archive: %s",
     async (mode) => {
@@ -555,7 +614,9 @@ describe("local sandbox workspace reconciliation", () => {
       owner.worktree.repoFingerprint = (
         await service.resolveRepositoryIdentity(owner.worktree.path)
       ).fingerprint;
-      insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths: [".env.allowed"] });
+      await insertRegistryWorktree(process.env, owner.worktree, {
+        provisionedPaths: [".env.allowed"],
+      });
       await fs.writeFile(
         path.join(owner.worktree.path, ".env.allowed"),
         "original provisioned bytes",
@@ -589,7 +650,7 @@ describe("local sandbox workspace reconciliation", () => {
       expect(
         await git(owner.worktree.repoRoot, "ls-tree", "-r", "--name-only", removed.snapshotRef!),
       ).not.toContain("guest-ignored");
-      const receipt = localWorkspaceStore().get(owner.worktree.id)!.pending_ref!;
+      const receipt = (await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref!;
       expect(receipt).toBeTruthy();
       const legacyState = (await getRegistryWorktreeProvisionedState(
         process.env,
@@ -605,8 +666,15 @@ describe("local sandbox workspace reconciliation", () => {
           await git(owner.worktree.repoRoot, "rev-parse", "--verify", removed.snapshotRef!),
         ).toMatch(/^[a-f0-9]+$/u);
         await fs.writeFile(path.join(projection, "guest-ignored/data"), bytes);
-        expect((await service.gc()).snapshotsPruned).toBe(1);
-        expect(localWorkspaceStore().get(owner.worktree.id)).toBeUndefined();
+        const sql = observeLocalWorkspaceStoreSql();
+        try {
+          sql.calibrate();
+          expect((await service.gc()).snapshotsPruned).toBe(1);
+          sql.expectIdle();
+        } finally {
+          sql.restore();
+        }
+        expect(await readLocalWorkspaceProjection(owner.worktree.id)).toBeUndefined();
         expect(getRegistryWorktree(process.env, owner.worktree.id)).toBeUndefined();
         expect(
           await git(
@@ -654,7 +722,7 @@ describe("local sandbox workspace reconciliation", () => {
           "original provisioned bytes",
         );
         expect(existsSync(path.join(owner.worktree.path, "guest-ignored/data"))).toBe(false);
-        updateRegistryWorktree(process.env, owner.worktree.id, {
+        await updateRegistryWorktree(process.env, owner.worktree.id, {
           removedAt: undefined,
           lastActiveAt: now + 1,
           provisionedPaths: legacyState.map((entry) => entry.path),
@@ -662,26 +730,29 @@ describe("local sandbox workspace reconciliation", () => {
         await closeOpenClawStateDatabaseAsync();
       } else {
         let injected = false;
+        const acknowledgement = observeAcknowledgedUpdate((row) => {
+          if (
+            row.pending_ref &&
+            row.pending_target === null &&
+            existsSync(path.join(owner.worktree.path, "guest-ignored/data"))
+          ) {
+            injected = true;
+          }
+        });
         await expect(
           service.restore({
             id: owner.worktree.id,
             commitGuard: () => {
-              const row = localWorkspaceStore().get(owner.worktree.id);
-              if (
-                !injected &&
-                row?.pending_ref &&
-                row.pending_target === null &&
-                existsSync(path.join(owner.worktree.path, "guest-ignored/data"))
-              ) {
-                injected = true;
+              if (injected) {
                 throw new Error("restore interrupted after overlay acceptance");
               }
             },
           }),
         ).rejects.toThrow("restore interrupted after overlay acceptance");
+        acknowledgement.mockRestore();
         expect(injected).toBe(true);
         expect(existsSync(owner.worktree.path)).toBe(false);
-        expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBe(receipt);
+        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBe(receipt);
         expect(getRegistryWorktree(process.env, owner.worktree.id)?.removedAt).toBeDefined();
         await service.restore({ id: owner.worktree.id });
       }
@@ -703,7 +774,7 @@ describe("local sandbox workspace reconciliation", () => {
         "original provisioned bytes",
       );
       await expectMissing(projection, ".env.allowed");
-      expect(localWorkspaceStore().get(owner.worktree.id)?.pending_ref).toBeNull();
+      expect((await readLocalWorkspaceProjection(owner.worktree.id))?.pending_ref).toBeNull();
       await git(owner.worktree.repoRoot, "config", "--unset-all", "credential.helper");
       const { captureGitHubPublicationWorkspaceSnapshot } =
         await import("../github-publication-git-transport.js");
@@ -716,31 +787,32 @@ describe("local sandbox workspace reconciliation", () => {
     },
   );
 
-  it("retains pending bytes across a same-conversation lifecycle reset", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "before reset\n");
-    const resumed = { ...owner, lifecycleRevision: randomUUID() };
-    expect(await withLocalWorkspaceProjection(resumed, (state) => state.prepare())).toBe(
-      projection,
-    );
-    expect(await readText(owner.worktree.path, "source.txt")).toBe("before reset\n");
-    expect(localWorkspaceStore().get(owner.worktree.id)?.lifecycle_revision).toBe(
-      resumed.lifecycleRevision,
-    );
-  });
-
-  it("does not let a replacement session adopt the old projection", async () => {
-    const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    await fs.writeFile(path.join(projection, "source.txt"), "unaccepted edit\n");
-    await expect(
-      withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
-        state.prepare(),
-      ),
-    ).rejects.toThrow("different session incarnation");
-    expect(await readText(projection, "source.txt")).toBe("unaccepted edit\n");
-    revoked = true;
-    await expect(withLocalWorkspaceProjection(owner, (state) => state.prepare())).rejects.toThrow(
-      "revoked",
-    );
-  });
+  it.each(["lifecycle reset", "replacement session"] as const)(
+    "preserves pending bytes across a %s without transferring session authority",
+    async (change) => {
+      const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+      await fs.writeFile(path.join(projection, "source.txt"), "unaccepted edit\n");
+      if (change === "lifecycle reset") {
+        const resumed = { ...owner, lifecycleRevision: randomUUID() };
+        expect(await withLocalWorkspaceProjection(resumed, (state) => state.prepare())).toBe(
+          projection,
+        );
+        expect(await readText(owner.worktree.path, "source.txt")).toBe("unaccepted edit\n");
+        expect((await readLocalWorkspaceProjection(owner.worktree.id))?.lifecycle_revision).toBe(
+          resumed.lifecycleRevision,
+        );
+      } else {
+        await expect(
+          withLocalWorkspaceProjection({ ...owner, sessionId: randomUUID() }, (state) =>
+            state.prepare(),
+          ),
+        ).rejects.toThrow("different session incarnation");
+        expect(await readText(projection, "source.txt")).toBe("unaccepted edit\n");
+        revoked = true;
+        await expect(
+          withLocalWorkspaceProjection(owner, (state) => state.prepare()),
+        ).rejects.toThrow("revoked");
+      }
+    },
+  );
 });

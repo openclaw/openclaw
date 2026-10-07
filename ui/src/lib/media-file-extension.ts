@@ -1,5 +1,3 @@
-// Browser-safe media filenames and format hints shared by Control UI renderers.
-
 const SAME_ORIGIN_MEDIA_ROUTE_MARKERS = [
   "/__openclaw__/assistant-media",
   "/__openclaw__/media/",

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import runpy
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -10,16 +12,27 @@ from pathlib import Path
 from unittest import mock
 
 from .test_autoreview_hardening import SCRIPT, git, init_repo, load_helper
+from . import test_git_line_endings
 
 
 ORACLE_TOOLS = runpy.run_path(str(SCRIPT.with_name("test-review-harness.py")))
+IMAGE_TESTS = runpy.run_path(str(SCRIPT.with_name("autoreview_test.py")))
+
+
+def write_python_fixture(path: Path, source: str) -> None:
+    path.write_text(
+        "#!/bin/sh\n"
+        f"'''exec' {shlex.quote(sys.executable)} \"$0\" \"$@\"\n"
+        "' '''\n" + source
+    )
+    path.chmod(0o755)
 
 
 def git_wrapper_path(root: Path, original_path: str) -> str:
     directory = root / "git-wrapper"
     directory.mkdir()
     wrapper = directory / "git"
-    wrapper.write_text(f"#!{sys.executable}\n" + '''
+    write_python_fixture(wrapper, '''
 import os, shutil, sys
 from pathlib import Path
 directory = Path(__file__).resolve().parent
@@ -30,7 +43,6 @@ os.environ["PATH"] = os.pathsep.join(
 )
 os.execv(shutil.which("git"), ["git", *sys.argv[1:]])
 ''')
-    wrapper.chmod(0o755)
     return os.pathsep.join((str(directory), original_path))
 
 
@@ -52,6 +64,7 @@ class GitFixtureIsolationTests(unittest.TestCase):
             validated = ORACLE_TOOLS["fixture_git_env"](str(self.root), roots)
             self.oracle_env["DEVELOPER_DIR"] = validated["DEVELOPER_DIR"]
         self.oracle_env.update({
+            "PATH": ORACLE_TOOLS["fixture_git_path"](roots, self.native_git, self.oracle_env.get("PATH", "")),
             "HOME": str(self.root), "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_SYSTEM": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_AUTHOR_NAME": "Sentinel", "GIT_AUTHOR_EMAIL": "test@example.invalid",
@@ -67,7 +80,7 @@ class GitFixtureIsolationTests(unittest.TestCase):
 
     def native(self, repo, *args):
         return subprocess.check_output(
-            [self.native_git, *args], cwd=repo, env=self.oracle_env,
+            [self.native_git, "-c", "maintenance.auto=false", *args], cwd=repo, env=self.oracle_env,
             stderr=subprocess.PIPE,
         ).decode("utf-8")
 
@@ -81,23 +94,80 @@ class GitFixtureIsolationTests(unittest.TestCase):
             (repo / "fixture.txt").write_bytes(b"fixture\n")
             git(repo, "add", ".")
             git(repo, "commit", "-qm", "fixture")
+        elif owner == "image":
+            case = IMAGE_TESTS["AutoreviewImageGitTests"]("runTest")
+            self.addCleanup(case.doCleanups)
+            case.setUp()
+            repo = case.repo
         else:
             repo = parent / "repo"
             repo.mkdir()
             self.harness["create_fixture_repo"](repo, "benign")
         return repo
 
+    def test_native_oracle_does_not_launch_background_maintenance(self):
+        trace = self.root / "maintenance-trace.jsonl"
+        (self.sentinel / "sentinel.txt").write_text("updated synthetic content\n")
+        self.native(self.sentinel, "add", ".")
+        with mock.patch.dict(self.oracle_env, {"GIT_TRACE2_EVENT": str(trace)}):
+            self.native(self.sentinel, "commit", "-qm", "observe maintenance")
+        events = [json.loads(line) for line in trace.read_text().splitlines()]
+        children = [event["argv"] for event in events if event.get("event") == "child_start"]
+        self.assertFalse(any("maintenance" in argv for argv in children), children)
+
+    @unittest.skipIf(os.name == "nt", "POSIX executable fixtures")
+    def test_custom_fixture_git_lookup_rejects_checkout_and_wrapper_tail(self):
+        caller = self.root / "caller"
+        caller.mkdir()
+        self.native(caller, "init", "-q")
+        repo_bin = caller / "bin"
+        repo_bin.mkdir()
+        marker = self.root / "unsafe-custom-fixture-git"
+        unsafe = repo_bin / "git"
+        write_python_fixture(unsafe, "from pathlib import Path\n"
+                             f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
+        git_wrapper_path(self.root, self.oracle_env["PATH"])
+        wrapped = self.root / "git-wrapper"
+        direct_path = os.pathsep.join((str(repo_bin), self.oracle_env["PATH"]))
+        wrapper_path = os.pathsep.join((str(wrapped), direct_path))
+        control = subprocess.run([str(wrapped / "git"), "--version"], env={
+            **self.oracle_env, "PATH": wrapper_path,
+        }, capture_output=True)
+        self.assertEqual(control.returncode, 97)
+        self.assertTrue(marker.exists())
+        marker.unlink()
+        original_cwd = Path.cwd()
+        try:
+            os.chdir(caller)
+            for label, path in (("direct", direct_path), ("wrapped", wrapper_path)):
+                for fixture_type in (test_git_line_endings.GitLineEndingTests, GitFixtureIsolationTests):
+                    with self.subTest(path=label, fixture=fixture_type.__name__):
+                        (wrapped / "used").unlink(missing_ok=True)
+                        with mock.patch.dict(os.environ, {"PATH": path}):
+                            fixture = fixture_type()
+                            try:
+                                fixture.setUp()
+                                self.assertFalse(marker.exists())
+                                if label == "wrapped":
+                                    self.assertTrue((wrapped / "used").exists())
+                            finally:
+                                self.assertTrue(fixture.doCleanups())
+        finally:
+            os.chdir(original_cwd)
+
     def test_fixture_mutations_ignore_inherited_git_routing(self):
         dotgit = self.sentinel / ".git"
         contaminations = {
             "repository": {"GIT_DIR": str(dotgit), "GIT_WORK_TREE": str(self.sentinel),
                            "GIT_INDEX_FILE": str(dotgit / "index")},
+            "directory": {"GIT_DIR": str(dotgit)},
+            "worktree": {"GIT_WORK_TREE": str(self.sentinel)},
             "index": {"GIT_INDEX_FILE": str(dotgit / "index")},
             "objects": {"GIT_OBJECT_DIRECTORY": str(dotgit / "objects")},
             "config": {"GIT_CONFIG": str(dotgit / "config")},
             "common": {"GIT_COMMON_DIR": str(dotgit)},
         }
-        for owner in ("hardening", "harness"):
+        for owner in ("hardening", "harness", "image"):
             for label, contamination in contaminations.items():
                 with self.subTest(owner=owner, routing=label):
                     parent = self.root / f"{owner}-{label}"
@@ -136,7 +206,7 @@ class GitFixtureIsolationTests(unittest.TestCase):
             {"GIT_CONFIG_COUNT": "invalid"},
         )
         before = config.read_bytes()
-        for owner in ("hardening", "harness"):
+        for owner in ("hardening", "harness", "image"):
             for index, contamination in enumerate(variants):
                 with self.subTest(owner=owner, variant=index):
                     parent = self.root / f"{owner}-{index}"
@@ -161,17 +231,54 @@ class GitFixtureIsolationTests(unittest.TestCase):
                               ("attributes", "*.js working-tree-encoding=UTF-16\n*.txt working-tree-encoding=UTF-16\n")):
             config = settings / kind
             config.write_text(content)
-            for owner in ("hardening", "harness"):
+            for owner in ("hardening", "harness", "image"):
                 with self.subTest(owner=owner, kind=kind):
                     parent = self.root / f"home-{owner}-{kind}"
                     parent.mkdir()
                     with mock.patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
                         repo = self.fixture(owner, parent)
-                    path = "fixture.txt" if owner == "hardening" else "app.js"
-                    expected = "fixture\n" if owner == "hardening" else self.harness["BENIGN_INITIAL"]
+                    path, expected = {
+                        "hardening": ("fixture.txt", "fixture\n"),
+                        "harness": ("app.js", self.harness["BENIGN_INITIAL"]),
+                        "image": ("text.txt", "old\n"),
+                    }[owner]
                     self.assertEqual(self.native(repo, "show", f"HEAD:{path}"), expected)
                     self.assertEqual(config.read_text(), content)
             config.unlink()
+
+    def test_image_fixture_is_independent_of_native_text_newlines(self):
+        original = Path.write_text
+        def windows_newlines(path, data, *args, **kwargs):
+            if path.name == "text.txt" and data == "old\n":
+                return path.write_bytes(data.replace("\n", "\r\n").encode("utf-8"))
+            return original(path, data, *args, **kwargs)
+        case = IMAGE_TESTS["AutoreviewImageGitTests"]("runTest")
+        self.addCleanup(case.doCleanups)
+        with mock.patch.object(Path, "write_text", windows_newlines):
+            case.setUp()
+        self.assertEqual(self.native(case.repo, "show", "HEAD:text.txt"), "old\n")
+
+    def test_image_fixture_preserves_text_output_and_nonzero_failure(self):
+        case = IMAGE_TESTS["AutoreviewImageGitTests"]("runTest")
+        self.addCleanup(case.doCleanups)
+        case.setUp()
+        self.assertEqual(case.git("show", "HEAD:text.txt"), "old\n")
+        case.commit("next.txt", b"next\n")
+        self.assertEqual(case.git("show", "HEAD:next.txt"), "next\n")
+        self.assertEqual(case.git("rev-list", "--count", "HEAD"), "2\n")
+        with self.assertRaises(subprocess.CalledProcessError) as caught:
+            case.git("config", "--get", "fixture.absent")
+        self.assertEqual(caught.exception.returncode, 1)
+        self.assertEqual(caught.exception.output, "")
+
+    def test_image_fixture_refuses_when_no_external_git_is_available(self):
+        case = IMAGE_TESTS["AutoreviewImageGitTests"]("runTest")
+        case.repo = self.root
+        with mock.patch.dict(os.environ, {"PATH": str(self.root)}), \
+                mock.patch("subprocess.run") as launch:
+            with self.assertRaisesRegex(FileNotFoundError, "trusted external fixture Git"):
+                case.git("init", "-q")
+        launch.assert_not_called()
 
     @unittest.skipIf(os.name == "nt", "POSIX executable and symlink fixtures")
     def test_fixture_git_lookup_rejects_caller_checkout_and_external_symlink(self):
@@ -184,9 +291,8 @@ class GitFixtureIsolationTests(unittest.TestCase):
         external.mkdir()
         marker = self.root / "unsafe-fixture-git"
         unsafe = repo_bin / "git"
-        unsafe.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
-                          f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
-        unsafe.chmod(0o755)
+        write_python_fixture(unsafe, "from pathlib import Path\n"
+                             f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
         (external / "git").symlink_to(unsafe)
         wrapper_path = git_wrapper_path(self.root, self.oracle_env["PATH"])
         wrapped = self.root / "git-wrapper"
@@ -199,7 +305,7 @@ class GitFixtureIsolationTests(unittest.TestCase):
         original_cwd = Path.cwd()
         try:
             os.chdir(caller)
-            for owner in ("hardening", "harness"):
+            for owner in ("hardening", "harness", "image"):
                 for prefix in (repo_bin, external):
                     with self.subTest(owner=owner, path=prefix.name):
                         parent = self.root / f"path-{owner}-{prefix.name}"
@@ -236,12 +342,11 @@ class GhGitBoundaryTests(unittest.TestCase):
             external_bin.mkdir()
             marker = root / "untrusted-git-ran"
             unsafe_git = repo_bin / "git"
-            unsafe_git.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
-                                  f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
-            unsafe_git.chmod(0o755)
+            write_python_fixture(unsafe_git, "from pathlib import Path\n"
+                                 f"Path({str(marker)!r}).touch()\nraise SystemExit(97)\n")
             (external_bin / "git").symlink_to(unsafe_git)
             gh = trusted / "gh"
-            gh.write_text(f"#!{sys.executable}\n" + f'''
+            write_python_fixture(gh, f'''
 import os, subprocess
 assert os.environ["GH_TOKEN"] == "synthetic-gh-test"
 assert os.environ["GH_CONFIG_DIR"] == {str(home)!r}
@@ -256,7 +361,6 @@ result = subprocess.run(["git", "rev-parse", "--show-toplevel"], check=True, cap
 assert result.stdout.strip() == {str(repo)!r}
 print("maintenance")
 ''')
-            gh.chmod(0o755)
             env = {key: os.environ[key] for key in ("PATH", "DEVELOPER_DIR") if key in os.environ}
             env["PATH"] = git_wrapper_path(root, env["PATH"])
             env.update({
@@ -405,9 +509,8 @@ class DeveloperGitBoundaryTests(unittest.TestCase):
             (developer / "usr" / "bin").mkdir(parents=True)
             marker = root / "developer-tool-dispatched"
             shim = developer / "usr" / "bin" / "xcrun"
-            shim.write_text(f"#!{sys.executable}\nfrom pathlib import Path\n"
-                            f"Path({str(marker)!r}).touch()\nraise SystemExit(7)\n")
-            shim.chmod(0o755)
+            write_python_fixture(shim, "from pathlib import Path\n"
+                                 f"Path({str(marker)!r}).touch()\nraise SystemExit(7)\n")
             env = {"PATH": "/usr/bin:/bin", "HOME": str(root),
                    "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_SYSTEM": os.devnull,
                    "AUTOREVIEW_GIT": "/usr/bin/git", "DEVELOPER_DIR": str(developer)}

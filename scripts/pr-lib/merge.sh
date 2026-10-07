@@ -664,7 +664,7 @@ merge_run() {
     merge_outcome_resume "$pr"
     return
   fi
-  if [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
+  if [ -n "$recovery_record" ] || [ "$auto_merge_requested" = true ] || [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
     MERGE_TRANSPORT=graphql
   fi
   review_artifact_preflight "$pr" prepared || return 1
@@ -1116,6 +1116,11 @@ merge_run() {
   if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson proof "$MERGE_PRIOR_CI_PROOF" '.priorCiAdmin=$proof') || return 1
   fi
+  local async_dispatch=false
+  if [ "$MERGE_TRANSPORT" = rest ] && [ "$route" = immediate ]; then
+    async_dispatch=true
+    intent=$(printf '%s\n' "$intent" | jq -c '.asyncMerge={uuid:null,status:"submitting",message:"",sha:null}') || return 1
+  fi
   if [ -n "$legacy_directory" ]; then
     intent=$(printf '%s\n' "$intent" | jq -c --argjson legacy "$legacy_refusal" --arg actor "$recovery_actor" '.legacyRefusal=($legacy + {actor:$actor})') || return 1
   elif [ -n "$recovery_oid" ]; then
@@ -1154,17 +1159,24 @@ merge_run() {
     if [ "$MERGE_USE_PRIOR_CI_ADMIN" = true ]; then
       merge_outcome_dispatch_prior_ci_squash "$merge_body_snapshot" "$MERGE_SUBJECT"
     elif [ "$MERGE_TRANSPORT" = rest ]; then
-      merge_rest merge "$pr" "$PREP_HEAD_SHA" "$merge_body_snapshot" "$MERGE_OBSERVATION"
+      merge_outcome_dispatch_async "$pr" "$PREP_HEAD_SHA" "$merge_body_snapshot"
     elif [ "$route" = immediate ] && [ "$merge_method" = squash ]; then
       merge_outcome_dispatch_squash "$merge_body_snapshot"
     else
       pr_gh_plain pr merge "$pr" --repo "$MERGE_REPO_URL" "$merge_flag" "${merge_args[@]}"
     fi
   ); then
-    merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.accepted=true')" || return 1
+    if [ "$async_dispatch" != true ]; then
+      merge_outcome_write "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -c '.accepted=true')" || return 1
+    fi
   else
     # Do not read a capture we could not create; it may be somebody else's symlink.
     [ "$?" -eq 125 ] || print_relevant_log_excerpt "$merge_output"
+  fi
+  # The dispatch child retained its response before returning. Reload even on
+  # failure so a lost local acknowledgment cannot erase a server request UUID.
+  if [ "$async_dispatch" = true ]; then
+    merge_outcome_load_local "$pr" || return 1
   fi
   merge_outcome_reconcile "$pr" || return 1
   [ "$(printf '%s\n' "$MERGE_OUTCOME_RECORD" | jq -r .phase)" != intent ] || return 0

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -18,6 +19,7 @@ import {
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
@@ -25,6 +27,7 @@ import {
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
+import * as skillLibrarySelection from "../skills/library/selection.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
@@ -36,6 +39,7 @@ import type {
   GatewayRequestHandlerOptions,
   RespondFn,
 } from "./server-methods/types.js";
+import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -53,6 +57,8 @@ import {
 } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
+import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
 const runEmbeddedAgent = vi.spyOn(embeddedAgent, "runEmbeddedAgent");
 
@@ -263,6 +269,16 @@ describe("Goal chat admission and continuation", () => {
     const profile = ensureProfileForEmail("goal-first-message@example.test");
     const requestClient = profileClient(profile.id);
     const request = freshGoalStart("Review the sample backlog", sessionId);
+    const placements = createWorkerSessionPlacementStore();
+    context.workerSessionPlacementService = placements;
+    // The provisional run ID is not the new Goal incarnation. Its worker placement
+    // must not make the fresh local session ineligible for durable admission.
+    const provisionalPlacement = await placements.startDispatch({
+      agentId: "main",
+      sessionKey,
+      sessionId: request.idempotencyKey,
+    });
+    expect(provisionalPlacement.state).toBe("requested");
     let entryAtAck: SessionEntry | undefined;
     let messagesAtAck: ReturnType<typeof userMessages> = [];
     const creationEvents = async () =>
@@ -273,6 +289,7 @@ describe("Goal chat admission and continuation", () => {
       );
     let eventsAtAck: ReturnType<typeof creationEvents> = Promise.resolve([]);
     await withHeldModel(async () => {
+      const signal = loseSessionSignalAcknowledgement();
       const started = await rpc(
         "chat.send",
         request,
@@ -284,8 +301,16 @@ describe("Goal chat admission and continuation", () => {
           }
         },
         requestClient,
-      );
+      ).finally(signal.restore);
       const acknowledgedEvents = await eventsAtAck;
+      expect(entryAtAck, "fresh Goal commits its own local incarnation").toMatchObject({
+        sessionId: expect.any(String),
+        restartRecoveryDeliveryRunId: request.idempotencyKey,
+        restartRecoveryDeliverySourceRunId: request.idempotencyKey,
+        goal: { objective: request.message, status: "active" },
+      });
+      expect(entryAtAck?.status).toBeUndefined();
+      expect(signal.attempts()).toBe(2);
       expect(started.mock.calls).toEqual([
         [
           true,
@@ -294,11 +319,6 @@ describe("Goal chat admission and continuation", () => {
           expect.anything(),
         ],
       ]);
-      expect(entryAtAck).toMatchObject({
-        sessionId: expect.any(String),
-        status: "running",
-        goal: { objective: request.message, status: "active" },
-      });
       expect(entryAtAck?.sessionId).not.toBe(request.idempotencyKey);
       expect(messagesAtAck).toEqual([expect.objectContaining({ content: request.message })]);
       expect(acknowledgedEvents.map((event) => event.kind)).toEqual(["created", "goal_changed"]);
@@ -310,6 +330,23 @@ describe("Goal chat admission and continuation", () => {
       expect(runEmbeddedAgent).toHaveBeenCalledOnce();
       expect(await creationEvents()).toEqual(acknowledgedEvents);
       expect(acpDispatch).not.toHaveBeenCalled();
+      expect(loadSessionEntry(scope())?.sessionId).toBe(entryAtAck?.sessionId);
+      const placementFacts = await placements.readProjection([request.idempotencyKey], {
+        current: true,
+      });
+      expect(placementFacts.placements.get(request.idempotencyKey)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        sessionId: request.idempotencyKey,
+        state: "requested",
+        generation: provisionalPlacement.generation,
+      });
+    }).finally(() => {
+      placements.retireSessionPlacement({
+        sessionId: request.idempotencyKey,
+        expectedState: "requested",
+        expectedGeneration: provisionalPlacement.generation,
+      });
     });
   });
 
@@ -459,26 +496,39 @@ describe("Goal chat admission and continuation", () => {
   });
 
   it.each([
-    { caseName: "the existing session is busy", entry: { status: "running" as const } },
+    { caseName: "the existing session is busy", busy: true, entry: {} },
     {
       caseName: "the session used the native Codex harness",
       entry: { agentHarnessId: "codex" },
     },
-  ])("leaves no Goal or turn when $caseName", async ({ entry }) => {
+  ])("leaves no Goal or turn when $caseName", async ({ entry, busy }) => {
     await patchSessionEntryCore(scope(), () => entry);
-    const result = await rpc("chat.send", goalStart("Finish the release checklist"));
-    expect(result).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message:
-          "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
-      }),
-    );
-    expect(loadSessionEntry(scope())?.goal).toBeUndefined();
-    expect(userMessages()).toEqual([]);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    const runId = "existing-goal-session-run";
+    if (busy) {
+      registerAgentRunContext(runId, {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        projectSessionActive: true,
+      });
+    }
+    try {
+      const result = await rpc("chat.send", goalStart("Finish the release checklist"));
+      expect(result).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message:
+            "Error: Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
+        }),
+      );
+      expect(loadSessionEntry(scope())?.goal).toBeUndefined();
+      expect(userMessages()).toEqual([]);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   });
 
   it.each(["objective", "issuedAtMs"] as const)(
@@ -590,6 +640,65 @@ describe("Goal chat admission and continuation", () => {
         release.resolve();
         await pending.catch(() => undefined);
         lookupSpy.mockRestore();
+      }
+    },
+  );
+
+  it.each(["expired", "replaced"] as const)(
+    "does not register a fresh Goal after its reservation is %s during skill selection",
+    async (change) => {
+      await useFreshSessionStore();
+      const profile = ensureProfileForEmail(`goal-selection-${change}@example.test`);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const seed = skillLibrarySelection.seedSkillLibrarySelection;
+      const seedSpy = vi
+        .spyOn(skillLibrarySelection, "seedSkillLibrarySelection")
+        .mockImplementationOnce(async (...args) => {
+          const selected = await seed(...args);
+          entered.resolve();
+          await release.promise;
+          return selected;
+        });
+      const request = freshGoalStart("Keep this fresh Goal bound to its pending reservation");
+      const pending = rpc("chat.send", request, undefined, profileClient(profile.id));
+      const key = pendingChatSendDedupeKey(request.idempotencyKey);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Fresh Goal skipped skill selection.",
+        );
+        const reservation = context.dedupe.get(key);
+        if (!reservation || !isRecord(reservation.payload)) {
+          throw new Error("Expected the fresh Goal's pending reservation.");
+        }
+        context.dedupe.set(key, {
+          ...reservation,
+          payload: {
+            ...reservation.payload,
+            ...(change === "expired" ? { expiresAtMs: 1 } : { attemptId: "successor-attempt" }),
+          },
+        });
+        release.resolve();
+        const response = await pending;
+        expect(response.mock.calls[0]?.[1]).toMatchObject(
+          change === "expired"
+            ? { status: "timeout", summary: "aborted" }
+            : { status: "in_flight" },
+        );
+        expect(loadSessionEntry(scope())).toBeUndefined();
+        expectNoDispatch();
+        expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+        if (change === "replaced") {
+          expect(context.dedupe.get(key)?.payload).toMatchObject({
+            attemptId: "successor-attempt",
+          });
+        }
+      } finally {
+        release.resolve();
+        await pending;
+        seedSpy.mockRestore();
       }
     },
   );

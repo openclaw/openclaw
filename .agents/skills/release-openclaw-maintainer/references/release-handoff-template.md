@@ -17,9 +17,15 @@ operator steering. Do not preserve superseded scope.
 - cut SHA: `<full sha>`
 - cut time: `<UTC timestamp>`
 - Code SHA: `<regular release full sha | not applicable>`
-- Tooling SHA: `<trusted workflow full sha>`
+- Candidate C: `<exact qualification target sha>`
+- Qualification Q: `<C for candidate-owned | original workflow SHA for historical route>`
+- Admission/verifier/publisher P: `<independent trusted full sha and ref>`
+- Qualification admission: `<P run/attempt and immutable descriptor | historical route>`
+- Retained request: `<private request path; original semantics preserved>`
 - Release SHA: `<same as Code SHA | notes-only descendant | exact extended-stable branch tip>`
 - tag: `v<version>`
+- main closeout SHA: `<exact merged closeout commit | pending>`
+- main closeout version: `<package.json version at that exact commit | pending>`
 - validation workflow ref: `<release-ci ref | canonical branch>`
 - publication tooling ref: `<release-publish/tooling-sha12-epoch | track-specific ref>`
 - tooling tag: `<tag verified via gh api git/ref/tags | created by hand after ruleset warning>`
@@ -93,9 +99,10 @@ reference for commands rather than redispatching the release parent.
 - confirmed product defect that a required lane blocks on (update/install
   path, publish bytes, or another required gate proven by diagnosis): fix the
   release branch, freeze a new Code SHA, and invalidate downstream product
-  evidence; any other failure keeps the Code SHA
+  evidence
 - selected test failure: record the lead's real-blocker-or-flake decision and
-  its evidence. A flake gets at most two recorded reruns on the same Release
+  its evidence. An untouched test or passing replay alone does not prove a
+  flake or a fix. A flake gets at most two recorded reruns on the same Release
   SHA and a fix-in-parallel issue or PR on `main`; never re-cut, change
   tooling, or start a new FRV for it
 - regular changelog-only failure before tagging: change the selected release entry and only
@@ -106,9 +113,11 @@ reference for commands rather than redispatching the release parent.
 - extended-stable branch change: land the approved product/changelog change or
   smallest frozen-target repair by PR, record its source/invariant, and replace
   all exact-head evidence
-- harness/tooling/provenance failure: keep the Code SHA, change the Tooling SHA
-  only when needed, and recover the smallest owning surface
-- infrastructure/credential failure: keep both SHAs and repair the external
+- qualification harness/contract failure: deliberately repair the candidate, freeze
+  a new C/Q, and replace affected evidence; never substitute newer main checks
+- P-only admission/verifier/publisher failure: keep C/Q and original artifacts,
+  repair independent trusted P only when needed, and record invalidated evidence
+- infrastructure/credential failure: keep C/Q/P and repair the external
   prerequisite
 - wrapper/monitor failure: record parent and child conclusions separately;
   parent cancellation leaves adopted children running until the operator

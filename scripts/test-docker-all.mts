@@ -150,8 +150,7 @@ type ForegroundEntry = {
   command: string;
   env?: NodeJS.ProcessEnv;
   label: string;
-  phaseDetails?: Record<string, unknown>;
-  phases?: Array<Record<string, unknown>>;
+  phaseDetails: Record<string, unknown>;
 };
 
 type ShutdownSignal = "SIGINT" | "SIGKILL" | "SIGTERM";
@@ -255,19 +254,6 @@ function parseBool(raw: string | undefined, fallback: boolean) {
     return fallback;
   }
   return !/^(?:0|false|no)$/i.test(raw);
-}
-
-function normalizeReleaseProfileEnv(raw: string | undefined) {
-  const profile = raw?.trim();
-  if (!profile) {
-    return normalizeReleaseProfile(undefined);
-  }
-  if (profile === "minimum" || profile === "beta" || profile === "stable" || profile === "full") {
-    return normalizeReleaseProfile(profile);
-  }
-  throw new Error(
-    `release profile must be one of: beta, stable, full. Got: ${JSON.stringify(raw)}`,
-  );
 }
 
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
@@ -611,9 +597,6 @@ async function writeTimingStore(timingStore: TimingStore, results: LaneResult[])
     version: 1,
   };
   for (const result of results) {
-    if (!result || typeof result.elapsedSeconds !== "number") {
-      continue;
-    }
     next.lanes[result.name] = {
       durationSeconds: result.elapsedSeconds,
       status: result.status,
@@ -1263,19 +1246,17 @@ export async function runCleanupSmokePhase(
   return failure;
 }
 
-async function runForegroundGroup(entries: ForegroundEntry[], env: NodeJS.ProcessEnv) {
+async function runForegroundGroup(
+  entries: ForegroundEntry[],
+  env: NodeJS.ProcessEnv,
+  phases: Array<Record<string, unknown>>,
+) {
   const failures: Array<{ entry: ForegroundEntry; error: unknown }> = [];
   for (const entry of entries) {
     try {
-      const { command, label, phaseDetails = {}, phases } = entry;
-      const entryEnv = { ...env, ...entry.env };
-      if (phases) {
-        await runPhase(phases, `build:${label}`, phaseDetails, async () => {
-          await runForeground(label, command, entryEnv);
-        });
-      } else {
-        await runForeground(label, command, entryEnv);
-      }
+      await runPhase(phases, `build:${entry.label}`, entry.phaseDetails, () =>
+        runForeground(entry.label, entry.command, { ...env, ...entry.env }),
+      );
     } catch (error) {
       if (hasUnjoinedWork(error) && failures.length === 0) {
         throw error;
@@ -1483,10 +1464,9 @@ function laneEnv(
   poolLane: DockerE2eLane,
   baseEnv: NodeJS.ProcessEnv,
   logDir: string,
-  cacheKey: string | undefined,
 ): DockerLaneEnv {
   const name = poolLane.name;
-  const cacheName = cacheKey || name;
+  const cacheName = poolLane.cacheKey || name;
   const env: DockerLaneEnv = {
     ...baseEnv,
     OPENCLAW_DOCKER_CACHE_HOME_DIR: path.resolve(
@@ -1517,7 +1497,7 @@ async function runLane(
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
   const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
-  const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
+  const env = laneEnv(lane, baseEnv, logDir);
   const command = prepareHarnessCommand(lane.command, env);
   await mkdir(env.OPENCLAW_DOCKER_CLI_TOOLS_DIR, { recursive: true });
   await mkdir(env.OPENCLAW_DOCKER_CACHE_HOME_DIR, { recursive: true });
@@ -1858,21 +1838,21 @@ function throwIfSchedulerStopping(result?: Pick<ShellCommandResult, "status" | "
   }
 }
 
-function shellCommandSkippedForShutdown(signal: ShutdownSignal | null = null) {
+function shellCommandSkippedForShutdown() {
   return {
     cancelled: true as const,
     noOutputTimedOut: false,
-    signal,
+    signal: null,
     status: 143,
     timedOut: false,
   };
 }
 
-function shellCaptureSkippedForShutdown(label: string, signal: ShutdownSignal | null = null) {
+function shellCaptureSkippedForShutdown(label: string) {
   return {
     cancelled: true as const,
     label,
-    signal,
+    signal: null,
     status: 143,
     stderr: "",
     stderrTruncated: false,
@@ -2085,7 +2065,7 @@ async function main() {
     cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
-  const releaseProfile = normalizeReleaseProfileEnv(
+  const releaseProfile = normalizeReleaseProfile(
     process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
   );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";
@@ -2341,7 +2321,6 @@ async function main() {
         command: liveDockerScriptCommand("test-live-build-docker.sh", "", { skipBuild: false }),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
-        phases,
       });
     }
     for (const imageKind of ["bare", "functional"] as const) {
@@ -2357,10 +2336,9 @@ async function main() {
         },
         label: `shared ${imageKind} Docker E2E image once: ${image}`,
         phaseDetails: { image, imageKind },
-        phases,
       });
     }
-    await runForegroundGroup(buildEntries, baseEnv);
+    await runForegroundGroup(buildEntries, baseEnv, phases);
   } else {
     console.log(`==> Shared Docker image builds: skipped`);
   }

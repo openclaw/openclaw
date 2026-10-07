@@ -1,11 +1,12 @@
 // Shared setup-wizard steps used by the classic wizard and the bootstrap onboarding flow.
-import type { GatewayAuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import type { OnboardOptions } from "../commands/onboard-types.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
 import { createConfigIO, resolveGatewayPort } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { applyMergePatch, createMergePatch } from "../config/merge-patch.js";
 import { isMergePatchObjectKeyAllowed } from "../config/patch-replace-paths.js";
 import type { ConfigWriteAfterWrite } from "../config/runtime-snapshot.js";
+import type { GatewayAuthMode } from "../config/types.gateway.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../infra/plain-object.js";
 import {
@@ -74,7 +75,9 @@ export function formatQuickstartGatewaySummary(
       auth:
         defaults.authMode === "token"
           ? t("wizard.setup.quickstartAuthTokenDefault")
-          : t("common.password"),
+          : defaults.authMode === "password"
+            ? t("common.password")
+            : t("wizard.setup.quickstartAuthKept"),
     }),
     t("wizard.setup.quickstartTailscaleExposure", {
       exposure: t(`wizard.gatewayTailscale.${defaults.tailscaleMode}`),
@@ -319,9 +322,13 @@ export function resolveQuickstartGatewayDefaults(
       ? bindRaw
       : "loopback";
 
-  let authMode: GatewayAuthChoice = "token";
-  if (baseConfig.gateway?.auth?.mode === "token" || baseConfig.gateway?.auth?.mode === "password") {
-    authMode = baseConfig.gateway.auth.mode;
+  // Preserve proxy-owned auth instead of inferring a shared-secret mode from
+  // its local password. `none` retains the existing credential inference;
+  // explicit CLI choices still win below.
+  let authMode: GatewayAuthMode = "token";
+  const storedAuthMode = baseConfig.gateway?.auth?.mode;
+  if (storedAuthMode !== undefined && storedAuthMode !== "none") {
+    authMode = storedAuthMode;
   } else if (baseConfig.gateway?.auth?.token) {
     authMode = "token";
   } else if (baseConfig.gateway?.auth?.password) {

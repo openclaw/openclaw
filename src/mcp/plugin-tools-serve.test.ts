@@ -240,12 +240,11 @@ describe("plugin tools MCP server", () => {
           deny: ["plugin_globally_denied"],
         },
         agents: {
-          list: [
-            {
-              id: "research",
+          entries: {
+            research: {
               tools: { allow: ["plugin_allowed"], deny: ["plugin_denied"] },
             },
-          ],
+          },
         },
       } as never,
       agentSessionKey: "agent:research:acp:session-1",

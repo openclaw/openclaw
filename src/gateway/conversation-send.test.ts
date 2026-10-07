@@ -484,7 +484,7 @@ describe("runGatewayConversationSend", () => {
     await runGatewayConversationSend({
       config: {
         ...workerDeps.config,
-        agents: { entries: { worker: { default: true } } },
+        agents: { entries: { worker: {} } },
       },
       agentId: "worker",
       senderIsOwner: true,

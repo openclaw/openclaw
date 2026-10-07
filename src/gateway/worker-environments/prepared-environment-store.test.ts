@@ -198,7 +198,7 @@ describe("prepared environment ownership", () => {
     expect(assigned).toMatchObject({ state: "provisioning", environmentId: "prepared-1" });
     const anotherStore = createWorkerSessionPlacementStore({ database, now: () => nowMs });
     expect(anotherStore.bindPreparedEnvironment(second)).toBeUndefined();
-    const failed = placements.fail({
+    const failed = await placements.fail({
       sessionId: first.sessionId,
       expectedGeneration: assigned.generation,
       recoveryError: "assignment cancelled",
@@ -323,7 +323,7 @@ describe("prepared environment ownership", () => {
     const assigned = placements.bindPreparedEnvironment(request)!;
     nowMs = 2_001;
     await reopenStores();
-    const syncing = placements.transition({
+    const syncing = await placements.transition({
       sessionId: request.sessionId,
       from: "provisioning",
       to: "syncing",

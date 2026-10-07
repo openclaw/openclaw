@@ -10,7 +10,7 @@ import {
 import { parseAccessGroupAllowFromEntry } from "../channels/allow-from.js";
 import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { inspectReadOnlyChannelAccount } from "../channels/read-only-account-inspect.js";
 import { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
@@ -46,16 +46,6 @@ function hasExplicitProviderAccountConfig(
     return false;
   }
   return Object.hasOwn(accounts, accountId);
-}
-
-function formatChannelAccountNote(params: {
-  orderedAccountIds: string[];
-  hasExplicitAccountPath: boolean;
-  accountId: string;
-}): string {
-  return params.orderedAccountIds.length > 1 || params.hasExplicitAccountPath
-    ? ` (account: ${params.accountId})`
-    : "";
 }
 
 /** Collect channel-specific security findings across active channel plugins/accounts. */
@@ -312,11 +302,8 @@ export async function collectChannelSecurityFindingsCore(params: {
         continue;
       }
 
-      const accountNote = formatChannelAccountNote({
-        orderedAccountIds,
-        hasExplicitAccountPath,
-        accountId,
-      });
+      const accountNote =
+        orderedAccountIds.length > 1 || hasExplicitAccountPath ? ` (account: ${accountId})` : "";
       const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
         ?.config;
       const dmPolicy = plugin.security.resolveDmPolicy?.({

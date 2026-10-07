@@ -13,7 +13,7 @@ import {
   resolveOptionalIntegerOption,
 } from "openclaw/plugin-sdk/number-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   appendComment,
   assertCanMutateClaimedCard,
@@ -39,11 +39,9 @@ import type {
   WorkboardClaimInput,
   WorkboardClaimOptions,
   WorkboardCompleteInput,
-  WorkboardDecomposeChildInput,
   WorkboardDecomposeInput,
   WorkboardHeartbeatInput,
   WorkboardMutationScope,
-  WorkboardProofInput,
   WorkboardReassignInput,
   WorkboardReclaimInput,
   WorkboardSpecifyInput,
@@ -140,7 +138,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
       const metadata = clearDiagnostics(guarded.metadata, ["stranded_ready"]);
       const card = await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status:
             guarded.status === "backlog" || guarded.status === "todo" || guarded.status === "ready"
@@ -165,7 +163,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
 
   async heartbeat(id: string, input: WorkboardHeartbeatInput): Promise<WorkboardCard> {
     const note = normalizeBoundedString(input.note, undefined, 400, "heartbeat note");
-    const card = await this.updateMetadata(id, (existing) => {
+    return await this.updateMetadata(id, (existing) => {
       const claim = existing.metadata?.claim;
       if (!claim) {
         throw new Error("card is not claimed.");
@@ -194,7 +192,6 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         comments: appendComment(metadata.comments, note, now),
       };
     });
-    return card;
   }
 
   async releaseClaim(
@@ -212,7 +209,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         assertClaimIdentity(claim, input);
       }
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status,
           metadata: { ...existing.metadata, claim: undefined },
@@ -227,7 +224,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
     input: WorkboardCompleteInput = {},
     scope: WorkboardMutationScope | null | undefined = input,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(async () => await this.completeDirect(id, input, scope));
+    return await this.enqueueMutation(() => this.completeDirect(id, input, scope));
   }
 
   private async completeDirect(
@@ -252,10 +249,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       }
     }
     const summary = normalizeBoundedString(input.summary, undefined, 2000, "summary");
-    const proofInput =
-      input.proof && typeof input.proof === "object" && !Array.isArray(input.proof)
-        ? (input.proof as WorkboardProofInput)
-        : undefined;
+    const proofInput = isRecord(input.proof) ? input.proof : undefined;
     const proofId = normalizeBoundedString(input.proofId, undefined, 120, "proof id");
     if (input.proofId !== undefined && !proofId) {
       throw new Error("proofId must be a non-empty string.");
@@ -282,7 +276,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ? { ...existing.execution, status: "done" as const, updatedAt: now }
         : existing.execution;
     return await this.updateCard(
-      id,
+      await this.requireCard(id),
       {
         status: "done",
         ...(execution ? { execution } : {}),
@@ -369,7 +363,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const reason =
         normalizeBoundedString(input.reason, undefined, 2000, "block reason") ??
         "Workboard card blocked.";
-      return await this.updateCard(id, this.buildBlockedCardPatch(existing, reason, now, options));
+      return await this.updateCard(
+        await this.requireCard(id),
+        this.buildBlockedCardPatch(existing, reason, now, options),
+      );
     });
   }
 
@@ -378,7 +375,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       const existing = await this.requireCard(id);
       assertCanMutateClaimedCard(existing, scope);
       const metadata = clearDiagnostics(existing.metadata, ["blocked_too_long"]);
-      return await this.updateCard(id, { status: "todo", metadata: { ...metadata, stale: null } });
+      return await this.updateCard(await this.requireCard(id), {
+        status: "todo",
+        metadata: { ...metadata, stale: null },
+      });
     });
   }
 
@@ -406,7 +406,11 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
         ...(shouldResetFailures ? { failureCount: 0 } : {}),
         comments: appendComment(baseMetadata?.comments, reason),
       };
-      return await this.updateCard(id, { agentId, status, metadata }, { enforceStatusHolds: true });
+      return await this.updateCard(
+        await this.requireCard(id),
+        { agentId, status, metadata },
+        { enforceStatusHolds: true },
+      );
     });
   }
 
@@ -429,7 +433,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             : existing.status
           : normalizeStatus(input.status, existing.status);
       const reclaimed = await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status: targetStatus,
           execution: existing.execution?.status === "running" ? null : existing.execution,
@@ -486,7 +490,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
       };
       const { summary: _summary, status: _status, ...cardPatch } = input;
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           ...cardPatch,
           status: "todo",
@@ -516,11 +520,10 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
           }
           const parentAutomation = parent.metadata?.automation;
           const children: WorkboardCard[] = [];
-          for (const rawChild of childrenInput) {
-            if (!rawChild || typeof rawChild !== "object" || Array.isArray(rawChild)) {
+          for (const child of childrenInput) {
+            if (!isRecord(child)) {
               throw new Error("children must be objects.");
             }
-            const child = rawChild as WorkboardDecomposeChildInput;
             const created = await this.createDirect(
               {
                 ...child,
@@ -559,7 +562,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
             : await (async () => {
                 const latestParent = (await this.get(parent.id)) ?? parent;
                 return await this.updateCard(
-                  parent.id,
+                  await this.requireCard(parent.id),
                   {
                     status:
                       latestParent.status === "triage" || latestParent.status === "backlog"
@@ -581,7 +584,7 @@ export class WorkboardWorkflowStore extends WorkboardPromoteStore {
                 );
               })();
           const decomposedParent = await this.updateCard(
-            updatedParent.id,
+            await this.requireCard(updatedParent.id),
             {},
             {
               event: { kind: "decomposed" },

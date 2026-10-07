@@ -20,7 +20,6 @@ import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-f
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -34,11 +33,7 @@ import {
 } from "./configure.gateway-health.js";
 import { promptGatewayConfig } from "./configure.gateway.js";
 import { createConfigurePrompts } from "./configure.prompts.js";
-import type {
-  ChannelsWizardMode,
-  ConfigureWizardParams,
-  WizardSection,
-} from "./configure.shared.js";
+import type { WizardSection } from "./configure.shared.js";
 import { CONFIGURE_SECTION_OPTIONS, intro, outro } from "./configure.shared.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import {
@@ -62,48 +57,6 @@ import type { OnboardMode } from "./onboard-types.js";
 type ConfigureSectionChoice = WizardSection | "__continue";
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
-
-const loadSetupPluginConfigModule = createLazyPromise(
-  () => import("../wizard/setup.plugin-config.js"),
-);
-
-async function promptConfigureSection(
-  runtime: RuntimeEnv,
-  hasSelection: boolean,
-): Promise<ConfigureSectionChoice> {
-  const prompts = createConfigurePrompts(runtime);
-  return await prompts.select<ConfigureSectionChoice>({
-    message: "What do you want to configure?",
-    options: [
-      ...CONFIGURE_SECTION_OPTIONS,
-      {
-        value: "__continue",
-        label: hasSelection ? "Done" : "Skip for now",
-      },
-    ],
-    initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
-  });
-}
-
-async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMode> {
-  const prompts = createConfigurePrompts(runtime);
-  return await prompts.select<ChannelsWizardMode>({
-    message: "Channel setup",
-    options: [
-      {
-        value: "configure",
-        label: "Add or update channels",
-        hint: "Configure accounts and disable unselected accounts",
-      },
-      {
-        value: "remove",
-        label: "Remove channel config",
-        hint: "Delete channel tokens/settings from openclaw.json",
-      },
-    ],
-    initialValue: "configure",
-  });
-}
 
 async function promptWebToolsConfig(
   nextConfig: OpenClawConfig,
@@ -276,14 +229,14 @@ async function promptWebToolsConfig(
   };
 }
 
-/** Run the configure/update wizard, optionally limited to selected sections. */
+/** Run the configure wizard, optionally limited to selected sections. */
 export async function runConfigureWizard(
-  opts: ConfigureWizardParams,
+  opts: { sections?: WizardSection[] },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const prompts = createConfigurePrompts(runtime);
   try {
-    intro(opts.command === "update" ? "OpenClaw update wizard" : "OpenClaw configure");
+    intro("OpenClaw configure");
     const prompter = createClackPrompter();
 
     const prepared = await readConfigFileSnapshotForWrite();
@@ -378,7 +331,7 @@ export async function runConfigureWizard(
             hint: localProbe.ok
               ? `Gateway reachable (${localUrl})`
               : "authUnavailable" in localProbe
-                ? `Gateway auth unavailable; probe skipped (${localUrl})`
+                ? `Gateway auth unavailable; check skipped (${localUrl})`
                 : `No gateway detected (${localUrl})`,
           },
           {
@@ -402,7 +355,7 @@ export async function runConfigureWizard(
     if (shouldPromptGatewayRunMode && mode === "remote") {
       let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
       remoteConfig = applyWizardMetadata(remoteConfig, {
-        command: opts.command,
+        command: "configure",
         mode: metadataMode,
       });
       const committed = await writeWizardConfigFile(remoteConfig, {
@@ -470,7 +423,7 @@ export async function runConfigureWizard(
         return;
       }
       nextConfig = applyWizardMetadata(nextConfig, {
-        command: opts.command,
+        command: "configure",
         mode: metadataMode,
       });
 
@@ -529,7 +482,22 @@ export async function runConfigureWizard(
     };
 
     const configureChannelsSection = async () => {
-      const channelMode = await promptChannelMode(runtime);
+      const channelMode = await prompts.select({
+        message: "Channel setup",
+        options: [
+          {
+            value: "configure",
+            label: "Add or update channels",
+            hint: "Configure accounts and disable unselected accounts",
+          },
+          {
+            value: "remove",
+            label: "Remove channel config",
+            hint: "Delete channel tokens/settings from openclaw.json",
+          },
+        ],
+        initialValue: "configure",
+      });
       if (channelMode === "configure") {
         const target = await resolveSetupTarget();
         nextConfig = await setupChannels(nextConfig, runtime, prompter, {
@@ -545,15 +513,6 @@ export async function runConfigureWizard(
       } else {
         nextConfig = await removeChannelConfigWizard(nextConfig, runtime);
       }
-    };
-
-    const promptDaemonPort = async () => {
-      const portInput = await prompts.text({
-        message: "Gateway port for service install",
-        initialValue: String(gatewayPort),
-        validate: validateGatewayPortInput,
-      });
-      gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
     };
 
     let didConfigureGateway = false;
@@ -578,7 +537,7 @@ export async function runConfigureWizard(
       },
       channels: configureChannelsSection,
       plugins: async () => {
-        const { configurePluginConfig } = await loadSetupPluginConfigModule();
+        const { configurePluginConfig } = await import("../wizard/setup.plugin-config.js");
         nextConfig = await configurePluginConfig({
           config: nextConfig,
           prompter,
@@ -595,7 +554,12 @@ export async function runConfigureWizard(
       },
       daemon: async () => {
         if (!didConfigureGateway) {
-          await promptDaemonPort();
+          const portInput = await prompts.text({
+            message: "Gateway port for service install",
+            initialValue: String(gatewayPort),
+            validate: validateGatewayPortInput,
+          });
+          gatewayPort = parseTcpPort(portInput) ?? gatewayPort;
         }
         daemonSetupOutcome = await maybeInstallDaemon({ runtime, port: gatewayPort });
       },
@@ -643,7 +607,17 @@ export async function runConfigureWizard(
       let ranSection = false;
 
       while (true) {
-        const choice = await promptConfigureSection(runtime, ranSection);
+        const choice = await prompts.select<ConfigureSectionChoice>({
+          message: "What do you want to configure?",
+          options: [
+            ...CONFIGURE_SECTION_OPTIONS,
+            {
+              value: "__continue",
+              label: ranSection ? "Done" : "Skip for now",
+            },
+          ],
+          initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
+        });
         if (choice === "__continue") {
           break;
         }
@@ -725,7 +699,7 @@ export async function runConfigureWizard(
     const probe =
       daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
     let gatewayProbe = probeAuth.warning
-      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      ? { ok: false, detail: "auth unavailable; check skipped" }
       : await probe({
           ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
           url: probeLinks.wsUrl,
@@ -752,7 +726,7 @@ export async function runConfigureWizard(
       }
     }
     const gatewayStatusLine = probeAuth.warning
-      ? "Gateway: auth unavailable (probe skipped)"
+      ? "Gateway: auth unavailable (check skipped)"
       : gatewayProbe.ok
         ? "Gateway: reachable"
         : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;

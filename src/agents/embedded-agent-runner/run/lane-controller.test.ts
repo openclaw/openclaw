@@ -249,12 +249,17 @@ describe("embedded run session lane", () => {
     }
   });
 
-  it("times out a stalled global task while another global admission keeps the session alive", async () => {
+  it("keeps a session alive while another run's stalled global task times out", async () => {
     const sessionLane = "test:session-stalled-global-with-successor";
     const globalLane = "test:stalled-global-with-successor";
     setCommandLaneConcurrency(globalLane, 1);
 
     const stalledGlobalTaskStarted = createDeferred();
+    const stalledController = createLaneController({
+      sessionLane: "test:stalled-global-owner",
+      globalLane,
+      runId: "stalled-global-owner",
+    });
     const controller = createLaneController({
       sessionLane,
       globalLane,
@@ -262,7 +267,7 @@ describe("embedded run session lane", () => {
     });
     const run = controller.enqueueSession(
       async () => {
-        const stalledGlobalAdmission = controller.enqueueGlobal(
+        const stalledGlobalAdmission = stalledController.enqueueGlobal(
           async () => {
             stalledGlobalTaskStarted.resolve();
             return await new Promise<never>(() => {});
@@ -288,6 +293,8 @@ describe("embedded run session lane", () => {
     await expectLaneCounts(globalLane, 1, 1);
 
     await completedRun;
+    expect(stalledController.abortSignal.aborted).toBe(true);
+    expect(controller.abortSignal.aborted).toBe(false);
     await expectLaneCounts(sessionLane, 0, 0);
     await expectLaneCounts(globalLane, 0, 0);
   });

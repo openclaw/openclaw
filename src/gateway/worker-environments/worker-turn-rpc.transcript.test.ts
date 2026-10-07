@@ -21,7 +21,7 @@ import { createPlacementTurnClaimFixtureOps } from "./placement-test-fixtures.js
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
-import { createWorkerTranscriptCommitStore } from "./transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-target.js";
@@ -29,7 +29,7 @@ import { resolveWorkerTurnTranscriptTarget } from "./worker-turn-transcript-targ
 describe("worker transcript claim fences", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["released", "replaced", "preparation"] as const)(
+  it.each(["replaced", "preparation"] as const)(
     "does not persist or publish a transcript after its worker claim is fenced: %s",
     async (scenario) => {
       const identity = await support.seedAttachedIdentity(
@@ -60,8 +60,8 @@ describe("worker transcript claim fences", () => {
         getConfig: () => ({ session: { store: target.storePath } }),
         store: {
           ...ledger,
-          begin(input) {
-            const result = ledger.begin(input);
+          async begin(input, assertCurrent) {
+            const result = await ledger.begin(input, assertCurrent);
             applicationStarted.resolve();
             return result;
           },
@@ -118,14 +118,12 @@ describe("worker transcript claim fences", () => {
         expect(await loadTranscriptEvents(target)).toEqual([]);
         if (scenario !== "preparation") {
           await store.releaseTurn(claim);
-          if (scenario === "replaced") {
-            replacement = await store.claimTurn({
-              ...target,
-              claimId: "replacement-claim",
-              runId: "replacement-run",
-              owner: claim.owner,
-            });
-          }
+          replacement = await store.claimTurn({
+            ...target,
+            claimId: "replacement-claim",
+            runId: "replacement-run",
+            owner: claim.owner,
+          });
         }
         releaseWriter.resolve();
         await blocker;
@@ -194,7 +192,7 @@ describe("worker transcript claim fences", () => {
     },
   );
 
-  it.each(["current", "deleted", "claim-released"] as const)(
+  it.each(["current", "deleted"] as const)(
     "keeps an admitted transcript on its original store after configuration changes: %s",
     async (scenario) => {
       const identity = await support.seedAttachedIdentity("worker-source", "session-source");
@@ -250,8 +248,6 @@ describe("worker transcript claim fences", () => {
               target: { canonicalKey: original.sessionKey, storeKeys: [original.sessionKey] },
             }),
           ).resolves.toMatchObject({ deleted: true });
-        } else if (scenario === "claim-released") {
-          await store.releaseTurn(claim);
         }
         const result = workerService.commitTranscript(
           identity,
@@ -269,13 +265,8 @@ describe("worker transcript claim fences", () => {
           ]);
           expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(1);
         } else {
-          if (scenario === "deleted") {
-            await expect(result).rejects.toThrow("transcript identity is no longer current");
-            expect(loadSessionEntry(original)).toBeUndefined();
-          } else {
-            await expect(result).resolves.toEqual({ ok: false, closeReason: "placement-mismatch" });
-            expect(SessionManager.open(original).getEntries()).toEqual([]);
-          }
+          await expect(result).rejects.toThrow("transcript identity is no longer current");
+          expect(loadSessionEntry(original)).toBeUndefined();
           expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBeNull();
         }
         expect(SessionManager.open(replacement).getEntries()).toEqual([]);

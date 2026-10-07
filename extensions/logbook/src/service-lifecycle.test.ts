@@ -5,7 +5,12 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginApi, OpenClawPluginService } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import {
   createCapturedPluginRegistration,
   createPluginRuntimeMock,
@@ -96,7 +101,14 @@ describe("Logbook service disposal", () => {
           visionModel: "codex/gpt-5.6-sol",
           analysisIntervalMinutes: 10,
         }),
-        { dataDir, workerModuleUrl, runtime, fullConfig: {}, logger },
+        {
+          dataDir,
+          workerModuleUrl,
+          runtime,
+          fullConfig: {},
+          logger,
+          scheduler: createTestPluginServiceScheduler(),
+        },
       );
       const peer = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
@@ -139,7 +151,7 @@ describe("Logbook service disposal", () => {
           status: "done",
           error: undefined,
         });
-        const frames = await peer.batchFrames(batch.id);
+        const frames = (await peer.batchImages(batch.id)).map(({ frame }) => frame);
         expect(frames).toEqual(
           prune
             ? []
@@ -163,7 +175,7 @@ describe("Logbook service disposal", () => {
         try {
           expect(await reopened.cardsForDay(day)).toEqual(cards);
           expect(await reopened.latestBatch()).toEqual(batch);
-          expect(await reopened.batchFrames(batch.id)).toEqual(frames);
+          expect((await reopened.batchImages(batch.id)).map(({ frame }) => frame)).toEqual(frames);
           expect(await reopened.countUnbatchedActiveFrames()).toBe(0);
         } finally {
           await reopened.close();
@@ -196,14 +208,20 @@ describe("Logbook service disposal", () => {
     });
     const captured = createCapturedPluginRegistration({ id: "logbook" });
     captured.api.pluginConfig = { captureEnabled: false };
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     captured.api.registerService = (service) => services.push(service);
     plugin.register({ ...captured.api, runtimeSource });
     const service = services[0]!;
-    const context = { config: {}, stateDir, logger: quietLogger };
+    const context = {
+      config: {},
+      stateDir,
+      logger: quietLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
     const starting = service.start(context);
     await opened.promise;
     const completed = vi.fn();
+    context.scheduler.beginClose();
     const stopping = Promise.all(
       captured.runtimeLifecycles.map(async (lifecycle) => {
         await lifecycle.cleanup?.({ reason: "disable" });
@@ -218,6 +236,7 @@ describe("Logbook service disposal", () => {
       releaseOpen.resolve();
       releaseClose.resolve();
       await Promise.all([starting, stopping]);
+      await context.scheduler.stop();
     }
     await expect(store.lastFrame()).rejects.toThrow();
   });
@@ -231,6 +250,7 @@ describe("Logbook service disposal", () => {
     const service = new LogbookService(resolveLogbookConfig({ captureEnabled: false }), {
       dataDir,
       workerModuleUrl,
+      scheduler: createTestPluginServiceScheduler(),
       runtime: createPluginRuntimeMock(),
       fullConfig: {},
       logger: quietLogger,
@@ -251,6 +271,7 @@ describe("Logbook service disposal", () => {
       {
         dataDir,
         workerModuleUrl,
+        scheduler: createTestPluginServiceScheduler(),
         runtime: createPluginRuntimeMock(),
         fullConfig: {},
         logger: quietLogger,
@@ -414,23 +435,26 @@ describe("Logbook service disposal", () => {
         return await observationsInRange(...args);
       });
     }
+    const clock = createGatewaySchedulerClock();
     const service = new LogbookService(
       resolveLogbookConfig({
         captureEnabled: true,
-        captureIntervalSeconds: 600,
+        captureIntervalSeconds: kind.startsWith("capture") ? 5 : 600,
         visionModel: "synthetic/vision",
       }),
-      { runtime, fullConfig: {}, logger, dataDir, workerModuleUrl },
+      {
+        runtime,
+        fullConfig: {},
+        logger,
+        dataDir,
+        workerModuleUrl,
+        scheduler: createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock)),
+      },
     );
     await service.start();
-    const ticks = service as unknown as {
-      captureTick(): Promise<void>;
-      analysisTick(): Promise<void>;
-    };
-    const active = kind.startsWith("capture")
-      ? ticks.captureTick()
-      : kind.startsWith("vision")
-        ? ticks.analysisTick()
+    const active =
+      kind.startsWith("capture") || kind.startsWith("vision")
+        ? Promise.resolve(clock.wake())
         : kind === "status-read"
           ? service.status()
           : kind === "ask-read"
@@ -458,6 +482,7 @@ describe("Logbook service disposal", () => {
         });
       }
       await settled;
+      expect(clock.armedAtMs).toBeNull();
       expect(logger.error).not.toHaveBeenCalled();
       const reopened = await LogbookStore.open(dataDir, workerModuleUrl);
       try {
@@ -501,7 +526,7 @@ describe("Logbook service disposal", () => {
       const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-runtime-drain-")));
       const captured = createCapturedPluginRegistration({ id: "logbook" });
       captured.api.pluginConfig = { captureEnabled: false };
-      const services: OpenClawPluginService[] = [];
+      const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
       captured.api.registerService = (service) => services.push(service);
       const handlers = new Map<string, Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1]>();
       captured.api.registerGatewayMethod = (name, handler) => handlers.set(name, handler);
@@ -514,7 +539,12 @@ describe("Logbook service disposal", () => {
       };
       plugin.register({ ...captured.api, runtimeSource });
       const service = services[0]!;
-      const context = { config: {}, stateDir, logger: quietLogger };
+      const context = {
+        config: {},
+        stateDir,
+        logger: quietLogger,
+        scheduler: createTestPluginServiceScheduler(),
+      };
       await service.start(context);
       const call = async (name: string, params = {}) => {
         const respond = vi.fn();
@@ -543,6 +573,7 @@ describe("Logbook service disposal", () => {
         const standup = call("logbook.standup");
         await entered.promise;
         const retired = vi.fn();
+        context.scheduler.beginClose();
         const retiring = cleanup({ reason }).then(retired);
         await setImmediate();
         expect.soft(retired).not.toHaveBeenCalled();
@@ -559,7 +590,9 @@ describe("Logbook service disposal", () => {
         }
       } finally {
         release.resolve();
+        context.scheduler.beginClose();
         await service.stop?.(context);
+        await context.scheduler.stop();
         rmSync(stateDir, { recursive: true, force: true });
       }
     },
@@ -569,10 +602,15 @@ describe("Logbook service disposal", () => {
     const stateDir = realpathSync(mkdtempSync(path.join(tmpdir(), "logbook-retired-start-")));
     const captured = createCapturedPluginRegistration({ id: "logbook" });
     captured.api.pluginConfig = { captureEnabled: false };
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     captured.api.registerService = (service) => services.push(service);
     plugin.register({ ...captured.api, runtimeSource });
-    const context = { config: {}, stateDir, logger: quietLogger };
+    const context = {
+      config: {},
+      stateDir,
+      logger: quietLogger,
+      scheduler: createTestPluginServiceScheduler(),
+    };
     try {
       for (const lifecycle of captured.runtimeLifecycles) {
         await lifecycle.cleanup?.({ reason: "restart" });
@@ -580,7 +618,9 @@ describe("Logbook service disposal", () => {
       await expect(services[0]!.start(context)).rejects.toThrow("runtime has been retired");
       expect(existsSync(path.join(stateDir, "logbook", "logbook.sqlite"))).toBe(false);
     } finally {
+      context.scheduler.beginClose();
       await services[0]!.stop?.(context);
+      await context.scheduler.stop();
       rmSync(stateDir, { recursive: true, force: true });
     }
   });

@@ -125,11 +125,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
         profileProvider: provider,
       });
       if (prepared.agentHarnessRuntimeOverride) {
-        const direct = await decisions.evaluateEntry(
-          entry,
-          params.snapshot.routeVariants,
-          "openclaw",
-        );
+        const direct = decisions.evaluateEntry(entry, params.snapshot.routeVariants, "openclaw");
         if (direct.availability === true) {
           delete prepared.agentHarnessRuntimeOverride;
         }
@@ -143,7 +139,7 @@ export async function resolveUtilityCompletionRuntimeForAgent(
       if (!runtime) {
         return undefined;
       }
-      const host = await decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
+      const host = decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
       const available = decisions.evaluateNative(entry, host, runtime.id).availability;
       // A selected engine is not evidence that its prepared account is usable.
       // Reuse catalog readiness, including CLI/native observations, before publishing it.

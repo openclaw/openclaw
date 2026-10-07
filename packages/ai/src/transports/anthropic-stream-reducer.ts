@@ -178,7 +178,10 @@ export async function consumeAnthropicStream(params: {
       }
       if (event.type === "error") {
         const error = asOptionalObjectRecord(event.error);
-        throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
+        throw Object.assign(
+          new Error(readStringField(error, "message") || "Anthropic Messages stream failed"),
+          { error },
+        );
       }
       if (event.type === "message_start") {
         sawMessageStart = true;

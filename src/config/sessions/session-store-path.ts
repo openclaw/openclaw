@@ -1,6 +1,8 @@
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
+  captureSystemEventStoreCurrentCheck,
   getSystemEventStorePath,
+  prepareSystemEventStorePath,
   publishSystemEventStoreResolver,
 } from "../../infra/system-event-ownership.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
@@ -85,6 +87,51 @@ export function captureSessionWatcherStorePaths(
         getSystemEventStorePath(sessionKey) ?? resolvePhysicalSessionStorePath({ sessionKey, env }),
       ]),
   );
+}
+
+export type PreparedSessionWatcherStorePaths = {
+  paths: Record<string, string>;
+  assertCurrent(): void;
+};
+
+/** Prepare exact watcher stores and retain their owner checks through worker admission. */
+export async function prepareSessionWatcherStorePaths(
+  keys: readonly string[] = [],
+  env?: NodeJS.ProcessEnv,
+): Promise<PreparedSessionWatcherStorePaths> {
+  const checks: Array<() => void> = [];
+  const results = await Promise.allSettled(
+    keys
+      .filter((key) => parseAgentSessionKey(key) != null)
+      .map(async (sessionKey) => {
+        const isStoreCurrent = captureSystemEventStoreCurrentCheck(sessionKey);
+        const pathname = await (prepareSystemEventStorePath(sessionKey) ??
+          preparePhysicalSessionStorePath({ sessionKey, env }));
+        const check = () => {
+          if (!isStoreCurrent(pathname)) {
+            throw new Error("Session signal lost its watcher store");
+          }
+        };
+        check();
+        checks.push(check);
+        return [sessionKey, pathname] as const;
+      }),
+  );
+  return {
+    paths: Object.fromEntries(
+      results.map((result) => {
+        if (result.status === "rejected") {
+          throw result.reason;
+        }
+        return result.value;
+      }),
+    ),
+    assertCurrent() {
+      for (const check of checks) {
+        check();
+      }
+    },
+  };
 }
 
 export function resolveSessionStorePathForScope(

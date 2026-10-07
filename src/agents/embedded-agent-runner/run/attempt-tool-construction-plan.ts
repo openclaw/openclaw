@@ -259,9 +259,6 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
-/**
- * Discovers LSP tools for plugin grants or patterns that can match their namespace.
- */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

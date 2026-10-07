@@ -146,119 +146,96 @@ function createAdmissionFixture() {
   return { context, entry, sessionKey, sessionId };
 }
 
-// Exercise the producer before execution: queued admission later normalizes the
-// same transcript to its scoped key, which must not change tool authority.
 afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
-  it("interrupt preserves another agent's tagged and untagged global lane work", async () => {
-    const { context, entry } = createAdmissionFixture();
-    const sessionKey = "global";
-    const lane = resolveEmbeddedSessionLane(sessionKey);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const blocker = enqueueCommandInLane(lane, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    const foreign = enqueueCommandInLane(lane, async () => "main", {
-      sessionTarget: { agentId: "main", sessionKey, sessionId: "main-session" },
-    });
-    const untagged = enqueueCommandInLane(lane, async () => "untagged");
-    const owned = enqueueCommandInLane(lane, async () => "research", {
-      sessionTarget: { agentId: "research", sessionKey, sessionId: entry.sessionId },
-    });
-    const older = enqueueCommandInLane(lane, async () => "older research", {
-      sessionTarget: { agentId: "research", sessionKey, sessionId: "older-session" },
-    });
-    const followup = createQueueTestRun({ prompt: "preserved research followup" });
-    Object.assign(followup.run, { agentId: "research", sessionKey, sessionId: entry.sessionId });
-    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
-    const results = Promise.allSettled([foreign, untagged, owned, older]);
-    try {
-      const prepared = await prepareReplyRunAdmission({
-        ...context,
-        effectiveQueueMode: "interrupt",
-        runtimePolicySessionKey: sessionKey,
-        params: {
-          ...context.params,
-          agentId: "research",
-          sessionKey,
-          sessionStore: { [sessionKey]: entry },
-          ctx: { ...context.params.ctx, SessionKey: sessionKey },
-          sessionCtx: { ...context.params.sessionCtx, SessionKey: sessionKey },
-        },
+  it.each([
+    { sessionKey: "global", agentId: "research" },
+    { sessionKey: undefined, agentId: "main" },
+  ])(
+    "interrupt clears only owned work for $agentId/$sessionKey",
+    async ({ sessionKey, agentId }) => {
+      const { context, entry, sessionId } = createAdmissionFixture();
+      const lane = resolveEmbeddedSessionLane(sessionKey ?? sessionId);
+      const entered = createDeferred();
+      const release = createDeferred();
+      const blocker = enqueueCommandInLane(lane, async () => {
+        entered.resolve();
+        await release.promise;
       });
-      expect(prepared.kind).toBe("ready");
-      expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([followup]);
-      release.resolve();
-      await blocker;
-      expect(await results).toEqual([
-        { status: "fulfilled", value: "main" },
-        { status: "fulfilled", value: "untagged" },
-        {
+      await entered.promise;
+      const queued = sessionKey
+        ? [
+            enqueueCommandInLane(lane, async () => "main", {
+              sessionTarget: { agentId: "main", sessionKey, sessionId: "main-session" },
+            }),
+            enqueueCommandInLane(lane, async () => "untagged"),
+            enqueueCommandInLane(lane, async () => "research", {
+              sessionTarget: { agentId, sessionKey, sessionId },
+            }),
+            enqueueCommandInLane(lane, async () => "older research", {
+              sessionTarget: { agentId, sessionKey, sessionId: "older-session" },
+            }),
+          ]
+        : [enqueueCommandInLane(lane, async () => "queued")];
+      const followup = createQueueTestRun({ prompt: "preserved research followup" });
+      if (sessionKey) {
+        Object.assign(followup.run, { agentId, sessionKey, sessionId });
+        enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+      }
+      const results = Promise.allSettled(queued);
+      try {
+        const prepared = await prepareReplyRunAdmission({
+          ...context,
+          effectiveQueueMode: "interrupt",
+          runtimePolicySessionKey: sessionKey,
+          promptSessionCtx: sessionKey
+            ? context.promptSessionCtx
+            : { ...context.promptSessionCtx, SessionKey: undefined },
+          params: {
+            ...context.params,
+            agentId,
+            sessionKey,
+            sessionStore: sessionKey ? { [sessionKey]: entry } : undefined,
+            ctx: { ...context.params.ctx, SessionKey: sessionKey },
+            sessionCtx: { ...context.params.sessionCtx, SessionKey: sessionKey },
+          },
+        });
+        expect(prepared.kind).toBe("ready");
+        if (sessionKey) {
+          expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([followup]);
+        } else {
+          expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
+        }
+        release.resolve();
+        await blocker;
+        const cleared = {
           status: "rejected",
           reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
-        },
-        {
-          status: "rejected",
-          reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
-        },
-      ]);
-    } finally {
-      release.resolve();
-      clearCommandLane(lane);
-      clearFollowupQueue(sessionKey);
-      await Promise.allSettled([blocker, results]);
-    }
-  });
-
-  it("interrupt clears a keyless run's own sessionId lane", async () => {
-    const { context, sessionId } = createAdmissionFixture();
-    const lane = resolveEmbeddedSessionLane(sessionId);
-    const entered = createDeferred();
-    const release = createDeferred();
-    const blocker = enqueueCommandInLane(lane, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
-    const queued = enqueueCommandInLane(lane, async () => "queued");
-    const result = Promise.allSettled([queued]);
-    try {
-      const prepared = await prepareReplyRunAdmission({
-        ...context,
-        effectiveQueueMode: "interrupt",
-        runtimePolicySessionKey: undefined,
-        promptSessionCtx: { ...context.promptSessionCtx, SessionKey: undefined },
-        params: {
-          ...context.params,
-          sessionKey: undefined,
-          sessionStore: undefined,
-          ctx: { ...context.params.ctx, SessionKey: undefined },
-          sessionCtx: { ...context.params.sessionCtx, SessionKey: undefined },
-        },
-      });
-      expect(prepared.kind).toBe("ready");
-      expect(drainFormattedSystemEvents).not.toHaveBeenCalled();
-      release.resolve();
-      await blocker;
-      expect(await result).toEqual([
-        {
-          status: "rejected",
-          reason: expect.objectContaining({ name: "CommandLaneClearedError" }),
-        },
-      ]);
-    } finally {
-      release.resolve();
-      clearCommandLane(lane);
-      await Promise.allSettled([blocker, result]);
-    }
-  });
+        };
+        expect(await results).toEqual(
+          sessionKey
+            ? [
+                { status: "fulfilled", value: "main" },
+                { status: "fulfilled", value: "untagged" },
+                cleared,
+                cleared,
+              ]
+            : [cleared],
+        );
+      } finally {
+        release.resolve();
+        clearCommandLane(lane);
+        if (sessionKey) {
+          clearFollowupQueue(sessionKey);
+        }
+        await Promise.allSettled([blocker, results]);
+      }
+    },
+  );
 
   it.each(["steer", "followup"] as const)(
-    "keeps %s admission independent of an older queued followup",
+    "preserves %s admission and transcript authority despite an older queued followup",
     async (mode) => {
       const { context, sessionKey, sessionId } = createAdmissionFixture();
       const older = createQueueTestRun({ prompt: "Earlier followup", messageId: `older-${mode}` });
@@ -274,6 +251,28 @@ describe("prepared reply transcript identity", () => {
           shouldFollowup: true,
         });
         expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([older]);
+        if (prepared.kind !== "ready") {
+          throw new Error("Expected a prepared reply");
+        }
+        const incoming = createQueueTestRun({ prompt: "Use the revised request" });
+        incoming.run = {
+          ...incoming.run,
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          sessionFile: prepared.preparedSessionState.sessionFile,
+        };
+        const queued = {
+          ...incoming,
+          run: {
+            ...incoming.run,
+            sessionFile: resolveAdmittedRunSessionFile(incoming.run)!,
+          },
+        };
+        expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(
+          resolveFollowupRunToolAuthorityFingerprint(queued),
+        );
+        expect(prepared.preparedSessionState.sessionFile).toBe(sessionKey);
       } finally {
         operation.complete();
         clearFollowupQueue(sessionKey);
@@ -312,35 +311,4 @@ describe("prepared reply transcript identity", () => {
       expect(entry.authProfileOverride).toBe("fixture:shared");
     },
   );
-
-  it("keeps incoming authority identical when the active turn came from the queue", async () => {
-    const { context, sessionKey, sessionId } = createAdmissionFixture();
-    const prepared = await prepareReplyRunAdmission(context);
-    expect(prepared.kind).toBe("ready");
-    if (prepared.kind !== "ready") {
-      throw new Error("Expected a prepared reply");
-    }
-    const incoming = createQueueTestRun({ prompt: "Use the revised request" });
-    incoming.run = {
-      ...incoming.run,
-      agentId: "main",
-      sessionKey,
-      sessionId,
-      sessionFile: prepared.preparedSessionState.sessionFile,
-    };
-    const queued = {
-      ...incoming,
-      run: {
-        ...incoming.run,
-        sessionFile: resolveAdmittedRunSessionFile({
-          sessionKey: incoming.run.sessionKey,
-          sessionFile: incoming.run.sessionFile,
-        })!,
-      },
-    };
-    expect(resolveFollowupRunToolAuthorityFingerprint(incoming)).toBe(
-      resolveFollowupRunToolAuthorityFingerprint(queued),
-    );
-    expect(prepared.preparedSessionState.sessionFile).toBe(sessionKey);
-  });
 });

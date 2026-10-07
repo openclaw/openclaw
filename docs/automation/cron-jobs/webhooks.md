@@ -154,6 +154,8 @@ limits, routing policy, and error responses.
 
     HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
 
+    A full session queue returns HTTP `503` with an actionable error instead of evicting an accepted event. Let the session process its pending events before retrying. This applies to mapped wake actions too; duplicate wakes can still coalesce when the queue is full.
+
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 
     Wake text is a system event, not an isolated, safety-wrapped email reader turn. Send only a short notification you control. Route raw email, documents, or other untrusted content through an `agent` action with a restricted reader.
@@ -164,6 +166,8 @@ limits, routing policy, and error responses.
 
     Keep `sessionMode: "isolated"` for fresh context. Set `"persistent"` only when repeated events should reuse prior context: direct requests then require an explicit `sessionKey`, `hooks.allowRequestSessionKey: true`, and nonempty `hooks.allowedSessionKeyPrefixes`.
 
+    When supplied, `sessionKey` must be a nonempty string. Malformed or blank keys return `400` instead of silently selecting a default or generated session key.
+
     For direct channel delivery, supply both a concrete `channel` and `to`; add `accountId` to select an enabled channel account. Supplying only part of a destination, using `channel: "last"`, or selecting an invalid account returns `400` before dispatch. Direct hooks do not inherit the main session's last recipient.
 
     With no destination, the default `deliver: true` allows a completion system event on the target agent's main session. Set `deliver: false` to suppress successful announcements and ignore destination fields; completion is logged instead. Non-ok outcomes still produce a failure event. Disabling announcement is not a tool restriction: restrict the agent's tools separately if it must not send messages.
@@ -171,6 +175,8 @@ limits, routing policy, and error responses.
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
     Custom paths resolve through `hooks.mappings`. The first matching mapping wins, ahead of presets. Templates or trusted local JS/TS transforms turn the payload into `wake` or `agent` actions; a transform returning `null` produces HTTP `204` without a run. See [Mapping details](/gateway/config-hooks#mapping-details).
+
+    A transform can override the configured wake timing in either direction: return `mode: "now"` or `mode: "next-heartbeat"` for a wake action, or the corresponding `wakeMode` for an agent action.
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 

@@ -4,7 +4,10 @@ import { isDeepStrictEqual } from "node:util";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import type { LegacyConfigUpdatePlan } from "../../commands/doctor/legacy-config-repair.js";
+import type {
+  LegacyConfigUpdatePlan,
+  repairLegacyConfigForUpdateChannel,
+} from "../../commands/doctor/legacy-config-repair.js";
 import {
   createConfigIO,
   mutateConfigFileWithRetry,
@@ -443,12 +446,9 @@ async function planUpdateChannelLegacyConfig(snapshot: ConfigFileSnapshot): Prom
   };
 }
 
-export async function maybeRepairLegacyConfigForUpdateChannel(params: {
-  plan?: LegacyConfigUpdatePlan;
-  configSnapshot: ConfigFileSnapshot;
-  configWriteOptions?: ConfigWriteOptions;
-  jsonMode: boolean;
-}): Promise<ConfigFileSnapshot> {
+export async function maybeRepairLegacyConfigForUpdateChannel(
+  params: Parameters<typeof repairLegacyConfigForUpdateChannel>[0],
+): Promise<ConfigFileSnapshot> {
   if (
     !params.plan &&
     (params.configSnapshot.valid || params.configSnapshot.legacyIssues.length === 0)
@@ -456,14 +456,14 @@ export async function maybeRepairLegacyConfigForUpdateChannel(params: {
     return params.configSnapshot;
   }
 
-  const { repairLegacyConfigForUpdateChannel } =
+  const { repairLegacyConfigForUpdateChannel: repairLegacyConfig } =
     await import("../../commands/doctor/legacy-config-repair.js");
-  const { snapshot, repaired, warnings } = await repairLegacyConfigForUpdateChannel(params);
+  const { snapshot, repaired, warnings } = await repairLegacyConfig(params);
   for (const warning of warnings ?? []) {
     defaultRuntime.error(`Warning: ${warning}`);
   }
   if (!params.jsonMode && repaired) {
-    defaultRuntime.log(theme.muted("Migrated legacy config before changing update channel."));
+    defaultRuntime.log(theme.muted("Migrated legacy config for the update."));
   }
   return snapshot;
 }
@@ -537,16 +537,13 @@ function resolvePreUpdateSourceConfigFromAuthored(
 async function isFreshPreUpdateConfigSnapshot(params: {
   currentConfigPath: string;
   snapshotPath: string;
-  updateStartedAtMs?: number;
+  updateStartedAtMs: number;
 }): Promise<boolean> {
   const snapshotStat = await fs.stat(params.snapshotPath).catch(() => null);
   if (!snapshotStat) {
     return false;
   }
-  if (
-    params.updateStartedAtMs !== undefined &&
-    snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs
-  ) {
+  if (snapshotStat.mtimeMs + 1000 < params.updateStartedAtMs) {
     return false;
   }
   if (Date.now() - snapshotStat.mtimeMs > PRE_UPDATE_CONFIG_SNAPSHOT_MAX_AGE_MS) {

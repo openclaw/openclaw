@@ -330,6 +330,7 @@ describeControlUiE2e("session pull request chips", () => {
           "chat.startup",
           SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
           "sessions.github.publish",
+          "sessions.github.options",
         ],
         methodResponses: {
           [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -416,6 +417,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -534,6 +536,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -637,6 +640,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -673,7 +677,7 @@ describeControlUiE2e("session pull request chips", () => {
 
     await page.getByRole("button", { name: "Publish PR" }).click();
     const failure = page.locator('.chat-pr__publication-outcome[data-state="failed"]');
-    await expect.poll(() => failure.textContent()).toContain("GitHub publication failed.");
+    await expect.poll(() => failure.textContent()).toContain("Publication failed");
     await expect.poll(() => failure.textContent()).toContain("Check repository write access");
     await expect
       .poll(() => page.getByRole("button", { name: "Choose a new publication" }).count())
@@ -712,6 +716,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
@@ -779,6 +784,7 @@ describeControlUiE2e("session pull request chips", () => {
         "chat.startup",
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
         "sessions.github.publish",
+        "sessions.github.options",
       ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },

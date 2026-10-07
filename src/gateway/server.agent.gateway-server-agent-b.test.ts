@@ -11,12 +11,10 @@ import {
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
+import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -298,20 +296,12 @@ describe("gateway server agent", () => {
 
   test("agent returns a wire error when durable user-turn admission fails", async () => {
     await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("expected session store path");
-    }
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path }).db;
-    ensureSessionPendingInputsSchema(database);
-    database.exec(`
-      CREATE TEMP TRIGGER fail_agent_turn_admission
-      BEFORE INSERT ON session_pending_inputs
-      BEGIN
-        SELECT RAISE(ABORT, 'injected agent transcript admission failure');
-      END;
-    `);
+    const refusal = refusePendingInputCommit({
+      operation: "stage",
+      message: "injected agent transcript admission failure",
+      sessionId: "sess-durable-agent-failure",
+      runId: "idem-agent-durable-failure",
+    });
     try {
       const response = await rpcReq(ws, "agent", {
         message: "this turn must not be acknowledged",
@@ -320,10 +310,13 @@ describe("gateway server agent", () => {
       });
 
       expect(response.ok).toBe(false);
-      expect(response.error).toMatchObject({ code: "UNAVAILABLE" });
+      expect(response.error).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("injected agent transcript admission failure"),
+      });
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
     } finally {
-      database.exec("DROP TRIGGER IF EXISTS fail_agent_turn_admission");
+      refusal.mockRestore();
     }
   });
 

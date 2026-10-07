@@ -33,6 +33,10 @@ import {
 import { withGatewayServiceInstallationRecovery } from "./service-update-authority.js";
 import { withSystemdDefinitionMutation } from "./systemd-definition-mutation.js";
 import {
+  readSystemdEnvironmentFile,
+  serializeSystemdEnvironmentFile,
+} from "./systemd-environment-files.js";
+import {
   assertSystemdAvailable,
   disableSystemdUserUnitForRemoval,
   execSystemctlUser,
@@ -45,13 +49,11 @@ import { captureSystemdInstallRecovery } from "./systemd-install-recovery.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
-  readSystemdEnvironmentFile,
   readSystemdServiceExecStart,
   resolveLegacyNodeSystemdEnvironmentFilePath,
   resolveSystemdEnvironmentFilePath,
   resolveSystemdServiceName,
   resolveSystemdUnitPath,
-  serializeSystemdEnvironmentFile,
 } from "./systemd-service-files.js";
 import {
   buildSystemdUnit,
@@ -479,7 +481,7 @@ function reportSystemdServicePublication(
   if (backedUp) {
     lines.push({ label: "Previous unit backed up to", value: `${unitPath}.bak` });
   }
-  writeFormattedLines(stdout, lines, { leadingBlankLine: true });
+  writeFormattedLines(stdout, lines);
 }
 
 export async function stageSystemdService({

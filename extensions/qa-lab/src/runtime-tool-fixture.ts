@@ -1,14 +1,13 @@
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { loadTranscriptEventsSync } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asBoolean,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { QaSuiteInfraError, QaSuiteScenarioSkipError } from "./errors.js";
+import { QaSuiteScenarioSkipError } from "./errors.js";
 import { resolveQaLiveTurnTimeoutMs as liveTurnTimeoutMs } from "./live-timeout.js";
 import { readQaNativeWorkspaceBehaviorId } from "./native-workspace-behavior.js";
 import {
@@ -23,6 +22,10 @@ import {
   readTranscriptToolEvidence,
 } from "./runtime-tool-evidence.js";
 import {
+  runtimeParitySessionKeyDetails,
+  runtimeToolFixtureError,
+} from "./runtime-tool-fixture-session-details.js";
+import {
   type QaRuntimeToolCoverageMetadata,
   readRuntimeToolCoverageMetadata,
 } from "./runtime-tool-metadata.js";
@@ -30,7 +33,13 @@ import {
   formatCodexNativeWorkspaceDetails,
   runCodexNativeWorkspaceFixture,
 } from "./runtime-tool-native-workspace.js";
-import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
+import * as searchEvidence from "./runtime-tool-search-evidence.js";
+import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
+import {
+  type createSession,
+  type readEffectiveTools,
+  readRawQaSessionStore,
+} from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type QaRuntimeToolFixtureConfig = Record<string, unknown>;
@@ -46,48 +55,15 @@ type QaRuntimeToolFixtureRequest = {
   toolOutputStructuredError?: unknown;
 };
 
-const RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX = "RUNTIME_PARITY_SESSION_KEY=";
 const RUNTIME_PATCH_HAPPY_FILENAME = "runtime-tool-fixture-patch.txt";
 const RUNTIME_PATCH_HAPPY_CONTENTS = "runtime patch\n";
 const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
 
-function runtimeParitySessionKeyDetails(...sessionKeys: string[]) {
-  return sessionKeys.map(
-    (sessionKey) => `${RUNTIME_PARITY_SESSION_KEY_DETAIL_PREFIX}${sessionKey}`,
-  );
-}
-
-function runtimeToolFixtureError(error: unknown, ...sessionKeys: string[]) {
-  const message = [
-    ...runtimeParitySessionKeyDetails(...sessionKeys),
-    formatErrorMessage(error),
-  ].join("\n");
-  return error instanceof QaSuiteInfraError
-    ? new QaSuiteInfraError(error.code, message, { cause: error })
-    : new Error(message, { cause: error });
-}
-
 type QaRuntimeToolFixtureDeps = {
-  createSession: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-    label: string,
-    key?: string,
-  ) => Promise<string>;
-  readEffectiveTools: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-    sessionKey: string,
-  ) => Promise<Set<string>>;
-  runAgentPrompt: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-    params: {
-      sessionKey: string;
-      message: string;
-      timeoutMs?: number;
-      transcriptToolName?: string;
-      requireSuccessfulTranscriptToolResult?: boolean;
-    },
-  ) => Promise<unknown>;
+  createSession: typeof createSession;
+  readEffectiveTools: typeof readEffectiveTools;
+  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
   fetchJson: (url: string) => Promise<unknown>;
   ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
 };
@@ -529,12 +505,12 @@ export async function runRuntimeToolFixture(
     : `agent:qa:runtime-tool:${toolName}`;
   const happySessionKey = await deps.createSession(
     env,
-    `Runtime tool fixture: ${toolName} happy`,
+    `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} happy`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:happy` : undefined,
   );
   const failureSessionKey = await deps.createSession(
     env,
-    `Runtime tool fixture: ${toolName} failure`,
+    `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} failure`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
   );
   const sessionKeys = [happySessionKey, failureSessionKey] as const;
@@ -775,6 +751,15 @@ export async function runRuntimeToolFixture(
         new Error("expected live apply_patch failure to explicitly reject the workspace boundary"),
       );
     }
+    const discoveryDetails = searchEvidence.needsSearchEvidence(env, metadata.capabilityLayer)
+      ? await runFixtureOperation(() =>
+          searchEvidence.requireRuntimeToolSearchDiscoveryDetails(env, {
+            sessionKeys: [happySessionKey, failureSessionKey],
+            callIds: [happyRequest.executedRequest?.id, failureRequest.executedRequest?.id],
+            toolName,
+          }),
+        )
+      : [];
     return withSessionDetails(
       [
         `${toolName} live provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedRequest?.args ?? {})}`,
@@ -782,6 +767,7 @@ export async function runRuntimeToolFixture(
           ? undefined
           : `${toolName} live provider happy direct output not required for this async fixture`,
         `${toolName} live provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedRequest?.args ?? {})}`,
+        ...discoveryDetails,
       ]
         .filter(Boolean)
         .join("\n"),

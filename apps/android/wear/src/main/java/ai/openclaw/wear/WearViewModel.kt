@@ -259,9 +259,7 @@ internal fun reduceWearTerminalChatEvent(
   // A send's idempotency key is its Gateway client run ID, including before
   // the first delta. A completed terminal is an outcome, not a live run owner.
   // An anonymous live stream still requires history to resolve identity.
-  val ownedRunId =
-    current.activeRunId
-      ?: current.pendingReply?.runId.takeIf { current.streamText == null }
+  val ownedRunId = current.abortRunId
   val outcome =
     when (event.state) {
       "final" -> WearReplyOutcome.Final
@@ -269,7 +267,7 @@ internal fun reduceWearTerminalChatEvent(
       "error" -> WearReplyOutcome.Error
       else -> return WearTerminalChatTransition(state = current, reloadHistory = false)
     }
-  val terminal = WearReplyTerminal(checkNotNull(event.sessionKey), current.phoneNodeId, event.runId, outcome, message = finalMessage)
+  val terminal = WearReplyTerminal(current.selectedSession.key, current.phoneNodeId, event.runId, outcome, message = finalMessage)
   if (ownedRunId != null && event.runId != null && ownedRunId != event.runId) {
     // The visible stream and the Watch send can belong to different runs.
     // Remember the send's terminal without clearing another run's live text.
@@ -349,7 +347,7 @@ internal fun WearUiState.reconcileReplyHistory(transcript: WearTranscript): Wear
     observedTerminal
       ?.takeIf {
         it.sessionKey == transcript.sessionKey && it.phoneNodeId == transcript.phoneNodeId &&
-          ((activeRunId == null && streamText == null) || (it.runId != null && it.runId == activeRunId))
+          (!hasActiveStream || (it.runId != null && it.runId == activeRunId))
       }?.anchorHistory(transcript.messages)
       // The first accepted response may already contain a newer reply after
       // the terminal's own message; do not anchor the old outcome to that reply.
@@ -705,7 +703,7 @@ internal class WearViewModel(
     viewModelScope.launch {
       if (!isCurrentSessionAction(session, routeGeneration) || !sendAttemptTracker.isCurrent(attempt)) return@launch
       try {
-        val controlCompleted = repository.send(attempt, requirePreferredPhone = true)
+        val controlCompleted = repository.send(attempt)
         if (!sendAttemptTracker.isCurrent(attempt) || !isCurrentSessionAction(session, routeGeneration)) return@launch
         if (controlCompleted) {
           sendAttemptTracker.retire(session.key, session.phoneNodeId, attempt.idempotencyKey)
@@ -959,16 +957,11 @@ internal class WearViewModel(
         mutableState.update { it.copy(loading = true, failure = null) }
         try {
           val status = repository.status(expectedNodeId)
-          val agentList =
+          val agents =
             if (status.connected && WearProxyCapability.AgentControls in status.capabilities) {
               repository.agents(status.phoneNodeId, status.capabilities)
             } else {
-              WearAgentList(
-                agents = emptyList(),
-                eventStreamId = status.eventStreamId,
-                eventSequence = status.eventSequence,
-                phoneNodeId = status.phoneNodeId,
-              )
+              emptyList()
             }
           val previousSession = mutableState.value.selectedSession
           val sessionList =
@@ -1075,11 +1068,11 @@ internal class WearViewModel(
               connected = status.connected,
               failure = status.failure,
               phoneNodeId = status.phoneNodeId,
-              agents = agentList.agents,
+              agents = agents,
               activeAgentId =
                 sessionList.activeAgentId
                   ?: status.activeAgentId
-                  ?: agentList.agents.firstOrNull(WearAgent::selected)?.id,
+                  ?: agents.firstOrNull(WearAgent::selected)?.id,
               selectedModelRef = selectedModelRef,
               models = modelList.models,
               modelCatalogRefreshFailed = modelList.refreshFailed,

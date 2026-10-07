@@ -63,6 +63,52 @@ function makeClient(
 }
 
 describe("gateway connection state", () => {
+  it("retires tool recipients across reconnects without retiring their active runs", () => {
+    const state = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "tool-recipient-retirement",
+      cfg: {},
+    });
+    onTestFinished(() => state.mentionInbox.dispose());
+    const context = createGatewayRequestContext(makeContextParams(state));
+    const live = makeClient("live", { count: 0 }).client;
+    state.clients.add(live);
+    state.chatRunState.getOrCreate("active").buffer = "unfinished response";
+    context.registerToolEventRecipient("active", live.connId);
+
+    for (let cycle = 0; cycle < 20; cycle++) {
+      const client = makeClient(`reconnect-${cycle}`, { count: 0 }).client;
+      const connection = new AbortController();
+      client.connectionSignal = connection.signal;
+      state.clients.add(client);
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("recipient-only", client.connId);
+      expect(state.toolEventRecipients.get("active")?.has(client.connId)).toBe(true);
+
+      connection.abort();
+      if (cycle % 2 === 0) {
+        state.clients.delete(client);
+      }
+      context.unsubscribeAllSessionEvents(client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("recipient-only")).toBe(false);
+
+      // Accepted turns can start after the requesting transport has disconnected.
+      context.registerToolEventRecipient("active", client.connId);
+      context.registerToolEventRecipient("late-start", client.connId);
+      expect(state.toolEventRecipients.get("active")).toEqual(new Set([live.connId]));
+      expect(state.chatRunState.runs.has("late-start")).toBe(false);
+      state.clients.delete(client);
+    }
+
+    state.clients.delete(live);
+    context.unsubscribeAllSessionEvents(live.connId);
+    expect(state.toolEventRecipients.get("active")).toBeUndefined();
+    expect(state.chatRunState.runs.get("active")?.buffer).toBe("unfinished response");
+    state.chatRunState.clearRun("active");
+    expect(state.chatRunState.runs.size).toBe(0);
+  });
+
   it("uses committed policy for projected and plain session events through tentative activation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const reader = ensureProfileForEmail("event-policy-reader@example.test");

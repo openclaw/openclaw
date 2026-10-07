@@ -1,5 +1,6 @@
 // Target runtime admission, executable identity, and compatible-runtime recovery guidance.
 import path from "node:path";
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -15,7 +16,7 @@ import {
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
-import type { PackageActivationRuntime } from "../../infra/package-update-swap-contract.js";
+import type { PackageActivationRuntime } from "../../infra/package-update-activation-runtime.types.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import {
@@ -139,7 +140,7 @@ export async function resolvePackageRuntimePreflight(params: {
           ? ok({ ...unchanged(), activationRuntime, targetVersion: target.version })
           : updater;
       } catch (error) {
-        return resultError(error instanceof Error ? error.message : String(error));
+        return resultError(coerceErrorMessage(error));
       }
     }
     const runtime = await resolvePackageRuntimeForPreflight({
@@ -153,9 +154,7 @@ export async function resolvePackageRuntimePreflight(params: {
     const unchangedRuntime = { ...unchanged(), activationRuntime, targetVersion };
     if (satisfies === true) {
       if (!activationRuntime) {
-        return resultError(
-          captureError instanceof Error ? captureError.message : String(captureError),
-        );
+        return resultError(coerceErrorMessage(captureError));
       }
       return ok(unchangedRuntime);
     }
@@ -187,9 +186,7 @@ export async function resolvePackageRuntimePreflight(params: {
         : nodeVersionSatisfiesEngine(fallbackRuntime.version, target.nodeEngine);
       if (fallbackSatisfies === true) {
         if (!fallbackActivationRuntime) {
-          return resultError(
-            captureError instanceof Error ? captureError.message : String(captureError),
-          );
+          return resultError(coerceErrorMessage(captureError));
         }
         return ok({
           nodeRunner: fallbackNodeRunner,
@@ -201,9 +198,7 @@ export async function resolvePackageRuntimePreflight(params: {
     }
     if (satisfies !== false) {
       if (!activationRuntime) {
-        return resultError(
-          captureError instanceof Error ? captureError.message : String(captureError),
-        );
+        return resultError(coerceErrorMessage(captureError));
       }
       return ok(unchangedRuntime);
     }
@@ -220,7 +215,7 @@ export async function resolvePackageRuntimePreflight(params: {
         try {
           recoveredRuntime = capturePackageActivationRuntime("node", recovered);
         } catch (error) {
-          return resultError(error instanceof Error ? error.message : String(error));
+          return resultError(coerceErrorMessage(error));
         }
         return ok({
           nodeRunner: recovered,

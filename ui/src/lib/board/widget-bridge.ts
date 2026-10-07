@@ -34,13 +34,6 @@ export function isBoardWidgetBridgeRequest(value: unknown): value is BoardWidget
   );
 }
 
-function assertWidgetRequestRecord(value: unknown): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error("widget host request params are invalid");
-  }
-  return value;
-}
-
 function requiredString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || value.length === 0) {
@@ -54,10 +47,7 @@ export class BoardWidgetBridgeController {
   private ticket: string;
   private readonly client: BoardWidgetBridgeGatewayClient;
   private readonly rateKey: string;
-  private readonly confirmPrompt: (text: string) => boolean;
-  private readonly dispatchPrompt: typeof dispatchWidgetPrompt;
-  private readonly now: () => number;
-  private readonly openUrl: (url: string) => boolean;
+  private readonly confirmPrompt: (text: string) => boolean | Promise<boolean>;
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
@@ -67,19 +57,13 @@ export class BoardWidgetBridgeController {
     ticket: string;
     client: BoardWidgetBridgeGatewayClient;
     rateKey: string;
-    confirmPrompt: (text: string) => boolean;
-    dispatchPrompt?: typeof dispatchWidgetPrompt;
-    now?: () => number;
-    openUrl?: (url: string) => boolean;
+    confirmPrompt: (text: string) => boolean | Promise<boolean>;
   }) {
     this.frame = options.frame;
     this.ticket = options.ticket;
     this.client = options.client;
     this.rateKey = options.rateKey;
     this.confirmPrompt = options.confirmPrompt;
-    this.dispatchPrompt = options.dispatchPrompt ?? dispatchWidgetPrompt;
-    this.now = options.now ?? Date.now;
-    this.openUrl = options.openUrl ?? ((url) => openExternalUrlSafe(url) !== null);
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
@@ -96,7 +80,7 @@ export class BoardWidgetBridgeController {
     if (bytes > STATE_PAYLOAD_MAX_BYTES) {
       throw new Error(`widget state payload exceeds ${STATE_PAYLOAD_MAX_BYTES} UTF-8 bytes`);
     }
-    const nowMs = this.now();
+    const nowMs = Date.now();
     for (const [recentPayload, emittedAtMs] of this.recentStatePayloads) {
       if (nowMs - emittedAtMs >= STATE_COALESCE_WINDOW_MS) {
         this.recentStatePayloads.delete(recentPayload);
@@ -120,7 +104,7 @@ export class BoardWidgetBridgeController {
     this.pendingStates.set(serialized, request);
     try {
       const result = await request;
-      this.recentStatePayloads.set(serialized, this.now());
+      this.recentStatePayloads.set(serialized, Date.now());
       return result;
     } finally {
       if (this.pendingStates.get(serialized) === request) {
@@ -136,7 +120,10 @@ export class BoardWidgetBridgeController {
     if (request.ticket !== this.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
-    const params = assertWidgetRequestRecord(request.params);
+    const params = request.params;
+    if (!isRecord(params)) {
+      throw new Error("widget host request params are invalid");
+    }
     switch (request.method) {
       // Opening a link the user clicked is navigation, not a granted capability,
       // so this stays outside the tool-grant checks. Opening goes through the
@@ -149,7 +136,7 @@ export class BoardWidgetBridgeController {
         if (!/^https?:\/\//i.test(url)) {
           throw new Error("widget link url is invalid");
         }
-        if (!this.openUrl(url)) {
+        if (!openExternalUrlSafe(url)) {
           throw new Error("widget link could not be opened");
         }
         return { ok: true };
@@ -165,11 +152,12 @@ export class BoardWidgetBridgeController {
         if (options.isCurrent?.() === false) {
           throw new Error("widget prompt request is no longer current");
         }
-        const accepted = this.dispatchPrompt(
+        const accepted = await dispatchWidgetPrompt(
           this.frame,
           text,
           this.rateKey,
           authorization.confirmationRequired === false ? undefined : this.confirmPrompt,
+          options.isCurrent,
         );
         if (!accepted) {
           throw new Error("widget prompt was not accepted");

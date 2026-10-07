@@ -10,11 +10,11 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
-  disposeOpenClawAgentDatabaseByPath,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as profileAliases from "../../state/user-profile-list.js";
@@ -232,7 +232,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       const observer = observeAliasRootProbes(stateDir);
       expect(receive()).toBe(true);
       const probes = observer.finish("event-merged-suggestion-stress");
-      expect(probes.aliasRootProbes).toBe(1);
+      expect(probes.aliasRootProbes).toBe(0);
       expect(probes.otherRootProbes).toBeLessThanOrEqual(7);
     });
   });
@@ -286,7 +286,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
             `broadcast-${shape}-${phase}-${client.connId}`,
             eventKeys.length,
           );
-          expect.soft(probes.aliasRootProbes).toBe(1);
+          expect.soft(probes.aliasRootProbes).toBe(0);
           expect.soft(probes.otherRootProbes).toBeLessThanOrEqual(7);
           return allowed;
         },
@@ -429,7 +429,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
     }, 1);
   });
 
-  it("reselects the current default root after legacy discovery and a new default appears", async () => {
+  it("invalidates creator visibility when the canonical root is replaced", async () => {
     await withCreatorRows(async ({ stateDir, creatorId, keys }) => {
       const sessionKey = keys[0]!;
       const client = eventClients(creatorId)[0]!.client;
@@ -459,11 +459,11 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
           });
         },
       });
-      await cleanupSessionStateForTest({ stateDir });
-      // This fixture moves/recreates the file, so release path validation as well as the handle.
-      disposeOpenClawAgentDatabaseByPath(
+      // Disposal writes the shared registry; drain it before moving/recreating the root.
+      await disposeOpenClawAgentDatabaseByPath(
         path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
       );
+      await cleanupSessionStateForTest({ stateDir });
       expect(closing).toEqual([
         { agentOpen: true, stateOpen: true, rootExists: true, selector: undefined },
       ]);
@@ -471,7 +471,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(state.db.isOpen).toBe(false);
       const legacyRoot = path.join(path.dirname(stateDir), ".clawdbot");
       fs.renameSync(stateDir, legacyRoot);
-      expect(receive()).toBe(true);
+      expect(receive()).toBe(false);
       fs.mkdirSync(stateDir);
       // Keep the visibility snapshot warm: suggestion roles must still select the new store.
       expect(receive()).toBe(false);
@@ -490,7 +490,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
 
   it("keeps configured, retired and agent-scoped sentinel stores distinct", async () => {
     await withCreatorRows(async ({ callerId, creatorId, keys }) => {
-      const cfg: OpenClawConfig = { agents: { list: [{ id: "work", default: true }] } };
+      const cfg: OpenClawConfig = { agents: { entries: { work: {} } } };
       const workKey = "agent:work:prepared-work";
       const client = eventClients(creatorId)[0]!.client;
       const receive = (sessionKeys: string[], agentId?: string) =>
@@ -657,9 +657,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(broadcastToConnIds.mock.calls[0]?.[1]?.catalog.hosts[0]?.sessions).toEqual([]);
       expect(broadcastToConnIds.mock.calls[1]?.[1]?.catalog.hosts[0]?.sessions).toHaveLength(100);
       expect(respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toHaveLength(100);
-      // Cache key, three publications, and the explicit post-merge warm read (three probes cold).
-      expect(probes).toBeGreaterThan(0);
-      expect(probes).toBeLessThanOrEqual(7);
+      expect(probes).toBe(0);
     });
   });
 });

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginCommandNativeCandidate } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -58,37 +57,15 @@ function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayl
 
 function isEditableTelegramProgressResult(result: TelegramNativeReplyPayload): boolean {
   const telegramData = resolveTelegramNativeReplyChannelData(result);
-  return Boolean(
-    typeof result.text === "string" &&
-    result.text.trim() &&
+  return (
     !result.mediaUrl &&
     (!result.mediaUrls || result.mediaUrls.length === 0) &&
     !result.presentation &&
     !result.interactive &&
     !result.btw &&
     !hasTelegramNativeReplyReaction(result) &&
-    telegramData?.pin !== true,
+    telegramData?.pin !== true
   );
-}
-
-async function cleanupTelegramProgressPlaceholder(params: {
-  bot: Bot;
-  chatId: number;
-  progressMessageId?: number;
-  runtime: TelegramCommandExecutorParams["runtime"];
-}): Promise<void> {
-  if (params.progressMessageId == null) {
-    return;
-  }
-  try {
-    await withTelegramApiErrorLogging({
-      operation: "deleteMessage",
-      runtime: params.runtime,
-      fn: () => params.bot.api.deleteMessage(params.chatId, params.progressMessageId!),
-    });
-  } catch {
-    // Best-effort cleanup before fallback or suppression exits.
-  }
 }
 
 async function resolveTelegramCommandTranscriptContext(params: {
@@ -157,6 +134,21 @@ export async function executeTelegramPluginCommand(
       : `telegram:${dispatch.chatId}`;
   const { deliverReplies, emitTelegramMessageSentHooks } = await dispatch.loadDeliveryRuntime();
   let progressMessageId: number | undefined;
+  const cleanupProgressPlaceholder = async () => {
+    const messageId = progressMessageId;
+    if (messageId == null) {
+      return;
+    }
+    try {
+      await withTelegramApiErrorLogging({
+        operation: "deleteMessage",
+        runtime: dispatch.runtime,
+        fn: () => dispatch.bot.api.deleteMessage(dispatch.chatId, messageId),
+      });
+    } catch {
+      // Best-effort cleanup before fallback or suppression exits.
+    }
+  };
   if (params.candidate.progressMessage) {
     try {
       const sent = await withTelegramApiErrorLogging({
@@ -204,12 +196,7 @@ export async function executeTelegramPluginCommand(
       payload: result,
     }) || result.suppressReply === true;
   if (suppressReply) {
-    await cleanupTelegramProgressPlaceholder({
-      bot: dispatch.bot,
-      chatId: dispatch.chatId,
-      progressMessageId,
-      runtime: dispatch.runtime,
-    });
+    await cleanupProgressPlaceholder();
     return;
   }
   const hasReaction = hasTelegramNativeReplyReaction(result);
@@ -263,12 +250,7 @@ export async function executeTelegramPluginCommand(
       // Fall through to cleanup + normal delivered reply if editing fails.
     }
   }
-  await cleanupTelegramProgressPlaceholder({
-    bot: dispatch.bot,
-    chatId: dispatch.chatId,
-    progressMessageId,
-    runtime: dispatch.runtime,
-  });
+  await cleanupProgressPlaceholder();
   await deliverReplies({
     replies: [deliverableResult],
     ...dispatch.buildDeliveryBaseOptions({

@@ -168,42 +168,35 @@ it("publishes the committed key exactly once after the worker settles, without h
   });
 });
 
-it.each(["refused", "rejected", "cleanup incomplete"])(
-  "does not publish when restoration is %s",
+it.each(["refused", "rejected", "cleanup incomplete", "database", "caller", "request"])(
+  "does not publish after restoration loses completion or authority: %s",
   async (outcome) => {
-    if (outcome === "cleanup incomplete") {
-      observed.worker.mockResolvedValue([{ result, cleanupIncomplete: true }]);
-    } else {
-      observed.worker.mockRejectedValue(
-        outcome === "refused"
-          ? new SqliteReclamationRequestRefusedError("restore refused")
-          : new Error("restore rejected"),
-      );
-    }
-    await expect(restore()).rejects.toThrow(
-      outcome === "cleanup incomplete" ? /cleanup is incomplete/ : `restore ${outcome}`,
-    );
-    expect(changes).not.toHaveBeenCalled();
-  },
-);
-
-it.each(["database", "caller", "request"])(
-  "does not publish a receipt after its %s authority retires",
-  async (authority) => {
     observed.worker.mockImplementation(async () => {
-      if (authority === "database") {
+      if (outcome === "refused") {
+        throw new SqliteReclamationRequestRefusedError("restore refused");
+      }
+      if (outcome === "rejected") {
+        throw new Error("restore rejected");
+      }
+      if (outcome === "database") {
         observed.claimCurrent = false;
-      } else {
-        observed[authority === "caller" ? "caller" : "request"].mockImplementation(() => {
+      } else if (outcome === "caller" || outcome === "request") {
+        observed[outcome].mockImplementation(() => {
           throw new Error("restore authority retired");
         });
       }
-      return [{ result }];
+      return [{ result, ...(outcome === "cleanup incomplete" ? { cleanupIncomplete: true } : {}) }];
     });
-    if (authority === "database") {
+    if (outcome === "database") {
       await restore();
     } else {
-      await expect(restore()).rejects.toThrow("restore authority retired");
+      await expect(restore()).rejects.toThrow(
+        outcome === "cleanup incomplete"
+          ? /cleanup is incomplete/
+          : outcome === "caller" || outcome === "request"
+            ? "restore authority retired"
+            : `restore ${outcome}`,
+      );
     }
     expect(changes).not.toHaveBeenCalled();
   },

@@ -84,17 +84,8 @@ export function createCronStreamWatchers(
   };
 
   const ownerParams: CronStreamOwnerParams = {
-    scheduler: params.scheduler,
-    getDefaultAgentId: params.getDefaultAgentId,
-    getProcessSupervisor: params.getProcessSupervisor,
+    ...params,
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
-    retryBackoffMs: params.retryBackoffMs,
-    updateState: params.updateState,
-    retireSource: params.retireSource,
-    ...(params.updateCounters ? { updateCounters: params.updateCounters } : {}),
-    recordFailure: params.recordFailure,
-    fireBatch: params.fireBatch,
-    logger: params.logger,
   };
 
   const retainCounterSeed = (owner: CronStreamJobOwner): void => {

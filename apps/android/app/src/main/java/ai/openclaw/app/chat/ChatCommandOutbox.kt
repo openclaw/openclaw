@@ -638,8 +638,10 @@ internal interface ChatOutboxDao {
  * a crash can never orphan bytes or strand a row without its attachments.
  */
 class RoomChatCommandOutbox internal constructor(
-  private val database: ClientStateDatabase,
+  private val openDatabase: suspend () -> ClientStateDatabase,
 ) : ChatCommandOutbox {
+  internal constructor(database: ClientStateDatabase) : this({ database })
+
   internal data class DeliveryState(
     val attemptVersion: Int,
     val branchEpoch: Int,
@@ -648,6 +650,7 @@ class RoomChatCommandOutbox internal constructor(
   )
 
   override suspend fun load(gatewayId: String): List<ChatOutboxItem> {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return emptyList()
     return database.withWriteTransaction {
       ensureBranchStorageLocked()
@@ -670,6 +673,7 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   override suspend fun wasAdmitted(id: String): Boolean {
+    val database = openDatabase()
     val dao = database.outboxDao()
     return dao.status(id) != null || dao.hasAdmissionReceipt(id)
   }
@@ -685,6 +689,7 @@ class RoomChatCommandOutbox internal constructor(
     ownerAgentId: String,
     idempotencyKey: String?,
   ): ChatOutboxEnqueueResult {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return ChatOutboxEnqueueResult.Unavailable
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return ChatOutboxEnqueueResult.Unavailable
     val owner = normalizedOutboxOwnerAgentId(ownerAgentId) ?: return ChatOutboxEnqueueResult.Unavailable
@@ -789,6 +794,7 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   override suspend fun loadAttachments(id: String): List<LoadedOutboxAttachment> {
+    val database = openDatabase()
     val dao = database.outboxDao()
     return dao.attachmentsForCommand(id).map { row ->
       val chunks = dao.chunksForAttachment(row.id)
@@ -809,8 +815,9 @@ class RoomChatCommandOutbox internal constructor(
     retryCount: Int,
     lastError: String?,
     expectedStatus: ChatOutboxStatus?,
-  ): Int =
-    database.withWriteTransaction {
+  ): Int {
+    val database = openDatabase()
+    return database.withWriteTransaction {
       ensureBranchStorageLocked()
       val state = readDeliveryStateLocked(id) ?: return@withWriteTransaction 0
       if (state.attemptVersion != expectedAttemptVersion) return@withWriteTransaction 0
@@ -831,14 +838,16 @@ class RoomChatCommandOutbox internal constructor(
       }
       updated
     }
+  }
 
   override suspend fun claimForSendingIfAttempt(
     id: String,
     expectedAttemptVersion: Int,
     retryCount: Int,
     lastError: String?,
-  ): Int =
-    database.withWriteTransaction {
+  ): Int {
+    val database = openDatabase()
+    return database.withWriteTransaction {
       ensureBranchStorageLocked()
       val dao = database.outboxDao()
       val row = dao.command(id) ?: return@withWriteTransaction 0
@@ -858,11 +867,13 @@ class RoomChatCommandOutbox internal constructor(
         lastError = lastError,
       )
     }
+  }
 
   override suspend fun pinSessionKey(
     id: String,
     sessionKey: String,
   ) {
+    val database = openDatabase()
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     database.withWriteTransaction {
       ensureBranchStorageLocked()
@@ -898,6 +909,7 @@ class RoomChatCommandOutbox internal constructor(
     ownerAgentId: String?,
     replacementId: String?,
   ): Int {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return 0
     val dao = database.outboxDao()
     return database.withWriteTransaction {
@@ -967,28 +979,32 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   override suspend fun delete(id: String) {
+    val database = openDatabase()
     database.withWriteTransaction {
-      deleteCommandRowLocked(id)
+      deleteCommandRowLocked(id, database.outboxDao())
     }
   }
 
-  override suspend fun deleteIfQueued(id: String): Boolean =
-    database.withWriteTransaction {
+  override suspend fun deleteIfQueued(id: String): Boolean {
+    val database = openDatabase()
+    return database.withWriteTransaction {
       val dao = database.outboxDao()
       if (dao.status(id) != ChatOutboxStatus.Queued.dbValue) return@withWriteTransaction false
-      val deleted = deleteCommandRowLocked(id) > 0
+      val deleted = deleteCommandRowLocked(id, dao) > 0
       if (deleted) dao.deleteAdmissionReceipt(id)
       deleted
     }
+  }
 
   override suspend fun confirmDeliveredAttempts(ids: Map<String, Int>): Int {
+    val database = openDatabase()
     if (ids.isEmpty()) return 0
     return database.withWriteTransaction {
       ensureBranchStorageLocked()
       var removed = 0
       for ((id, attemptVersion) in ids) {
         if (readDeliveryStateLocked(id)?.attemptVersion == attemptVersion) {
-          removed += deleteCommandRowLocked(id)
+          removed += deleteCommandRowLocked(id, database.outboxDao())
         }
       }
       removed
@@ -999,6 +1015,7 @@ class RoomChatCommandOutbox internal constructor(
     gatewayId: String,
     scope: ChatOutboxScope,
   ): ChatOutboxBranchState? {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return null
     val normalized = normalizedScope(scope) ?: return null
     return database.withWriteTransaction {
@@ -1017,6 +1034,7 @@ class RoomChatCommandOutbox internal constructor(
     scope: ChatOutboxScope,
     nowMs: Long,
   ): ChatOutboxMutationLease? {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return null
     val normalized = normalizedScope(scope) ?: return null
     return database.withWriteTransaction {
@@ -1063,6 +1081,7 @@ class RoomChatCommandOutbox internal constructor(
     activeTranscriptEntryIds: Set<String>,
     lastError: String,
   ): ChatOutboxBranchState? {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return null
     val normalized = normalizedScope(scope) ?: return null
     val leaf = activeLeafEntryId?.trim()?.takeIf { it.isNotEmpty() }
@@ -1143,6 +1162,7 @@ class RoomChatCommandOutbox internal constructor(
     lastError: String,
     lease: ChatOutboxMutationLease?,
   ): Boolean {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return false
     val normalized = normalizedScope(scope) ?: return false
     val leaf = activeLeafEntryId?.trim()?.takeIf { it.isNotEmpty() }
@@ -1171,6 +1191,7 @@ class RoomChatCommandOutbox internal constructor(
     sessionKey: String,
     ownerAgentId: String,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val key = sessionKey.trim().takeIf { it.isNotEmpty() } ?: return
     val owner = normalizedOutboxOwnerAgentId(ownerAgentId) ?: return
@@ -1178,7 +1199,7 @@ class RoomChatCommandOutbox internal constructor(
     database.withWriteTransaction {
       ensureBranchStorageLocked()
       for (id in dao.commandIdsForSession(gateway, key, owner)) {
-        deleteCommandRowLocked(id)
+        deleteCommandRowLocked(id, dao)
       }
       dao.deleteAdmissionReceiptsForSession(gateway, key, owner)
       usePrepared(
@@ -1191,12 +1212,13 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   override suspend fun clearGateway(gatewayId: String) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.outboxDao()
     database.withWriteTransaction {
       ensureBranchStorageLocked()
       for (id in dao.commandIdsForGateway(gateway)) {
-        deleteCommandRowLocked(id)
+        deleteCommandRowLocked(id, dao)
       }
       dao.deleteAdmissionReceiptsForGateway(gateway)
       usePrepared("DELETE FROM outbox_branch_scopes WHERE gatewayId = ?") { statement ->
@@ -1207,6 +1229,7 @@ class RoomChatCommandOutbox internal constructor(
   }
 
   override suspend fun failSendingAfterRestart() {
+    val database = openDatabase()
     // Deliberately unscoped: recovery happens before a gateway is resolved, but a crash leaves
     // delivery ambiguous and must not silently replay an already accepted command.
     database.withWriteTransaction {
@@ -1240,6 +1263,7 @@ class RoomChatCommandOutbox internal constructor(
     gatewayId: String,
     nowMs: Long,
   ) {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return
     val dao = database.outboxDao()
     val cutoff = nowMs - OUTBOX_EXPIRY_MS
@@ -1265,9 +1289,11 @@ class RoomChatCommandOutbox internal constructor(
 
   // Attachment chunk and metadata rows must die with their command row in the same
   // transaction; callers wrap this in database.withWriteTransaction.
-  private suspend fun PooledConnection.deleteCommandRowLocked(id: String): Int {
+  private suspend fun PooledConnection.deleteCommandRowLocked(
+    id: String,
+    dao: ChatOutboxDao,
+  ): Int {
     ensureBranchStorageLocked()
-    val dao = database.outboxDao()
     dao.deleteChunksForCommand(id)
     dao.deleteAttachmentsForCommand(id)
     deleteDeliveryStateLocked(id)
@@ -1440,6 +1466,7 @@ class RoomChatCommandOutbox internal constructor(
     needsReconciliation: Boolean,
     lease: ChatOutboxMutationLease?,
   ): ChatOutboxBranchState? {
+    val database = openDatabase()
     val gateway = scopedGatewayId(gatewayId) ?: return null
     val normalized = normalizedScope(scope) ?: return null
     return database.withWriteTransaction {

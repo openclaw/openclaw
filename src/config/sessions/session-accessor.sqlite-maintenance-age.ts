@@ -67,7 +67,7 @@ export function observeSessionEntryMaintenanceAgeChanges(
   changeObservers.set(identity, observers);
   return () => {
     observers.delete(observe);
-    if (!observers.size) {
+    if (!observers.size && changeObservers.get(identity) === observers) {
       changeObservers.delete(identity);
     }
   };

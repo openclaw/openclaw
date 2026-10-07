@@ -1,5 +1,6 @@
 package ai.openclaw.app.node
 
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -11,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SmsManagerTest {
-  private val json = SmsManager.JsonConfig
+  private val json = Json
 
   private fun smsMessage(
     id: Long,
@@ -36,7 +37,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsEmptyPayload() {
-    val result = SmsManager.parseParams("", json)
+    val result = SmsManager.parseParams("")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: paramsJSON required", error.error)
@@ -44,7 +45,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsInvalidJson() {
-    val result = SmsManager.parseParams("not-json", json)
+    val result = SmsManager.parseParams("not-json")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -52,7 +53,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsNonObjectJson() {
-    val result = SmsManager.parseParams("[]", json)
+    val result = SmsManager.parseParams("[]")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -60,7 +61,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsMissingTo() {
-    val result = SmsManager.parseParams("{\"message\":\"Hi\"}", json)
+    val result = SmsManager.parseParams("{\"message\":\"Hi\"}")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'to' phone number required", error.error)
@@ -68,7 +69,7 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsRejectsMissingMessage() {
-    val result = SmsManager.parseParams("{\"to\":\"+1234\"}", json)
+    val result = SmsManager.parseParams("{\"to\":\"+1234\"}")
     assertTrue(result is SmsManager.ParseResult.Error)
     val error = result as SmsManager.ParseResult.Error
     assertEquals("INVALID_REQUEST: 'message' text required", error.error)
@@ -77,16 +78,16 @@ class SmsManagerTest {
 
   @Test
   fun parseParamsTrimsToField() {
-    val result = SmsManager.parseParams("{\"to\":\"  +1555  \",\"message\":\"Hello\"}", json)
+    val result = SmsManager.parseParams("{\"to\":\"  +1555  \",\"message\":\"Hello\"}")
     assertTrue(result is SmsManager.ParseResult.Ok)
     val ok = result as SmsManager.ParseResult.Ok
-    assertEquals("+1555", ok.params.to)
-    assertEquals("Hello", ok.params.message)
+    assertEquals("+1555", ok.to)
+    assertEquals("Hello", ok.message)
   }
 
   @Test
   fun parseQueryParamsDefaultsWhenPayloadEmpty() {
-    val result = SmsManager.parseQueryParams(null, json)
+    val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(25, ok.params.limit)
@@ -97,7 +98,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsInvalidJson() {
-    val result = SmsManager.parseQueryParams("not-json", json)
+    val result = SmsManager.parseQueryParams("not-json")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -105,7 +106,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsInvertedTimeRange() {
-    val result = SmsManager.parseQueryParams("{\"startTime\":200,\"endTime\":100}", json)
+    val result = SmsManager.parseQueryParams("{\"startTime\":200,\"endTime\":100}")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: startTime must be less than or equal to endTime", error.error)
@@ -113,7 +114,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsClampsLimitAndOffset() {
-    val result = SmsManager.parseQueryParams("{\"limit\":999,\"offset\":-5}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":999,\"offset\":-5}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(200, ok.params.limit)
@@ -137,7 +138,6 @@ class SmsManagerTest {
           "offset": 2
         }
         """.trimIndent(),
-        json,
       )
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
@@ -156,7 +156,6 @@ class SmsManagerTest {
   fun buildPayloadJsonEscapesFields() {
     val payload =
       SmsManager.buildPayloadJson(
-        json = json,
         ok = false,
         to = "+1\"23",
         error = "SMS_SEND_FAILED: \"nope\"",
@@ -171,7 +170,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesCountAndMessages() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = true,
         messages =
           listOf(
@@ -209,7 +207,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesErrorOnFailure() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = false,
         messages = emptyList(),
         error = "SMS_QUERY_FAILED: nope",
@@ -224,7 +221,6 @@ class SmsManagerTest {
   fun buildQueryPayloadJsonIncludesMmsMetadataWhenProvided() {
     val payload =
       SmsManager.buildQueryPayloadJson(
-        json = json,
         ok = true,
         messages = listOf(smsMessage(id = 1L, date = 1000L)),
         queryMetadata =
@@ -258,7 +254,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsAcceptsEmptyPayload() {
-    val result = SmsManager.parseQueryParams(null, json)
+    val result = SmsManager.parseQueryParams(null)
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(25, ok.params.limit)
@@ -267,7 +263,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsRejectsNonObjectJson() {
-    val result = SmsManager.parseQueryParams("[]", json)
+    val result = SmsManager.parseQueryParams("[]")
     assertTrue(result is SmsManager.QueryParseResult.Error)
     val error = result as SmsManager.QueryParseResult.Error
     assertEquals("INVALID_REQUEST: expected JSON object", error.error)
@@ -275,7 +271,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesLimitAndOffset() {
-    val result = SmsManager.parseQueryParams("{\"limit\":10,\"offset\":5}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":10,\"offset\":5}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(10, ok.params.limit)
@@ -284,7 +280,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsClampsLimitRange() {
-    val result = SmsManager.parseQueryParams("{\"limit\":300}", json)
+    val result = SmsManager.parseQueryParams("{\"limit\":300}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(200, ok.params.limit)
@@ -292,7 +288,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesPhoneNumber() {
-    val result = SmsManager.parseQueryParams("{\"phoneNumber\":\"+1234567890\"}", json)
+    val result = SmsManager.parseQueryParams("{\"phoneNumber\":\"+1234567890\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("+1234567890", ok.params.phoneNumber)
@@ -300,7 +296,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesContactName() {
-    val result = SmsManager.parseQueryParams("{\"contactName\":\"lixuankai\"}", json)
+    val result = SmsManager.parseQueryParams("{\"contactName\":\"lixuankai\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("lixuankai", ok.params.contactName)
@@ -308,7 +304,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesKeyword() {
-    val result = SmsManager.parseQueryParams("{\"keyword\":\"test\"}", json)
+    val result = SmsManager.parseQueryParams("{\"keyword\":\"test\"}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals("test", ok.params.keyword)
@@ -316,7 +312,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesTimeRange() {
-    val result = SmsManager.parseQueryParams("{\"startTime\":1000,\"endTime\":2000}", json)
+    val result = SmsManager.parseQueryParams("{\"startTime\":1000,\"endTime\":2000}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(1000L, ok.params.startTime)
@@ -325,7 +321,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesType() {
-    val result = SmsManager.parseQueryParams("{\"type\":1}", json)
+    val result = SmsManager.parseQueryParams("{\"type\":1}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(1, ok.params.type)
@@ -333,7 +329,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesReadStatus() {
-    val result = SmsManager.parseQueryParams("{\"isRead\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"isRead\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertEquals(true, ok.params.isRead)
@@ -341,7 +337,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsIncludeMmsDefaultsFalse() {
-    val result = SmsManager.parseQueryParams("{}", json)
+    val result = SmsManager.parseQueryParams("{}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertFalse(ok.params.includeMms)
@@ -349,7 +345,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesIncludeMmsTrue() {
-    val result = SmsManager.parseQueryParams("{\"includeMms\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"includeMms\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertTrue(ok.params.includeMms)
@@ -357,7 +353,7 @@ class SmsManagerTest {
 
   @Test
   fun parseQueryParamsParsesConversationReviewTrue() {
-    val result = SmsManager.parseQueryParams("{\"conversationReview\":true}", json)
+    val result = SmsManager.parseQueryParams("{\"conversationReview\":true}")
     assertTrue(result is SmsManager.QueryParseResult.Ok)
     val ok = result as SmsManager.QueryParseResult.Ok
     assertTrue(ok.params.conversationReview)

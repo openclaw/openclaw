@@ -21,6 +21,7 @@ import {
   type WorkerWorkspaceManifestEntry,
   type WorkerWorkspaceReconciliationJournal,
 } from "./workspace-manifest.js";
+import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import {
   assertWorkspaceMatchesManifest,
   ConcurrentWorkspacePathError,
@@ -225,7 +226,6 @@ export async function createWorkspacePatch(params: {
 export async function applyWorkspacePatch(params: {
   root: string;
   patch: Uint8Array;
-  reverse?: boolean;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.patch.byteLength === 0) {
@@ -240,15 +240,7 @@ export async function applyWorkspacePatch(params: {
   try {
     await requireGit(
       params.root,
-      [
-        "-c",
-        "core.autocrlf=false",
-        "apply",
-        "--no-index",
-        "--binary",
-        "--whitespace=nowarn",
-        ...(params.reverse ? ["--reverse"] : []),
-      ],
+      ["-c", "core.autocrlf=false", "apply", "--no-index", "--binary", "--whitespace=nowarn"],
       params.patch,
       { GIT_DIR: path.join(temporary, ".git") },
       params.assertCurrent,
@@ -283,9 +275,8 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
     const paths = new Set([...baseByPath.keys(), ...appliedByPath.keys()]);
     const directories = new Set<string>();
     for (const entryPath of paths) {
-      const segments = entryPath.split("/");
-      for (let index = 1; index < segments.length; index += 1) {
-        directories.add(segments.slice(0, index).join("/"));
+      for (const ancestor of workspacePathAncestors(entryPath)) {
+        directories.add(ancestor);
       }
     }
     const actualEntries: WorkerWorkspaceManifestEntry[] = [];
@@ -368,9 +359,8 @@ async function assertWorkspaceRecoveryBase(params: WorkspaceRecoveryContext): Pr
   const basePaths = new Set(baseEntries.map((entry) => entry.path));
   const baseDirectories = new Set<string>();
   for (const entryPath of basePaths) {
-    const segments = entryPath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      baseDirectories.add(segments.slice(0, index).join("/"));
+    for (const ancestor of workspacePathAncestors(entryPath)) {
+      baseDirectories.add(ancestor);
     }
   }
   for (const entry of appliedEntries) {
@@ -487,14 +477,10 @@ async function restoreWorkspaceJournalDirectories(params: WorkspaceRecoveryConte
 export async function recoverWorkerWorkspaceReconciliation(params: {
   root: string;
   journal: WorkerWorkspaceReconciliationJournal;
-  preservePaths?: ReadonlySet<string>;
   assertCurrent?: () => void;
 }): Promise<void> {
   if (params.journal.appliedManifestRef) {
     throw new Error("Cloud workspace result is already applied and awaits fence acceptance");
-  }
-  if (params.preservePaths?.size) {
-    throw new Error("Cloud workspace patch recovery cannot preserve partial paths");
   }
   const root = await fs.realpath(params.root);
   validateJournalSnapshot(params.journal);

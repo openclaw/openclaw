@@ -13,14 +13,10 @@ import {
   unopenedMcpConfig,
 } from "../agent-bundle-mcp-manager.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "../agent-bundle-mcp-runtime-shared.js";
-import {
-  isCliBindingFlushed,
-  restoreCliRunnerTestDeps,
-  runCliAgent,
-  setCliRunnerTestDeps,
-} from "../cli-runner.js";
+import { isCliBindingFlushed, runCliAgent } from "../cli-runner.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { applyCliSessionBindingResult, getCliSessionBinding } from "../cli-session.js";
+import * as cliTranscript from "../command/attempt-execution.helpers.js";
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
@@ -41,18 +37,17 @@ describe("isCliBindingFlushed", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
-    restoreCliRunnerTestDeps();
   });
 
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    restoreCliRunnerTestDeps();
+    vi.mocked(cliTranscript.claudeCliSessionTranscriptHasContent).mockRestore();
   });
 
   it("returns false when no sessionId is provided", async () => {
     const probe = vi.fn(async () => true);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed(undefined, "claude-cli")).toBe(false);
     expect(probe).not.toHaveBeenCalled();
@@ -60,7 +55,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true when the transcript has content on the first probe", async () => {
     const probe = vi.fn(async () => true);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-fresh", "claude-cli", workspaceDir)).toBe(true);
     expect(probe).toHaveBeenCalledTimes(1);
@@ -68,17 +63,21 @@ describe("isCliBindingFlushed", () => {
   });
 
   it("succeeds when the transcript becomes visible on a later retry", async () => {
-    const delay = vi.fn(async () => undefined);
+    vi.useFakeTimers();
     let calls = 0;
     const probe = vi.fn(async () => {
       calls += 1;
       return calls >= 2;
     });
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe, delay });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
-    expect(await isCliBindingFlushed("sid-late", "claude-cli", workspaceDir)).toBe(true);
+    const result = isCliBindingFlushed("sid-late", "claude-cli", workspaceDir);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(probe).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await result).toBe(true);
     expect(probe).toHaveBeenCalledTimes(2);
-    expect(delay).toHaveBeenCalledExactlyOnceWith(50);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("schedules at most 0 + 50 + 150ms of delay across the bounded retry", async () => {
@@ -87,7 +86,7 @@ describe("isCliBindingFlushed", () => {
       // Fake timers enforce the retry contract without introducing wall-clock
       // sleeps into this import-heavy agent test.
       const probe = vi.fn(async () => false);
-      setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+      vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
       const settled = vi.fn();
       const errored = vi.fn();
@@ -109,7 +108,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing for non-claude-cli providers", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-codex", "codex-cli")).toBe(true);
     expect(await isCliBindingFlushed("sid-anthropic", "anthropic")).toBe(true);
@@ -119,7 +118,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing when provider is undefined", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(await isCliBindingFlushed("sid-x", undefined)).toBe(true);
     expect(probe).not.toHaveBeenCalled();
@@ -127,7 +126,7 @@ describe("isCliBindingFlushed", () => {
 
   it("returns true without probing when the caller owns continuity outside native transcripts", async () => {
     const probe = vi.fn(async () => false);
-    setCliRunnerTestDeps({ claudeCliSessionTranscriptHasContent: probe });
+    vi.spyOn(cliTranscript, "claudeCliSessionTranscriptHasContent").mockImplementation(probe);
 
     expect(
       await isCliBindingFlushed("sid-warm", "claude-cli", workspaceDir, {
@@ -249,6 +248,30 @@ describe.each(["anthropic", undefined])(
     );
   },
 );
+
+describe.each([false, true])("CLI run rejection (cleanupFails=%s)", (cleanupFails) => {
+  it.each([undefined, null, 0, false])(
+    "rejects the thrown value %s after cleanup",
+    async (error) => {
+      const context = buildPreparedCliRunContext();
+      const cleanup = vi.fn(async () => {
+        if (cleanupFails) {
+          throw new Error("synthetic cleanup failure");
+        }
+      });
+      context.params.cleanupCliLiveSessionOnRunEnd = true;
+      context.preparedBackend.closeLiveSession = cleanup;
+
+      await expect(
+        settlePreparedCliRun({
+          context,
+          run: vi.fn().mockRejectedValue(error),
+        }),
+      ).rejects.toThrow(new Error(String(error)));
+      expect(cleanup).toHaveBeenCalledOnce();
+    },
+  );
+});
 
 it("preserves completed result boundaries for independent final delivery", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });

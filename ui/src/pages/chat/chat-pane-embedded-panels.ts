@@ -26,6 +26,7 @@ import {
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
 import { renderPluginContribution } from "../../plugins/control-ui-view.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
+import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type {
   ChatSessionCompanionThread,
   ChatSessionCompanionTurn,
@@ -38,11 +39,8 @@ import {
   closeSessionWorkspacePreview,
 } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
-import type {
-  SidebarPanelDefinition,
-  SidebarPanelTemplates,
-} from "./components/chat-sidebar-region-types.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
+import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
+import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
@@ -52,6 +50,19 @@ registerFilePreviewEnglish();
 type SidebarPanelDefinitionParams = {
   panePresentation?: PresentationValue;
   state: ChatPageHost;
+  paneId: string;
+  panePresentationId: string;
+  subagentsInputRegion: "page" | "dock";
+  subagentsPresented: PresentationValue;
+  processesPresented?: PresentationValue;
+  onRefreshProcesses?: () => void;
+  subagentsAvailable: boolean;
+  subagentsShowRequest?: () => string | null | undefined;
+  onRefreshSubagents: () => void;
+  onSubagentSessionSelect: (
+    sessionKey: string,
+    options?: PaneSessionChangeOptions,
+  ) => boolean | void;
   themeMode: "dark" | "light";
   agentId: string | null;
   browserPresented: PresentationValue;
@@ -61,6 +72,7 @@ type SidebarPanelDefinitionParams = {
   linkReaderTabsInHeader?: boolean;
   onCloseLinkReader?: () => void;
   terminalTabsInHeader: boolean;
+  onCloseTerminal?: () => void;
   browserRefreshOnPresentation: boolean;
   preferredBrowserTab?: BrowserTabSelection;
   sessionBrowserTabs?: BrowserTabTarget[];
@@ -145,19 +157,23 @@ export function sidebarPanelDefinitions(
               phase: state.connected ? "connected" : "stopped",
             },
             "portal.list",
-            "operator.write",
+            "operator.read",
           )
-        : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+        : slot === "subagents" || slot === "processes"
+          ? panelContext.subagentsAvailable
+          : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
     ),
     content,
     loading: renderPanelLoadingSkeleton(
       textKey === "conversation" || textKey === "companion"
         ? "chat"
-        : textKey === "portal"
-          ? "browser"
-          : textKey === "dashboard"
-            ? "board"
-            : textKey,
+        : textKey === "subagents" || textKey === "processes"
+          ? "file-list"
+          : textKey === "portal"
+            ? "browser"
+            : textKey === "dashboard"
+              ? "board"
+              : textKey,
       t(textKey === "desktop" ? "desktop.connecting" : "common.loading"),
     ),
     empty: { description: t(`chat.sidePanel.${textKey}Empty`) },
@@ -168,6 +184,7 @@ export function sidebarPanelDefinitions(
     ? html`<openclaw-terminal-panel
         embedded
         .tabsInHeader=${params?.terminalTabsInHeader ?? false}
+        .onClose=${params?.onCloseTerminal}
         .client=${state.connected ? state.client : null}
         .available=${state.terminalAvailable}
         .agentId=${params?.agentId ?? null}
@@ -284,6 +301,59 @@ export function sidebarPanelDefinitions(
   return [
     definePanel("conversation", "conversation", icons.messageSquare, nothing),
     definePanel(
+      "subagents",
+      "subagents",
+      icons.bot,
+      state && params
+        ? html`<openclaw-chat-subagents-panel
+            .sessionKey=${state.sessionKey}
+            .agentId=${params.agentId ?? "main"}
+            .paneId=${params.paneId}
+            .presentationId=${params.panePresentationId}
+            .inputRegion=${params.subagentsInputRegion}
+            .presented=${livePresentation(params.subagentsPresented)}
+            .showRequest=${params.subagentsShowRequest}
+            .onSessionSelect=${params.onSubagentSessionSelect}
+          ></openclaw-chat-subagents-panel>`
+        : null,
+      params
+        ? html`<button
+            type="button"
+            class="rail-header__action"
+            aria-label=${t("chat.subagentsPanel.refresh")}
+            title=${t("chat.subagentsPanel.refresh")}
+            ?disabled=${!params.connected}
+            @click=${params.onRefreshSubagents}
+          >
+            ${icons.refresh}
+          </button>`
+        : undefined,
+    ),
+    definePanel(
+      "processes",
+      "processes",
+      icons.terminal,
+      state && params
+        ? html`<openclaw-chat-processes-panel
+            .sessionKey=${state.sessionKey}
+            .agentId=${params.agentId ?? "main"}
+            .presented=${livePresentation(params.processesPresented ?? false)}
+          ></openclaw-chat-processes-panel>`
+        : null,
+      params
+        ? html`<button
+            type="button"
+            class="rail-header__action"
+            aria-label=${t("chat.processesPanel.refresh")}
+            title=${t("chat.processesPanel.refresh")}
+            ?disabled=${!params.connected}
+            @click=${params.onRefreshProcesses}
+          >
+            ${icons.refresh}
+          </button>`
+        : undefined,
+    ),
+    definePanel(
       "detail",
       "review",
       icons.diff,
@@ -371,7 +441,6 @@ export function sidebarPanelDefinitions(
             "panels",
             entry.key,
             { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
-            nothing,
             params?.isPluginPanelPresented(slot),
           )
         : null,
@@ -379,24 +448,4 @@ export function sidebarPanelDefinitions(
       empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
     })),
   ];
-}
-
-export function availableSidebarSlots(definitions: SidebarPanelDefinition[]): SidebarSlotId[] {
-  return definitions
-    .filter((definition) => definition.available)
-    .map((definition) => definition.slot);
-}
-
-export function sidebarPanelTemplates(
-  definitions: SidebarPanelDefinition[],
-  field: "content" | "headerAction" = "content",
-): SidebarPanelTemplates {
-  const templates: SidebarPanelTemplates = {};
-  for (const definition of definitions) {
-    const template = definition[field];
-    if (template != null) {
-      templates[definition.slot] = template;
-    }
-  }
-  return templates;
 }

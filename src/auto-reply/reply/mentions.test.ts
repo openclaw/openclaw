@@ -9,7 +9,7 @@ import {
 
 function mention(name: string, emoji?: string) {
   const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "agent", identity: { name, emoji } }] },
+    agents: { entries: { agent: { identity: { name, emoji } } } },
   };
   const regexes = buildMentionRegexes(cfg, "agent");
   return {

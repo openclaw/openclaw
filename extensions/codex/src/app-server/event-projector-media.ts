@@ -4,15 +4,16 @@ import {
   type MessagingToolSend,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessToolResultTelemetry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import type { RemoteWorkspaceFileReader } from "openclaw/plugin-sdk/file-access-runtime";
 import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   normalizeMediaReferenceForComparison,
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-store";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexThreadItem, JsonObject } from "./protocol.js";
-import type { CodexRemoteWorkspaceFileReader } from "./remote-workspace-media.js";
 
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
@@ -26,7 +27,7 @@ export class CodexGeneratedMediaProjection {
     private readonly config: EmbeddedRunAttemptParams["config"],
     private readonly remote?: {
       remoteWorkspaceRoot?: string;
-      readFile?: CodexRemoteWorkspaceFileReader;
+      readFile?: RemoteWorkspaceFileReader;
       requestTimeoutMs?: number;
       signal?: AbortSignal;
     },
@@ -66,13 +67,13 @@ export class CodexGeneratedMediaProjection {
           return;
         }
         try {
-          const response = await this.remote.readFile({
+          const bytes = await this.remote.readFile({
             path: savedPath,
             maxBytes: resolveGeneratedMediaMaxBytes(this.config, "image"),
             signal: this.remote.signal,
             timeoutMs: this.remote.requestTimeoutMs,
           });
-          if (!response || typeof response.dataBase64 !== "string" || !response.dataBase64) {
+          if (!bytes.length) {
             embeddedAgentLog.warn("codex remote image file returned no inline bytes", {
               itemId: item.id,
             });
@@ -80,7 +81,7 @@ export class CodexGeneratedMediaProjection {
           }
           await this.recordImage({
             itemId: item.id,
-            result: response.dataBase64,
+            result: bytes.toString("base64"),
             revisedPrompt: readString(item, "revisedPrompt"),
             source: "native",
           });
@@ -92,7 +93,10 @@ export class CodexGeneratedMediaProjection {
         }
         return;
       }
-      this.recordUrl({ itemId: item.id, mediaUrl: savedPath });
+      const existing = this.mediaByItemId.get(item.id);
+      if (!existing?.mediaUrl) {
+        this.mediaByItemId.set(item.id, { ...existing, mediaUrl: savedPath });
+      }
     }
   }
 
@@ -153,7 +157,7 @@ export class CodexGeneratedMediaProjection {
   }): Promise<void> {
     const maxBytes = resolveGeneratedMediaMaxBytes(this.config, "image");
     const estimatedDecodedBytes = estimateBase64DecodedBytes(params.result);
-    if (estimatedDecodedBytes !== undefined && estimatedDecodedBytes > maxBytes) {
+    if (estimatedDecodedBytes > maxBytes) {
       embeddedAgentLog.warn(
         `codex app-server ${params.source} image generation result exceeds media limit`,
         {
@@ -183,12 +187,11 @@ export class CodexGeneratedMediaProjection {
         asset.fileName,
       );
       this.gatewayMaterializedItemIds.add(params.itemId);
-      this.recordUrl({
-        itemId: params.itemId,
+      // Both Codex event shapes can carry a DevBox-local savedPath; channel
+      // delivery must always use the copy materialized on this gateway.
+      this.mediaByItemId.set(params.itemId, {
+        ...this.mediaByItemId.get(params.itemId),
         mediaUrl: saved.path,
-        // Both Codex event shapes can carry a DevBox-local savedPath; channel
-        // delivery must always use the copy materialized on this gateway.
-        replaceExisting: true,
       });
     } catch (error) {
       embeddedAgentLog.warn(
@@ -258,39 +261,4 @@ export class CodexGeneratedMediaProjection {
       }),
     };
   }
-
-  private recordUrl(params: { itemId: string; mediaUrl: string; replaceExisting?: boolean }): void {
-    const existing = this.mediaByItemId.get(params.itemId);
-    if (existing?.mediaUrl && params.replaceExisting !== true) {
-      this.itemIds.add(params.itemId);
-      return;
-    }
-    this.mediaByItemId.set(params.itemId, { ...existing, mediaUrl: params.mediaUrl });
-    this.itemIds.add(params.itemId);
-  }
-}
-
-function estimateBase64DecodedBytes(base64: string): number | undefined {
-  let nonWhitespaceLength = 0;
-  let previousCode = -1;
-  let lastCode = -1;
-  for (let i = 0; i < base64.length; i += 1) {
-    const code = base64.charCodeAt(i);
-    if (isBase64WhitespaceCode(code)) {
-      continue;
-    }
-    nonWhitespaceLength += 1;
-    previousCode = lastCode;
-    lastCode = code;
-  }
-  if (nonWhitespaceLength === 0) {
-    return undefined;
-  }
-  const equalsCode = "=".charCodeAt(0);
-  const padding = lastCode === equalsCode ? (previousCode === equalsCode ? 2 : 1) : 0;
-  return Math.max(0, Math.floor((nonWhitespaceLength * 3) / 4) - padding);
-}
-
-function isBase64WhitespaceCode(code: number): boolean {
-  return code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d;
 }

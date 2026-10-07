@@ -95,10 +95,10 @@ exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
 `resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
 to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
-Native command probes should use `runCommandWithTimeout` from
+Native command checks should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
 `killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+checks, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
 can return before canceled remote startup delivers its PID. When a command owns a
 session reservation or temporary output, await `withCommandProcessScope` from the
 same subpath around execution before releasing those resources. The scope joins
@@ -174,7 +174,7 @@ Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
-exited. Keep the probe pending through cleanup, use `detached: true` only for a
+exited. Keep the check pending through cleanup, use `detached: true` only for a
 process group you created, and start Windows tree termination while its root is
 still alive.
 
@@ -270,6 +270,35 @@ return {
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
+
+### Bounded waits
+
+`openclaw/plugin-sdk/time-runtime` exports
+`raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
+promise, or a function returning a promise when the timer must start before the
+work. The timeout callback returns a fallback or throws the caller's error.
+Delays use native `setTimeout` semantics; the timer keeps the process alive
+unless `ref` is `false`, and is cleared when the race settles.
+
+When `signal` is supplied, the same wait owns cancellation and clears both the
+timer and listener on any outcome. `onAbort(signal)` returns a fallback or throws
+the caller's error; the default throws an `AbortError` with the signal reason as
+its cause. The operation comes first in the promise race, including when both
+inputs have already settled. Check an existing abort before calling if it must
+prevent an operation factory from starting.
+
+`racePromiseWithAbortSignal(operation, signal?, createError?)` from the same
+subpath bounds observation by caller cancellation. An already-aborted signal
+wins over an already-settled promise. By default it rejects with an `AbortError`
+whose cause is the signal's reason; `createError(signal)` can preserve a
+transport's existing cancellation error. The helper removes its abort listener
+when the race settles and observes late source rejections. A function returning
+a promise starts after the abort listener is registered; an already-aborted
+signal prevents that function from starting.
+
+Neither helper cancels the underlying operation or certifies that cleanup has
+finished. Keep resource settlement, authority checks, and abort side effects
+with the operation's lifecycle owner.
 
 ### Stage timing diagnostics
 

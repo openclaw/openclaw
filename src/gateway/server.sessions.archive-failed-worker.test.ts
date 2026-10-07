@@ -27,14 +27,14 @@ const execFileAsync = promisify(execFile);
 async function pendingWorkerCleanup(sessionId: string, key: string) {
   const placements = createWorkerSessionPlacementStore();
   const requested = await placements.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
-  const provisioning = placements.transition({
+  const provisioning = await placements.transition({
     sessionId,
     from: "requested",
     to: "provisioning",
     expectedGeneration: requested.generation,
     patch: { environmentId: "worker-cleanup-pending" },
   });
-  const failed = placements.fail({
+  const failed = await placements.fail({
     sessionId,
     expectedGeneration: provisioning.generation,
     recoveryError: "provider cleanup pending",
@@ -131,7 +131,7 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
   await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
   expect(await patch(true)).toMatchObject({ ok: true });
   environment.state = "destroyed";
-  placements.transition({
+  await placements.transition({
     sessionId,
     from: "failed",
     to: "local",
@@ -141,7 +141,8 @@ test("failed worker cleanup does not block archive, reopen, or Undo, and retains
 });
 
 test("failed worker cleanup keeps worktree reconstruction blocked until the worker is gone", async () => {
-  const { key, sessionId, storePath, worktree } = await createArchiveWorktreeFixture();
+  const { key, sessionId, storePath, worktree, cleanupWorktrees } =
+    await createArchiveWorktreeFixture();
   await fs.writeFile(path.join(worktree.path, "draft.txt"), "restore this work\n");
   expect(
     await directSessionReq("sessions.patch", {
@@ -150,6 +151,7 @@ test("failed worker cleanup keeps worktree reconstruction blocked until the work
       archived: true,
     }),
   ).toMatchObject({ ok: true });
+  await cleanupWorktrees();
   const { environment, reclaim, context } = await pendingWorkerCleanup(sessionId, key);
   const restore = vi.spyOn(managedWorktrees, "restore");
   const unarchive = () =>

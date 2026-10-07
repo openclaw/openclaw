@@ -1,5 +1,5 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
-  normalizeNonNegativeMs,
   resolveBindingIdsForTargetSession,
   mutateBindingsForTargetSession,
   updateBindingsForTargetSessionSync,
@@ -12,7 +12,7 @@ export async function setThreadBindingIdleTimeoutBySessionKeyAsync(input: {
   idleTimeoutMs: number;
 }): Promise<ThreadBindingRecord[]> {
   const params = { ...input };
-  const idleTimeoutMs = normalizeNonNegativeMs(params.idleTimeoutMs);
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
   return mutateBindingsForTargetSession(params, (existing, now) => ({
     ...existing,
     idleTimeoutMs,
@@ -26,7 +26,7 @@ export async function setThreadBindingMaxAgeBySessionKeyAsync(input: {
   maxAgeMs: number;
 }): Promise<ThreadBindingRecord[]> {
   const params = { ...input };
-  const maxAgeMs = normalizeNonNegativeMs(params.maxAgeMs);
+  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   return mutateBindingsForTargetSession(params, (existing, now) => ({
     ...existing,
     maxAgeMs,
@@ -40,7 +40,7 @@ export function setThreadBindingIdleTimeoutBySessionKey(
   params: Parameters<typeof setThreadBindingIdleTimeoutBySessionKeyAsync>[0],
 ): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  const idleTimeoutMs = normalizeNonNegativeMs(params.idleTimeoutMs);
+  const idleTimeoutMs = resolveNonNegativeIntegerOption(params.idleTimeoutMs, 0);
   return updateBindingsForTargetSessionSync(ids, (existing, now) => ({
     ...existing,
     idleTimeoutMs,
@@ -53,7 +53,7 @@ export function setThreadBindingMaxAgeBySessionKey(
   params: Parameters<typeof setThreadBindingMaxAgeBySessionKeyAsync>[0],
 ): ThreadBindingRecord[] {
   const ids = resolveBindingIdsForTargetSession(params);
-  const maxAgeMs = normalizeNonNegativeMs(params.maxAgeMs);
+  const maxAgeMs = resolveNonNegativeIntegerOption(params.maxAgeMs, 0);
   return updateBindingsForTargetSessionSync(ids, (existing, now) => ({
     ...existing,
     maxAgeMs,

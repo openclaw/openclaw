@@ -244,9 +244,9 @@ function resolveTrustedOpenClawRootFromArgvHint(params: {
   return hasTrustedOpenClawRootIndicator({ packageRoot, packageJson }) ? packageRoot : null;
 }
 
-function findNearestPluginSdkPackageRoot(startDir: string, maxDepth = 12): string | null {
+function findNearestPluginSdkPackageRoot(startDir: string): string | null {
   let cursor = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     const subpaths = readPluginSdkSubpathsFromPackageRoot(cursor);
     if (subpaths) {
       return cursor;
@@ -293,7 +293,6 @@ function dedupeResolvedPaths(paths: readonly string[]): string[] {
 function listAncestorPluginRuntimeModuleCandidates(params: {
   starts: readonly (string | undefined)[];
   orderedKinds: readonly PluginSdkAliasCandidateKind[];
-  maxDepth?: number;
 }): string[] {
   const candidates: string[] = [];
   for (const start of params.starts) {
@@ -301,8 +300,7 @@ function listAncestorPluginRuntimeModuleCandidates(params: {
       continue;
     }
     let cursor = path.resolve(start);
-    const maxDepth = params.maxDepth ?? 12;
-    for (let i = 0; i < maxDepth; i += 1) {
+    for (let i = 0; i < 12; i += 1) {
       candidates.push(...listPluginRuntimeModuleCandidates(cursor, params.orderedKinds));
       const parent = path.dirname(cursor);
       if (parent === cursor) {

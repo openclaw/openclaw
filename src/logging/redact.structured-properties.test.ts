@@ -17,24 +17,26 @@ function observePrefilterProbes(text: string) {
   };
 }
 
-describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured properties", (redact) => {
-  it("probes repeated text once while preserving field-specific protection", () => {
-    const text = "ordinary repeated fixture 🦞";
+it.each([redactSecrets, redactModelVisibleSecrets, redactLogRecordForTransport])(
+  "%s reuses scalar probes only within the current record and preserves field protection",
+  (redact) => {
+    const log = redact === redactLogRecordForTransport;
+    const text = log ? "ordinary repeated log fixture 🦞" : "ordinary repeated fixture 🦞";
+    const record = { detail: text, nested: { detail: text }, ...(log ? {} : { token: text }) };
     const probe = observePrefilterProbes(text);
     try {
-      expect(redact({ detail: text, nested: { detail: text }, token: text })).toEqual({
-        detail: text,
-        nested: { detail: text },
-        token: "ordina…e 🦞",
-      });
+      expect(redact(record)).toEqual({ ...record, ...(log ? {} : { token: "ordina…e 🦞" }) });
       expect(probe.count()).toBe(1);
-      redact({ detail: text });
+      const next = log ? record : { detail: text };
+      expect(redact(next)).toEqual(next);
       expect(probe.count()).toBe(2);
     } finally {
       probe.restore();
     }
-  });
+  },
+);
 
+describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured properties", (redact) => {
   it("uses current registry masking before reusing an exact text probe", () => {
     const text = "opaque-fixture-value";
     const input = [{ detail: text }, { detail: text }];
@@ -102,18 +104,4 @@ describe.each([redactSecrets, redactModelVisibleSecrets])("%s structured propert
     expect(result.first).not.toBe(shared);
     expect(shared.token).toBe("fixture-value");
   });
-});
-
-it("reuses log scalar probes only within the current record", () => {
-  const text = "ordinary repeated log fixture 🦞";
-  const record = { detail: text, nested: { detail: text } };
-  const probe = observePrefilterProbes(text);
-  try {
-    expect(redactLogRecordForTransport(record)).toEqual(record);
-    expect(probe.count()).toBe(1);
-    expect(redactLogRecordForTransport(record)).toEqual(record);
-    expect(probe.count()).toBe(2);
-  } finally {
-    probe.restore();
-  }
 });

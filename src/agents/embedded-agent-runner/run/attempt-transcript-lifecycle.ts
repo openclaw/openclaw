@@ -1,6 +1,8 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
 
 const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
@@ -8,7 +10,6 @@ const TRANSCRIPT_TEARDOWN_BUDGET_MS = 30_000;
 /** Per-attempt transcript write state carried by the owned AsyncLocalStorage. */
 export type LifecycleOwner = {
   active: boolean;
-  nestedPending: number;
   nestedTail: Promise<void>;
   pendingOperations: Set<Promise<void>>;
 };
@@ -35,12 +36,10 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   let cleanupDrain: Promise<void> | undefined;
   let disposePromise: Promise<void> | undefined;
   let pendingWrites = 0;
-  let teardownBudgetLogged = false;
   const lifecycleOwner = deps.createLifecycleStore?.() ?? new AsyncLocalStorage<LifecycleOwner>();
 
   const createLifecycleOwner = (): LifecycleOwner => ({
     active: true,
-    nestedPending: 0,
     nestedTail: Promise.resolve(),
     pendingOperations: new Set(),
   });
@@ -100,10 +99,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(
   const serializeLifecycle = async <T>(run: () => Promise<T> | T): Promise<T> => {
     const inheritedOwner = lifecycleOwner.getStore();
     if (inheritedOwner?.active) {
-      const waitForPrevious =
-        inheritedOwner.nestedPending > 0 ? inheritedOwner.nestedTail : Promise.resolve();
-      inheritedOwner.nestedPending += 1;
-      const operation = waitForPrevious.then(async () => {
+      const operation = inheritedOwner.nestedTail.then(async () => {
         const childOwner = createLifecycleOwner();
         return await runLifecycleOwner(childOwner, run);
       });
@@ -115,17 +111,12 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       void propagated.catch(() => {});
       inheritedOwner.nestedTail = queueTail;
       inheritedOwner.pendingOperations.add(propagated);
-      void queueTail.finally(() => {
-        inheritedOwner.nestedPending -= 1;
-      });
       return await operation;
     }
 
     const previous = lifecycle;
-    let release!: () => void;
-    lifecycle = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise, resolve: release } = createDeferredCore();
+    lifecycle = promise;
     await previous;
     const owner = createLifecycleOwner();
     try {
@@ -134,32 +125,13 @@ export function createEmbeddedAttemptTranscriptLifecycle(
       release();
     }
   };
-  const logTeardownBudgetExpiry = (): void => {
-    if (teardownBudgetLogged) {
-      return;
-    }
-    teardownBudgetLogged = true;
-    log.error(
-      `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
-        `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
-        `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
-    );
-  };
   const settleWithinTeardownBudget = async (operation: Promise<void>): Promise<void> => {
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const settled = await Promise.race([
-      operation.then(() => true),
-      new Promise<false>((resolve) => {
-        timeout = setTimeout(() => resolve(false), TRANSCRIPT_TEARDOWN_BUDGET_MS);
-        timeout.unref?.();
-      }),
-    ]);
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    if (!settled) {
-      void operation.catch(() => {});
-      logTeardownBudgetExpiry();
+    if (!(await settlesWithin(operation, TRANSCRIPT_TEARDOWN_BUDGET_MS))) {
+      log.error(
+        `transcript teardown budget expired: runId=${params.runId ?? "unknown"} ` +
+          `sessionId=${params.sessionId ?? "unknown"} pendingWrites=${pendingWrites} ` +
+          `timeoutMs=${TRANSCRIPT_TEARDOWN_BUDGET_MS}`,
+      );
     }
   };
   const beginCleanup = async (): Promise<void> => {

@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { FAST_RESET_LINEAGE_FIXTURE } from "../../config/sessions/session-lineage.test-support.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target-paths.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -376,9 +377,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(mocks.handleInlineActions).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the exact multiline reset payload during fast bootstrap", () => {
+  it("preserves the exact multiline reset payload during fast bootstrap", async () => {
     const payload = "keep [Q3]\nline 2";
-    const result = bootstrap(
+    const result = await bootstrap(
       buildGetReplyCtx({
         Body: `/new ${payload}`,
         BodyForCommands: `/new ${payload}`,
@@ -394,23 +395,9 @@ describe("getReplyFromConfig fast test bootstrap", () => {
   });
 
   it("preserves node provenance, lineage, and usage preferences during fast reset bootstrap", async () => {
-    const preserved = {
-      spawnedBy: "agent:main:main",
-      parentSessionKey: "agent:main:dashboard:parent",
-      parentSessionId: "parent-session",
-      spawnedWorkspaceDir: "/tmp/workspace",
-      spawnedCwd: "/tmp/repo",
-      forkSource: { sessionKey: "agent:main:main", sessionId: "source-generation" },
-      createdVia: "spawn" as const,
-      createdActor: { type: "agent" as const, id: "agent:main:main" },
-      createdAt: 1_234,
-      spawnDepth: 2,
-      subagentRole: "orchestrator" as const,
-      subagentControlScope: "children" as const,
-      responseUsage: "full" as const,
-    };
+    const preserved = { ...FAST_RESET_LINEAGE_FIXTURE, responseUsage: "full" as const };
     await seedSession({ sessionId: "existing-fast-reset-lineage", ...preserved });
-    const result = bootstrap();
+    const result = await bootstrap();
     expect(result.resetTriggered).toBe(true);
     expect(result.sessionEntry).toMatchObject({
       previousSessionId: "existing-fast-reset-lineage",
@@ -425,7 +412,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       modelSelectionLocked: true,
     };
     await seedSession(entry);
-    expect(() => bootstrap()).toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
+    await expect(bootstrap()).rejects.toThrow(MODEL_SELECTION_LOCKED_RESET_MESSAGE);
     expect(readSession()).toMatchObject(entry);
   });
 });

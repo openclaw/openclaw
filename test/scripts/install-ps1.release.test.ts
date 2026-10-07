@@ -1161,7 +1161,6 @@ $previousTemp = $script:InstallerTempDirectory
 $previousLocation = (Get-Location).Path
 function Ensure-Git { return $true }
 function Assert-GitCheckoutHasCommit { param([string]$RepoDir) }
-function Remove-LegacySubmodule { param([string]$RepoDir) }
 function git { throw 'unexpected Git mutation' }
 function New-TransactionalGitCheckout { throw 'unexpected clone' }
 function Main { throw 'unexpected installer entrypoint' }

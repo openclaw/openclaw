@@ -20,6 +20,13 @@ import {
 export { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 
 export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+export const ChannelThreadBindingsSchema = z.strictObject({
+  enabled: z.boolean().optional(),
+  idleHours: z.number().nonnegative().optional(),
+  maxAgeHours: z.number().nonnegative().optional(),
+  spawnSessions: z.boolean().optional(),
+  defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
+});
 export const ChannelStreamingPreviewSchema = z.strictObject({
   chunk: BlockStreamingChunkSchema.optional(),
   toolProgress: z.boolean().optional(),

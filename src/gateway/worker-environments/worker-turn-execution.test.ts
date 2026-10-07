@@ -1,21 +1,35 @@
 import assert from "node:assert/strict";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { isRecordedModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   makeAgentAssistantMessage,
   makeAgentUserMessage,
 } from "../../agents/test-helpers/agent-message-fixtures.js";
+import {
+  CORE_WORKER_LAUNCH_TOOL_NAMES,
+  resolveCoreToolExecutionLocation,
+} from "../../agents/tool-catalog.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { resolveNodeWorkerLaunchToolNames } from "../../infra/node-runner-inventory.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../../plugins/hook-runner-global.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   completeWorkerLaunchDescriptor,
@@ -23,9 +37,9 @@ import {
   type WorkerLaunchPlan,
 } from "../../worker/launch-descriptor.js";
 import { roundTripWorkerLaunchDescriptor } from "../../worker/launch-descriptor.test-support.js";
-import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-contract.js";
+import { registerWorkerTurnInferenceTests } from "./worker-turn-execution.inference.suite.js";
 import {
   acknowledgeCompletedWorkerTurn,
   createWorkerTurnTunnel,
@@ -39,6 +53,7 @@ import {
   placements,
   openSessionManager,
   readWorkerTurnTranscriptStorageRows,
+  root,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -50,6 +65,143 @@ import {
 describe("worker turn execution", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(resetGlobalHookRunner);
+
+  it.each([
+    { recorderOwned: false, throws: false },
+    { recorderOwned: true, throws: false },
+    { recorderOwned: false, throws: true },
+    { recorderOwned: true, throws: true },
+  ])("redacts blocked input before launch (%j)", async ({ recorderOwned, throws }) => {
+    await seedActivePlacement();
+    const input = turn("blocked-input");
+    const recorder = recorderOwned
+      ? createUserTurnTranscriptRecorder({
+          target: { ...sessionTarget, sessionEntry: undefined },
+          input: { text: input.prompt },
+        })
+      : undefined;
+    const handler = vi.fn(async () => {
+      expect((await openSessionManager()).getEntries()).toEqual([]);
+      if (throws) {
+        throw new Error("synthetic policy failure");
+      }
+      return { outcome: "block" as const, reason: "synthetic policy", message: "Request blocked." };
+    });
+    await using runtime = await acquireAgentRunPreparedModelRuntime({
+      config: input.config,
+      agentId: input.agentId,
+      agentDir: resolveAgentDir(input.config, input.agentId),
+      workspaceDir: input.workspaceDir,
+    });
+    const registry = runtime.snapshot.pluginRegistry;
+    assert(registry);
+    const registration = {
+      pluginId: "policy",
+      hookName: "before_agent_run" as const,
+      handler,
+      source: "test",
+    };
+    registry.typedHooks.push(registration);
+    initializeGlobalHookRunner(registry);
+    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
+    const runLocal = vi.fn();
+    const onUserMessagePersisted = vi.fn();
+    try {
+      const result = await provider.executeTurn(
+        { ...sessionTarget, runId: input.runId },
+        {
+          ...input,
+          pluginGeneration: runtime.pluginGeneration,
+          userTurnTranscriptRecorder: recorder,
+          onUserMessagePersisted,
+        },
+        runLocal,
+      );
+      expect(result.meta.error?.kind).toBe("hook_block");
+      expect(result.meta.livenessState).toBe("blocked");
+      expect(handler).toHaveBeenCalledOnce();
+      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+      expect(environments.startTunnel).not.toHaveBeenCalled();
+      expect(runLocal).not.toHaveBeenCalled();
+      const messages = (await openSessionManager()).buildSessionContext().messages;
+      expect(messages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: [{ type: "text", text: result.payloads?.[0]?.text }],
+          idempotencyKey: `hook-block:before_agent_run:user:${input.runId}`,
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: throws ? "before_agent_run" : "policy",
+              blockedAt: expect.any(Number),
+            },
+          },
+        }),
+      ]);
+      expect(JSON.stringify(readWorkerTurnTranscriptStorageRows())).not.toContain(input.prompt);
+      expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(messages[0]);
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    } finally {
+      registry.typedHooks.splice(registry.typedHooks.indexOf(registration), 1);
+      input.preparedRunAdmission.close();
+    }
+  });
+
+  it("fences a passing gate when run authority closes during its await", async () => {
+    await seedActivePlacement();
+    const entered = createDeferred();
+    const release = createDeferred();
+    const input = turn("revoked-gate");
+    await using runtime = await acquireAgentRunPreparedModelRuntime({
+      config: input.config,
+      agentId: input.agentId,
+      agentDir: resolveAgentDir(input.config, input.agentId),
+      workspaceDir: input.workspaceDir,
+    });
+    const registry = runtime.snapshot.pluginRegistry;
+    assert(registry);
+    const registration = {
+      pluginId: "policy",
+      hookName: "before_agent_run" as const,
+      source: "test",
+      handler: async () => {
+        entered.resolve();
+        await release.promise;
+        return { outcome: "pass" as const };
+      },
+    };
+    registry.typedHooks.push(registration);
+    initializeGlobalHookRunner(registry);
+    const environments = { ...unusedEnvironments(), get: attachedEnvironment };
+    const provider = createWorkerSessionTurnPlacementProvider({ placements, environments });
+    let current = true;
+    const execution = provider.executeTurn(
+      { ...sessionTarget, runId: input.runId },
+      { ...input, pluginGeneration: runtime.pluginGeneration },
+      vi.fn(),
+      undefined,
+      () => {
+        if (!current) {
+          throw new Error("synthetic authority closed");
+        }
+      },
+    );
+    const outcome = execution.catch((error: unknown) => error);
+    try {
+      await awaitGateBeforeSettlement(entered.promise, execution, "turn skipped its input gate");
+      current = false;
+      release.resolve();
+      expect(await outcome).toMatchObject({ message: "synthetic authority closed" });
+      expect((await openSessionManager()).getEntries()).toEqual([]);
+      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await outcome;
+      registry.typedHooks.splice(registry.typedHooks.indexOf(registration), 1);
+      input.preparedRunAdmission.close();
+    }
+  });
 
   it.each(["authority", "acknowledgement"] as const)(
     "retains the committed user receipt when %s fails before worker launch",
@@ -118,7 +270,10 @@ describe("worker turn execution", () => {
         expect(outcome).toBeInstanceOf(SessionTranscriptMessageCommittedError);
         expect(outcome).toMatchObject({
           committedMessageId,
-          committedTarget: sessionTarget,
+          committedTarget: {
+            ...sessionTarget,
+            storePath: resolveSqliteReadScope(sessionTarget).path,
+          },
           cause: expectedFailure,
         });
         expect(isRecordedModelFallbackStop(outcome)).toBe(true);
@@ -137,7 +292,7 @@ describe("worker turn execution", () => {
   );
 
   it.each([false, true])(
-    "launches only supervisor-admitted tools and authorizes the same set (declared: %s)",
+    "preserves prepared context and limits launch authority to supervisor tools (declared: %s)",
     async (declared) => {
       await seedActivePlacement();
       const launchToolNames = resolveNodeWorkerLaunchToolNames({
@@ -145,7 +300,8 @@ describe("worker turn execution", () => {
         capacity: { total: 1, available: 1 },
         environmentSession: 1,
         capturedExecPolicy: true,
-        ...(declared ? { launchToolNames: WORKER_TOOL_NAMES } : {}),
+        promptContext: 1,
+        ...(declared ? { launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES] } : {}),
       });
       const authorize = vi.spyOn(placements, "authorizeWorkerTurnTools");
       const launchTurn = vi.fn<NonNullable<WorkerTunnelHandle["launchTurn"]>>(async () => {
@@ -170,20 +326,68 @@ describe("worker turn execution", () => {
         },
       });
       const input = turn("launch-tool-negotiation");
+      const agentWorkspace = path.join(root, "agent-bootstrap");
+      await mkdir(agentWorkspace);
+      await Promise.all([
+        writeFile(path.join(agentWorkspace, "AGENTS.md"), "Canonical agent instructions."),
+        writeFile(path.join(agentWorkspace, "SOUL.md"), "Canonical agent identity."),
+        writeFile(path.join(agentWorkspace, "USER.md"), "Canonical user context."),
+        writeFile(path.join(agentWorkspace, "TOOLS.md"), "Canonical tool instructions."),
+        writeFile(path.join(root, "AGENTS.md"), "Selected execution project instructions."),
+        writeFile(path.join(root, "SOUL.md"), "Unselected execution identity must stay private."),
+      ]);
       try {
         await expect(
-          provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+          provider.executeTurn(
+            { ...sessionTarget, runId: input.runId },
+            {
+              ...input,
+              config: {
+                ...input.config,
+                agents: {
+                  defaults: { ...input.config.agents.defaults, workspace: agentWorkspace },
+                },
+              },
+              currentInboundContext: { text: "Current sender: fixture-sender" },
+            },
+            vi.fn(),
+          ),
         ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
         expect(launchTurn).toHaveBeenCalledOnce();
         const request = launchTurn.mock.calls[0]![0];
         expect(parseWorkerLaunchPlan(request.plan)).toEqual(request.plan);
+        const { systemPrompt, prompt, runtimeContext } = request.plan.assignment;
+        expect(systemPrompt).toContain("You are a personal assistant running inside OpenClaw.");
+        expect(systemPrompt).toContain("Canonical agent instructions.");
+        expect(systemPrompt).toContain("Canonical agent identity.");
+        expect(systemPrompt).toContain("Canonical user context.");
+        expect(systemPrompt).not.toContain("Canonical tool instructions.");
+        expect(systemPrompt).toContain("Selected execution project instructions.");
+        expect(systemPrompt).not.toContain("Unselected execution identity must stay private.");
+        expect(systemPrompt).toContain("Working directory: /worker/workspace");
+        expect(prompt).toMatch(
+          /^\[[^\]]+\d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\] Inspect this workspace$/u,
+        );
+        expect(runtimeContext).toContainEqual({
+          kind: "conversation-data",
+          text: "Current sender: fixture-sender",
+        });
         const allowed = request.plan.assignment.toolAuthority.allowedToolNames;
         expect(allowed.length).toBeGreaterThan(0);
         expect(allowed.filter((name) => !launchToolNames.includes(name))).toEqual([]);
-        expect(allowed.includes("presence")).toBe(declared);
+        expect(
+          allowed.every((name) => resolveCoreToolExecutionLocation(name) === "placement"),
+        ).toBe(true);
+        expect(allowed.includes("ls")).toBe(declared);
+        expect(allowed).not.toContain("sessions_list");
+        const authorized = authorize.mock.calls[0]?.[1];
+        expect(authorized).toEqual(
+          expect.arrayContaining([...allowed, "sessions_list", "github_identity_status"]),
+        );
+        expect(authorized).not.toContain("github_publish");
         expect(authorize).toHaveBeenCalledExactlyOnceWith(
           request.turnClaim,
-          allowed,
+          authorized,
           expect.any(Function),
         );
       } finally {
@@ -223,7 +427,8 @@ describe("worker turn execution", () => {
           {
             ...input,
             abortSignal: abort.signal,
-            onExecutionStarted: async () => {
+            onExecutionStarted: async (info) => {
+              expect(info?.backend).toBe("cloud-worker");
               // Earlier workspace recovery and externally owned writes retain their own ordering.
               hydration.mockClear();
               acquireTurnCredential.mockClear();
@@ -451,13 +656,13 @@ describe("worker turn execution", () => {
       );
       const committed = (await openSessionManager()).getPersistedEntries();
       const committedRows = readWorkerTurnTranscriptStorageRows();
-      expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       abort.abort(new Error("cancel after terminal acknowledgement"));
       release.resolve();
       expect(await operation).toMatchObject({ payloads: [{ text: "Committed reply 🦞" }] });
       expect((await openSessionManager()).getPersistedEntries()).toEqual(committed);
       expect(readWorkerTurnTranscriptStorageRows()).toEqual(committedRows);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
       expect(launchTurn).toHaveBeenCalledOnce();
       expect(runLocal).not.toHaveBeenCalled();
@@ -609,6 +814,7 @@ describe("worker turn execution", () => {
                   custom: {
                     baseUrl: "https://example.invalid/v1",
                     api: "openai-completions",
+                    apiKey: "synthetic-worker-api-key",
                     models: [
                       {
                         id: "plain",
@@ -649,6 +855,8 @@ describe("worker turn execution", () => {
       });
     },
   );
+
+  registerWorkerTurnInferenceTests();
 
   it.each([
     [WORKER_LAUNCH_V2_PROTOCOL_FEATURE],

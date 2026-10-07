@@ -337,10 +337,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
     func setRoute(_ route: GatewayNodeSessionRoute?, authorityGeneration: UInt64) async -> Bool {
         await withCheckedContinuation { continuation in
             self.queue.async {
-                guard Self.routeUpdateIsCurrent(
-                    candidateGeneration: authorityGeneration,
-                    currentGeneration: self.routeAuthorityGeneration)
-                else {
+                guard authorityGeneration >= self.routeAuthorityGeneration else {
                     continuation.resume(returning: false)
                     return
                 }
@@ -366,13 +363,6 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
                 continuation.resume(returning: true)
             }
         }
-    }
-
-    nonisolated static func routeUpdateIsCurrent(
-        candidateGeneration: UInt64,
-        currentGeneration: UInt64) -> Bool
-    {
-        candidateGeneration >= currentGeneration
     }
 
     func gatewayConnected(ifCurrentRoute route: GatewayNodeSessionRoute) async {
@@ -727,9 +717,7 @@ final class MacNodeHostWorker: MacNodeHostWorking, @unchecked Sendable {
         gatewayGeneration: UInt64) async
     {
         do {
-            guard let paramsJSON = String(bytes: paramsData, encoding: .utf8) else {
-                throw WorkerError.unavailable(reason: "node-host worker gateway request was not UTF-8")
-            }
+            let paramsJSON = String(bytes: paramsData, encoding: .utf8)!
             let data = try await self.session.request(
                 method: method,
                 paramsJSON: paramsJSON,

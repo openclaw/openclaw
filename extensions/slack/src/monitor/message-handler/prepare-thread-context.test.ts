@@ -72,7 +72,7 @@ describe("resolveSlackThreadContextData", () => {
       ctx.channelRuntime = {
         ...ctx.channelRuntime!,
         session: {
-          resolveEntryResetFreshness: () =>
+          resolveEntryResetFreshnessAsync: async () =>
             params.sessionState === "missing"
               ? { state: "missing", entry: undefined }
               : {

@@ -1,0 +1,133 @@
+import type { MSTeamsConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  normalizeSecretInputString,
+} from "openclaw/plugin-sdk/secret-input";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type MSTeamsSecretCredentials = {
+  type: "secret";
+  appId: string;
+  appPassword: string;
+  tenantId: string;
+};
+
+type MSTeamsFederatedCredentials = {
+  type: "federated";
+  appId: string;
+  tenantId: string;
+  certificatePath?: string;
+  certificateThumbprint?: string;
+  useManagedIdentity?: boolean;
+  managedIdentityClientId?: string;
+};
+
+export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCredentials;
+
+function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+  const fromCfg = cfg?.authType;
+  if (fromCfg === "secret" || fromCfg === "federated") {
+    return fromCfg;
+  }
+
+  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  if (fromEnv === "federated") {
+    return "federated";
+  }
+
+  return "secret";
+}
+
+function resolveFederatedPath(configValue?: string, envValue?: string): string | undefined {
+  // Reject blank settings without trimming a real path: surrounding whitespace
+  // can be part of the certificate filename on the filesystem.
+  return readNonBlankString(configValue) ?? readNonBlankString(envValue);
+}
+
+export function hasConfiguredMSTeamsCredentials(cfg?: MSTeamsConfig): boolean {
+  const authType = resolveAuthType(cfg);
+
+  const hasAppId = Boolean(
+    normalizeSecretInputString(cfg?.appId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_APP_ID),
+  );
+  const hasTenantId = Boolean(
+    normalizeSecretInputString(cfg?.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID),
+  );
+
+  if (authType === "federated") {
+    const hasCert = Boolean(
+      resolveFederatedPath(cfg?.certificatePath, process.env.MSTEAMS_CERTIFICATE_PATH),
+    );
+    const hasManagedIdentity =
+      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
+
+    return hasAppId && hasTenantId && (hasCert || hasManagedIdentity);
+  }
+
+  return Boolean(
+    normalizeSecretInputString(cfg?.appId) &&
+    hasConfiguredSecretInput(cfg?.appPassword) &&
+    normalizeSecretInputString(cfg?.tenantId),
+  );
+}
+
+export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentials | undefined {
+  const authType = resolveAuthType(cfg);
+
+  const appId =
+    normalizeSecretInputString(cfg?.appId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_APP_ID);
+
+  const tenantId =
+    normalizeSecretInputString(cfg?.tenantId) ||
+    normalizeSecretInputString(process.env.MSTEAMS_TENANT_ID);
+
+  if (!appId || !tenantId) {
+    return undefined;
+  }
+
+  if (authType === "federated") {
+    const certificatePath = resolveFederatedPath(
+      cfg?.certificatePath,
+      process.env.MSTEAMS_CERTIFICATE_PATH,
+    );
+
+    const certificateThumbprint =
+      cfg?.certificateThumbprint || process.env.MSTEAMS_CERTIFICATE_THUMBPRINT || undefined;
+
+    const useManagedIdentity =
+      cfg?.useManagedIdentity ?? process.env.MSTEAMS_USE_MANAGED_IDENTITY === "true";
+
+    const managedIdentityClientId =
+      cfg?.managedIdentityClientId || process.env.MSTEAMS_MANAGED_IDENTITY_CLIENT_ID || undefined;
+
+    if (!certificatePath && !useManagedIdentity) {
+      return undefined;
+    }
+
+    return {
+      type: "federated",
+      appId,
+      tenantId,
+      certificatePath,
+      certificateThumbprint,
+      useManagedIdentity: useManagedIdentity || undefined,
+      managedIdentityClientId,
+    };
+  }
+
+  const appPassword =
+    normalizeResolvedSecretInputString({
+      value: cfg?.appPassword,
+      path: "channels.msteams.appPassword",
+    }) || normalizeSecretInputString(process.env.MSTEAMS_APP_PASSWORD);
+
+  if (!appPassword) {
+    return undefined;
+  }
+
+  return { type: "secret", appId, appPassword, tenantId };
+}

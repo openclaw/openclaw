@@ -15,7 +15,7 @@ import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
-import { livePresentation, type PresentationBinding } from "../../../lit/presentation-binding.ts";
+import { livePresentation, type PresentationValue } from "../../../lit/presentation-binding.ts";
 import "../../../components/tooltip.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import {
@@ -116,14 +116,14 @@ function renderChecks(
     sessionKey?: string;
     sessionId?: string;
     basePath?: string;
-    presented?: boolean;
-    presentation?: PresentationBinding;
+    presented?: PresentationValue;
   },
 ) {
   const checks = pullRequest.checks;
   const label = checks ? t(CHECK_LABEL_KEYS[checks.state]) : t("chat.pullRequests.ciMonitoring");
   let details: HTMLDetailsElement | undefined;
-  const isPresented = () => props.presentation?.isPresented() ?? props.presented ?? true;
+  const presented = props.presented ?? true;
+  const isPresented = () => (typeof presented === "boolean" ? presented : presented.isPresented());
   const syncChecksOverlay = (element: EventTarget | null | undefined) => {
     if (!(element instanceof HTMLDetailsElement)) {
       return;
@@ -149,7 +149,7 @@ function renderChecks(
       </summary>
       <wa-popup
         data-anchored-overlay
-        .active=${props.presentation ? livePresentation({ owner: props.presentation.owner, isPresented: () => isPresented() && Boolean(details?.open) }) : noChange}
+        .active=${typeof presented === "boolean" ? noChange : livePresentation({ owner: presented.owner, isPresented: () => isPresented() && Boolean(details?.open) })}
       >
         <div
           class="chat-pr__checks-menu"
@@ -180,7 +180,7 @@ function renderChecks(
             .sessionKey=${props.sessionKey ?? ""}
             .sessionId=${props.sessionId ?? ""}
             .basePath=${props.basePath ?? ""}
-            .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+            .presented=${livePresentation(presented)}
           ></openclaw-chat-ci-automation>
           ${
             checks
@@ -188,7 +188,7 @@ function renderChecks(
                   .pullRequest=${pullRequest}
                   .gateway=${props.gateway}
                   .sessionKey=${props.sessionKey ?? ""}
-                  .presented=${livePresentation(props.presentation ?? props.presented ?? true)}
+                  .presented=${livePresentation(presented)}
                 ></openclaw-chat-ci-details>`
               : nothing
           }
@@ -307,8 +307,7 @@ export function renderChatPullRequests(props: {
   sessionKey?: string;
   sessionId?: string;
   basePath?: string;
-  presented?: boolean;
-  presentation?: PresentationBinding;
+  presented?: PresentationValue;
   branch?: ControlUiSessionBranch;
   status: ControlUiSessionPullRequestSnapshot["status"];
   onDismiss: (pullRequest: ControlUiSessionPullRequest) => void;
@@ -398,8 +397,9 @@ export function renderChatPullRequests(props: {
 }
 
 function renderPublicationRecovery(publication: GitHubPublicationView) {
+  const failed = publication.result?.status === "failed";
   const content = html`<div class="chat-pr__publication-recovery">
-    ${renderGitHubPublicationDetails(publication)}
+    ${renderGitHubPublicationDetails(publication, { inline: failed })}
     ${
       publication.result?.status !== "published"
         ? html`<div>${renderGitHubPublicationAction(publication)}</div>`
@@ -408,7 +408,7 @@ function renderPublicationRecovery(publication: GitHubPublicationView) {
   </div>`;
   // A session attempt has no proven relationship to any listed PR. Keep its
   // failed receipt inspectable without presenting it as that PR’s current state.
-  return publication.result?.status === "failed"
+  return failed
     ? html`<details class="chat-pr__publication-history">
         <summary>${t("githubPublication.failedAttempt")}</summary>
         ${content}

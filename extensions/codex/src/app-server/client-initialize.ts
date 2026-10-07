@@ -123,7 +123,7 @@ export function buildCodexAppServerRuntimeIdentity(
   };
 }
 
-export class CodexAppServerVersionError extends Error {
+class CodexAppServerVersionError extends Error {
   readonly detectedVersion?: string;
 
   constructor(detectedVersion: string | undefined) {
@@ -167,4 +167,8 @@ function readCodexVersionFromUserAgent(userAgent: string | undefined): string | 
     /^[^/]+\/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?:[\s(]|$)/,
   );
   return match?.[1];
+}
+
+export function isUnsupportedCodexAppServerVersionError(error: unknown): boolean {
+  return error instanceof CodexAppServerVersionError;
 }

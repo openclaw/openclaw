@@ -7,18 +7,16 @@ import { readFileDescriptorBounded } from "../../infra/boundary-file-read.js";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import type {
-  SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
-import { runDockerSandboxShellCommand } from "./docker-backend.js";
 import { SANDBOX_FILE_IDENTITY } from "./file-mutation-identity.js";
 import {
   buildPinnedMutationPlan,
   PINNED_MUTATION_ACTION_LABELS,
+  type SandboxFsCommandPlan,
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard, type PinnedSandboxEntry } from "./fs-bridge-path-safety.js";
-import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
 import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
@@ -34,20 +32,24 @@ export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-b
 
 const readFileAsync = promisify(fs.readFile);
 
+type MountedSandboxFsBridgeContext = SandboxFsBridgeContext & {
+  backend: NonNullable<SandboxFsBridgeContext["backend"]>;
+};
+
 export function createSandboxFsBridge(params: {
-  sandbox: SandboxFsBridgeContext;
+  sandbox: MountedSandboxFsBridgeContext;
   containerOnlyMounts?: readonly string[];
 }): SandboxFsBridge {
   return new SandboxFsBridgeImpl(params.sandbox, params.containerOnlyMounts);
 }
 
 class SandboxFsBridgeImpl implements SandboxFsBridge {
-  private readonly sandbox: SandboxFsBridgeContext;
+  private readonly sandbox: MountedSandboxFsBridgeContext;
   private readonly mounts: ReturnType<typeof buildSandboxFsMounts>;
   private readonly pathGuard: SandboxFsPathGuard;
   private readonly containerOnlyMounts: readonly string[];
 
-  constructor(sandbox: SandboxFsBridgeContext, containerOnlyMounts?: readonly string[]) {
+  constructor(sandbox: MountedSandboxFsBridgeContext, containerOnlyMounts?: readonly string[]) {
     this.sandbox = sandbox;
     this.mounts = buildSandboxFsMounts(sandbox);
     this.containerOnlyMounts =
@@ -61,7 +63,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
       containerOnlyMounts: this.containerOnlyMounts,
-      runCommand: (script, options) => this.runCommand(script, options),
+      runCommand: (script, options) => sandbox.backend.runShellCommand({ script, ...options }),
     });
   }
 
@@ -340,7 +342,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const result = await this.runCheckedCommand({
       // Keep stat's original parent/basename metadata semantics, while its
       // boundary check validates the container-visible backing rather than a hidden host alias.
-      ...buildStatPlan(resolved.target, anchoredTarget),
+      checks: [{ target: resolved.target, options: { action: "stat files" } }],
+      script: 'set -eu\ncd -- "$1"\nLC_ALL=C stat -c "%F|%s|%y" -- "$2"',
+      args: [anchoredTarget.canonicalParentPath, anchoredTarget.basename],
+      allowFailure: true,
       signal: params.signal,
     });
     if (result.code !== 0) {
@@ -358,21 +363,6 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       size: parseSandboxStatSize(sizeRaw),
       mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
-  }
-
-  private async runCommand(
-    script: string,
-    options: Omit<SandboxBackendCommandParams, "script"> = {},
-  ): Promise<SandboxBackendCommandResult> {
-    const backend = this.sandbox.backend;
-    const command = { script, ...options };
-    if (backend) {
-      return await backend.runShellCommand(command);
-    }
-    return await runDockerSandboxShellCommand({
-      containerName: this.sandbox.containerName,
-      ...command,
-    });
   }
 
   private async readPinnedFile(
@@ -428,7 +418,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   }
 
   private async runCheckedCommand(
-    plan: SandboxFsCommandPlan & { stdin?: Buffer | string; signal?: AbortSignal },
+    plan: SandboxFsCommandPlan & { signal?: AbortSignal },
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
@@ -436,7 +426,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       // checks immediately before command execution to close TOCTOU gaps.
       await this.pathGuard.assertPathChecks(plan.checks);
     }
-    return await this.runCommand(plan.script, {
+    return await this.sandbox.backend.runShellCommand({
+      script: plan.script,
       args: plan.args,
       stdin: plan.stdin,
       allowFailure: plan.allowFailure,

@@ -15,7 +15,6 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
-/** Returns true when either total runtime or any single stage exceeds warning thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: StageTimingSummary,
   options?: {
@@ -31,11 +30,6 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
-/**
- * Builds the shared "emit stage summary" closure used by run startup and
- * attempt prep: warn when thresholds trip, trace otherwise, stay silent when
- * neither applies.
- */
 export function createEmbeddedRunStageSummaryEmitter(options: {
   label: string;
   log: {

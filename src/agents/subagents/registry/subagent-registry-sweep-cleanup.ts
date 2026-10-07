@@ -32,8 +32,8 @@ export const isSessionCleanupDeferred = (entry: SubagentRunRecord) =>
       entry.delivery.payload !== undefined ||
       entry.delivery.disposition === "session_queued"));
 
-export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number) =>
-  entry.collectorCompletion &&
+export const isCollectorArchiveReady = (entry: SubagentRunRecord, now: number): boolean =>
+  entry.collectorCompletion !== undefined &&
   entry.collectorLaunchCleanupPending !== true &&
   entry.archiveAtMs !== undefined &&
   entry.archiveAtMs <= now;

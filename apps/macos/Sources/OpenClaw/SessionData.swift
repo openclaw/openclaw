@@ -73,10 +73,8 @@ enum SessionLoader {
             .appendingPathComponent("sessions/sessions.json").path)
 
     static func loadSnapshot(
-        activeMinutes: Int? = nil,
         limit: Int? = nil,
-        includeGlobal: Bool = true,
-        includeUnknown: Bool = true) async throws -> SessionStoreSnapshot
+        control: ControlChannel = .shared) async throws -> SessionStoreSnapshot
     {
         let data: Data
         do {
@@ -84,10 +82,8 @@ enum SessionLoader {
                 limit: limit,
                 search: nil,
                 archived: false,
-                includeGlobal: includeGlobal,
-                includeUnknown: includeUnknown,
-                activeMinutes: activeMinutes)
-            data = try await ControlChannel.shared.request(request)
+                includeUnknown: true)
+            data = try await control.request(request)
         } catch {
             let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
             if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {

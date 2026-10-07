@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
-import { listRegistryWorktrees } from "./registry.js";
+import { readPendingWorktrees } from "./pending-slots.js";
+import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -51,15 +52,14 @@ export async function ensureEmptyWorktreeSource(params: {
   commitGuard: () => void;
 }): Promise<string> {
   const { env, commitGuard } = params;
-  // Each session owns its Git metadata as well as its files. Git configuration
-  // and remote changes made by one empty task cannot affect another task.
+  // Isolate each session's Git metadata and configuration from other tasks.
   const gitEnv = Object.fromEntries(
     Object.entries(mergeProcessEnv([process.env, env])).filter(
       ([key]) => !key.toUpperCase().startsWith("GIT_"),
     ),
   );
   gitEnv.GIT_CONFIG_NOSYSTEM = "1";
-  gitEnv.GIT_CONFIG_GLOBAL = os.devNull;
+  gitEnv.GIT_CONFIG_GLOBAL = gitNullConfigPath();
   gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
   const gitOptions = {
     baseEnv: gitEnv,
@@ -74,7 +74,12 @@ export async function ensureEmptyWorktreeSource(params: {
   const sourceRoot = path.join(ownerRoot, "workspace");
   if (!(await worktreePathExists(sourceRoot))) {
     if (
-      listRegistryWorktrees(env).some((record) => path.relative(sourceRoot, record.repoRoot) === "")
+      (await readPendingWorktrees(env)).some(
+        ({ record }) => path.relative(sourceRoot, record.repoRoot) === "",
+      ) ||
+      (await readRegistryWorktrees(env)).some(
+        (record) => path.relative(sourceRoot, record.repoRoot) === "",
+      )
     ) {
       throw new Error(
         `Empty workspace source is missing: ${sourceRoot}. Restore its original Git metadata before starting this workspace; existing session history and snapshots depend on it.`,
@@ -156,7 +161,14 @@ export async function removeUnusedEmptyWorktreeSource(params: {
     return;
   }
   const ownerRoot = path.dirname(expected);
-  const otherRecords = listRegistryWorktrees(env).filter(
+  if (
+    (await readPendingWorktrees(env)).some(
+      ({ record: pending }) => path.relative(expected, pending.repoRoot) === "",
+    )
+  ) {
+    return;
+  }
+  const otherRecords = (await readRegistryWorktrees(env)).filter(
     (other) => other.id !== record.id && path.relative(expected, other.repoRoot) === "",
   );
   if (otherRecords.length > 0) {

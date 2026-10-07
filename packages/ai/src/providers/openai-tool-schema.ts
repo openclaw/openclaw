@@ -133,7 +133,10 @@ export function normalizeOpenAIStrictToolParameters<T>(
 
 /** Returns whether a schema already satisfies OpenAI strict tool-schema constraints. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
-  return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
+  return (
+    findOpenAIStrictSchemaViolations(normalizeStrictOpenAIJsonSchema(schema), "parameters")
+      .length === 0
+  );
 }
 
 type OpenAIStrictToolSchemaDiagnostic = {
@@ -162,46 +165,6 @@ export function findOpenAIStrictToolProjectionDiagnostics(
         : [];
     }),
   ];
-}
-
-function isStrictOpenAIJsonSchemaCompatibleRecursive(schema: unknown): boolean {
-  if (Array.isArray(schema)) {
-    return schema.every((entry) => isStrictOpenAIJsonSchemaCompatibleRecursive(entry));
-  }
-  if (!schema || typeof schema !== "object") {
-    return true;
-  }
-
-  const record = schema as Record<string, unknown>;
-  if ("anyOf" in record || "oneOf" in record || "allOf" in record) {
-    return false;
-  }
-  if (Array.isArray(record.type)) {
-    return false;
-  }
-  if (record.type === "object" && record.additionalProperties !== false) {
-    return false;
-  }
-  if (record.type === "object") {
-    const properties = isRecord(record.properties) ? record.properties : {};
-    const required = Array.isArray(record.required)
-      ? record.required.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-    if (!required) {
-      return false;
-    }
-    const requiredSet = new Set(required);
-    if (Object.keys(properties).some((key) => !requiredSet.has(key))) {
-      return false;
-    }
-  }
-
-  return Object.entries(record).every(([key, entry]) => {
-    if (key === "properties" && isRecord(entry)) {
-      return Object.values(entry).every(isStrictOpenAIJsonSchemaCompatibleRecursive);
-    }
-    return isStrictOpenAIJsonSchemaCompatibleRecursive(entry);
-  });
 }
 
 /** Resolves strict mode for the projected tools that will be emitted in the request payload. */

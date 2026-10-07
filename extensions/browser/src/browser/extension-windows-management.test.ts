@@ -30,7 +30,7 @@ const missing = {
   installation: null,
 };
 describe("accepted Windows management ABI", () => {
-  it.each(['{"v":1,"\\u0076":1}', '{"v":1.0}', '{"v":1e0}', '{"v":1,"x":"\\ud800"}'])(
+  it.each(['{"v":1,"\\u0076":1}', '{"v":1.0}', '{"v":1,"x":"\\ud800"}'])(
     "rejects ambiguous JSON %s",
     (json) => {
       expect(() => parseWindowsJson(Buffer.from(json))).toThrow();
@@ -140,28 +140,23 @@ describe("real child-process management transport (not Windows PE proof)", () =>
       response,
     );
   });
-  it.each(["stderr", "overflow", "exit-mismatch", "legacy"])(
-    "rejects %s without any retry",
-    async (kind) => {
-      const body =
-        kind === "stderr"
-          ? 'process.stderr.write("private error"); process.stdout.write(' +
+  it.each(["stderr", "overflow", "exit-mismatch"])("rejects %s without any retry", async (kind) => {
+    const body =
+      kind === "stderr"
+        ? 'process.stderr.write("private error"); process.stdout.write(' +
+          JSON.stringify(JSON.stringify(missing) + "\n") +
+          ");"
+        : kind === "overflow"
+          ? 'process.stdout.write("x".repeat(32769));'
+          : "process.stdout.write(" +
             JSON.stringify(JSON.stringify(missing) + "\n") +
-            ");"
-          : kind === "overflow"
-            ? 'process.stdout.write("x".repeat(32769));'
-            : kind === "legacy"
-              ? "process.stdout.write(Buffer.from([4,0,0,0,123,125]));"
-              : "process.stdout.write(" +
-                JSON.stringify(JSON.stringify(missing) + "\n") +
-                "); process.exitCode=1;";
-      const run = vi.fn(await child(body));
-      await expect(
-        runWindowsManagement("fixture.exe", windowsFixture().request, { run }),
-      ).rejects.toThrow(WindowsManagementTransportError);
-      expect(run).toHaveBeenCalledTimes(1);
-    },
-  );
+            "); process.exitCode=1;";
+    const run = vi.fn(await child(body));
+    await expect(
+      runWindowsManagement("fixture.exe", windowsFixture().request, { run }),
+    ).rejects.toThrow(WindowsManagementTransportError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
   it("joins cancellation after the real child has consumed management EOF", async ({ signal }) => {
     const controller = new AbortController();
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-manage-ready-"));

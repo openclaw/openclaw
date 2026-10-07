@@ -45,6 +45,7 @@ type PersistedSubagentToolPolicyEnvelope = {
   completionOwnerSessionKey?: string;
   inheritedToolAllow: string[];
   inheritedToolDeny: string[];
+  inheritedToolPolicySource?: "sender";
 };
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
@@ -122,11 +123,8 @@ export function resolveSubagentCapabilityStore(
   },
 ): SessionCapabilityStore | undefined {
   const normalizedSessionKey = normalizeOptionalString(sessionKey);
-  if (!normalizedSessionKey) {
+  if (!normalizedSessionKey || opts?.store) {
     return opts?.store;
-  }
-  if (opts?.store) {
-    return opts.store;
   }
   // Dashboard key shape permits only a store lookup. Callers still require a
   // persisted spawn envelope before granting subagent authority.
@@ -313,6 +311,9 @@ export function resolvePersistedSubagentToolPolicyEnvelope(
     ...(completionOwnerSessionKey ? { completionOwnerSessionKey } : {}),
     inheritedToolAllow: normalizeInheritedToolAllowlist(entry.inheritedToolAllow),
     inheritedToolDeny: normalizeInheritedToolDenylist(entry.inheritedToolDeny),
+    ...(entry.inheritedToolPolicySource === "sender"
+      ? { inheritedToolPolicySource: "sender" as const }
+      : {}),
   };
 }
 
@@ -330,26 +331,24 @@ export function resolveStoredSubagentCapabilities(
   if (!normalizedSessionKey) {
     return resolveSubagentCapabilities({ depth: 0, maxSpawnDepth });
   }
-  if (!shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
-    const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
+  let depthStore = opts?.store;
+  if (shouldInspectStoredSubagentEnvelope(normalizedSessionKey)) {
+    depthStore = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
+    const entry = resolveSessionCapabilityEntry({
+      sessionKey: normalizedSessionKey,
       cfg: opts?.cfg,
-      store: opts?.store,
-      agentId: opts?.agentId,
+      store: depthStore,
     });
-    return resolveSubagentCapabilities({ depth, maxSpawnDepth });
+    // Explicit records may be partial. Lazy lookups retain their memo while
+    // the depth helper follows the parent chain.
+    if (
+      opts?.cfg &&
+      !isSessionCapabilityLookup(depthStore) &&
+      typeof entry?.spawnDepth !== "number"
+    ) {
+      depthStore = undefined;
+    }
   }
-  const store = resolveSubagentCapabilityStore(normalizedSessionKey, opts);
-  const entry = resolveSessionCapabilityEntry({
-    sessionKey: normalizedSessionKey,
-    cfg: opts?.cfg,
-    store,
-  });
-  const depthStore =
-    opts?.cfg && !isSessionCapabilityLookup(store) && typeof entry?.spawnDepth !== "number"
-      ? undefined
-      : store;
-  // Explicit records may be partial. Lazy lookups already read canonical entries
-  // and must retain their memo while the depth helper follows the parent chain.
   const depth = getSubagentDepthFromSessionStore(normalizedSessionKey, {
     cfg: opts?.cfg,
     store: depthStore,

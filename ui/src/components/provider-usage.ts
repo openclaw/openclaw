@@ -250,11 +250,7 @@ function renderProviderUsageWindow(window: UsageWindow) {
   `;
 }
 
-/**
- * Card body for one provider usage snapshot: quota windows with progress
- * bars, billing rows, provider cost history, and the provider summary line.
- * The surrounding card header (name, plan badge, icon) stays surface-owned.
- */
+/** The surrounding card header (name, plan badge, icon) stays surface-owned. */
 export function renderProviderUsageDetails(
   snapshot: ProviderUsageDetails,
   options: ProviderUsageDetailsOptions = {},

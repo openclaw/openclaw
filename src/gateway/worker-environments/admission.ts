@@ -156,9 +156,6 @@ export function admitWorkerConnection(params: {
   if (admission.sessionId !== credential.sessionId) {
     return { ok: false, reason: "session-mismatch" };
   }
-  if ((admission.sessionId === null) !== (admission.runId === null)) {
-    return { ok: false, reason: "session-mismatch" };
-  }
   if (
     admission.ownerEpoch !== credential.ownerEpoch ||
     admission.ownerEpoch !== environment.ownerEpoch

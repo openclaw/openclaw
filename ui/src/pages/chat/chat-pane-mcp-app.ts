@@ -70,7 +70,6 @@ export type ChatPaneMcpAppOwner = {
   openFile: (path: string) => void;
 };
 
-/** Adapts sandbox events to the existing conversation, attachment and workspace owners. */
 export class ChatPaneMcpAppController {
   private openedLaunch?: McpAppOpenDetail;
 

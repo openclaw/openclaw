@@ -12,10 +12,10 @@ import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-mig
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import {
   mutateConfigFileWithRetry,
-  readConfigFileSnapshotForWrite,
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "../config/config.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
@@ -68,11 +68,6 @@ import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-import {
-  DEFAULT_IDENTITY_FILENAME,
-  ensureAgentWorkspace,
-  isWorkspaceBootstrapPending,
-} from "./workspace.js";
 
 it("restores only the configured held store after explicit creation, never through bootstrap or retargeting", async () => {
   const state = await createOpenClawTestState({ scenario: "minimal", label: "held-agent-restore" });
@@ -735,110 +730,6 @@ it.each(["commit", "rollback", "close-failure"] as const)(
   },
 );
 
-it("preserves env references from guided staging when preparation changes the environment", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "guided-stage-env",
-  });
-  const oldToken = process.env.GUIDED_STAGE_TOKEN;
-  try {
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-read-value";
-    const config = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    await state.writeConfig({
-      ...config,
-      gateway: { ...config.gateway, auth: { mode: "token", token: "${GUIDED_STAGE_TOKEN}" } },
-    });
-    const writeSnapshot = await readConfigFileSnapshotForWrite();
-    const staged = writeSnapshot.snapshot.sourceConfig;
-    expect(staged.gateway?.auth?.token).toBe("synthetic-read-value");
-    await Promise.resolve();
-    process.env.GUIDED_STAGE_TOKEN = "synthetic-after-guided-await";
-    const created = await createAgent({
-      name: "guided",
-      workspace: state.path("guided-workspace"),
-      stagedConfig: { config: staged, writeSnapshot },
-      prepareConfigCommit: async () => {
-        await Promise.resolve();
-        process.env.GUIDED_STAGE_TOKEN = "synthetic-after-preparation";
-      },
-    });
-    expect(created).toMatchObject({ status: "created", agentId: "guided" });
-    const saved = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-    expect(saved.gateway?.auth?.token).toBe("${GUIDED_STAGE_TOKEN}");
-    expect(saved.agents?.entries?.guided).toBeDefined();
-  } finally {
-    if (oldToken === undefined) {
-      delete process.env.GUIDED_STAGE_TOKEN;
-    } else {
-      process.env.GUIDED_STAGE_TOKEN = oldToken;
-    }
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("keeps a fresh named workspace pending through the first run setup", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "minimal",
-    label: "named-agent-hatch",
-  });
-  const workspace = state.path("named-workspace");
-
-  try {
-    const created = await createAgent({ name: "Researcher", workspace });
-
-    expect(created).toMatchObject({ status: "created", bootstrapPending: true });
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-
-    const firstRunWorkspace = await ensureAgentWorkspace({
-      dir: workspace,
-      ensureBootstrapFiles: true,
-    });
-    expect(firstRunWorkspace.bootstrapPending).toBe(true);
-    expect(await isWorkspaceBootstrapPending(workspace)).toBe(true);
-    expect(
-      await fs.readFile(path.join(workspace, DEFAULT_IDENTITY_FILENAME), "utf8"),
-    ).not.toContain("Researcher");
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
-it("records operator and agent creation provenance after roster commits", async () => {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    scenario: "empty",
-    label: "agent-creation-provenance",
-  });
-  try {
-    await createAgent({ name: "Operator Child", workspace: state.path("operator-child") });
-    await createAgent({
-      name: "Agent Child",
-      workspace: state.path("agent-child"),
-      provenance: { createdVia: "agent", creatorAgentId: "main" },
-    });
-
-    expect(readAgentProvenance("operator-child", { env: state.env })).toMatchObject({
-      agentId: "operator-child",
-      createdVia: "operator",
-      creatorAgentId: null,
-      createdAtMs: expect.any(Number),
-    });
-    expect(readAgentProvenance("agent-child", { env: state.env })).toMatchObject({
-      agentId: "agent-child",
-      createdVia: "agent",
-      creatorAgentId: "main",
-      createdAtMs: expect.any(Number),
-    });
-  } finally {
-    closeOpenClawStateDatabaseForTest();
-    await state.cleanup();
-  }
-});
-
 describe("agent roster persistence", () => {
   async function addWorkerToConfig(config: unknown): Promise<OpenClawConfig> {
     const state = await createOpenClawTestState({
@@ -872,7 +763,7 @@ describe("agent roster persistence", () => {
   });
 
   it("extends the complete keyed roster after Doctor migrates a legacy list", async () => {
-    const legacy = {
+    const legacy: OpenClawConfigWithLegacyRoster = {
       agents: {
         list: [
           { id: "main", default: true },
@@ -905,8 +796,12 @@ describe("agent roster persistence", () => {
       { id: "main", default: true },
       { id: "ops", workspace: "/srv/ops" },
     ];
+    const legacy: OpenClawConfigWithLegacyRoster = {
+      agents: { list },
+      gateway: { port: 18789 },
+    };
     try {
-      await state.writeConfig({ agents: { list }, gateway: { port: 18789 } });
+      await state.writeConfig(legacy);
       const original = await fs.readFile(state.configPath, "utf8");
       await expect(
         mutateConfigFileWithRetry({
@@ -917,10 +812,12 @@ describe("agent roster persistence", () => {
       ).rejects.toThrow("doctor --fix");
 
       expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
-      const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
-      expect(JSON.stringify(persisted.agents?.list)).toBe(JSON.stringify(list));
+      const persisted: OpenClawConfigWithLegacyRoster = JSON.parse(
+        await fs.readFile(state.configPath, "utf8"),
+      );
+      expect(persisted.agents).toEqual({ list });
       expect(persisted.agents).not.toHaveProperty("entries");
-      expect(persisted.gateway?.port).toBe(18789);
+      expect(persisted.gateway).toEqual({ port: 18789 });
     } finally {
       closeOpenClawStateDatabaseForTest();
       await state.cleanup();

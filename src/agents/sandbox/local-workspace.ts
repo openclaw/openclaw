@@ -4,7 +4,13 @@ import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
-import type { SandboxContext } from "./types.js";
+import { withWorktreeAllocationLease } from "../worktrees/allocation.js";
+import {
+  markManagedWorktreePreparation,
+  setWorktreePreparationTemplate,
+  startWorktreePreparationPhase,
+} from "../worktrees/preparation-timing.js";
+import type { SandboxConfig, SandboxContext } from "./types.js";
 
 /** A writable project is an exact managed projection, never a role-policy override. */
 export async function prepareLocalSandboxWorkspace(params: {
@@ -12,19 +18,48 @@ export async function prepareLocalSandboxWorkspace(params: {
   agentId: string;
   sessionKey: string;
   workspaceDir?: string;
-  backend: string;
+  sandbox: SandboxConfig;
+  signal?: AbortSignal;
   assertCurrent?: () => void;
 }) {
   const owner = resolveLocalWorkspaceOwner(params);
   if (!owner) {
     return undefined;
   }
-  if (params.backend !== "docker" && params.backend !== "podman") {
+  markManagedWorktreePreparation();
+  if (params.sandbox.backend !== "docker" && params.sandbox.backend !== "podman") {
     throw new Error(
       "Managed guest projects require a local Docker or Podman sandbox; this backend cannot safely reconcile a local managed checkout",
     );
   }
-  const workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  const existing = await withLocalWorkspaceProjection(owner, (state) => state.reuse());
+  let workspaceDir: string;
+  if (existing) {
+    setWorktreePreparationTemplate("reused");
+    workspaceDir = existing;
+  } else if (params.cfg.worktreeAcceleration === false) {
+    workspaceDir = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
+  } else {
+    const allocated = startWorktreePreparationPhase("allocate");
+    try {
+      workspaceDir = await withWorktreeAllocationLease(
+        {
+          env: owner.env ?? process.env,
+          signal: params.signal,
+          commitGuard: owner.assertCurrent,
+        },
+        (allocation) => {
+          allocated();
+          return withLocalWorkspaceProjection(
+            { ...owner, workerAuthority: allocation.workerAuthority },
+            (state) => state.prepare({ sandbox: params.sandbox, allocation }),
+          );
+        },
+      );
+    } finally {
+      allocated();
+    }
+  }
   owner.assertCurrent();
   return {
     workspaceDir,

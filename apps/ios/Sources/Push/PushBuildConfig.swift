@@ -71,10 +71,9 @@ struct PushBuildConfig {
     }
 
     private init(readValue: (String) -> Any?) {
-        self.mode = Self.readEnum(
-            readValue: readValue,
-            key: "OpenClawPushMode",
-            fallback: .localSandbox)
+        let rawMode = (readValue("OpenClawPushMode") as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        self.mode = PushBuildMode(rawValue: rawMode) ?? PushBuildMode(rawValue: rawMode.lowercased()) ?? .localSandbox
         let relayBaseURLOverride = Self.readURL(
             readValue: readValue,
             key: "OpenClawPushRelayBaseURL")
@@ -135,15 +134,5 @@ struct PushBuildConfig {
             return nil
         }
         return components.url
-    }
-
-    private static func readEnum<T: RawRepresentable>(
-        readValue: (String) -> Any?,
-        key: String,
-        fallback: T)
-    -> T where T.RawValue == String {
-        guard let raw = readValue(key) as? String else { return fallback }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return T(rawValue: trimmed) ?? T(rawValue: trimmed.lowercased()) ?? fallback
     }
 }

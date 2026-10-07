@@ -4,6 +4,10 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createFallbackSessionEntry } from "../../config/sessions/session-accessor.sqlite-normalize.js";
+import {
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "../../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -11,6 +15,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { hasOpenClawAgentDatabaseAsyncResources } from "../../state/openclaw-agent-db-resources.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import {
@@ -41,6 +46,7 @@ function writeSessionFixture(
   scope: Parameters<typeof patchSessionEntryCore>[0],
   patch: Partial<SessionEntry>,
 ) {
+  openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope)));
   return patchSessionEntryCore(scope, () => patch, {
     skipMaintenance: true,
     fallbackEntry: createFallbackSessionEntry(patch),
@@ -275,6 +281,7 @@ describe("direct session model catalogs", () => {
     "selected patch",
     "selected reset",
     "store close",
+    "same-file reopen",
     "profile alias change",
     "catalog owner",
   ] as const)("revalidates the selected model catalog after %s", async (change) => {
@@ -308,8 +315,14 @@ describe("direct session model catalogs", () => {
             sessionId: "replacement",
             lifecycleRevision: "replacement",
           });
-        } else if (change === "store close") {
-          closeOpenClawAgentDatabaseByPath(openOpenClawAgentDatabase(scope).path);
+        } else if (change === "store close" || change === "same-file reopen") {
+          const database = openOpenClawAgentDatabase(scope);
+          if (change === "same-file reopen") {
+            await closeOpenClawAgentDatabaseByPathAsync(database.path);
+            openOpenClawAgentDatabase(scope);
+          } else {
+            closeOpenClawAgentDatabaseByPath(database.path);
+          }
         } else if (change === "profile alias change") {
           publishUserProfileAliasChange();
         } else {

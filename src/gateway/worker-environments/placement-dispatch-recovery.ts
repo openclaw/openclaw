@@ -332,7 +332,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             return;
           }
           const claimId = `reclaim-${randomUUID()}`;
-          const claim = placements.claimReclaimWorkspaceResult(
+          const claim = await placements.claimReclaimWorkspaceResult(
             {
               sessionId: placement.sessionId,
               sessionKey: placement.sessionKey,
@@ -343,7 +343,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
             },
             (recoveryClaim) => environments.fenceWorkerTurnForRecovery(recoveryClaim),
           );
-          placements.handoffWorkspaceResultRecovery(claim);
+          await placements.handoffWorkspaceResultRecovery(claim);
         });
         const environmentId = abandonedEnvironmentId;
         if (environmentId) {

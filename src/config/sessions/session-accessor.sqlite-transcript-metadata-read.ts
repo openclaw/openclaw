@@ -41,7 +41,6 @@ export function readTranscriptHeaderFromDatabase(
 export function readLatestAssistantTextFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   scope: Pick<ResolvedTranscriptReadScope, "agentId" | "sessionId" | "sessionKey">,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantText | undefined {
   return runSqliteDeferredTransactionSync(
     database.db,
@@ -66,7 +65,7 @@ export function readLatestAssistantTextFromDatabase(
           .orderBy("ti.seq", "desc"),
       );
       for (const row of rows) {
-        const latest = parseLatestAssistantMessageEvent(row.event_json, options);
+        const latest = parseLatestAssistantMessageEvent(row.event_json);
         if (!latest) {
           continue;
         }
@@ -86,7 +85,6 @@ export function readLatestAssistantTextFromDatabase(
 
 function parseLatestAssistantMessageEvent(
   raw: string,
-  options: { includeTranscriptOnlyOpenClawAssistant?: boolean } = {},
 ): LatestTranscriptAssistantMessage | undefined {
   let parsed: {
     id?: unknown;
@@ -101,10 +99,7 @@ function parseLatestAssistantMessageEvent(
   if (!message || message.role !== "assistant") {
     return undefined;
   }
-  if (
-    !options.includeTranscriptOnlyOpenClawAssistant &&
-    isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)
-  ) {
+  if (isTranscriptOnlyOpenClawAssistantModel(message.provider, message.model)) {
     return undefined;
   }
   return {

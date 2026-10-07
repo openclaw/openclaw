@@ -16,6 +16,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { waitForCatalogPublication } from "./server-methods/models-auth-catalog.test-support.js";
 import { createClaudeAuthFixture } from "./server.chat-cli-auth.test-support.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
@@ -118,7 +119,11 @@ async function cleanupCliAuthFixture({
 }
 
 async function prepareCliAuthFixture(
-  { order, credential, nativeContinuity }: (typeof cases)[number],
+  {
+    order,
+    credential,
+    nativeContinuity,
+  }: Pick<(typeof cases)[number], "order" | "credential" | "nativeContinuity">,
   signal: AbortSignal,
 ): Promise<CliAuthFixture> {
   signal.throwIfAborted();
@@ -428,6 +433,46 @@ async function executeCliAuthCase(
     });
   }
 }
+
+it(
+  "publishes Claude login changes after Gateway startup",
+  { timeout: 90_000 },
+  async ({ signal, onTestFinished }) => {
+    const fixture = await prepareCliAuthFixture({ order: undefined }, signal);
+    onTestFinished(() => cleanupCliAuthFixture(fixture));
+    const credentials = path.join(fixture.nativeRoot, ".credentials.json");
+    const probes = async () =>
+      (await fs.readFile(path.join(fixture.nativeRoot, "auth-status.log"), "utf8")).split("\n")
+        .length - 1;
+    const available = async () => {
+      const { models } = await fixture.gateway.client.request<{
+        models: { provider: string; id: string; available?: boolean }[];
+      }>("models.list", { view: "configured", agentId: "main" });
+      return models.find((model) => `${model.provider}/${model.id}` === fixture.modelRef)
+        ?.available;
+    };
+    const now = Date.now.bind(Date);
+    let elapsed = 0;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now() + elapsed);
+    onTestFinished(() => clock.mockRestore());
+
+    expect(await available()).toBe(false);
+    await fs.writeFile(credentials, "{}");
+    const startupProbes = await probes();
+    expect(await available()).toBe(false);
+    expect(await probes()).toBe(startupProbes);
+
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === true });
+    const loginProbes = await probes();
+    expect(loginProbes).toBe(startupProbes + 1);
+
+    await fs.rm(credentials);
+    elapsed += 5 * 60_000;
+    await waitForCatalogPublication({ signal, read: available, ready: (value) => value === false });
+    expect(await probes()).toBe(loginProbes + 1);
+  },
+);
 
 it("persists config health in the isolated Gateway process", async () => {
   const state = await createOpenClawTestState({

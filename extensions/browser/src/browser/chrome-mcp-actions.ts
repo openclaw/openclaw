@@ -25,14 +25,13 @@ import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 export async function focusChromeMcpTab(
   profileName: string,
   targetId: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOperationOptions = {},
 ): Promise<void> {
   await callTargetTool(
     {
       profileName,
-      profile: typeof profileOptions === "string" ? undefined : profileOptions,
-      userDataDir: typeof profileOptions === "string" ? profileOptions : undefined,
+      profile: profileOptions,
       targetId,
       ...options,
     },
@@ -44,16 +43,13 @@ export async function focusChromeMcpTab(
 export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOperationOptions = {},
 ): Promise<void> {
-  const profile = typeof profileOptions === "string" ? undefined : profileOptions;
-  const userDataDir = typeof profileOptions === "string" ? profileOptions : undefined;
   await withChromeMcpTarget(
     {
       profileName,
-      profile,
-      userDataDir,
+      profile: profileOptions,
       targetId,
       ...options,
     },
@@ -76,15 +72,9 @@ export async function closeChromeMcpTab(
   );
 }
 
-export async function navigateChromeMcpPage(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  url: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<{ url: string }> {
+export async function navigateChromeMcpPage(
+  params: ChromeMcpTargetOperation & { url: string },
+): Promise<{ url: string }> {
   const resolvedTimeoutMs = resolveBrowserNavigationTimeoutMs(params.timeoutMs);
   const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   return await withChromeMcpTarget({ ...params, timeoutMs: callTimeoutMs }, async (target) => {

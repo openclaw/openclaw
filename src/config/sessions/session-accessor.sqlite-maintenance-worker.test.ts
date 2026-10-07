@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync, StatementSync as NativeStatement } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as workerIdentity from "../../infra/sqlite-worker-identity.js";
 import {
@@ -27,7 +28,12 @@ import {
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import type {
+  SessionEntryMaintenanceResult,
+  SqliteSessionReclamationPlan,
+} from "./session-accessor.sqlite-lifecycle-types.js";
 import * as maintenanceKick from "./session-accessor.sqlite-maintenance-kick.js";
+import { registerSessionMaintenanceProtectionTests } from "./session-accessor.sqlite-maintenance-protection.test-support.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
 import {
   observeSessionMaintenancePlanningWorker,
@@ -41,16 +47,10 @@ import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 afterEach(() => vi.restoreAllMocks());
 
 function observeMaintenance(
-  accept: (
-    result: Awaited<
-      ReturnType<
-        typeof maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort
-      >
-    >,
-  ) => boolean = () => true,
+  accept: (result: SessionEntryMaintenanceResult) => boolean = () => true,
 ) {
   const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-  const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+  const completed = createDeferredCore<SessionEntryMaintenanceResult>();
   vi.spyOn(
     maintenance,
     "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
@@ -109,7 +109,8 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         (request) => observation.run(true, () => kick(request)),
       );
       const { DatabaseSync, StatementSync } = requireNodeSqlite();
-      const counts = { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 };
+      const emptyCounts = { prepare: 0, exec: 0, get: 0, all: 0, run: 0, iterate: 0 };
+      const counts = { ...emptyCounts };
       const preparedSql: string[] = [];
       const executedSql: string[] = [];
       // oxlint-disable-next-line typescript/unbound-method -- Forward the native operation with its exact database receiver.
@@ -152,7 +153,10 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         );
       });
       const preservation = vi.fn(() => []);
-      const unregister = registerSessionMaintenancePreserveKeysProvider(preservation);
+      const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+        capture: preservation,
+        dispose() {},
+      }));
       const result = await (async () => {
         try {
           await patchSessionEntryCore(active, () => ({ label: "updated" }), {
@@ -173,14 +177,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         ),
       ).toEqual([]);
       if (!remove) {
-        expect(counts).toEqual({
-          prepare: 0,
-          exec: 0,
-          get: 0,
-          all: 0,
-          run: 0,
-          iterate: 0,
-        });
+        expect(counts).toEqual(emptyCounts);
         expect(preservation).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry(active)?.label).toBe("updated");
@@ -255,7 +252,7 @@ it.runIf(process.platform !== "win32")(
         return result;
       });
       const finalize = maintenance.finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort;
-      const completed = createDeferredCore<Awaited<ReturnType<typeof finalize>>>();
+      const completed = createDeferredCore<SessionEntryMaintenanceResult>();
       vi.spyOn(
         maintenance,
         "finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort",
@@ -284,107 +281,157 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it.each(["provider", "work-key", "work-id", "lifecycle-key", "lifecycle-id", "ancestor"] as const)(
-  "preserves %s protection through automatic worker planning",
-  async (protection) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = path.join(state.sessionsDir(), "sessions.json");
-      const active = { sessionKey: "agent:main:maintenance-protection-active", storePath };
-      const protectedKey = "agent:main:subagent:maintenance-protected";
-      const protectedId = "maintenance-protected-id";
-      const aliasKey = "agent:main:subagent:maintenance-protected-alias";
-      const sibling = "agent:main:subagent:maintenance-unprotected";
-      replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
+it.each([
+  "registry",
+  "recovery-cycle",
+  "recovery-run",
+  "provider",
+  "work-key",
+  "work-id",
+  "lifecycle-key",
+  "lifecycle-id",
+  "ancestor",
+] as const)("preserves %s protection through automatic worker planning", async (protection) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const active = { sessionKey: "agent:main:maintenance-protection-active", storePath };
+    const protectedKey = protection.startsWith("recovery")
+      ? "agent:main:hook:maintenance-protected"
+      : "agent:main:subagent:maintenance-protected";
+    const protectedId = "maintenance-protected-id";
+    const aliasKey = "agent:main:subagent:maintenance-protected-alias";
+    const sibling = "agent:main:subagent:maintenance-unprotected";
+    replaceSessionEntrySync(active, { sessionId: "active", updatedAt: Date.now() });
+    replaceSessionEntrySync(
+      { sessionKey: protectedKey, storePath },
+      {
+        sessionId: protectedId,
+        updatedAt: 1,
+        ...(protection === "recovery-cycle"
+          ? {
+              mainRestartRecovery: { cycleId: "waiting", revision: 1, chargedAttempts: 0 },
+            }
+          : protection === "recovery-run"
+            ? {
+                restartRecoveryRuns: [
+                  { runId: "awaiting-recovery", lifecycleGeneration: "previous-gateway" },
+                ],
+              }
+            : {}),
+      },
+    );
+    if (protection.endsWith("-id")) {
       replaceSessionEntrySync(
-        { sessionKey: protectedKey, storePath },
+        { sessionKey: aliasKey, storePath },
         {
           sessionId: protectedId,
           updatedAt: 1,
         },
       );
-      if (protection.endsWith("-id")) {
-        replaceSessionEntrySync(
-          { sessionKey: aliasKey, storePath },
-          {
-            sessionId: protectedId,
-            updatedAt: 1,
-          },
-        );
-      }
-      replaceSessionEntrySync(
-        { sessionKey: sibling, storePath },
+    }
+    replaceSessionEntrySync(
+      { sessionKey: sibling, storePath },
+      {
+        sessionId: "unprotected",
+        updatedAt: 1,
+        ...(protection === "recovery-cycle"
+          ? {
+              mainRestartRecovery: {
+                cycleId: "finished",
+                revision: 1,
+                chargedAttempts: 0,
+                tombstone: { reason: "exhausted" },
+              },
+            }
+          : protection === "recovery-run"
+            ? {
+                restartRecoveryRuns: [
+                  { runId: "terminal", lifecycleGeneration: "previous-gateway" },
+                ],
+                restartRecoveryTerminalRunIds: ["terminal"],
+              }
+            : {}),
+      },
+    );
+    const run = async () => {
+      const completed = observeMaintenance();
+      await patchSessionEntryCore(
+        active,
+        () => ({
+          label: "protected",
+          ...(protection === "ancestor" ? { parentSessionKey: protectedKey } : {}),
+        }),
         {
-          sessionId: "unprotected",
-          updatedAt: 1,
+          maintenanceConfig: resolveMaintenanceConfigFromInput({
+            mode: "enforce",
+            maxEntries: 100,
+            pruneAfter: "1s",
+          }),
         },
       );
-      const run = async () => {
-        const completed = observeMaintenance();
-        await patchSessionEntryCore(
-          active,
-          () => ({
-            label: "protected",
-            ...(protection === "ancestor" ? { parentSessionKey: protectedKey } : {}),
-          }),
-          {
-            maintenanceConfig: resolveMaintenanceConfigFromInput({
-              mode: "enforce",
-              maxEntries: 100,
-              pruneAfter: "1s",
-            }),
-          },
-        );
-        await completed;
-        expect(loadSessionEntry({ sessionKey: protectedKey, storePath })?.sessionId).toBe(
-          protectedId,
-        );
-        expect(loadSessionEntry({ sessionKey: sibling, storePath })).toBeUndefined();
-        if (protection.endsWith("-id")) {
-          expect(loadSessionEntry({ sessionKey: aliasKey, storePath })?.sessionId).toBe(
-            protectedId,
-          );
-        }
-      };
-      if (protection === "provider") {
-        let reverse = false;
-        const unregister = registerSessionMaintenancePreserveKeysProvider(() => {
+      await completed;
+      expect(loadSessionEntry({ sessionKey: protectedKey, storePath })?.sessionId).toBe(
+        protectedId,
+      );
+      expect(loadSessionEntry({ sessionKey: sibling, storePath })).toBeUndefined();
+      if (protection.endsWith("-id")) {
+        expect(loadSessionEntry({ sessionKey: aliasKey, storePath })?.sessionId).toBe(protectedId);
+      }
+    };
+    if (protection === "provider") {
+      let reverse = false;
+      const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+        capture: () => {
           reverse = !reverse;
           const keys = [protectedKey.toUpperCase(), active.sessionKey];
           return reverse ? keys.toReversed() : keys;
+        },
+        dispose() {},
+      }));
+      try {
+        await run();
+      } finally {
+        unregister();
+      }
+    } else if (protection === "registry") {
+      registerAgentRunContext("maintenance-live-run", {
+        agentId: "main",
+        sessionKey: protectedKey,
+        sessionId: protectedId,
+        projectSessionActive: true,
+      });
+      try {
+        await run();
+      } finally {
+        clearAgentRunContext("maintenance-live-run");
+      }
+    } else if (protection === "ancestor" || protection.startsWith("recovery")) {
+      await run();
+    } else {
+      const identity = protection.endsWith("-key") ? protectedKey : protectedId;
+      if (protection.startsWith("lifecycle")) {
+        await runExclusiveSessionLifecycleMutation("archive", {
+          scope: storePath,
+          identities: [identity],
+          run,
+        });
+      } else {
+        const lease = await beginSessionWorkAdmission({
+          scope: storePath,
+          identities: [identity],
+          assertAllowed: () => {},
         });
         try {
           await run();
         } finally {
-          unregister();
-        }
-      } else if (protection === "ancestor") {
-        await run();
-      } else {
-        const identity = protection.endsWith("-key") ? protectedKey : protectedId;
-        if (protection.startsWith("lifecycle")) {
-          await runExclusiveSessionLifecycleMutation({
-            scope: storePath,
-            identities: [identity],
-            run,
-          });
-        } else {
-          const lease = await beginSessionWorkAdmission({
-            scope: storePath,
-            identities: [identity],
-            assertAllowed: () => {},
-          });
-          try {
-            await run();
-          } finally {
-            lease.release();
-          }
+          lease.release();
         }
       }
-    });
-  },
-);
+    }
+  });
+});
 
-it("rolls back archive metadata when protection changes at planning commit", async () => {
+it("rolls back archive metadata when a run registers at planning commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = path.join(state.sessionsDir(), "sessions.json");
     const active = { sessionKey: "agent:main:maintenance-live-protection", storePath };
@@ -400,9 +447,6 @@ it("rolls back archive metadata when protection changes at planning commit", asy
       { sessionId: "stale", updatedAt: 1 },
     );
     let protectedNow = false;
-    const unregister = registerSessionMaintenancePreserveKeysProvider(() =>
-      protectedNow ? [protectedKey] : [],
-    );
     observeSessionMaintenancePlanningWorker({
       beforeAdmission(request) {
         const facts = request.facts;
@@ -414,6 +458,11 @@ it("rolls back archive metadata when protection changes at planning commit", asy
           facts.publication.changedKeys.includes(protectedKey)
         ) {
           protectedNow = true;
+          registerAgentRunContext("maintenance-live-run", {
+            agentId: "main",
+            sessionKey: protectedKey,
+            projectSessionActive: true,
+          });
         }
       },
     });
@@ -433,7 +482,7 @@ it("rolls back archive metadata when protection changes at planning commit", asy
         expect.any(Number),
       );
     } finally {
-      unregister();
+      clearAgentRunContext("maintenance-live-run");
     }
   });
 });
@@ -547,7 +596,6 @@ it.each([
       });
       await completed;
       expect(changed).toBe(true);
-      expect(workerThreadIds.length).toBeGreaterThan(0);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
       expect(new Set(workerThreadIds).size).toBe(1);
       if (warm) {
@@ -631,8 +679,10 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
       const result = await reclamationRun.runSqliteSessionReclamation({
         diagnostics,
         forceInProcess: false,
-        plan: reclamation.createSessionMaintenancePlanningOperation({
-          databaseOptions,
+        plan: {
+          kind: "maintenance-plan",
+          databaseOptions: reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
+          materializedPlans: [],
           input: {
             activeSessionKey: active.sessionKey,
             archiveDirectory: state.sessionsDir(),
@@ -644,12 +694,16 @@ it("publishes exact archived keys without worktrees after Worker planning", asyn
             preservation: { providerKeys: [], workIdentities: [], lifecycleIdentities: [] },
             storePath,
           },
-        }),
+        },
       });
       expect(diagnostics).toMatchObject({ workerThreadId: expect.any(Number) });
       expect(result).toMatchObject({
         kind: "maintenance-plan",
-        value: { archived: 1, archivedSessionKeys: [stale.sessionKey], entryRemovals: [] },
+        value: {
+          archived: 1,
+          archivedEntries: [{ sessionKey: stale.sessionKey, sessionId: "stale" }],
+          entryRemovals: [],
+        },
       });
       expect(published).toEqual([
         {
@@ -728,7 +782,7 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
       const databaseOptions = { agentId: "main", env: state.env };
       const database = openOpenClawAgentDatabase(databaseOptions);
       const originalFile = fs.statSync(database.path, { bigint: true });
-      const plan =
+      const plan: SqliteSessionReclamationPlan =
         operation === "statistics"
           ? reclamation.createSessionMaintenanceStatisticsOperation(databaseOptions)
           : operation === "empty-finalization"
@@ -738,8 +792,11 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
                 entries: [],
                 materializedPlans: [],
               })
-            : reclamation.createSessionMaintenancePlanningOperation({
-                databaseOptions,
+            : {
+                kind: "maintenance-plan",
+                databaseOptions:
+                  reclamation.resolveSessionReclamationDatabaseOptions(databaseOptions),
+                materializedPlans: [],
                 input: {
                   activeSessionKey: active.sessionKey,
                   archiveDirectory: state.sessionsDir(),
@@ -751,7 +808,7 @@ it.each(["no-op", "preservation", "statistics", "empty-finalization"] as const)(
                   preservation: null,
                   storePath,
                 },
-              });
+              };
       const published: unknown[] = [];
       const unsubscribe = sessionChanges.subscribe((change) => {
         const scope = "all" in change ? change.scope : change;
@@ -964,4 +1021,5 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
   });
 });
 
+registerSessionMaintenanceProtectionTests();
 registerSessionMaintenancePreparationTests();

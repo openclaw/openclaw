@@ -73,9 +73,9 @@ export function readChatPaneComposerAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "hello">,
   session: GatewaySessionRow | undefined,
   catalog: boolean,
-) {
+): boolean {
   const auth = snapshot.hello?.auth ?? null;
-  const canSend =
+  return (
     hasOperatorWriteAccess(auth) ||
     (!catalog &&
       readSessionMethodScopeAccess(auth, {
@@ -83,8 +83,8 @@ export function readChatPaneComposerAccess(
         requiredScope: "operator.write",
         sessionScope: true,
         session,
-      }).allowed);
-  return { canCompose: canSend, canSend };
+      }).allowed)
+  );
 }
 
 export function readChatPaneMutationAccess(
@@ -291,7 +291,6 @@ export function renderChatPaneComposerControls(params: {
           modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
           modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-          modelsLoading: state.chatModelsLoading,
           modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
           effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
           contextWindowMutationDisabledReason: contextWindowAccess.allowed

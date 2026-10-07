@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveModelEntries } from "../../../media-understanding/resolve.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
@@ -21,7 +22,7 @@ describe("canonical model-reference migration", () => {
           },
         },
       };
-      const config: OpenClawConfig = {
+      const config: OpenClawConfigWithLegacyRoster = {
         agents:
           scope === "defaults"
             ? { defaults: agent, entries: { main: {} } }
@@ -351,7 +352,7 @@ describe("canonical model-reference migration", () => {
       },
     });
 
-    const res = normalizeCompatibilityConfigValues(seeded.next as OpenClawConfig);
+    const res = normalizeCompatibilityConfigValues(seeded.next);
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
       "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },

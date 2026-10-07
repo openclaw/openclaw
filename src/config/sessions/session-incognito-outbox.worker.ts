@@ -17,7 +17,6 @@ type Command = SqliteWorkerCommand<IncognitoOutboxOperations>;
 /** The existing outbox domain owns all transitions on the actor's retained connection. */
 export function createIncognitoOutboxWorker(
   database: OpenClawAgentDatabase,
-  _env: NodeJS.ProcessEnv,
   admit: (stage: "transaction" | "commit", keys: readonly string[]) => void,
 ) {
   let active: Command | undefined;

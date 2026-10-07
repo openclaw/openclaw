@@ -629,12 +629,8 @@ configured_plugin_installs_enabled() {
   [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]
 }
 
-source_only_plugin_shadow_enabled() {
-  [ "$SCENARIO" = "stale-source-plugin-shadow" ]
-}
-
 seed_source_only_plugin_shadow() {
-  source_only_plugin_shadow_enabled || return 0
+  [ "$SCENARIO" = "stale-source-plugin-shadow" ] || return 0
 
   local shadow_root="$OPENCLAW_STATE_DIR/extensions/opik-openclaw"
   mkdir -p "$shadow_root/src"
@@ -703,18 +699,22 @@ assert_prepublish_fixture_idle() {
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
+prepublish_capability_consent_supported=""
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
-  local consent_supported=0 pending_args=("" "" "") published_companion_tarball=""
+  local pending_args=("" "" "") published_companion_tarball=""
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     [ "$baseline_companion_availability" != "unavailable" ] || return 0
     plugin_id="discord"
   elif configured_plugin_installs_enabled; then
     plugin_id="matrix"
   fi
-  help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
-  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
-  [ -z "$consent" ] || consent_supported=1
+  if [ -z "$prepublish_capability_consent_supported" ]; then
+    help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
+    consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
+    prepublish_capability_consent_supported=0
+    [ -z "$consent" ] || prepublish_capability_consent_supported=1
+  fi
   if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
     pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
   fi
@@ -732,7 +732,7 @@ assert_prepublish_plugin_install() {
   # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
-    "$consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
+    "$prepublish_capability_consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   assert_prepublish_fixture_idle
 }
@@ -904,43 +904,6 @@ read_installed_version() {
   node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1] + "/package.json", "utf8")).version' "$(package_root)"
 }
 
-repair_2026_7_33_ai_runtime() {
-  if [ "$baseline_version" != "2026.7.33" ]; then
-    return 0
-  fi
-  local root ai_manifest ai_version installed_version
-  root="$(package_root)"
-  ai_manifest="$root/node_modules/@openclaw/ai/package.json"
-  if [ -f "$ai_manifest" ]; then
-    return 0
-  fi
-  ai_version="$(
-    node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).dependencies?.["@openclaw/ai"] ?? ""' \
-      "$root/package.json"
-  )"
-  if [ "$ai_version" != "2026.7.33" ]; then
-    echo "2026.7.33 baseline declares unexpected @openclaw/ai version: ${ai_version:-<missing>}" >&2
-    return 1
-  fi
-  echo "Repairing published 2026.7.33 baseline's omitted @openclaw/ai runtime."
-  if ! openclaw_prepublish_plugin_registry_run_published \
-    openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
-    npm install --prefix "$root" --no-save --omit=dev --ignore-scripts --no-fund --no-audit \
-      "@openclaw/ai@$ai_version" >>"$BASELINE_INSTALL_LOG" 2>&1; then
-    echo "2026.7.33 @openclaw/ai repair failed" >&2
-    openclaw_e2e_print_log "$BASELINE_INSTALL_LOG" >&2
-    return 1
-  fi
-  installed_version="$(
-    node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).version' \
-      "$ai_manifest"
-  )"
-  if [ "$installed_version" != "$ai_version" ]; then
-    echo "2026.7.33 @openclaw/ai repair mismatch: expected $ai_version, got $installed_version" >&2
-    return 1
-  fi
-}
-
 storage_preflight() {
   echo "Storage preflight:"
   df -h "$ARTIFACT_ROOT" "$TMPDIR" /tmp || true
@@ -983,7 +946,6 @@ install_baseline() {
     return 1
   fi
   baseline_version="$installed_version"
-  repair_2026_7_33_ai_runtime || return "$?"
   local version_output
   if ! version_output="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw --version 2>&1)"; then
     echo "baseline openclaw --version failed" >&2
@@ -1376,12 +1338,11 @@ prepare_update_restart_probe() {
 }
 
 assert_baseline_state() {
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
+  local assertion
+  for assertion in assert-exec-approvals assert-config assert-state; do
+    OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+      node scripts/e2e/lib/upgrade-survivor/assertions.mjs "$assertion" || return "$?"
+  done
 }
 
 resolve_candidate_version() {
@@ -2657,7 +2618,16 @@ fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase capture-native-assignment-input node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs before-update
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Seed after baseline CLI work so only the published update can consume this legacy input.
+  phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-pending-delivery
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"
+fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi

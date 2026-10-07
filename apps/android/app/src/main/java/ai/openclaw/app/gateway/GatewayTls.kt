@@ -236,10 +236,7 @@ internal fun buildGatewayTlsConfig(
   onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig {
   val expectedInput = params.expectedFingerprint?.takeIf { it.isNotBlank() }
-  val expected =
-    expectedInput
-      ?.let(::normalizeGatewayTlsFingerprint)
-      ?.takeIf { it.isNotBlank() }
+  val expected = expectedInput?.let(::normalizeGatewayTlsFingerprintInput)
   val effectiveFingerprint = AtomicReference(expected)
   val usesPlatformTrust = expectedInput == null && !params.allowTOFU
 
@@ -416,7 +413,7 @@ internal suspend fun probeGatewayTlsFingerprint(
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
           authType: String,
-        ): Unit = throw CertificateException("gateway TLS probe does not accept client certificates")
+        ): Unit = throw CertificateException("gateway TLS check does not accept client certificates")
 
         override fun checkClientTrusted(
           chain: Array<X509Certificate>,
@@ -437,7 +434,7 @@ internal suspend fun probeGatewayTlsFingerprint(
           if (chain.isEmpty()) throw CertificateException("empty certificate chain")
           fingerprintRef.set(chain[0].sha256Fingerprint())
           // Abort validation after capture; the probe is not deciding trust.
-          throw CertificateException("gateway TLS probe captured fingerprint")
+          throw CertificateException("gateway TLS check captured fingerprint")
         }
 
         override fun checkServerTrusted(
@@ -595,9 +592,6 @@ fun normalizeGatewayTlsFingerprintInput(raw: String): String? {
     value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }
   }
 }
-
-/** Normalizes internal fingerprint text; invalid values become empty. */
-fun normalizeGatewayTlsFingerprint(raw: String): String = normalizeGatewayTlsFingerprintInput(raw).orEmpty()
 
 private fun normalizedGatewayTlsDnsHost(rawHost: String): String? {
   val trimmed = rawHost.trim()

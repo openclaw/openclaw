@@ -81,6 +81,7 @@ export function readOpenClawStateLease(
         "owner",
         "created_at as createdAt",
         "expires_at as expiresAt",
+        "heartbeat_at as heartbeatAt",
         "payload_json as payloadJson",
       ])
       .where("scope", "=", identity.scope)

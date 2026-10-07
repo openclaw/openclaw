@@ -2,9 +2,8 @@ import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/bro
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isAgentDatabaseInspectionPendingError } from "../../lib/gateway-availability.ts";
 
-const DEFAULT_RETRY_MS = 500;
-const MAX_RETRY_MS = 5_000;
 export const CHAT_HISTORY_RETRY_WINDOW_MS = 60_000;
 
 type RetryableChatReadError = GatewayRequestError | GatewayProtocolRequestTimeoutError;
@@ -33,19 +32,10 @@ export function isRetryableChatReadError(
 }
 
 export function formatChatHistoryLoadError(error: unknown): string {
+  if (isAgentDatabaseInspectionPendingError(error)) {
+    return t("chat.agentDatabaseWarming");
+  }
   return error instanceof GatewayProtocolRequestTimeoutError
     ? t("chat.historyRequestTimedOut")
     : formatUiError(error);
-}
-
-export function resolveChatReadRetryDelayMs(err: RetryableChatReadError, attempt = 0): number {
-  if (
-    err instanceof GatewayRequestError &&
-    typeof err.retryAfterMs === "number" &&
-    Number.isFinite(err.retryAfterMs)
-  ) {
-    // Server hints are minimum waits; the owning consumer deadline bounds the operation.
-    return Math.max(err.retryAfterMs, 100);
-  }
-  return Math.min(DEFAULT_RETRY_MS * 2 ** Math.min(attempt, 4), MAX_RETRY_MS);
 }

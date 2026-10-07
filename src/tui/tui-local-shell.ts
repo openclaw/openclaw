@@ -14,7 +14,7 @@ type LocalShellDeps = {
     requestRender: () => void;
   };
   openOverlay: (component: Component) => OverlayHandle;
-  closeOverlay: (handle?: OverlayHandle) => void;
+  closeOverlay: (handle: OverlayHandle) => void;
   createSelector?: (
     items: SelectItem[],
     maxVisible: number,

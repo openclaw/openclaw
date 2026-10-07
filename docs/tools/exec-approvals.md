@@ -379,9 +379,16 @@ openclaw exec-policy preset yolo
 
 Updates both local `tools.exec.host/security/ask` and the local approvals
 file defaults (including `askFallback: "full"`). It is intentionally
-local-only. To change gateway-host or node-host approvals remotely, use
+local-only and requires exclusive offline ownership of the selected state. Stop a
+running Gateway through its service owner before using `exec-policy set` or
+`preset`; these commands refuse before changing policy while another live Gateway
+owns the state. To change gateway-host or node-host approvals remotely, use
 `openclaw approvals set --gateway` or
 `openclaw approvals set --node <id|name|ip>`.
+
+A Gateway policy change that withdraws permission may be refused while a cron
+command is starting. Retry after command startup settles; the refusal leaves the
+previous policy in place.
 
 Other built-in presets: `cautious` (`host=gateway`, `security=allowlist`,
 `ask=on-miss`, `askFallback=deny`) and `deny-all` (`host=gateway`,
@@ -701,14 +708,16 @@ context when forwarding approved `system.run` requests:
 - The node exec path prepares one canonical plan up front.
 - The approval record stores that plan and its binding metadata.
 - Once approved, the final forwarded `system.run` call reuses the stored plan instead of trusting later caller edits.
-- If the caller changes `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created, the gateway rejects the forwarded run as an approval mismatch.
+- Edits to `command`, `rawCommand`, `cwd`, `agentId`, or `sessionKey` after the approval request was created are discarded: the gateway forwards the stored values instead. Changed `env` overrides are still rejected as an approval mismatch.
 
 ## Approval scope summaries
 
 An approval owner can attach a typed, display-only scope describing the action's
 blast radius. OpenClaw renders the sanitized summary on channel approval cards
 and includes the bounded scope in the safe approval presentation available to
-Control UI clients. Scope never grants authorization or changes approval policy.
+Control UI clients. Standalone approval links display the supplied scope before
+the decision buttons, including automation grant terms. Scope never grants
+authorization or changes approval policy.
 
 - `message-send`: destination, recipient count, optional recipient preview, and
   whether the audience is internal or external.

@@ -16,24 +16,37 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each(["confirmed", "rejected"] as const)(
-  "keeps a held thinking patch visible across mounted panes until it is %s",
-  async (outcome) => {
-    const row: GatewaySessionRow = {
-      key: "agent:main:held-effort",
+it.each([
+  "unrelated confirmed",
+  "unrelated rejected",
+  "replacement",
+  "thinking",
+  "speed",
+  "label",
+] as const)(
+  "reconciles a held settings preview with authoritative publication: %s",
+  async (change) => {
+    const initial: GatewaySessionRow = {
+      key: "agent:main:settings-publication",
       agentId: "main",
-      sessionId: "held-effort-session",
+      sessionId: "current-session",
       kind: "direct",
       updatedAt: 1,
+      label: "Original label",
       thinkingLevel: "high",
+      fastMode: false,
+      effectiveFastMode: false,
+      contextWindow: "64k",
     };
     const other: GatewaySessionRow = {
-      ...row,
+      ...initial,
       key: "agent:main:unrelated",
       sessionId: "unrelated-session",
       thinkingLevel: "medium",
     };
-    const rows = [row, other];
+    const unrelated = change.startsWith("unrelated");
+    const confirmed = change === "unrelated confirmed";
+    const rows = unrelated ? [initial, other] : [initial];
     const acknowledgement = createDeferred<unknown>();
     const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
     const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
@@ -42,44 +55,86 @@ it.each(["confirmed", "rejected"] as const)(
     let operation: Promise<boolean> | undefined;
     try {
       await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(row.key), mount(row.key)];
+      const panes = [mount(initial.key), mount(initial.key)];
       await Promise.all(panes.map(refreshPane));
-      for (const pane of panes) {
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(row);
-      }
-      operation = switchChatThinkingLevel(panes[0]!.state, "off");
-      expect(patch.mock.calls[0]?.[1]).toMatchObject({ key: row.key, thinkingLevel: "off" });
-      const assertThinking = (thinkingLevel: string) => {
+      const assertRows = (expected: GatewaySessionRow) => {
+        expect(sessions.state.result?.sessions.filter((row) => row.key === initial.key)).toEqual([
+          expect.objectContaining(expected),
+        ]);
         for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(row.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject({
-            key: row.key,
-            sessionId: row.sessionId,
-            thinkingLevel,
-          });
+          expect(pane.state.currentSessionId).toBe(expected.sessionId);
+          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
         }
       };
-      assertThinking("off");
-      emitGatewayEvent("sessions.changed", {
-        sessionKey: other.key,
-        agentId: "main",
-        reason: "label",
-        session: { ...other, updatedAt: 2, label: "Unrelated publication" },
+      assertRows(initial);
+      const pendingFields: Partial<GatewaySessionRow> =
+        change === "speed" ? { fastMode: true, effectiveFastMode: true } : { thinkingLevel: "off" };
+      operation =
+        change === "speed"
+          ? switchChatFastMode(panes[0]!.state, "on")
+          : switchChatThinkingLevel(panes[0]!.state, "off");
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch.mock.calls[0]?.[1]).toMatchObject({
+        key: initial.key,
+        ...(change === "speed" ? { fastMode: true } : { thinkingLevel: "off" }),
       });
-      expect(sessions.state.result?.sessions.find((entry) => entry.key === other.key)?.label).toBe(
-        "Unrelated publication",
-      );
-      assertThinking("off");
-      if (outcome === "confirmed") {
-        rows[0] = { ...row, thinkingLevel: "off", updatedAt: 3 };
-        acknowledgement.resolve({ ok: true, key: row.key, path: "", entry: rows[0] });
+      assertRows({ ...initial, ...pendingFields });
+      let authoritative = initial;
+      if (unrelated) {
+        rows[1] = { ...other, updatedAt: 2, label: "Unrelated publication" };
+        emitGatewayEvent("sessions.changed", {
+          sessionKey: other.key,
+          agentId: "main",
+          reason: "label",
+          session: rows[1],
+        });
+        expect(sessions.state.result?.sessions.find((row) => row.key === other.key)?.label).toBe(
+          "Unrelated publication",
+        );
+        assertRows({ ...initial, ...pendingFields });
       } else {
-        acknowledgement.reject(new Error("Synthetic thinking patch rejection"));
+        authoritative = {
+          ...initial,
+          updatedAt: 3,
+          ...(change === "replacement"
+            ? { sessionId: "replacement-session", thinkingLevel: "low" }
+            : change === "thinking"
+              ? { thinkingLevel: "medium" }
+              : change === "speed"
+                ? { fastMode: "auto", effectiveFastMode: true }
+                : { label: "Authoritative label while settings are pending" }),
+        };
+        rows[0] = authoritative;
+        if (change === "replacement") {
+          await sessions.refresh({ agentId: "main", force: true });
+        }
+        emitGatewayEvent("sessions.changed", {
+          sessionKey: initial.key,
+          agentId: "main",
+          ...(change === "replacement" ? {} : { sessionId: authoritative.sessionId }),
+          reason: change === "label" || change === "replacement" ? "label" : "patch",
+          ...(change === "label"
+            ? { updatedAt: 3, label: authoritative.label }
+            : { session: authoritative }),
+        });
+        if (change === "replacement") {
+          await Promise.all(panes.map(refreshPane));
+          assertRows(authoritative);
+        } else {
+          assertRows({ ...authoritative, ...pendingFields });
+        }
       }
-      await expect(operation).resolves.toBe(outcome === "confirmed");
-      assertThinking(outcome === "confirmed" ? "off" : "high");
+      if (confirmed) {
+        authoritative = { ...initial, thinkingLevel: "off", updatedAt: 3 };
+        rows[0] = authoritative;
+        acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: authoritative });
+      } else {
+        acknowledgement.reject(new Error("Synthetic settings rejection after publication"));
+      }
+      await expect(operation).resolves.toBe(confirmed);
+      assertRows(authoritative);
     } finally {
-      acknowledgement.resolve({ ok: true, key: row.key, path: "", entry: rows[0] });
+      acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
       await operation;
       await vi.dynamicImportSettled();
     }
@@ -165,128 +220,6 @@ it.each(["qualified", "global"] as const)(
       }
     } finally {
       acknowledgement.resolve({ ok: true, key: target.key, path: "", entry: target });
-      await operation;
-      await vi.dynamicImportSettled();
-    }
-  },
-);
-
-it("does not roll an old thinking patch back onto a replacement physical session", async () => {
-  const previous: GatewaySessionRow = {
-    key: "agent:main:replaced-effort",
-    agentId: "main",
-    sessionId: "previous-session",
-    kind: "direct",
-    updatedAt: 1,
-    thinkingLevel: "high",
-  };
-  const replacement = {
-    ...previous,
-    sessionId: "replacement-session",
-    updatedAt: 2,
-    thinkingLevel: "low",
-  };
-  const rows = [previous];
-  const acknowledgement = createDeferred<unknown>();
-  const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
-    "sessions.patch": () => acknowledgement.promise,
-  });
-  let operation: Promise<boolean> | undefined;
-  try {
-    await sessions.refresh({ agentId: "main", force: true });
-    const pane = mount(previous.key);
-    await refreshPane(pane);
-    operation = switchChatThinkingLevel(pane.state, "off");
-    expect(selectedChatSessionRow(pane.state)?.thinkingLevel).toBe("off");
-    rows[0] = replacement;
-    await sessions.refresh({ agentId: "main", force: true });
-    emitGatewayEvent("sessions.changed", {
-      sessionKey: replacement.key,
-      agentId: "main",
-      reason: "label",
-      session: replacement,
-    });
-    await refreshPane(pane);
-    expect(pane.state.currentSessionId).toBe(replacement.sessionId);
-    expect(selectedChatSessionRow(pane.state)).toMatchObject(replacement);
-    acknowledgement.reject(new Error("Synthetic previous-session patch rejection"));
-    await expect(operation).resolves.toBe(false);
-    expect(pane.state.currentSessionId).toBe(replacement.sessionId);
-    expect(selectedChatSessionRow(pane.state)).toMatchObject(replacement);
-    expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(replacement)]);
-  } finally {
-    acknowledgement.resolve({ ok: true, key: previous.key, path: "", entry: previous });
-    await operation;
-    await vi.dynamicImportSettled();
-  }
-});
-
-it.each(["thinking", "speed"] as const)(
-  "preserves a newer same-session %s event when the held local patch fails",
-  async (setting) => {
-    const initial: GatewaySessionRow = {
-      key: "agent:main:concurrent-settings",
-      agentId: "main",
-      sessionId: "current-session",
-      kind: "direct",
-      updatedAt: 1,
-      thinkingLevel: "high",
-      fastMode: false,
-      effectiveFastMode: false,
-      contextWindow: "64k",
-    };
-    const newer: GatewaySessionRow = {
-      ...initial,
-      updatedAt: 3,
-      ...(setting === "thinking"
-        ? { thinkingLevel: "medium" }
-        : { fastMode: "auto" as const, effectiveFastMode: true }),
-    };
-    const pendingFields: Partial<GatewaySessionRow> =
-      setting === "thinking"
-        ? { thinkingLevel: "off" }
-        : { fastMode: true, effectiveFastMode: true };
-    const rows = [initial];
-    const acknowledgement = createDeferred<unknown>();
-    const patch = vi.fn<GatewayRequestHandler>(() => acknowledgement.promise);
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(rows, "main", undefined, {
-      "sessions.patch": patch,
-    });
-    let operation: Promise<boolean> | undefined;
-    try {
-      await sessions.refresh({ agentId: "main", force: true });
-      const panes = [mount(initial.key), mount(initial.key)];
-      await Promise.all(panes.map(refreshPane));
-      for (const pane of panes) {
-        expect(selectedChatSessionRow(pane.state)).toMatchObject(initial);
-      }
-      const state = panes[0]!.state;
-      operation =
-        setting === "thinking"
-          ? switchChatThinkingLevel(state, "off")
-          : switchChatFastMode(state, "on");
-      expect(patch).toHaveBeenCalledOnce();
-      rows[0] = newer;
-      emitGatewayEvent("sessions.changed", {
-        sessionKey: initial.key,
-        agentId: "main",
-        sessionId: initial.sessionId,
-        reason: "patch",
-        session: newer,
-      });
-      const assertRows = (expected: GatewaySessionRow) => {
-        expect(sessions.state.result?.sessions).toEqual([expect.objectContaining(expected)]);
-        for (const pane of panes) {
-          expect(pane.state.currentSessionId).toBe(initial.sessionId);
-          expect(selectedChatSessionRow(pane.state)).toMatchObject(expected);
-        }
-      };
-      assertRows({ ...newer, ...pendingFields });
-      acknowledgement.reject(new Error("Synthetic rejected local settings patch"));
-      await expect(operation).resolves.toBe(false);
-      assertRows(newer);
-    } finally {
-      acknowledgement.resolve({ ok: true, key: initial.key, path: "", entry: rows[0] });
       await operation;
       await vi.dynamicImportSettled();
     }

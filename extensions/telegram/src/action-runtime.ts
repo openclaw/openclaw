@@ -15,7 +15,6 @@ import { normalizeOutboundLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   buildOutboundSessionContext,
   sendDurableMessageBatch,
-  type DurableMessageBatchSendResult,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -194,49 +193,6 @@ function normalizeTelegramDeliveryPin(params: Record<string, unknown>) {
   } as const;
 }
 
-function buildTelegramActionSendPayload(params: {
-  content: string;
-  mediaUrls: string[];
-  asVoice?: boolean;
-  asVideoNote?: boolean;
-  location?: ReplyPayload["location"];
-  pin?: ReturnType<typeof normalizeTelegramDeliveryPin>;
-  buttons?: ReturnType<typeof resolveTelegramButtonsFromParams>;
-  quoteText?: string;
-}): ReplyPayload {
-  const telegramData =
-    params.buttons || params.quoteText
-      ? {
-          ...(params.buttons ? { buttons: params.buttons } : {}),
-          ...(params.quoteText ? { quoteText: params.quoteText } : {}),
-        }
-      : undefined;
-  return {
-    text: params.content,
-    ...(params.mediaUrls.length > 0 ? { mediaUrls: params.mediaUrls } : {}),
-    ...(params.asVoice === true ? { audioAsVoice: true } : {}),
-    ...(params.asVideoNote === true ? { videoAsNote: true } : {}),
-    ...(params.location ? { location: params.location } : {}),
-    ...(params.pin ? { delivery: { pin: params.pin } } : {}),
-    ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
-  };
-}
-
-function getLastDurableTelegramActionResult(
-  result: Extract<DurableMessageBatchSendResult, { status: "sent" }>,
-) {
-  const lastResult = result.results.at(-1);
-  const receipt = result.receipt;
-  return {
-    messageId:
-      lastResult?.messageId ??
-      receipt.primaryPlatformMessageId ??
-      receipt.platformMessageIds.at(-1),
-    chatId: lastResult?.target?.kind === "chat" ? lastResult.target.id : undefined,
-    receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
-  };
-}
-
 async function describeTelegramAllowedReactionSample(params: {
   chatId: string | number;
   cfg: OpenClawConfig;
@@ -291,14 +247,13 @@ export async function handleTelegramAction(
   },
 ): Promise<AgentToolResult<unknown>> {
   rejectTelegramNativeButtonParams(params);
-  const { action, accountId } = {
-    action: normalizeTelegramActionName(readStringParam(params, "action", { required: true })),
-    accountId: readStringParam(params, "accountId"),
-  };
+  const action = normalizeTelegramActionName(readStringParam(params, "action", { required: true }));
+  const accountId = readStringParam(params, "accountId");
   const isActionEnabled = createTelegramActionGate({
     cfg,
     accountId,
   });
+  const apiOptions = { cfg, accountId, gatewayClientScopes: options?.gatewayClientScopes };
   const requireToken = () => {
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
@@ -344,7 +299,7 @@ export async function handleTelegramAction(
     const allowed = await getTelegramAllowedReactions(chatId, {
       cfg,
       token,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     const reactions =
       allowed ??
@@ -368,7 +323,7 @@ export async function handleTelegramAction(
     // loops and duplicate content.
     const reactionLevelInfo = resolveTelegramReactionLevel({
       cfg,
-      accountId: accountId ?? undefined,
+      accountId,
     });
     if (!reactionLevelInfo.agentReactionsEnabled) {
       return jsonResult({
@@ -427,11 +382,9 @@ export async function handleTelegramAction(
         context: options,
       });
       reactionResult = await reactMessageTelegram(authorizedChatId, messageId, emoji ?? "", {
-        cfg,
+        ...apiOptions,
         token,
         remove,
-        accountId: accountId ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
       });
     } catch (err) {
       const isInvalid = String(err).includes("REACTION_INVALID");
@@ -444,7 +397,7 @@ export async function handleTelegramAction(
               chatId: authorizedChatId,
               cfg,
               token,
-              accountId: accountId ?? undefined,
+              accountId,
             })}`
           : "Reaction failed. Do not retry.",
       });
@@ -454,7 +407,7 @@ export async function handleTelegramAction(
         chatId: authorizedChatId,
         cfg,
         token,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       return jsonResult({
         ok: false,
@@ -512,7 +465,7 @@ export async function handleTelegramAction(
     if (buttons) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       if (inlineButtonsScope === "off") {
         throw new Error(
@@ -544,16 +497,20 @@ export async function handleTelegramAction(
     const silent = readBooleanParam(params, "silent");
     const forceDocument =
       readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
-    const payload = buildTelegramActionSendPayload({
-      content,
-      mediaUrls,
-      asVoice,
-      asVideoNote,
-      location,
-      pin: normalizeTelegramDeliveryPin(params),
-      buttons,
-      quoteText,
-    });
+    const pin = normalizeTelegramDeliveryPin(params);
+    const telegramData =
+      buttons || quoteText
+        ? { ...(buttons ? { buttons } : {}), ...(quoteText ? { quoteText } : {}) }
+        : undefined;
+    const payload: ReplyPayload = {
+      text: content,
+      ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+      ...(asVoice === true ? { audioAsVoice: true } : {}),
+      ...(asVideoNote ? { videoAsNote: true } : {}),
+      ...(location ? { location } : {}),
+      ...(pin ? { delivery: { pin } } : {}),
+      ...(telegramData ? { channelData: { telegram: telegramData } } : {}),
+    };
     const mediaAccess =
       options?.mediaAccess ??
       (options?.mediaLocalRoots || options?.mediaReadFile
@@ -571,7 +528,7 @@ export async function handleTelegramAction(
       cfg,
       channel: "telegram",
       to,
-      accountId: accountId ?? undefined,
+      accountId,
       payloads: [payload],
       ...(options?.reply
         ? { reply: options.reply }
@@ -605,13 +562,15 @@ export async function handleTelegramAction(
       // Hook diagnostics remain private; only the durable owner's bounded reason crosses here.
       return jsonResult({ status: "suppressed", reason: durableResult.reason });
     }
-    const result = getLastDurableTelegramActionResult(durableResult);
+    const result = durableResult.results.at(-1);
+    const receipt = durableResult.receipt;
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
       ok: true,
-      messageId: result.messageId,
-      chatId: result.chatId,
-      receipt: result.receipt,
+      messageId:
+        result?.messageId ?? receipt.primaryPlatformMessageId ?? receipt.platformMessageIds.at(-1),
+      chatId: result?.target?.kind === "chat" ? result.target.id : undefined,
+      receipt: { threadId: receipt.threadId, replyToId: receipt.replyToId },
       ...buildTelegramControlDegradation(droppedControls, Boolean(content.trim())),
     });
   }
@@ -663,18 +622,16 @@ export async function handleTelegramAction(
         question,
         options: answers,
         maxSelections: resolvePollMaxSelections(answers.length, allowMultiselect ?? false),
-        durationSeconds: durationSeconds ?? undefined,
-        durationHours: durationHours ?? undefined,
+        durationSeconds,
+        durationHours,
       },
       {
-        cfg,
+        ...apiOptions,
         token,
-        accountId: accountId ?? undefined,
-        replyToMessageId: replyToMessageId ?? undefined,
-        messageThreadId: messageThreadId ?? undefined,
-        isAnonymous: isAnonymous ?? undefined,
-        silent: silent ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
+        replyToMessageId,
+        messageThreadId,
+        isAnonymous,
+        silent,
       },
     );
     notifyVisibleOutboundSuccess(to, messageThreadId);
@@ -708,9 +665,7 @@ export async function handleTelegramAction(
     });
     if (action === "deleteMessage") {
       const result = await deleteMessageTelegram(authorizedChatId, messageId, {
-        cfg,
-        accountId: accountId ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
+        ...apiOptions,
         assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       });
       if (!result.ok) {
@@ -753,7 +708,7 @@ export async function handleTelegramAction(
     if (buttons !== undefined) {
       const inlineButtonsScope = resolveTelegramInlineButtonsScope({
         cfg,
-        accountId: accountId ?? undefined,
+        accountId,
       });
       if (inlineButtonsScope === "off") {
         throw new Error(
@@ -764,10 +719,8 @@ export async function handleTelegramAction(
     const token = requireToken();
     if (content == null && caption == null && buttons !== undefined) {
       const result = await editMessageReplyMarkupTelegram(authorizedChatId, messageId, buttons, {
-        cfg,
+        ...apiOptions,
         token,
-        accountId: accountId ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
         assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       });
       return jsonResult({
@@ -785,9 +738,8 @@ export async function handleTelegramAction(
         ? progressPreview.text.replaceAll("<br>", "\n")
         : (progressPreview?.text ?? caption ?? content ?? ""),
       {
-        cfg,
+        ...apiOptions,
         token,
-        accountId: accountId ?? undefined,
         buttons,
         editMode: progressPreview ? "text" : caption != null ? "caption" : "auto",
         ...(progressPreview
@@ -796,7 +748,6 @@ export async function handleTelegramAction(
               richMessage: progressPreview.richMessage,
             }
           : {}),
-        gatewayClientScopes: options?.gatewayClientScopes,
         assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
       },
     );
@@ -825,12 +776,10 @@ export async function handleTelegramAction(
     const messageThreadId = readTelegramThreadId(params);
     const token = requireToken();
     const result = await sendStickerTelegram(to, fileId, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
-      replyToMessageId: replyToMessageId ?? undefined,
-      messageThreadId: messageThreadId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
+      replyToMessageId,
+      messageThreadId,
     });
     notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({
@@ -881,12 +830,10 @@ export async function handleTelegramAction(
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = requireToken();
     const result = await createForumTopicTelegram(chatId ?? "", name, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
       iconColor,
-      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
+      iconCustomEmojiId,
     });
     return jsonResult({
       ok: true,
@@ -909,12 +856,10 @@ export async function handleTelegramAction(
     const iconCustomEmojiId = readStringParam(params, "iconCustomEmojiId");
     const token = requireToken();
     const result = await editForumTopicTelegram(chatId ?? "", messageThreadId, {
-      cfg,
+      ...apiOptions,
       token,
-      accountId: accountId ?? undefined,
-      name: name ?? undefined,
-      iconCustomEmojiId: iconCustomEmojiId ?? undefined,
-      gatewayClientScopes: options?.gatewayClientScopes,
+      name,
+      iconCustomEmojiId,
     });
     if (result.chatId) {
       const patch: { name?: string; iconCustomEmojiId?: string } = {};

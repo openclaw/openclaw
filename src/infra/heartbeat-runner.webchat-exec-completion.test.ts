@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -150,97 +151,115 @@ it.each(["automatic", "message_tool"] as const)(
   },
 );
 
-it.each([
-  { target: "last", publishes: true, label: "routeless target:last" },
-  { target: "none", publishes: false, label: "explicit target:none" },
-  { target: "pagerduty", publishes: false, label: "explicit target with no resolvable route" },
-])("$label leaves the completion published: $publishes", async ({ target, publishes }) => {
-  await withProjectionScenario(async (scenario) => {
-    const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
-    if (!heartbeat) {
-      throw new Error("projection scenario heartbeat is missing");
-    }
-    heartbeat.target = target;
-    const marker = `RESOLVER_TARGET_${target.toUpperCase()}`;
-    enqueueSystemEvent(`Exec completed (resolver-proof, code 0) :: ${marker}`, {
-      sessionKey: scenario.sessionKey,
-    });
-    const broadcastMessages: unknown[] = [];
-    const unsubscribe = onSessionTranscriptUpdate((update) => {
-      if (update.sessionKey === scenario.sessionKey && update.message !== undefined) {
-        broadcastMessages.push(update.message);
+type VisibleCompletionCase = NonNullable<Parameters<typeof withProjectionScenario>[1]> & {
+  target?: string;
+  wake?: "manual" | "cron";
+  timeout?: boolean;
+};
+const visibleCompletions: Array<[string, boolean, VisibleCompletionCase]> = [
+  ["routeless target:last", true, { target: "last" }],
+  ["explicit target:none", false, { target: "none" }],
+  ["unresolved explicit target", false, { target: "pagerduty" }],
+  ["manual wake", true, { wake: "manual" }],
+  ["cron wake", true, { wake: "cron" }],
+  [
+    "unopened spawned dashboard",
+    true,
+    {
+      sessionKey: "agent:main:dashboard:spawned-completion",
+      entry: { createdVia: "spawn" },
+    },
+  ],
+  [
+    "previously opened internal conversation",
+    true,
+    { entry: { createdVia: "run", lastReadAt: 1 } },
+  ],
+  ["timeout without output", true, { timeout: true }],
+];
+it.each(visibleCompletions)(
+  "publishes completion according to %s",
+  async (_name, publishes, options) => {
+    const { target, wake, timeout } = options;
+    const marker = target
+      ? `RESOLVER_TARGET_${target.toUpperCase()}`
+      : timeout
+        ? "TIMEOUT_REPORTED"
+        : "VISIBLE_COMPLETION";
+    await withProjectionScenario(async (scenario) => {
+      const heartbeat = scenario.cfg.agents?.defaults?.heartbeat;
+      if (!heartbeat) {
+        throw new Error("projection scenario heartbeat is missing");
       }
-    });
-    try {
-      const reply = vi
-        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-        .mockResolvedValue(completionPayload(marker));
-      const result = await runProjectionWake(scenario, reply);
-
-      // The model runs and the completion is consumed in every arm; only the
-      // user-visible publication differs.
-      expect(result.status).toBe("ran");
-      expect(reply).toHaveBeenCalledOnce();
-      expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
-
-      const messages = await readProjectionMessages(scenario);
-      const event = getLastHeartbeatEvent();
-      expect(messages).toHaveLength(publishes ? 1 : 0);
-      expect(broadcastMessages).toHaveLength(publishes ? 1 : 0);
-      if (publishes) {
+      if (target) {
+        heartbeat.target = target;
+      }
+      enqueueSystemEvent(
+        timeout
+          ? appendExecTimeoutRetryGuidance(
+              "Exec failed (timeout-proof, signal SIGTERM)",
+              "overall-timeout",
+            )
+          : `Exec completed (visible-proof, code 0) :: ${marker}`,
+        {
+          sessionKey: scenario.sessionKey,
+          ...(timeout ? { contextKey: "exec:timeout-proof" } : {}),
+        },
+      );
+      const broadcastMessages: unknown[] = [];
+      const unsubscribe = onSessionTranscriptUpdate((update) => {
+        if (update.sessionKey === scenario.sessionKey && update.message !== undefined) {
+          broadcastMessages.push(update.message);
+        }
+      });
+      try {
+        const reply = vi
+          .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+          .mockResolvedValue(completionPayload(marker));
+        expect((await runProjectionWake(scenario, reply, wake)).status).toBe("ran");
+        expect(reply).toHaveBeenCalledOnce();
+        expect(reply.mock.calls[0]?.[0]).toMatchObject({
+          From: "heartbeat",
+          To: undefined,
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+        });
+        expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
+        const messages = await readProjectionMessages(scenario);
+        expect(messages).toHaveLength(publishes ? 1 : 0);
+        expect(broadcastMessages).toHaveLength(publishes ? 1 : 0);
         const prompt = reply.mock.calls[0]?.[0].Body;
-        expect(prompt).toContain("requested result not yet delivered");
-        expect(prompt).toContain("duplicate or superseded results");
-        expect(prompt).not.toContain("user delivery is disabled");
-        expect(JSON.stringify(messages[0]?.content)).toContain(marker);
-        expect(event?.status).toBe("sent");
-        expect(event?.reason).toBeUndefined();
-      } else {
-        expect(reply.mock.calls[0]?.[0].Body).toContain("user delivery is disabled");
-        expect(event?.status).toBe("skipped");
-        expect(event?.reason).toBe("target-none");
+        if (target) {
+          const event = getLastHeartbeatEvent();
+          if (publishes) {
+            expect(prompt).toContain("requested result not yet delivered");
+            expect(prompt).toContain("duplicate or superseded results");
+            expect(prompt).not.toContain("user delivery is disabled");
+            expect(JSON.stringify(messages[0]?.content)).toContain(marker);
+            expect(event?.status).toBe("sent");
+            expect(event?.reason).toBeUndefined();
+          } else {
+            expect(prompt).toContain("user delivery is disabled");
+            expect(event?.status).toBe("skipped");
+            expect(event?.reason).toBe("target-none");
+          }
+        } else if (timeout) {
+          expect(prompt).toContain(
+            "Exec failed (timeout-proof, signal SIGTERM) without captured stdout/stderr.",
+          );
+          expect(prompt).toContain("Verify the resulting state before retrying");
+        } else {
+          expect(getLastHeartbeatEvent()?.status).toBe("sent");
+          await runProjectionWake(scenario, reply);
+          expect(reply).toHaveBeenCalledOnce();
+          expect(await readProjectionMessages(scenario)).toHaveLength(1);
+        }
+      } finally {
+        unsubscribe();
       }
-    } finally {
-      unsubscribe();
-    }
-  });
-});
-
-it.each([
-  {
-    name: "queued exec completion inspected by a manual wake",
-    wake: "manual" as const,
+    }, options);
   },
-  {
-    name: "queued exec completion inspected by a cron wake",
-    wake: "cron" as const,
-  },
-  {
-    name: "unopened spawned dashboard",
-    sessionKey: "agent:main:dashboard:spawned-completion",
-    entry: { createdVia: "spawn" as const },
-  },
-  {
-    name: "previously opened internal conversation",
-    entry: { createdVia: "run" as const, lastReadAt: 1 },
-  },
-])("publishes completion once in $name", async (options) => {
-  await withProjectionScenario(async (scenario) => {
-    enqueueSystemEvent("Exec completed (visible-proof, code 0) :: VISIBLE_COMPLETION", {
-      sessionKey: scenario.sessionKey,
-    });
-    const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-      .mockResolvedValue(completionPayload("VISIBLE_COMPLETION"));
-    await runProjectionWake(scenario, reply, "wake" in options ? options.wake : undefined);
-    expect(await readProjectionMessages(scenario)).toHaveLength(1);
-    expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
-    expect(getLastHeartbeatEvent()?.status).toBe("sent");
-    await runProjectionWake(scenario, reply);
-    expect(reply).toHaveBeenCalledOnce();
-    expect(await readProjectionMessages(scenario)).toHaveLength(1);
-  }, options);
-});
+);
 
 it.each([
   { name: "unstamped internal row", entry: { createdVia: undefined } },
@@ -344,24 +363,6 @@ it("consumes only captured occurrences and publishes distinct same-text completi
   });
 });
 
-it("retains the completion occurrence after a failed model turn", async () => {
-  await withProjectionScenario(async (scenario) => {
-    enqueueSystemEvent("Exec completed (failed-turn-proof, code 0) :: RETAIN_EVENT", {
-      sessionKey: scenario.sessionKey,
-    });
-    const pending = peekSystemEventEntries(scenario.sessionKey);
-    const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-      .mockRejectedValue(new Error("injected model failure"));
-    const result = await runProjectionWake(scenario, reply);
-    expect(result.status).toBe("failed");
-    expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual(
-      pending.map((event) => event.id),
-    );
-    expect(await readProjectionMessages(scenario)).toEqual([]);
-  });
-});
-
 it.each([undefined, "[{model}]"])(
   "reconciles an ordinary persisted final with response prefix %s",
   async (responsePrefix) => {
@@ -418,36 +419,47 @@ it.each([undefined, "[{model}]"])(
   },
 );
 
-it("does not let a visible failed turn block the successful completion retry", async () => {
-  await withProjectionScenario(async (scenario) => {
-    enqueueSystemEvent("Exec completed (retry-proof, code 0) :: RECOVERED_COMPLETION", {
-      sessionKey: scenario.sessionKey,
+it.each(["model rejection", "visible tool failure"])(
+  "retains a completion after %s",
+  async (failure) => {
+    await withProjectionScenario(async (scenario) => {
+      enqueueSystemEvent("Exec completed (retry-proof, code 0) :: RECOVERED_COMPLETION", {
+        sessionKey: scenario.sessionKey,
+      });
+      const pending = peekSystemEventEntries(scenario.sessionKey);
+      const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>();
+      if (failure === "model rejection") {
+        reply.mockRejectedValue(new Error("injected model failure"));
+      } else {
+        reply
+          .mockResolvedValueOnce(
+            setReplyPayloadMetadata(
+              { text: "The notification attempt failed.", isError: true },
+              { heartbeatTerminalToolFailure: { toolName: "message" } },
+            ),
+          )
+          .mockResolvedValue(completionPayload("RECOVERED_COMPLETION"));
+      }
+      expect((await runProjectionWake(scenario, reply)).status).toBe("failed");
+      expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual(
+        pending.map((event) => event.id),
+      );
+      if (failure === "model rejection") {
+        expect(await readProjectionMessages(scenario)).toEqual([]);
+      } else {
+        await runProjectionWake(scenario, reply);
+        expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
+        expect(
+          (await readProjectionMessages(scenario)).filter((message) =>
+            JSON.stringify(message?.content).includes("RECOVERED_COMPLETION"),
+          ),
+        ).toHaveLength(1);
+        await runProjectionWake(scenario, reply);
+        expect(reply).toHaveBeenCalledTimes(2);
+      }
     });
-    const pending = peekSystemEventEntries(scenario.sessionKey);
-    const reply = vi
-      .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
-      .mockResolvedValueOnce(
-        setReplyPayloadMetadata(
-          { text: "The notification attempt failed.", isError: true },
-          { heartbeatTerminalToolFailure: { toolName: "message" } },
-        ),
-      )
-      .mockResolvedValue(completionPayload("RECOVERED_COMPLETION"));
-    expect((await runProjectionWake(scenario, reply)).status).toBe("failed");
-    expect(peekSystemEventEntries(scenario.sessionKey).map((event) => event.id)).toEqual(
-      pending.map((event) => event.id),
-    );
-    await runProjectionWake(scenario, reply);
-    expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
-    expect(
-      (await readProjectionMessages(scenario)).filter((message) =>
-        JSON.stringify(message?.content).includes("RECOVERED_COMPLETION"),
-      ),
-    ).toHaveLength(1);
-    await runProjectionWake(scenario, reply);
-    expect(reply).toHaveBeenCalledTimes(2);
-  });
-});
+  },
+);
 
 it("settles an accepted completion before retrying a later queued occurrence", async () => {
   await withProjectionScenario(async (scenario) => {

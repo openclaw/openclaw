@@ -155,11 +155,12 @@ describe("session branch diff stats", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each(["loose", "packed", "detached", "linked"])(
+  it.each(["loose", "packed", "detached", "linked", "enterprise"])(
     "reads %s HEAD and remote refs without probes and preserves checkout context",
     async (layout) => {
       await initializeRepo();
-      await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+      const host = layout === "enterprise" ? "ghe.example.test" : "github.com";
+      await git("remote", "add", "origin", `https://${host}/openclaw/openclaw.git`);
       await trackRemote("main");
       await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
       let cwd = root;
@@ -178,10 +179,11 @@ describe("session branch diff stats", () => {
       try {
         await expect(
           runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).resolves.toEqual({
+          ...(layout === "enterprise" ? { host } : {}),
           owner: "openclaw",
           repo: "openclaw",
           root: cwd,
@@ -203,7 +205,7 @@ describe("session branch diff stats", () => {
         reads.mockClear();
         expect(
           await runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).toMatchObject({ defaultBranch: "release" });
@@ -212,7 +214,7 @@ describe("session branch diff stats", () => {
         reads.mockClear();
         expect(
           await runGitReadOperation(
-            { type: "checkout.context", input: { root: cwd } },
+            { type: "checkout.context", input: { root: cwd, githubHost: host } },
             { refresh: true },
           ),
         ).not.toHaveProperty("defaultBranch");
@@ -461,7 +463,120 @@ describe("session branch diff stats", () => {
     },
   );
 
-  it("refreshes staged edits immediately and unstaged edits on activity or the slow fallback", async () => {
+  it("keeps PR facts when unrelated snapshot refs change or refs are packed", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    await git("remote", "add", "origin", "https://github.com/openclaw/openclaw.git");
+    await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+    const fetchImpl = routedFetch([
+      { match: "/pulls?head=", response: () => githubJson([]) },
+      { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
+    ]);
+    const load = () =>
+      loadControlUiSessionPullRequests(
+        { sessionKey: "agent:main:snapshot-refs" },
+        { fetchImpl, resolveGitRoot: async () => root },
+      );
+    const initial = await load();
+    expect(initial.branch).toMatchObject({ additions: 1, changedFiles: 1 });
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    try {
+      await git("update-ref", "refs/openclaw/snapshots/unrelated", "HEAD");
+      expect(await load()).toEqual(initial);
+      expect(reads.mock.calls.length).toBe(0);
+      await git("pack-refs", "--all", "--prune");
+      expect(await load()).toEqual(initial);
+      expect(reads.mock.calls.length).toBe(0);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
+  it.each(["shallow", "grafts", "loose replacement", "packed replacement"])(
+    "refreshes unchanged tips when %s changes their ancestry or diff",
+    async (layout) => {
+      await initializeFeatureWork({ trackFeature: true });
+      const read = () =>
+        runGitReadOperation(
+          {
+            type: "pull-request.branch-facts",
+            input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+          },
+          { refresh: true },
+        );
+      const initial = await read();
+      expect(initial).toMatchObject({ stats: { additions: 1, changedFiles: 1 } });
+      if (layout === "shallow" || layout === "grafts") {
+        const boundary = path.join(root, ".git", layout === "shallow" ? "shallow" : "info/grafts");
+        await fs.writeFile(boundary, `${await resolveRevision("HEAD")}\n`);
+        expect(await read()).toEqual({ creatable: true, stats: null });
+        await fs.unlink(boundary);
+      } else {
+        const baseTree = await resolveRevision("main^{tree}");
+        await git("replace", baseTree, await resolveRevision("HEAD^{tree}"));
+        if (layout === "packed replacement") {
+          await git("pack-refs", "--all", "--prune");
+        }
+        expect(await read()).toMatchObject({ stats: { additions: 0, changedFiles: 0 } });
+        await git("replace", "--delete", baseTree);
+      }
+      expect(await read()).toEqual(initial);
+    },
+  );
+
+  it("refreshes stats when only a symbolic replacement ref's target advances", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    const baseTree = await resolveRevision("main^{tree}");
+    const featureTree = await resolveRevision("HEAD^{tree}");
+    await git("checkout", "-b", "replacement-target");
+    await appendCommit("a.txt", "three\n", "replacement tree");
+    const replacementTree = await resolveRevision("HEAD^{tree}");
+    await git("checkout", "feature");
+    const target = "refs/tags/replacement-tree";
+    const replacement = `refs/replace/${baseTree}`;
+    await git("update-ref", target, featureTree);
+    await git("symbolic-ref", replacement, target);
+    const read = () =>
+      runGitReadOperation(
+        {
+          type: "pull-request.branch-facts",
+          input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+        },
+        { refresh: true },
+      );
+    expect(await read()).toMatchObject({ stats: { additions: 0, deletions: 0, changedFiles: 0 } });
+    await git("update-ref", target, replacementTree);
+    expect(await read()).toMatchObject({ stats: { additions: 0, deletions: 1, changedFiles: 1 } });
+    await git("symbolic-ref", "--delete", replacement);
+    expect(await read()).toMatchObject({ stats: { additions: 1, deletions: 0, changedFiles: 1 } });
+  });
+
+  it("refreshes staged removals from an alternate index", async () => {
+    await initializeFeatureWork({ trackFeature: true });
+    const alternateIndex = path.join(root, ".git", "alternate-index");
+    await fs.copyFile(path.join(root, ".git", "index"), alternateIndex);
+    vi.stubEnv("GIT_INDEX_FILE", alternateIndex);
+    const read = () =>
+      runGitReadOperation(
+        {
+          type: "pull-request.branch-facts",
+          input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [] },
+        },
+        { refresh: true },
+      );
+    try {
+      expect(await read()).toMatchObject({
+        stats: { additions: 1, deletions: 0, changedFiles: 1 },
+      });
+      await git("rm", "--cached", "a.txt");
+      expect(await read()).toMatchObject({
+        stats: { additions: 2, deletions: 1, changedFiles: 2 },
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("refreshes staged edits immediately and unstaged edits on the slow fallback", async () => {
     await initializeFeatureBranch();
     await trackRemote("feature");
     const operation = {
@@ -478,10 +593,13 @@ describe("session branch diff stats", () => {
       expect(await runGitReadOperation(operation)).toBeUndefined();
       expect(reads.mock.calls.length).toBe(0);
       await appendFile("a.txt", "pending\n");
-      expect(await runGitReadOperation(operation, { refresh: true })).toMatchObject({
+      expect(await runGitReadOperation(operation, { refresh: true })).toBeUndefined();
+      expect(reads.mock.calls.length).toBe(0);
+      await git("add", "a.txt");
+      expect(await runGitReadOperation(operation)).toMatchObject({
         stats: { additions: 1, changedFiles: 1 },
       });
-      expect(reads.mock.calls.length).toBe(2);
+      expect(reads).toHaveBeenCalled();
       await writeFile("new.txt", "untracked\n");
       now += 300_000;
       expect(await runGitReadOperation(operation)).toMatchObject({
@@ -497,6 +615,32 @@ describe("session branch diff stats", () => {
       clock.mockRestore();
     }
   });
+
+  it.each([true, false])(
+    "refreshes stat-dirty binary files only in an owned checkout (owned=%s)",
+    async (refreshIndex) => {
+      await initializeFeatureBranch();
+      await writeFile("image.bin", Buffer.from([0, 1, 2, 3]));
+      await commit("binary fixture", "image.bin");
+      await trackRemote("main");
+      await trackRemote("feature");
+      const indexPath = path.join(root, ".git", "index");
+      const originalIndex = await fs.readFile(indexPath);
+      const tree = await resolveRevision("HEAD^{tree}");
+      await fs.utimes(path.join(root, "image.bin"), new Date(0), new Date(0));
+      const result = await runGitReadOperation({
+        type: "pull-request.branch-facts",
+        input: { root, branch: "feature", defaultBranch: "main", mergedHeads: [], refreshIndex },
+      });
+      if (refreshIndex) {
+        expect(result).toBeUndefined();
+        expect(await fs.readFile(indexPath)).not.toEqual(originalIndex);
+        expect((await git("write-tree")).stdout.trim()).toBe(tree);
+      } else {
+        expect(await fs.readFile(indexPath)).toEqual(originalIndex);
+      }
+    },
+  );
 
   it("reports local changes without createUrl until the branch exists on origin", async () => {
     await initializeFeatureBranch();

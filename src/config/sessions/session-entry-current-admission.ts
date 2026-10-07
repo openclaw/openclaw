@@ -25,6 +25,7 @@ function decodeSessionEntryCurrentFacts(
       subagentRole: value.subagentRole,
       subagentControlScope: value.subagentControlScope,
       inheritedToolPolicyVersion: value.inheritedToolPolicyVersion,
+      inheritedToolPolicySource: value.inheritedToolPolicySource,
       inheritedToolAllow: value.inheritedToolAllow,
       inheritedToolDeny: value.inheritedToolDeny,
     };
@@ -35,6 +36,7 @@ function decodeSessionEntryCurrentFacts(
   }
   return {
     sessionId: value.sessionId,
+    previousSessionId: value.previousSessionId,
     ...(value.archivedAt === undefined ? {} : { archivedAt: value.archivedAt }),
     ...(value.repositoryWorkspaceId === undefined
       ? {}

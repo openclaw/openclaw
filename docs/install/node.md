@@ -27,9 +27,11 @@ recorded in the managed Gateway service, Node on PATH, then nvm, fnm, Volta, and
 Homebrew defaults. Each candidate must pass the same SQLite capability checks as
 normal startup. The first passing runtime retries the original command without
 prompting, including non-interactive Doctor commands launched by older updaters.
-Arguments, working directory, environment, standard streams, and exit status are
-preserved. Commands with an exact process-identity requirement cannot use this
-recovery.
+Arguments, working directory, standard streams, and exit status are preserved.
+The selected Node directory is prepended to the child process's PATH so package
+managers and lifecycle scripts use the compatible runtime too. Other environment
+settings, including `npm_config_node`, are preserved. Commands with an exact
+process-identity requirement cannot use this recovery.
 
 Runtime discovery uses the environment inherited when the CLI starts, before
 OpenClaw loads any `.env` file. Configure version-manager roots in your shell environment;
@@ -50,7 +52,7 @@ byte-order marks. If the current Node build cannot decode a service script safel
 OpenClaw prints the code page and continues searching other sources. Unsupported
 OEM pages such as CP850 are skipped rather than guessed. CP949 is also skipped:
 Node's ICU `euc-kr` decoder silently misdecodes UHC extension characters. Neither
-case probes the service executable; recovery continues with PATH and the other
+case checks the service executable; recovery continues with PATH and the other
 available runtime sources.
 
 If none is available and you are in an interactive terminal, the CLI offers:
@@ -157,6 +159,13 @@ fnm use 26
 </Accordion>
 
 ## Troubleshooting
+
+### Homebrew upgrades while the Gateway is running
+
+If Homebrew removes the running Gateway's Node executable, command relays and
+the spawn broker use the formula's available stable Homebrew path for new launches.
+They keep using the original executable while it exists. Restart the Gateway
+after upgrading Node to move the Gateway itself onto the new runtime.
 
 ### `openclaw: command not found`
 

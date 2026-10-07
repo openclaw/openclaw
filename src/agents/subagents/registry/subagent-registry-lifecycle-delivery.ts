@@ -8,7 +8,6 @@ import {
   getGatewayContextResolver,
   withPluginRuntimeGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import {
@@ -18,12 +17,12 @@ import {
 import { isSilentAgentReplyText } from "../../embedded-agent-runner/message-visibility.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
+import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner.js";
 import {
   ensureCompletionState,
   ensureDeliveryState,
   loadPendingFinalDeliveryPayload,
 } from "./subagent-delivery-state.js";
-import type { SubagentLifecycleEndedReason } from "./subagent-lifecycle-events.js";
 import { capFrozenResultText } from "./subagent-registry-helpers.js";
 import type {
   SubagentLifecycleCommonContext,
@@ -57,7 +56,7 @@ export const formatAnnounceDeliveryError = (delivery: SubagentAnnounceDeliveryRe
 export const recordAnnounceDeliveryResult = (
   entry: SubagentRunRecord,
   delivery: SubagentAnnounceDeliveryResult,
-  runs?: ReadonlyMap<string, SubagentRunRecord>,
+  runs: ReadonlyMap<string, SubagentRunRecord>,
 ) => {
   const deliveryState = ensureDeliveryState(entry);
   if (typeof delivery.enqueuedAt === "number") {
@@ -86,7 +85,7 @@ export const recordAnnounceDeliveryResult = (
       delivery.requesterVisibleFinalDelivered &&
       requesterTurnRunId
     ) {
-      const siblings = [...(runs?.values() ?? [])].filter(
+      const siblings = [...runs.values()].filter(
         (sibling) =>
           sibling.requesterSessionKey === entry.requesterSessionKey &&
           sibling.requesterTurnRunId === requesterTurnRunId &&
@@ -217,7 +216,6 @@ export const captureSubagentRunResult = async (
     const current = getCurrentSubagentRunOwner(params.runs, entry);
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
       current.pauseReason !== "sessions_yield" &&
       !context.newerGenerationOwnsSession(current)
     );
@@ -232,7 +230,8 @@ export const captureSubagentRunResult = async (
   try {
     const transcriptTarget = entry.execution.transcriptTarget;
     const agentId =
-      transcriptTarget?.agentId ?? resolveAgentIdFromSessionKey(entry.childSessionKey);
+      transcriptTarget?.agentId ??
+      resolveSubagentChildSessionOwner(entry, params.getRuntimeConfig()).agentId;
     const sessionKey = transcriptTarget?.sessionKey ?? entry.childSessionKey;
     const configuredStorePath = agentId
       ? (transcriptTarget?.storePath ??
@@ -327,7 +326,6 @@ export const refreshFrozenResultFromSession = async (
   const previousCapturedAt = entry.completion?.capturedAt;
   const isCurrent = (current = getCurrentSubagentRunOwner(params.runs, entry)) =>
     current !== undefined &&
-    isSameSubagentRunOwner(current, entry) &&
     current.pauseReason !== "sessions_yield" &&
     current.cleanupCompletedAt === undefined &&
     current.completion?.resultText === previousResultText &&
@@ -378,24 +376,6 @@ export const refreshFrozenResultFromSession = async (
   return true;
 };
 
-export const emitCompletionEndedHookIfNeeded = async (
-  params: SubagentLifecycleOptions,
-  entry: SubagentRunRecord,
-  reason: SubagentLifecycleEndedReason,
-  isCurrent?: () => boolean,
-  prepareCurrent?: () => Promise<boolean>,
-) => {
-  if (params.shouldEmitEndedHookForRun({ entry, reason })) {
-    await params.emitSubagentEndedHookForRun({
-      entry,
-      reason,
-      sendFarewell: true,
-      isCurrent,
-      prepareCurrent,
-    });
-  }
-};
-
 export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error?: string }) => {
   const now = Date.now();
   const payload: PendingFinalDeliveryPayload = loadPendingFinalDeliveryPayload(args.entry);
@@ -407,23 +387,4 @@ export const markPendingFinalDelivery = (args: { entry: SubagentRunRecord; error
   delivery.attemptCount = (delivery.attemptCount ?? 0) + 1;
   delivery.lastError = args.error ?? null;
   delivery.payload = payload;
-};
-
-export const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
-  const delivery = entry.delivery;
-  if (
-    !delivery?.payload ||
-    delivery.status === "delivered" ||
-    typeof delivery.announcedAt === "number"
-  ) {
-    return false;
-  }
-  delivery.payload = {
-    ...delivery.payload,
-    startedAt: entry.execution.startedAt,
-    endedAt: entry.execution.endedAt,
-    outcome: entry.execution.outcome,
-    terminalReply: entry.completion?.terminalReply,
-  };
-  return true;
 };

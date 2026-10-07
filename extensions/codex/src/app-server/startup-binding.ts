@@ -1,7 +1,3 @@
-/**
- * Guards Codex app-server thread reuse during startup by rotating bindings when
- * native transcripts exceed byte or token budgets.
- */
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -19,6 +15,7 @@ import { resolveProjectionPromptBudgetTokens } from "./context-engine-projection
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
+  type CodexBindingAuthority,
   type CodexAppServerBindingIdentity,
   type CodexAppServerBindingStore,
   type CodexAppServerThreadBinding,
@@ -116,12 +113,7 @@ async function listCodexAppServerRolloutFilesForThread(
     }
   }
   const files: CodexAppServerRolloutFile[] = [];
-  const visited = new Set<string>();
-  for (const root of roots) {
-    if (visited.has(root)) {
-      continue;
-    }
-    visited.add(root);
+  for (const root of new Set(roots)) {
     const stack = [root];
     while (stack.length > 0) {
       const dir = stack.pop();
@@ -271,12 +263,6 @@ function readCodexAppServerRolloutTokenSnapshotLine(
   }
 }
 
-function readCompactionConfig(config: EmbeddedRunAttemptParams["config"] | undefined) {
-  return isJsonObject(config?.agents?.defaults?.compaction)
-    ? config.agents.defaults.compaction
-    : undefined;
-}
-
 function resolveCodexAppServerNativeThreadTokenFuse(params: {
   modelContextWindow: number | undefined;
   reserveTokens: number;
@@ -297,19 +283,14 @@ function resolveCodexAppServerNativeThreadTokenFuse(params: {
   return Math.max(1, promptBudget - projectedTurnTokens);
 }
 
-function maxFiniteNumber(values: Array<number | undefined>): number | undefined {
-  const nums = values.filter(
-    (value): value is number => typeof value === "number" && Number.isFinite(value),
-  );
-  if (nums.length === 0) {
-    return undefined;
-  }
-  return Math.max(...nums);
+function maxDefinedNumber(values: Array<number | undefined>): number | undefined {
+  const nums = values.filter((value) => value !== undefined);
+  return nums.length ? Math.max(...nums) : undefined;
 }
 
-/** Clears and drops a binding when the native Codex thread is too large to resume safely. */
 export async function rotateOversizedCodexAppServerStartupBinding(params: {
   assertCurrent?: () => void;
+  authority?: CodexBindingAuthority;
   binding: CodexAppServerThreadBinding | undefined;
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
@@ -332,13 +313,27 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
   if (binding.connectionScope === "supervision") {
     return { binding };
   }
+  const clearBinding = async () => {
+    const cleared = await params.bindingStore.mutate(
+      params.identity,
+      { kind: "clear", threadId: binding.threadId, clientId: binding.clientId },
+      params.assertCurrent,
+      params.authority,
+    );
+    if (!cleared) {
+      throw new Error(
+        "Codex startup binding changed during rotation; retry with its current owner.",
+      );
+    }
+    return { binding: undefined };
+  };
   const rolloutFiles = await listCodexAppServerRolloutFilesForThread(
     params.agentDir,
     binding.threadId,
     params.codexHome,
     binding.rolloutPath,
   );
-  const compaction = readCompactionConfig(params.config);
+  const compaction = params.config?.agents?.defaults?.compaction;
   const maxBytes = parseCodexAppServerByteLimit(compaction?.maxActiveTranscriptBytes);
   const shouldDeferByteGuard =
     maxBytes !== undefined &&
@@ -375,15 +370,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
           files: oversizedFiles.map((file) => ({ path: file.path, bytes: file.bytes })),
         },
       );
-      await params.bindingStore.mutate(
-        params.identity,
-        {
-          kind: "clear",
-          threadId: binding.threadId,
-        },
-        params.assertCurrent,
-      );
-      return { binding: undefined };
+      return await clearBinding();
     }
   }
   const nativeTokenSnapshots = await Promise.all(
@@ -391,10 +378,10 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
       readCodexAppServerRolloutTokenSnapshot(file.path, file.handle),
     ),
   );
-  const nativeTokens = maxFiniteNumber(
+  const nativeTokens = maxDefinedNumber(
     nativeTokenSnapshots.map((snapshot) => snapshot?.totalTokens),
   );
-  const nativeModelContextWindow = maxFiniteNumber(
+  const nativeModelContextWindow = maxDefinedNumber(
     nativeTokenSnapshots.map((snapshot) => snapshot?.modelContextWindow),
   );
   const reserveTokens = CODEX_APP_SERVER_NATIVE_THREAD_DEFAULT_RESERVE_TOKENS;
@@ -420,15 +407,7 @@ export async function rotateOversizedCodexAppServerStartupBinding(params: {
         projectedTurnTokens: params.projectedTurnTokens,
       },
     );
-    await params.bindingStore.mutate(
-      params.identity,
-      {
-        kind: "clear",
-        threadId: binding.threadId,
-      },
-      params.assertCurrent,
-    );
-    return { binding: undefined };
+    return await clearBinding();
   }
   return {
     binding,

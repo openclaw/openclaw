@@ -50,18 +50,6 @@ type QaRuntimeParitySuiteScenario = QaReportScenario & {
   runtimeParity?: RuntimeParityResult;
 };
 
-type QaAgenticParityMetrics = {
-  totalScenarios: number;
-  passedScenarios: number;
-  failedScenarios: number;
-  completionRate: number;
-  unintendedStopCount: number;
-  unintendedStopRate: number;
-  validToolCallCount: number;
-  validToolCallRate: number;
-  fakeSuccessCount: number;
-};
-
 type QaAgenticParityScenarioComparison = {
   name: string;
   candidateStatus: "pass" | "fail" | "skip" | "missing";
@@ -70,17 +58,7 @@ type QaAgenticParityScenarioComparison = {
   baselineDetails?: string;
 };
 
-type QaAgenticParityComparison = {
-  candidateLabel: string;
-  baselineLabel: string;
-  comparedAt: string;
-  candidateMetrics: QaAgenticParityMetrics;
-  baselineMetrics: QaAgenticParityMetrics;
-  scenarioComparisons: QaAgenticParityScenarioComparison[];
-  pass: boolean;
-  failures: string[];
-  notes: string[];
-};
+type QaAgenticParityComparison = ReturnType<typeof buildQaAgenticParityComparison>;
 
 const UNINTENDED_STOP_PATTERNS = [
   /incomplete turn/i,
@@ -135,7 +113,7 @@ function scenarioHasRuntimeToolCallEvidence(scenario: QaRuntimeParitySuiteScenar
 function computeQaAgenticParityMetrics(
   summary: QaParitySuiteSummary,
   parityTitleSet: ReadonlySet<string>,
-): QaAgenticParityMetrics {
+) {
   const scenarios = summary.scenarios.filter((scenario) => parityTitleSet.has(scenario.name));
   const toolBackedTitleSet: ReadonlySet<string> = new Set(
     QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
@@ -182,10 +160,6 @@ function computeQaAgenticParityMetrics(
 
 function formatPercent(value: number) {
   return `${(value * 100).toFixed(1)}%`;
-}
-
-function isLiveProviderMode(providerMode: string | undefined) {
-  return providerMode?.startsWith("live-") === true;
 }
 
 function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
@@ -292,7 +266,7 @@ export function buildQaAgenticParityComparison(params: {
   candidateSummary: QaParitySuiteSummary;
   baselineSummary: QaParitySuiteSummary;
   comparedAt?: string;
-}): QaAgenticParityComparison {
+}) {
   verifySummaryLabelMatch({
     summary: params.candidateSummary,
     label: params.candidateLabel,
@@ -342,15 +316,12 @@ export function buildQaAgenticParityComparison(params: {
     });
 
   const failures: string[] = [];
-  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) => {
-    const candidate = candidateByName.get(name);
-    const baseline = baselineByName.get(name);
-    return {
-      name,
-      candidateStatus: requiredCoverageStatus(candidate),
-      baselineStatus: requiredCoverageStatus(baseline),
-    };
-  });
+  const comparisonByName = new Map(
+    scenarioComparisons.map((scenario) => [scenario.name, scenario]),
+  );
+  const requiredScenarioStatuses = QA_AGENTIC_PARITY_SCENARIO_TITLES.map((name) =>
+    comparisonByName.get(name)!,
+  );
   const hasCoverageGap = (scenario: QaAgenticParityScenarioComparison) =>
     [scenario.candidateStatus, scenario.baselineStatus].some(
       (status) => status === "missing" || status === "skip",
@@ -474,7 +445,7 @@ export function buildQaRuntimeParityReport(params: {
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
-  const requiresLiveUsage = isLiveProviderMode(providerMode);
+  const requiresLiveUsage = providerMode?.startsWith("live-") === true;
   const driftCounts: Record<RuntimeParityDrift, number> = {
     none: 0,
     "text-only": 0,

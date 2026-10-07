@@ -16,12 +16,7 @@ import {
   recordAggregateTruncation,
 } from "../prompt-cache-observability.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
-import {
-  type getEmbeddedSessionPromptState,
-  type ToolResultPromptProjectionState,
-  hasSessionUserTurnBeenSent,
-  markSessionUserTurnsSent,
-} from "../session-prompt-state.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
 import { snapshotRecentMessages } from "./attempt-context-summary.js";
 import {
@@ -64,7 +59,7 @@ type SteeringLease = {
   isCurrent: () => boolean;
 };
 
-type TrajectoryRecorder = ReturnType<typeof createTrajectoryRuntimeRecorder>;
+type TrajectoryRecorder = Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
 
 export async function submitEmbeddedAttemptPrompt(input: {
   attempt: Pick<
@@ -101,7 +96,6 @@ export async function submitEmbeddedAttemptPrompt(input: {
   promptActiveSession: PromptActiveSession;
   runtimeContextMessage?: RuntimeContextCustomMessage;
   runtimeOnly: boolean;
-  sessionPromptState: ReturnType<typeof getEmbeddedSessionPromptState>;
   systemPrompt: string;
   toolResultAggregateMaxChars: number;
   toolResultMaxChars: number;
@@ -251,11 +245,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
         }
         // Mark the current turn sent at provider dispatch so late media appends
         // instead of rewriting its prompt-cache slot (#99495).
-        markSessionUserTurnsSent(input.sessionPromptState, providerMessages);
         const recorder = attempt.userTurnTranscriptRecorder;
+        const idempotencyKey = recorder?.message?.idempotencyKey;
         if (
           recorder &&
-          hasSessionUserTurnBeenSent(input.sessionPromptState, recorder.message) !== false
+          (!idempotencyKey ||
+            providerMessages.some(
+              (message) =>
+                message.role === "user" &&
+                "idempotencyKey" in message &&
+                message.idempotencyKey === idempotencyKey,
+            ))
         ) {
           recorder.markSentToProvider?.();
         }

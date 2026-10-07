@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -21,6 +22,50 @@ export type PreparedSqliteAuditRecord = Omit<DiagnosticEventRow, "sequence">;
 const LEGACY_AUDIT_SEQUENCE_BASE = Number.MIN_SAFE_INTEGER;
 
 export const diagnosticReadOperations = {
+  "diagnostic.configAuditFacts": (
+    input: { scope: string; lastSeenAuditSequence: number },
+    db: DatabaseSync,
+  ) => {
+    const store = createSqliteAuditRecordKernel<{ event: string }>(db, {
+      scope: input.scope,
+      maxEntries: 1,
+    });
+    let auditSequence = 0;
+    let beforeSequence: number | undefined;
+    let recentExternalEdit = false;
+    while (true) {
+      const page = store.latest({
+        limit: 5,
+        ...(beforeSequence === undefined ? {} : { beforeSequence }),
+      });
+      if (beforeSequence === undefined) {
+        auditSequence = page[0]?.sequence ?? 0;
+      }
+      if (page.length === 0) {
+        break;
+      }
+      let reachedWatermark = false;
+      for (const entry of page) {
+        if (entry.sequence <= input.lastSeenAuditSequence) {
+          reachedWatermark = true;
+          break;
+        }
+        if (entry.value.event === "config.external") {
+          recentExternalEdit = true;
+        }
+      }
+      if (reachedWatermark || page.length < 5) {
+        break;
+      }
+      const nextBeforeSequence = page.at(-1)?.sequence;
+      if (nextBeforeSequence === undefined || nextBeforeSequence === beforeSequence) {
+        break;
+      }
+      beforeSequence = nextBeforeSequence;
+    }
+    return { type: "diagnostic.configAuditFacts" as const, auditSequence, recentExternalEdit };
+  },
+
   "diagnostic.latest": (
     input: { scope: string; limit: number; beforeSequence?: number },
     db: DatabaseSync,
@@ -147,7 +192,7 @@ function createAuditRecordInsert(database: DatabaseSync) {
   );
 }
 
-const auditRecordInserts = new WeakMap<DatabaseSync, ReturnType<typeof createAuditRecordInsert>>();
+const auditRecordInsert = createSqliteQueryCache(createAuditRecordInsert);
 
 /** Connection-bound operations; mutation callers retain the complete transaction. */
 export function createSqliteAuditRecordKernel<T>(
@@ -157,12 +202,7 @@ export function createSqliteAuditRecordKernel<T>(
   const scope = options.scope;
   const maxEntries = options.maxEntries;
   function insertRecord(record: DiagnosticEventRow): void {
-    let insert = auditRecordInserts.get(database);
-    if (!insert) {
-      insert = createAuditRecordInsert(database);
-      auditRecordInserts.set(database, insert);
-    }
-    insert({ ...record, scope });
+    auditRecordInsert(database)({ ...record, scope });
   }
 
   function upsertPreparedRecord(record: PreparedSqliteAuditRecord): void {

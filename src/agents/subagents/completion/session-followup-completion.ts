@@ -1,5 +1,6 @@
 /** Same-process custody for a followup's result across committed yield cohorts. */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   registerAgentEventLifecycleRotationHandler,
@@ -270,24 +271,17 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
       throw new Error("Followup result already has a consumer.");
     }
     this.taking = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       const reply =
         timeoutMs === undefined
           ? await this.result.promise
-          : await Promise.race([
-              this.result.promise,
-              new Promise<undefined>((resolve) => {
-                timer = setTimeout(() => resolve(undefined), timeoutMs);
-              }),
-            ]);
+          : await raceWithTimeout(this.result.promise, timeoutMs, () => undefined);
       this.assertCurrent();
       if (reply) {
         this.consumed = true;
       }
       return reply;
     } finally {
-      clearTimeout(timer);
       this.taking = false;
     }
   }

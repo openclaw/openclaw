@@ -138,25 +138,12 @@ function stateSkillsAgentParams(state: Pick<SkillsState, "skillsAgentId">): { ag
   return agentId ? { agentId } : {};
 }
 
-type SkillsAgentScope = {
-  agentId: string | null;
-  revision: number;
-};
-
 function captureSkillsAgentScope(
   state: Pick<SkillsState, "skillsAgentId" | "skillsAgentRevision">,
-): SkillsAgentScope {
-  return {
-    agentId: state.skillsAgentId,
-    revision: state.skillsAgentRevision,
-  };
-}
-
-function isSkillsAgentScopeCurrent(
-  state: Pick<SkillsState, "skillsAgentId" | "skillsAgentRevision">,
-  scope: SkillsAgentScope,
-): boolean {
-  return state.skillsAgentId === scope.agentId && state.skillsAgentRevision === scope.revision;
+): () => boolean {
+  const { skillsAgentId, skillsAgentRevision } = state;
+  return () =>
+    state.skillsAgentId === skillsAgentId && state.skillsAgentRevision === skillsAgentRevision;
 }
 
 export function setSkillsAgentId(state: SkillsState, agentId: string | null) {
@@ -217,10 +204,10 @@ export async function loadSkills(
   if (options?.clearMessages && Object.keys(state.skillMessages).length > 0) {
     state.skillMessages = {};
   }
-  const agentScope = captureSkillsAgentScope(state);
+  const isCurrentAgent = captureSkillsAgentScope(state);
   const ownsLoad = () =>
     state.client === client &&
-    isSkillsAgentScopeCurrent(state, agentScope) &&
+    isCurrentAgent() &&
     (!options?.operation || state.skillOperation === options.operation);
   const isCurrent = () => state.connected && ownsLoad();
   state.skillsLoading = true;
@@ -259,10 +246,10 @@ async function loadCurrentSkillsForOperation(
   // Reconciliation can change scope while a status request is pending. Keep
   // the operation owner until one response belongs to the current scope.
   while (ownsSkillOperation(state, client, operation)) {
-    const scope = captureSkillsAgentScope(state);
+    const isCurrentAgent = captureSkillsAgentScope(state);
     await loadSkills(state, { clearMessages: shouldClearMessages, operation });
     shouldClearMessages = false;
-    if (!ownsSkillOperation(state, client, operation) || isSkillsAgentScopeCurrent(state, scope)) {
+    if (!ownsSkillOperation(state, client, operation) || isCurrentAgent()) {
       return;
     }
   }
@@ -326,7 +313,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
   if (!cacheKey) {
     return;
   }
-  const agentScope = captureSkillsAgentScope(state);
+  const isCurrentAgent = captureSkillsAgentScope(state);
   const requestParams = { ...stateSkillsAgentParams(state), skillKey };
   state.skillCardLoadingKey = skillKey;
   const { [skillKey]: _previousError, ...nextErrors } = state.skillCardErrors;
@@ -337,7 +324,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       requestParams,
     );
     if (
-      isSkillsAgentScopeCurrent(state, agentScope) &&
+      isCurrentAgent() &&
       response?.skillKey === skillKey &&
       typeof response.content === "string" &&
       currentSkillCardCacheKey(state, skillKey) === cacheKey
@@ -346,14 +333,14 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
       state.skillCardContentKeys = { ...state.skillCardContentKeys, [skillKey]: cacheKey };
     }
   } catch (err) {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (isCurrentAgent()) {
       state.skillCardErrors = {
         ...state.skillCardErrors,
         [skillKey]: formatUiError(err),
       };
     }
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope) && state.skillCardLoadingKey === skillKey) {
+    if (isCurrentAgent() && state.skillCardLoadingKey === skillKey) {
       state.skillCardLoadingKey = null;
     }
   }
@@ -361,7 +348,7 @@ export async function loadSkillCard(state: SkillsState, skillKey: string) {
 
 export async function loadClawHubSecurityVerdicts(state: SkillsState, report: SkillStatusReport) {
   const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
+  const isCurrentAgent = captureSkillsAgentScope(state);
   if (
     !client ||
     !state.connected ||
@@ -379,7 +366,7 @@ export async function loadClawHubSecurityVerdicts(state: SkillsState, report: Sk
       "skills.securityVerdicts",
       stateSkillsAgentParams(state),
     );
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrentAgent()) {
       return;
     }
     state.clawhubVerdicts = Object.fromEntries(
@@ -394,13 +381,13 @@ export async function loadClawHubSecurityVerdicts(state: SkillsState, report: Sk
       ]),
     );
   } catch (err) {
-    if (!isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (!isCurrentAgent()) {
       return;
     }
     state.clawhubVerdicts = {};
     state.clawhubVerdictsError = formatUiError(err);
   } finally {
-    if (isSkillsAgentScopeCurrent(state, agentScope)) {
+    if (isCurrentAgent()) {
       state.clawhubVerdictsLoading = false;
     }
   }
@@ -422,9 +409,8 @@ async function runSkillMutation(
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
     return;
   }
-  const agentScope = captureSkillsAgentScope(state);
-  const isCurrent = () =>
-    ownsSkillOperation(state, client, operation) && isSkillsAgentScopeCurrent(state, agentScope);
+  const isCurrentAgent = captureSkillsAgentScope(state);
+  const isCurrent = () => ownsSkillOperation(state, client, operation) && isCurrentAgent();
   // All writes share one owner: overlapping refreshes can otherwise publish
   // a stale snapshot after both Gateway mutations have already succeeded.
   state.skillOperation = operation;
@@ -463,10 +449,7 @@ async function runSkillMutation(
       };
     }
   } finally {
-    if (
-      ownsSkillOperation(state, client, operation) &&
-      !isSkillsAgentScopeCurrent(state, agentScope)
-    ) {
+    if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
       await loadCurrentSkillsForOperation(state, client, operation);
     }
     releaseSkillOperation(state, operation);
@@ -551,7 +534,7 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
     return;
   }
   const client = state.client;
-  const agentScope = captureSkillsAgentScope(state);
+  const isCurrentAgent = captureSkillsAgentScope(state);
   state.clawhubDetailRef = ref;
   state.clawhubDetailLoading = true;
   state.clawhubDetailError = null;
@@ -560,7 +543,7 @@ export async function loadClawHubDetail(state: SkillsState, ref: string) {
     state.connected &&
     state.client === client &&
     ref === state.clawhubDetailRef &&
-    isSkillsAgentScopeCurrent(state, agentScope);
+    isCurrentAgent();
   try {
     const res = await client.request<ClawHubSkillDetail>("skills.detail", { slug: ref });
     if (!isCurrent()) {

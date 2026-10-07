@@ -255,7 +255,7 @@ describe("resolveSandboxContext", () => {
                 prune: { idleHours: 0, maxAgeDays: 0 },
               },
             },
-            list: [{ id: "main" }],
+            entries: { main: {} },
           },
         },
         sessionKey,
@@ -284,7 +284,7 @@ describe("resolveSandboxContext", () => {
         defaults: {
           sandbox: { mode: "non-main", scope: "session" },
         },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -485,7 +485,7 @@ describe("resolveSandboxContext", () => {
                   prune: { idleHours: 0, maxAgeDays: 0 },
                 },
               },
-              list: [{ id: "main" }],
+              entries: { main: {} },
             },
           },
           sessionKey,

@@ -4,15 +4,55 @@ import { resolvePairingGatewayUrl } from "./setup-code.js";
 const options = { env: {}, networkInterfaces: () => ({}) };
 
 describe("pairing public origin", () => {
-  it.each([
-    ["https://gateway.example.test", "wss://gateway.example.test"],
-    ["http://127.0.0.1:19821", "ws://127.0.0.1:19821"],
-    ["https://gateway.example.test/openclaw-gw", "wss://gateway.example.test/openclaw-gw"],
-  ])("normalizes gateway.publicOrigin %s", async (publicOrigin, url) => {
-    await expect(
-      resolvePairingGatewayUrl({ gateway: { bind: "loopback", publicOrigin } }, options),
-    ).resolves.toEqual({ url, source: "gateway.publicOrigin" });
-  });
+  type OriginCase = {
+    config: Parameters<typeof resolvePairingGatewayUrl>[0];
+    networkInterfaces?: Parameters<typeof resolvePairingGatewayUrl>[1]["networkInterfaces"];
+    expected: Awaited<ReturnType<typeof resolvePairingGatewayUrl>>;
+  };
+  it.each<OriginCase>([
+    ...[
+      ["https://gateway.example.test", "wss://gateway.example.test"],
+      ["http://127.0.0.1:19821", "ws://127.0.0.1:19821"],
+      ["https://gateway.example.test/openclaw-gw", "wss://gateway.example.test/openclaw-gw"],
+    ].map(([publicOrigin, url]) => ({
+      config: { gateway: { bind: "loopback" as const, publicOrigin } },
+      expected: { url, source: "gateway.publicOrigin" },
+    })),
+    {
+      config: {
+        gateway: { bind: "loopback", publicOrigin: "https://gateway.example.test:notaport" },
+      },
+      expected: { error: "Configured gateway.publicOrigin is invalid." },
+    },
+    {
+      config: {
+        gateway: { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" },
+      },
+      networkInterfaces: () => ({
+        en0: [
+          {
+            address: "192.168.1.20",
+            family: "IPv4",
+            internal: false,
+            netmask: "255.255.255.0",
+            mac: "00:00:00:00:00:00",
+            cidr: "192.168.1.20/24",
+          },
+        ],
+      }),
+      expected: { url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" },
+    },
+  ])(
+    "resolves public-origin fallback: $expected",
+    async ({ config, networkInterfaces, expected }) => {
+      await expect(
+        resolvePairingGatewayUrl(config, {
+          ...options,
+          networkInterfaces: networkInterfaces ?? options.networkInterfaces,
+        }),
+      ).resolves.toEqual(expected);
+    },
+  );
 
   it.each(["serve", "funnel"] as const)(
     "preserves Tailscale %s ahead of publicOrigin for device pairing",
@@ -75,41 +115,4 @@ describe("pairing public origin", () => {
       ).resolves.toEqual({ url, source });
     },
   );
-
-  it("preserves the advertised LAN address when publicOrigin is configured", async () => {
-    await expect(
-      resolvePairingGatewayUrl(
-        { gateway: { bind: "lan", port: 19001, publicOrigin: "https://gateway.example.test" } },
-        {
-          ...options,
-          networkInterfaces: () => ({
-            en0: [
-              {
-                address: "192.168.1.20",
-                family: "IPv4",
-                internal: false,
-                netmask: "255.255.255.0",
-                mac: "00:00:00:00:00:00",
-                cidr: "192.168.1.20/24",
-              },
-            ],
-          }),
-        },
-      ),
-    ).resolves.toEqual({ url: "ws://192.168.1.20:19001", source: "gateway.bind=lan" });
-  });
-
-  it("rejects an invalid publicOrigin when the loopback fallback needs it", async () => {
-    await expect(
-      resolvePairingGatewayUrl(
-        {
-          gateway: {
-            bind: "loopback",
-            publicOrigin: "https://gateway.example.test:notaport",
-          },
-        },
-        options,
-      ),
-    ).resolves.toEqual({ error: "Configured gateway.publicOrigin is invalid." });
-  });
 });

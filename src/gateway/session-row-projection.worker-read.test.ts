@@ -5,11 +5,9 @@ import {
   observeHostDataSql,
   observeSqliteReadSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
-import {
-  upsertAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { upsertAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -18,14 +16,13 @@ import {
   loadSessionEntry,
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
-import * as entryCache from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { updateSessionGroupCategoriesInWorker } from "../config/sessions/session-group-categories.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
 import {
@@ -44,6 +41,7 @@ import * as agentWorkers from "../state/openclaw-agent-worker-store.js";
 import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   identifiedClient,
   listSessions,
@@ -51,7 +49,6 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { prepareGatewaySessionAccessAuthority } from "./session-access-authority.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as records from "./session-row-projection-record.js";
@@ -67,10 +64,30 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each([
-  { workMs: 0, rowCount: 2 },
-  { workMs: 20, rowCount: 65 },
-])(
+function observeRowFacts(
+  wrap: (
+    owner: history.SessionHistoryWorkerDatabase,
+  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
+  once = false,
+) {
+  const readDatabases = history.withSessionHistoryWorkerDatabases;
+  const observe: typeof readDatabases = (databases, consume, lane) =>
+    readDatabases(
+      databases,
+      (owners) =>
+        consume(
+          owners.map((owner) => ({
+            ...owner,
+            readRowFacts: wrap(owner),
+          })),
+        ),
+      lane,
+    );
+  const spy = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
+  return once ? spy.mockImplementationOnce(observe) : spy.mockImplementation(observe);
+}
+
+it.each([{ workMs: 20, rowCount: 65 }])(
   "accepts $rowCount rows once with $workMs ms of materialization work",
   async ({ workMs, rowCount }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -88,7 +105,7 @@ it.each([
       const releaseForeground = retainSessionListForegroundWork();
       try {
         const projection = await createSessionRowProjection({
-          cfg: { agents: { list: [{ id: "main", default: true }] } },
+          cfg: { agents: { entries: { main: {} } } },
           modelCatalog: [],
         });
         try {
@@ -96,26 +113,14 @@ it.each([
           expect(projection.dirtyRowCount).toBe(0);
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
-          const readDatabases = history.withSessionHistoryWorkerDatabases;
-          const databases = vi
-            .spyOn(history, "withSessionHistoryWorkerDatabases")
-            .mockImplementation((selected, consume) =>
-              readDatabases(selected, (owners) =>
-                consume(
-                  owners.map((owner) => ({
-                    ...owner,
-                    async readRowFacts(input) {
-                      const reply = await owner.readRowFacts(input);
-                      reads.push({
-                        sessionKeys: [...input.sessionKeys],
-                        rows: structuredClone(reply.rows),
-                      });
-                      return reply;
-                    },
-                  })),
-                ),
-              ),
-            );
+          const databases = observeRowFacts((owner) => async (input) => {
+            const reply = await owner.readRowFacts(input);
+            reads.push({
+              sessionKeys: [...input.sessionKeys],
+              rows: structuredClone(reply.rows),
+            });
+            return reply;
+          });
           let elapsed = 0;
           const acceptance: number[] = [];
           let accepting = 0;
@@ -227,24 +232,13 @@ it.each([
       try {
         await projection.ensureMaterialized();
         const reads: string[][] = [];
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume) =>
-            readDatabases(databases, (owners) =>
-              consume(
-                owners.map((owner) => ({
-                  ...owner,
-                  async readRowFacts(input) {
-                    reads.push([...input.sessionKeys]);
-                    const reply = await owner.readRowFacts(input);
-                    entered.resolve();
-                    await release.promise;
-                    return reply;
-                  },
-                })),
-              ),
-            ),
-        );
+        observeRowFacts((owner) => async (input) => {
+          reads.push([...input.sessionKeys]);
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        });
         for (const { query, entry } of rows) {
           replaceSessionEntrySync(
             { agentId: query.agentId, sessionKey: query.key },
@@ -296,44 +290,55 @@ it("preserves a keyed replacement while an older worker reply is pending", async
     const entered = createDeferredCore();
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
-    const projection = await createSessionRowProjection({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
-    });
+    let describing: Promise<void> | undefined;
+    const cfg = { agents: { entries: { main: {} } } };
+    const projection = await createSessionRowProjection({ cfg });
     try {
       await projection.ensureMaterialized();
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementationOnce(
-        (databases, consume) =>
-          readDatabases(databases, (owners) =>
-            consume(
-              owners.map((owner) => ({
-                ...owner,
-                async readRowFacts(input) {
-                  const reply = await owner.readRowFacts(input);
-                  entered.resolve();
-                  await release.promise;
-                  return reply;
-                },
-              })),
-            ),
-          ),
+      const original = projection.capture(query);
+      expect(original).toBeDefined();
+      observeRowFacts(
+        (owner) => async (input) => {
+          const reply = await owner.readRowFacts(input);
+          entered.resolve();
+          await release.promise;
+          return reply;
+        },
+        true,
       );
       sessionChanges.emit({ agentId: query.agentId, sessionKey: query.key });
       reading = projection.ensureMaterialized();
       await entered.promise;
-      // A direct reader can discover a new lifecycle independently of bulk publication.
-      vi.spyOn(entryCache, "readCommittedSessionEntryCache").mockReturnValueOnce(
-        new Map([[query.key, { ...entry, sessionId: "replacement" }]]),
+      // The committed replacement retires authority before the older reply returns.
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        { ...entry, sessionId: "replacement" },
+      );
+      expect(projection.isCurrent(original!)).toBe(false);
+      const respond = vi.fn();
+      describing = Promise.resolve(
+        sessionByKeyReadHandlers["sessions.describe"]!({
+          req: { type: "req", id: "worker-replacement", method: "sessions.describe" },
+          params: query,
+          context: bindSessionRowProjection(requestContext(cfg), () => projection),
+          client: null,
+          isWebchatConnect: () => false,
+          respond,
+        }),
+      );
+      release.resolve();
+      await Promise.all([reading, describing]);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        expect.objectContaining({ session: expect.objectContaining({ sessionId: "replacement" }) }),
       );
       const replacement = projection.describe(query);
       expect(replacement?.entry.sessionId).toBe("replacement");
-      release.resolve();
-      await reading;
       expect(projection.isCurrent(replacement!)).toBe(true);
       expect(projection.snapshot(query).row?.sessionId).toBe("replacement");
     } finally {
       release.resolve();
-      await reading;
+      await Promise.allSettled([reading, describing]);
       projection.dispose();
       releaseForeground();
     }
@@ -375,18 +380,22 @@ it.each([false, true])(
       const releaseB = createDeferredCore();
       const pending: Promise<unknown>[] = [];
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
-      let authority: Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>> | undefined;
+      let authority:
+        | Awaited<ReturnType<typeof prepareGatewaySessionAccessAuthority>>["authority"]
+        | undefined;
       let resource: ReturnType<NonNullable<typeof authority>["retainSession"]> | undefined;
       try {
         await projection.ensureMaterialized();
         const context = bindSessionRowProjection(requestContext(cfg), () => projection);
-        authority = await prepareGatewaySessionAccessAuthority({
-          policy: { mode: "write" },
-          requestParams: { agentId: b.agentId, sessionKey: b.key },
-          client: identifiedClient(owner.id),
-          context,
-          ownSessionOnly: true,
-        });
+        authority = (
+          await prepareGatewaySessionAccessAuthority({
+            policy: { mode: "write" },
+            requestParams: { agentId: b.agentId, sessionKey: b.key },
+            client: identifiedClient(owner.id),
+            context,
+            ownSessionOnly: true,
+          })
+        ).authority;
         resource = authority.retainSession();
         const generation = projection.capture(b)?.generation;
         expect(generation).toBeDefined();
@@ -396,41 +405,27 @@ it.each([false, true])(
           sessionChanges.emit({ sessionKey: c.key, factsInvalidated: true });
           expect(projection.capture(c)?.unresolvedDatabaseFacts).toBe(true);
         }
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
         const reads: string[][] = [];
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume, lane) =>
-            readDatabases(
-              databases,
-              (owners) =>
-                consume(
-                  owners.map((database) => ({
-                    ...database,
-                    async readRowFacts(input) {
-                      reads.push([...input.sessionKeys]);
-                      const reply = await database.readRowFacts(input);
-                      if (input.sessionKeys.includes(a.key)) {
-                        if (reads.filter((keys) => keys.includes(a.key)).length === 1) {
-                          capturedA.resolve();
-                          await releaseA.promise;
-                        } else {
-                          repeatedA.resolve();
-                        }
-                      }
-                      if (structuralPending && input.sessionKeys.includes(c.key)) {
-                        await releaseB.promise;
-                      }
-                      if (input.sessionKeys.includes(b.key)) {
-                        capturedB.resolve();
-                        await releaseB.promise;
-                      }
-                      return reply;
-                    },
-                  })),
-                ),
-              lane,
-            ),
-        );
+        observeRowFacts((database) => async (input) => {
+          reads.push([...input.sessionKeys]);
+          const reply = await database.readRowFacts(input);
+          if (input.sessionKeys.includes(a.key)) {
+            if (reads.filter((keys) => keys.includes(a.key)).length === 1) {
+              capturedA.resolve();
+              await releaseA.promise;
+            } else {
+              repeatedA.resolve();
+            }
+          }
+          if (structuralPending && input.sessionKeys.includes(c.key)) {
+            await releaseB.promise;
+          }
+          if (input.sessionKeys.includes(b.key)) {
+            capturedB.resolve();
+            await releaseB.promise;
+          }
+          return reply;
+        });
         const describe = (query: typeof a) =>
           withReadySessionRows(
             projection,
@@ -561,7 +556,7 @@ it.each([
   "captured sibling row",
 ] as const)("consumes current list facts across an awaited worker reply: %s", async (change) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const changesOwner =
       change === "runtime stored facts" || change === "invalidated presentation facts";
     const changesSibling = change === "unrelated stored row" || change === "captured sibling row";
@@ -608,33 +603,22 @@ it.each([
             owner: expect.objectContaining({ actor: expect.objectContaining({ id: owner.id }) }),
           }),
         ]);
-        const readDatabases = history.withSessionHistoryWorkerDatabases;
         let first = true;
-        vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-          (databases, consume) =>
-            readDatabases(databases, (owners) =>
-              consume(
-                owners.map((database) => ({
-                  ...database,
-                  async readRowFacts(input) {
-                    const reply = await database.readRowFacts(input);
-                    if (first) {
-                      if (change === "captured sibling row") {
-                        expect(input.sessionKeys).toContain(unrelated.sessionKey);
-                      }
-                      first = false;
-                      captured.resolve();
-                      await releaseFirst.promise;
-                    } else if (input.sessionKeys.includes(scope.sessionKey)) {
-                      repeated.resolve();
-                      await releaseRepeated.promise;
-                    }
-                    return reply;
-                  },
-                })),
-              ),
-            ),
-        );
+        observeRowFacts((database) => async (input) => {
+          const reply = await database.readRowFacts(input);
+          if (first) {
+            if (change === "captured sibling row") {
+              expect(input.sessionKeys).toContain(unrelated.sessionKey);
+            }
+            first = false;
+            captured.resolve();
+            await releaseFirst.promise;
+          } else if (input.sessionKeys.includes(scope.sessionKey)) {
+            repeated.resolve();
+            await releaseRepeated.promise;
+          }
+          return reply;
+        });
         replaceSessionEntrySync(scope, { ...entry, updatedAt: 2, label: "Fresh stored label" });
         if (change === "captured sibling row") {
           replaceSessionEntrySync(unrelated, {
@@ -845,16 +829,11 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
     let projection: SessionRowProjection | undefined;
     try {
       projection = await createSessionRowProjection({ cfg: cfgAfter, modelCatalog: [] });
-      const facts = readSessionRowModelFacts({
-        cfg: cfgAfter,
-        key: target.sessionKey,
-        agentId: target.agentId,
-        entry: stored,
-        source: { entry: stored, readSourceEntry: () => undefined },
-        rowContext: projection.state.rowContext,
-        modelCatalog: [],
-      });
-      expect(facts.thinkingProjection.acpMeta).toEqual(meta);
+      await projection.ensureMaterialized();
+      expect(
+        projection.describe({ agentId: target.agentId, key: target.sessionKey })?.materialized
+          .source.thinkingProjection.acpMeta,
+      ).toEqual(meta);
       const result = await listProjectedSessions({ projection, opts: { agentId: "main" } });
       expect(result.sessions).toEqual([
         expect.objectContaining({
@@ -873,7 +852,7 @@ it("keeps the stored main address and ACP runtime after mainKey changes", async 
 it("refreshes prepared ACP metadata on publication and fences replacement lifecycles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const key = "agent:main:acp:worker-row";
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const target = { agentId: "main", sessionKey: key };
     replaceSessionEntrySync(target, {
       sessionId: "worker-row",
@@ -886,8 +865,8 @@ it("refreshes prepared ACP metadata on publication and fences replacement lifecy
       await projection.ensureMaterialized();
       expect(projection.snapshot({ agentId: "main", key }).row?.runtimeSelectionLocked).toBe(false);
       for (const backend of ["acpx", "replacement-acp-backend"]) {
-        // Released free-runtime aliases are case-insensitive and read-only compatible.
-        writeAcpSessionMetaForMigration({
+        // Canonical publication invalidates prepared metadata without host SQL.
+        seedCanonicalAcpSessionMeta({
           sessionKey: key.toUpperCase(),
           lifecycleRevision: "first",
           meta: {

@@ -76,9 +76,9 @@ describe("runtime plugin migration ownership", () => {
         const raw = JSON.stringify({ ...config, legacyFixture: { enabled: true } });
         await fs.writeFile(configPath, raw);
         const result = await readConfigPreflightSnapshot({
+          purpose: "doctor",
           allowCurrentPluginMetadata: false,
           includePluginMetadata,
-          preparePluginMetadataSnapshot: false,
           skipPluginValidation: false,
           observe: false,
           ...(facts === "prepared-empty"
@@ -103,6 +103,7 @@ describe("runtime plugin migration ownership", () => {
         configPath,
         JSON.stringify({
           ...config,
+          meta: { migrations: { webhookListeners: true } },
           plugins: { entries: { "missing-fixture": { enabled: true } } },
         }),
       );

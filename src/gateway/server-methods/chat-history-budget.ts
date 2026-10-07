@@ -1,8 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallContentType,
-  isToolErrorOutput,
   isToolResultContentType,
   readToolErrorFlag,
 } from "../../chat/tool-content.js";
@@ -11,15 +9,6 @@ import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js"
 import { jsonUtf8Bytes, jsonUtf8BytesOrInfinity } from "../../infra/json-utf8-bytes.js";
 import { logLargePayload } from "../../logging/diagnostic-payload.js";
 import type { InFlightRunSnapshot } from "../chat-abort.js";
-import {
-  extractChatHistoryBlockText,
-  extractChatToolResultCanvasPreview,
-} from "../chat-display-projection.canvas.js";
-import {
-  hasTranscriptMediaFacts,
-  isAssistantInternalReasoningContentType,
-  isAssistantTextContentType,
-} from "../chat-display-projection.helpers.js";
 import { readChatHistoryMessageId } from "../session-history-tail.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
@@ -103,105 +92,6 @@ export function createChatHistoryDeltaByteCounter(sessionSnapshot: Record<string
   };
 }
 
-function hasHistoryToolPresentation(
-  message: Record<string, unknown>,
-  inheritedError?: boolean,
-): boolean {
-  return Boolean(
-    asOptionalRecord(message.details) ||
-    (readToolErrorFlag(message) ?? inheritedError) === true ||
-    extractChatToolResultCanvasPreview(message),
-  );
-}
-
-function isPlainHistoryToolResult(
-  message: Record<string, unknown>,
-  inheritedError?: boolean,
-): boolean {
-  if (
-    hasHistoryToolPresentation(message, inheritedError) ||
-    (readToolErrorFlag(message) ??
-      inheritedError ??
-      isToolErrorOutput(extractChatHistoryBlockText(message)))
-  ) {
-    return false;
-  }
-  const content = message.content ?? message.text;
-  return (
-    content === undefined ||
-    typeof content === "string" ||
-    (Array.isArray(content) &&
-      content.every((block) => {
-        const entry = asOptionalRecord(block);
-        return isAssistantTextContentType(entry?.type) && typeof entry?.text === "string";
-      }))
-  );
-}
-
-function isChatHistoryActivity(message: unknown): boolean {
-  const entry = asOptionalRecord(message);
-  if (!entry || hasTranscriptMediaFacts(entry) || hasHistoryToolPresentation(entry)) {
-    return false;
-  }
-  const metadata = asOptionalRecord(entry["__openclaw"]);
-  if (
-    metadata?.kind !== undefined ||
-    metadata?.turnBoundary === true ||
-    metadata?.replyToId !== undefined ||
-    metadata?.replyToPreview !== undefined ||
-    entry.openclawDelivery !== undefined ||
-    entry.stopReason === "error"
-  ) {
-    return false;
-  }
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (isToolResultContentType(role) || role === "tool" || role === "function") {
-    return isPlainHistoryToolResult(entry);
-  }
-  if (
-    (role !== "assistant" && role !== "user") ||
-    (typeof entry.text === "string" && entry.text.trim()) ||
-    !Array.isArray(entry.content) ||
-    entry.content.length === 0
-  ) {
-    return false;
-  }
-  // Tool rows can also carry canvas previews, media, or other visible outcomes.
-  // Only known activity without such presentation is eligible for trimming.
-  return entry.content.every((block) => {
-    const content = asOptionalRecord(block);
-    if (!content) {
-      return false;
-    }
-    return isToolResultContentType(content.type)
-      ? isPlainHistoryToolResult(content, readToolErrorFlag(entry))
-      : !hasHistoryToolPresentation(content, readToolErrorFlag(entry)) &&
-          (isToolCallContentType(content.type) ||
-            isAssistantInternalReasoningContentType(content.type));
-  });
-}
-
-export function trimChatHistoryActivity(params: {
-  messages: unknown[];
-  maxBytes: number;
-  byteCounter: ReturnType<typeof createChatHistoryByteCounter>;
-}): unknown[] {
-  const { messages, maxBytes, byteCounter } = params;
-  let bytes = byteCounter.messagesBytes(messages);
-  if (bytes <= maxBytes) {
-    return messages;
-  }
-  let remaining = messages.length;
-  return messages.filter((message) => {
-    if (bytes <= maxBytes || !isChatHistoryActivity(message)) {
-      return true;
-    }
-    bytes -= byteCounter.messageBytes(message) + (remaining > 1 ? 1 : 0);
-    remaining -= 1;
-    return false;
-  });
-}
-
 function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   return {
     role: "assistant",
@@ -210,7 +100,7 @@ function buildChatHistoryUnavailableSentinel(): Record<string, unknown> {
   };
 }
 
-function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
+export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
   const entry = asOptionalRecord(message) ?? {};
   const role = typeof entry.role === "string" ? entry.role : "assistant";
   const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : Date.now();
@@ -256,9 +146,6 @@ export function replaceOversizedChatHistoryMessages(params: {
 }): { messages: unknown[]; replacedCount: number } {
   const { messages, maxSingleMessageBytes } = params;
   const byteCounter = params.byteCounter ?? createChatHistoryByteCounter();
-  if (messages.length === 0) {
-    return { messages, replacedCount: 0 };
-  }
   let replacedCount = 0;
   const next = messages.map((message) => {
     if (byteCounter.messageBytes(message) <= maxSingleMessageBytes) {

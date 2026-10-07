@@ -60,7 +60,9 @@ export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-aut
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
+export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
@@ -201,10 +203,48 @@ export const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
   content: transcriptSchemas.userContent,
   timestamp: Type.Integer({ minimum: 0 }),
+  operatorMessage: Type.Optional(transcriptSchemas.operatorMessage),
 });
+
+export const WorkerRuntimeContextFragmentsSchema = Type.Array(
+  closedObject({
+    kind: Type.Enum(["runtime-instruction", "conversation-data", "heartbeat-outcome"]),
+    text: Type.String(),
+  }),
+);
+
+const workerRuntimeContextFields = {
+  role: Type.Literal("custom"),
+  content: Type.Union([Type.String(), transcriptSchemas.userContent]),
+  display: Type.Literal(false),
+  timestamp: Type.Integer({ minimum: 0 }),
+};
+export const WorkerRuntimeContextMessageSchema = Type.Union([
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.runtime-context"),
+    details: Type.Partial(
+      closedObject({
+        source: Type.Literal("openclaw-runtime-context"),
+        runtimeContextCarrier: Type.Literal(true),
+        fragments: WorkerRuntimeContextFragmentsSchema,
+      }),
+      { anyOf: [{ required: ["source"] }, { required: ["runtimeContextCarrier"] }] },
+    ),
+  }),
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.system-update"),
+    details: closedObject({
+      kind: Type.Enum(["prompt-update", "runtime-context"]),
+      turnScoped: Type.Boolean(),
+    }),
+  }),
+]);
 
 export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptUserMessageSchema,
+  WorkerRuntimeContextMessageSchema,
   transcriptSchemas.contextAssistant,
   transcriptSchemas.toolResult,
 ]);

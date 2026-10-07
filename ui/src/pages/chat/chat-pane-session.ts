@@ -8,10 +8,11 @@ import type {
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
@@ -27,6 +28,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
+import { isPermanentUnreadAckFailure } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -51,6 +53,8 @@ import { scheduleChatScroll } from "./scroll.ts";
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
+  /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
+  private readonly hiddenRunReadRequests = new Map<string, number | null>();
 
   protected secondarySessionReadsReady(explicit = false): boolean {
     const state = this.state;
@@ -121,9 +125,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      !isGatewayMethodAdvertised(
+      !canCallGatewayMethod(
         scope.context.gateway.snapshot,
         SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
       )
     ) {
       if (scope) {
@@ -306,7 +311,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
       this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
-      return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
@@ -324,9 +328,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         listLoading: state.sessionsLoading,
         sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
         session: row,
-      }) ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+      })
     ) {
+      return;
+    }
+    // Hidden runs fold their unread state into this row, even after it was read.
+    this.markHiddenRunsRead(row);
+    if (!unread || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)) {
       return;
     }
     const guardKey = state.sessionKey;
@@ -350,6 +358,56 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
           this.unreadPatchGuard.patchFailed(guardKey, error);
         },
       );
+  }
+
+  private markHiddenRunsRead(parent: GatewaySessionRow) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const runs = collectUnreadHiddenRunRows(state.sessionsResult?.sessions ?? [], parent.key);
+    for (const run of runs) {
+      const revision = run.updatedAt ?? null;
+      // Manual unread markers stay until the run itself is acknowledged.
+      if (
+        run.markedUnreadAt != null ||
+        run.sharingRole === "viewer" ||
+        this.hiddenRunReadRequests.get(run.key) === revision
+      ) {
+        continue;
+      }
+      const agentId = parseAgentSessionKey(run.key)?.agentId ?? resolveChatAgentId(state);
+      const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: run.key, unread: false, agentId },
+      });
+      if (!access.allowed) {
+        continue;
+      }
+      this.hiddenRunReadRequests.set(run.key, revision);
+      const retry = () => {
+        if (this.hiddenRunReadRequests.get(run.key) === revision) {
+          this.hiddenRunReadRequests.delete(run.key);
+        }
+      };
+      // The null expectation lets the Gateway keep a marker set after this snapshot.
+      // Permanent rejections stay latched until the run changes; the capability
+      // reports them once. Transient failures retry on the next read.
+      void this.context.sessions
+        .patch(run.key, { unread: false }, { agentId, expectedMarkedUnreadAt: null })
+        .then(
+          (result) => {
+            if (result === null) {
+              retry();
+            }
+          },
+          (error: unknown) => {
+            if (!isPermanentUnreadAckFailure(error)) {
+              retry();
+            }
+          },
+        );
+    }
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

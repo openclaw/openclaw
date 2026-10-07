@@ -9,18 +9,17 @@ export function renderSkillWorkshopProposalList(params: {
   groups: Array<{ label: string; items: SkillWorkshopProposal[] }>;
   selected: SkillWorkshopProposal | undefined;
   emptyText: string;
-  searchLabel: string;
-  searchPlaceholder: string;
 }) {
   const { props, groups, selected } = params;
   const total = groups.reduce((sum, group) => sum + group.items.length, 0);
+  const searchLabel = t("skillWorkshop.queue.suggestionsLabel");
   return html`
-    <aside class="sw-queue" aria-label=${params.searchLabel}>
+    <aside class="sw-queue" aria-label=${searchLabel}>
       <div class="sw-queue__search">
         <input
           type="search"
-          aria-label=${params.searchLabel}
-          placeholder=${params.searchPlaceholder}
+          aria-label=${searchLabel}
+          placeholder=${t("skillWorkshop.queue.searchSuggestions")}
           .value=${props.query}
           @input=${(event: Event) =>
             // SAFETY: handler is bound on the <input> itself, so currentTarget is that element.

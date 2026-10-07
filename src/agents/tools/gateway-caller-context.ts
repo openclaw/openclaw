@@ -4,6 +4,10 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import type { SessionEntriesCurrentCheck } from "../../config/sessions/session-entry-current.types.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type {
@@ -22,6 +26,7 @@ import {
   getGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  captureAdmittedRunActiveAssertion,
   getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -39,6 +44,9 @@ import {
 } from "../runtime/internal-hooks.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
+
+type ReceiptAuthority = (() => boolean | void) &
+  Pick<SessionSourceAssertion, "prepareSessionSource" | "nativeSource">;
 
 type GatewayToolCallerIdentity = {
   personalToolParticipants?: ReplyTurnParticipants;
@@ -65,7 +73,7 @@ type GatewayToolCallerIdentity = {
   signedAgentRuntimeIdentityToken?: string;
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   /** Synchronous host-owned fence for tool effects and decision receipts. */
-  receiptAuthority?: () => boolean | void;
+  receiptAuthority?: ReceiptAuthority;
   receiptAdmissions?: readonly GatewayToolCallerReceiptAdmission[];
   /** Captured conversation policy for tools delegated through another tool's transport. */
   assertToolAllowed?: (toolName: string) => void;
@@ -157,7 +165,7 @@ function bindGatewayToolContextResolver(
 
 type AdmittedGatewayToolCallerParams = {
   admittedRunContext: AdmittedRunContext;
-  receiptAuthority?: () => boolean | void;
+  receiptAuthority?: ReceiptAuthority;
   receiptAdmission?: GatewayToolCallerReceiptAdmission;
   cronAuthorityCheck?: () => boolean;
   mintCronRequesterGrant?: GatewayToolCallerIdentity["mintCronRequesterGrant"];
@@ -172,25 +180,60 @@ type AdmittedGatewayToolCallerParams = {
 };
 
 function composeReceiptAuthority(
-  ...predicates: Array<(() => boolean | void) | undefined>
-): (() => boolean) | undefined {
+  ...predicates: Array<ReceiptAuthority | undefined>
+): ((() => boolean) & ReceiptAuthority) | undefined {
   const checks = predicates.filter(
-    (predicate, index): predicate is () => boolean | void =>
+    (predicate, index): predicate is ReceiptAuthority =>
       predicate !== undefined && predicates.indexOf(predicate) === index,
   );
   return checks.length === 0
     ? undefined
-    : () => {
-        let active = true;
-        for (const check of checks) {
-          try {
-            active = check() !== false && active;
-          } catch {
-            active = false;
+    : Object.assign(
+        () => {
+          let active = true;
+          for (const check of checks) {
+            try {
+              active = check() !== false && active;
+            } catch {
+              active = false;
+            }
           }
+          return active;
+        },
+        composeSessionSourceAssertion(
+          checks.map((check) => captureGatewayToolReceiptAssertion(check)),
+        ),
+      );
+}
+
+/** Preserve boolean refusal across the receipt owner's prepared assertion. */
+export function captureGatewayToolReceiptAssertion(
+  receipt: ReceiptAuthority,
+  message = "agent tool caller authority is no longer active",
+): SessionSourceAssertion {
+  const assertAllowed = (result: boolean | void) => {
+    if (result === false) {
+      throw new Error(message);
+    }
+  };
+  const prepare = receipt.prepareSessionSource?.bind(receipt);
+  return Object.assign(() => assertAllowed(receipt()), {
+    nativeSource: receipt.nativeSource,
+    ...(prepare
+      ? {
+          async prepareSessionSource() {
+            const prepared = await prepare();
+            const release = prepared.release?.bind(prepared);
+            return {
+              nativeSource: prepared.nativeSource,
+              checks: prepared.checks,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              ...(release ? { release } : {}),
+            };
+          },
         }
-        return active;
-      };
+      : {}),
+  });
 }
 
 /** Builds host-owned Gateway authority from the exact admitted execution. */
@@ -217,9 +260,9 @@ export function createAdmittedGatewayToolCallerIdentity(
       getGatewayContextResolver(params.admittedRunContext),
     ),
     receiptAuthority: composeReceiptAuthority(
-      () =>
-        delegatedAuthority !== undefined &&
-        getAdmittedRunDelegatedAuthority(params.admittedRunContext) === delegatedAuthority,
+      (delegatedAuthority &&
+        captureAdmittedRunActiveAssertion(params.admittedRunContext, delegatedAuthority)) ??
+        (() => false),
       params.receiptAuthority,
     ),
     ...(params.receiptAdmission ? { receiptAdmissions: [params.receiptAdmission] } : {}),
@@ -277,10 +320,10 @@ export function resolveGatewayToolOperatorSelection(): GatewayToolOperatorSelect
       : caller?.operatorAuthority;
   const selection = Object.freeze({
     operatorAuthority,
-    assertCurrent: () => {
-      participant?.assertCurrent();
-      operatorAuthority?.assertCurrent();
-    },
+    assertCurrent: composeSessionSourceAssertion([
+      participant?.assertCurrent,
+      operatorAuthority?.assertCurrent,
+    ]),
   });
   if (caller?.personalToolIdentityScoped) {
     caller.personalToolSelection = selection;
@@ -306,7 +349,7 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolIdentityScoped: true,
       personalToolSelection: Object.freeze({
         operatorAuthority,
-        assertCurrent: () => operatorAuthority?.assertCurrent(),
+        assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
       }),
     },
     run,
@@ -340,10 +383,10 @@ export function resolveGatewayPersonalToolParticipant(
     return (
       participant && {
         ...participant,
-        assertCurrent: () => {
-          registered.assertCurrent();
-          participant.assertCurrent();
-        },
+        assertCurrent: composeSessionSourceAssertion([
+          registered.assertCurrent,
+          participant.assertCurrent,
+        ]),
       }
     );
   }
@@ -351,7 +394,9 @@ export function resolveGatewayPersonalToolParticipant(
 }
 
 /** Capture the admitted run and worker owner, independently of optional audit collection. */
-export function captureGatewayToolCallerAssertion(): ((method?: string) => void) | undefined {
+export function captureGatewayToolCallerAssertion(
+  boundMethod?: string,
+): ((method?: string) => void) | undefined {
   const caller = getGatewayToolCallerIdentity();
   if (!caller?.operationalRunInstance) {
     return undefined;
@@ -361,16 +406,40 @@ export function captureGatewayToolCallerAssertion(): ((method?: string) => void)
   const selection = caller.personalToolIdentityScoped
     ? resolveGatewayToolOperatorSelection()
     : undefined;
-  return (method) => {
-    selection?.assertCurrent();
-    caller.operatorAuthority?.assertCurrent();
-    if (!isCurrent || signals.some((signal) => signal.aborted) || isCurrent() === false) {
-      throw new Error("agent tool caller authority is no longer active");
-    }
+  const assertMethod = (method?: string) => {
     if (method?.startsWith("cron.") && caller.cronAuthorityCheck?.() === false) {
       throw new Error("Automation caller authority is no longer active.");
     }
   };
+  const assertCurrent = composeSessionSourceAssertion(
+    [
+      selection?.assertCurrent,
+      caller.operatorAuthority?.assertCurrent,
+      composeSessionSourceAssertion(
+        isCurrent ? [captureGatewayToolReceiptAssertion(isCurrent)] : [],
+        (assertReceipt) => {
+          try {
+            if (!isCurrent || signals.some((signal) => signal.aborted)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+            assertReceipt();
+          } catch {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
+      ),
+    ],
+    (assertSources) => {
+      assertSources();
+      assertMethod(boundMethod);
+    },
+  );
+  return Object.assign((method = boundMethod) => {
+    assertCurrent();
+    if (method !== boundMethod) {
+      assertMethod(method);
+    }
+  }, assertCurrent);
 }
 
 /** Watch admission preserves opaque lifecycle assertions while moving registered row predicates. */

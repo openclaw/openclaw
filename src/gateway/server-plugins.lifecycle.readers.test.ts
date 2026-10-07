@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as cleanupTimeout from "../plugins/host-hook-cleanup-timeout.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import * as settlement from "../shared/settle-within.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { clearInstanceBindingProbeCoordinators } from "./server-plugins.lifecycle.test-fixtures.js";
 import {
@@ -55,6 +58,9 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
   let held: ReturnType<typeof rpcReq> | undefined;
   let reloading: ReturnType<typeof rpcReq> | undefined;
   const drainObservations: Array<{ mockRestore: () => void }> = [];
+  const deadline = createDeferredCore<false>();
+  const deadlineScope = new AsyncLocalStorage<boolean>();
+  let deadlineObservations = 0;
   try {
     await server.startupSettled;
     socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
@@ -91,9 +97,30 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
         return pending;
       }),
     );
+    // Expire only this drain observation; native Gateway owners keep their clocks.
+    const within = settlement.settlesWithin;
+    const withCleanupDeadline = cleanupTimeout.withPluginHostCleanupTimeout;
+    drainObservations.push(
+      vi.spyOn(settlement, "settlesWithin").mockImplementation((pending, timeoutMs) => {
+        if (!deadlineScope.getStore()) {
+          return within(pending, timeoutMs);
+        }
+        deadlineObservations += 1;
+        expect(timeoutMs).toBeGreaterThan(0);
+        expect(timeoutMs).toBeLessThanOrEqual(60_000);
+        return Promise.race([pending.then(() => true), deadline.promise]);
+      }),
+      vi
+        .spyOn(cleanupTimeout, "withPluginHostCleanupTimeout")
+        .mockImplementation(
+          <T>(label: string, cleanup: () => T | Promise<T>, timeoutMs?: number) =>
+            label === "retained plugin work"
+              ? deadlineScope.run(true, () => withCleanupDeadline(label, cleanup, timeoutMs))
+              : withCleanupDeadline(label, cleanup, timeoutMs),
+        ),
+    );
     held = rpcReq(connected, "instanceBinding.hold", {}, 120_000);
     await entered.promise;
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     let reloadSettled = false;
     reloading = rpcReq(
       connected,
@@ -110,14 +137,16 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     expect(reloadSettled).toBe(false);
     expect(getActivePluginRegistry()).toBe(registry);
     expect(during.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
-    await vi.advanceTimersByTimeAsync(60_000);
-    vi.useRealTimers();
+    expect(deadlineObservations).toBe(1);
+    deadline.resolve(false);
     expect(await reloading).toMatchObject({
       ok: false,
       error: { details: { runtime: { committed: false, phase: "drain" } } },
     });
     expect(getActivePluginRegistry()).toBe(registry);
+    expect(instance.acceptingCalls).toBe(true);
     const after = await reads();
+    expect(after.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
     console.info(
       "PLUGIN_DRAIN_READER_LATENCY " +
         JSON.stringify({
@@ -129,7 +158,7 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     release.resolve();
     expect((await held).ok).toBe(true);
   } finally {
-    vi.useRealTimers();
+    deadline.resolve(false);
     release.resolve();
     await Promise.allSettled([held, reloading]);
     for (const observation of drainObservations) {

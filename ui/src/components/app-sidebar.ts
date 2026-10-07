@@ -81,7 +81,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
-  private readonly people = new SidebarPeopleController(this);
+  readonly people = new SidebarPeopleController(this);
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -522,6 +522,10 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   override render() {
     const sidebarZone = this.reconciledSidebarZone();
+    const entries = sidebarZone.entries.filter(
+      (entry) => entry.type !== "route" || this.sidebarMenus.isRouteEnabled(entry.route),
+    );
+    const showHome = this.sidebarAgentsMode !== "roster";
     return html`
       <aside
         class="sidebar"
@@ -538,10 +542,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(
             this,
             this.sidebarAgentsMode === "roster"
-              ? this.rosterRenderer?.renderSidebarNewSessionMenu(
-                  this,
-                  "sidebar-brand__icon sidebar-brand__header-control sidebar-brand__new-thread",
-                )
+              ? this.rosterRenderer?.renderSidebarNewSessionMenu(this)
               : nothing,
           )}
           <div class="sidebar-shell__content">
@@ -553,7 +554,6 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                 class="sidebar-nav"
                 @contextmenu=${this.sidebarMenus.openCustomizeMenuFromContext}
               >
-                ${renderAppSidebarPagesHead(this)}
                 <div
                   class="nav-section__items"
                   @dragover=${(event: DragEvent) =>
@@ -562,14 +562,15 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                     this.sessionOrganizer.handleSidebarZoneDragLeave(event)}
                   @drop=${(event: DragEvent) => this.sessionOrganizer.handleSidebarZoneDrop(event)}
                 >
-                  ${renderAppSidebarHomeRow(this)}
+                  ${showHome || entries.length === 0 ? renderAppSidebarPagesHead(this, renderAppSidebarHomeRow(this)) : nothing}
                   <openclaw-mcp-app-catalog surface="sidebar"></openclaw-mcp-app-catalog>
-                  ${repeat(sidebarZone.entries, serializeSidebarEntry, (entry) =>
+                  ${repeat(entries, serializeSidebarEntry, (entry, index) =>
                     renderAppSidebarZoneEntry(
                       this,
                       entry,
                       sidebarZone.sessionRows,
                       sidebarZone.pluginTabs,
+                      !showHome && index === 0,
                     ),
                   )}
                 </div>
@@ -589,7 +590,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             }
           </div>
           <div class="sidebar-shell__invite">
-            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite) : nothing}
+            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite, this.context?.theme.resolvedMode ?? "dark") : nothing}
           </div>
           <div class="sidebar-shell__footer">
             ${

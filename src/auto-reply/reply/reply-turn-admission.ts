@@ -1,12 +1,13 @@
+import { addAbortListener } from "node:events";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
-import { isMainRestartRecoveryCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import {
   claimMainSessionRecoveryOwner,
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryPendingTarget,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { beginForegroundSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import {
   isRestartRecoveryTombstone,
@@ -15,6 +16,10 @@ import {
   SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
   SessionRestartRecoveryTombstoneError,
 } from "../../config/sessions/lifecycle.js";
+import {
+  hasMainSessionRecoveryClaim,
+  isMainRestartRecoveryCandidate,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { SessionAdmissionDatabaseClaim } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
@@ -37,6 +42,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   type SessionWorkAdmissionLease,
 } from "../../sessions/session-lifecycle-admission.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   createReplyOperation,
   isReplyRunSuccessorAdmissionBlocked,
@@ -55,13 +61,13 @@ import {
 } from "./reply-run-registry.js";
 import {
   expireVisibleStaleOperation,
+  getAttachedBackend,
   lifecycleAdmissionByOperation,
   resolveVisibleActiveWaitMs,
 } from "./reply-run-registry.state.js";
 import { waitForRestartRecoveryProgress } from "./reply-turn-recovery-wait.js";
 import { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
 
-/** Admission result for a reply turn attempting to own the session run slot. */
 type ReplyTurnAdmission =
   | {
       status: "owned";
@@ -82,12 +88,7 @@ class ReplyOperationChangedDuringAdmissionError extends Error {}
 
 const log = createSubsystemLogger("auto-reply/reply-turn-admission");
 
-async function releaseReplyRecoveryOwner(
-  lease: MainSessionRecoveryOwnerLease | undefined,
-): Promise<MainSessionRecoveryPendingTarget | undefined> {
-  if (!lease) {
-    return undefined;
-  }
+async function releaseReplyRecoveryOwner(lease: MainSessionRecoveryOwnerLease | undefined) {
   try {
     return await releaseMainSessionRecoveryOwner(lease);
   } catch (error) {
@@ -168,10 +169,10 @@ type ReplyTurnAdmissionParams = {
   onLifecycleInterrupt?: () => void;
 };
 
-/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(
   params: ReplyTurnAdmissionParams,
 ): Promise<ReplyTurnAdmission> {
+  const workSignal = getAsyncWorkSignal();
   const activeAtAdmission = replyRunRegistry.get(params.sessionKey);
   const releaseForeground =
     params.kind === "visible"
@@ -417,10 +418,12 @@ export async function admitReplyTurn(
           const shouldClaimRecoveryOwner =
             mayWaitForRecoveryOwner &&
             admittedSessionEntry &&
-            ((admittedSessionEntry.status === "running" &&
-              (admittedSessionEntry.abortedLastRun === true ||
-                (params.kind !== "heartbeat" &&
-                  admittedSessionEntry.restartRecoveryRuns !== undefined))) ||
+            ((hasMainSessionRecoveryClaim(admittedSessionEntry) &&
+              admittedSessionEntry.abortedLastRun === true) ||
+              (params.kind !== "heartbeat" &&
+                admittedSessionEntry.restartRecoveryRuns !== undefined &&
+                (admittedSessionEntry.mainRestartRecovery !== undefined ||
+                  !replyRunRegistry.get(params.sessionKey))) ||
               admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
             isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
           const gatewayContext = resolveGatewayContext?.();
@@ -563,6 +566,36 @@ export async function admitReplyTurn(
         const releaseWorkerDatabaseClaim =
           databaseClaim && "kind" in databaseClaim ? () => databaseClaim.release() : undefined;
         if (releaseWorkerDatabaseClaim) {
+          const admittedOperation = operation;
+          let releasingForRestart = false;
+          const releaseForRestart = (signal: AbortSignal) => {
+            if (releasingForRestart || !isAgentRunRestartAbortReason(signal.reason)) {
+              return;
+            }
+            releasingForRestart = true;
+            const runId = getAttachedBackend(admittedOperation)?.runId ?? "unbound";
+            // Admission's read has settled; model/tool finalization owns no native work here.
+            void releaseWorkerDatabaseClaim().then(
+              () =>
+                log.info(
+                  `lease released: reason=restart-abort runId=${runId} kind=reply-admission`,
+                  { sessionId },
+                ),
+              (error: unknown) =>
+                log.warn(
+                  `failed to release restart-aborted reply database owner: ${formatErrorMessage(error)}`,
+                ),
+            );
+          };
+          // Shutdown can cancel the owning work after terminal settlement freezes reply abort.
+          const restartReleases = [...new Set([operation.abortSignal, workSignal])].flatMap(
+            (signal) => (signal ? [addAbortListener(signal, () => releaseForRestart(signal))] : []),
+          );
+          runAfterReplyOperationClear(operation, () => {
+            for (const listener of restartReleases) {
+              listener[Symbol.dispose]();
+            }
+          });
           registerReplyOperationSuccessorBarrier({
             operation,
             sessionId,
@@ -717,7 +750,6 @@ export async function admitReplyTurn(
   }
 }
 
-/** Resolves the default turn kind from reply options. */
 export function resolveReplyTurnKind(opts?: { isHeartbeat?: boolean }): ReplyTurnKind {
   return opts?.isHeartbeat === true ? "heartbeat" : "visible";
 }

@@ -15,13 +15,50 @@ import {
   preflightOpenClawDatabaseSchemas,
 } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "./openclaw-state-db-readonly.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("keeps readiness on the admitted shared-state snapshot and observes changes in the next admission", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("schema-admitted-snapshot-") };
+  const state = openOpenClawStateDatabase({ env });
+  const inspect = () =>
+    preflightOpenClawDatabaseSchemas({
+      env,
+      scope: "state",
+      requireStartupMigrationReadiness: true,
+    });
+  try {
+    await withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(
+        async () => {
+          state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
+          expect(await inspect()).toEqual({ incompatible: [], indeterminate: [] });
+        },
+        { env },
+      ),
+    );
+    expect(await inspect()).toMatchObject({
+      incompatible: [
+        { kind: "state", path: state.path, foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1 },
+      ],
+      indeterminate: [],
+    });
+  } finally {
+    state.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  }
 });
 
 describe("schema-only agent preflight", () => {
@@ -47,7 +84,7 @@ describe("schema-only agent preflight", () => {
           return prepare(pathname, options);
         },
       );
-      const config = { agents: { list: [{ id: "worker", default: true }] } };
+      const config = { agents: { entries: { worker: {} } } };
       const ready = (operation: "doctor" | "gateway-restart" | "gateway-startup") =>
         assertOpenClawDatabasesReady({
           env,
@@ -187,6 +224,7 @@ it.each([
       const run = () =>
         preflightOpenClawDatabaseSchemas({
           env,
+          preserveSourceArtifacts: true,
           verifyCurrentSchemaShape: mode !== "header",
           requireStartupMigrationReadiness: mode === "startup",
           signal: controller.signal,

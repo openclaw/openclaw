@@ -94,6 +94,7 @@ Other selection rules:
 - Changing `agents.defaults.model.primary` does not rewrite existing session pins. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.
 - The Control UI starts from the Gateway's prepared configured model view, so opening chat does not start provider discovery. Opening the chat model picker reads published rows, including rows matched by a trailing `provider/*` policy entry. Use its explicit Refresh action to request immediate provider discovery. Default and configured picker views hide catalog rows marked `deprecated` or `disabled`. There is one exception: a row stays visible when that exact model is configured as a primary, fallback, utility or tool model, alias or settings key, or exact policy entry. Hidden rows remain selectable by exact `provider/model` ref. The full built-in catalog, including hidden rows, is reserved for explicit browse views (`models.list` with `view: "all"`, or `openclaw models list --all`).
+- Configured models stay in the picker when their sign-in, key, or CLI login is missing: they show as unavailable instead of disappearing. This covers the primary, fallbacks, utility and tool models, and each `agents.defaults.models` or per-agent `models` entry.
 - Provider inventory UIs use `models.list` with `view: "provider-config"` to show source-authored `models.providers.*.models` rows without applying picker allowlists.
 - Chat and New Session keep the Default reset choice pinned in its provider group, then put the selected model before the remaining catalog choices. Models settings puts the selected model first. Other rows keep the Gateway's catalog order, including provider-curated recommendations where supplied. Text `/models <provider>` pages also put the current model first instead of alphabetizing the catalog. Picker search checks the full list, not just the visible rows.
 - Signing in to a provider keeps existing choices visible in open Control UI and terminal model pickers while discovery refreshes in the background. Changes to model restrictions, operator roles, or catalog mode still retire the old choices until the replacement catalog is ready.
@@ -146,7 +147,8 @@ warning identify the failed fresh-generation retry.
 
 For models configured to use a CLI runtime, channel picker availability follows that
 runtime's prepared authentication. A provider API key does not substitute for its
-native login.
+native login. When Claude Code is logged out, its models stay listed as unavailable
+and the Control UI picker and `/models` suggest `claude auth login`.
 
 If discovery fails, **Settings > Models** and `openclaw models list` report the
 failure and keep the last compatible model list. Without one, OpenClaw shows
@@ -304,6 +306,8 @@ harness here.
 Catalog preparation and explicit Refresh acquire the requested native inventories
 once per runtime while preserving the configured default.
 Opening the picker reuses prepared catalog facts; explicit Refresh owns discovery.
+Session-scoped pickers evaluate model and runtime choices together after checking
+session access, and recheck access before returning the catalog.
 
 An agent can replace the inherited list through
 `agents.entries.<id>.models["provider/model"].pickerRuntimes`; an empty array removes
@@ -335,7 +339,7 @@ If an existing session's harness becomes unavailable, the failed turn reports
 the owner plugin when known and its activation or loading blocker. Follow the error's
 `openclaw doctor --fix` or `openclaw plugins inspect <id> --runtime --json`
 guidance, fix the plugin, and restart the Gateway before retrying. Gateway
-health probes remain independent of model execution. Use [Models status](/cli/models)
+health checks remain independent of model execution. Use [Models status](/cli/models)
 and [Doctor](/gateway/doctor) to diagnose the configured route.
 
 Choose the model when you create a session whenever possible. The Control UI's
@@ -398,6 +402,7 @@ Without a scope flag, selections change only the current session. `agents.defaul
 - **Follow compatible runtime selections:** Model-only changes preserve a session runtime pin when it supports the selected provider. Otherwise, the pin is cleared and the selected model follows its configured runtime automatically. An explicitly requested incompatible runtime is still rejected without changing either selection. Use `/model <provider/model> --runtime <runtime> -s` to switch runtimes, or `--runtime default` to follow configured routing. Explicit runtime rows and **Default** in the Control UI still select or reset the runtime.
 - If the agent is idle, a model change applies to the next run immediately. If a run is already active, the switch is queued for the next clean retry point. It can be queued for a later point, if tool activity or reply output already started.
 - A user-selected `/model` ref is strict for that session: if it becomes unreachable, the reply fails visibly instead of silently falling back through `agents.defaults.model.fallbacks`. Configured defaults and cron job primaries still use fallback chains.
+- If you select another model while a live switch is queued, the newer selection stays pending for the next safe retry opportunity.
 - `/model status` is the detailed view: auth candidates per provider, and (when configured) the provider endpoint `baseUrl` plus `api` mode.
 - Model refs are parsed by splitting on the first `/`. Type `provider/model`. If the model ID itself contains `/` (OpenRouter-style), include the provider prefix, for example `/model openrouter/moonshotai/kimi-k2`. If you omit the provider, OpenClaw tries an alias match first. It then tries a unique configured-provider match for that exact unprefixed model id. It then tries the configured default provider, which is a deprecated fallback. If that provider no longer exposes the configured default model, OpenClaw uses the first configured provider and model instead. This avoids surfacing a stale removed-provider default.
 - An alias cannot redirect an explicit registered or configured provider ref to another provider, including when the ref has an auth-profile suffix. A colliding alias remains usable with its own provider prefix. Slash-form aliases whose leading segment is a model namespace still work.
@@ -425,9 +430,11 @@ openclaw models auth list|add|login|paste-api-key|paste-token|setup-token|order
 
 <AccordionGroup>
   <Accordion title="Scanning (OpenRouter free models)">
-    `openclaw models scan` inspects OpenRouter's public free-model catalog and can probe candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live probing and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
+    `openclaw models scan` inspects OpenRouter's public free-model catalog and can check candidates for tool and image support live. The catalog itself is public, so metadata-only scans (`--no-probe`) need no key. Live checking and `--set-default`/`--set-image` require an OpenRouter API key (auth profile or `OPENROUTER_API_KEY`). Without one they fail closed to metadata-only output.
 
-    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, probed results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+    Results rank by: image support, then tool latency, then context size, then parameter count. In a TTY, checked results prompt an interactive fallback selection. Non-interactive mode needs `--yes` to accept defaults.
+
+    A probed scan replaces `agents.defaults.model.fallbacks` even without `--set-default`; the flag additionally sets the primary. Use `--no-probe` to inspect candidates without writing config.
 
   </Accordion>
 </AccordionGroup>
@@ -448,6 +455,11 @@ rows and prices together without restarting. Picker reads keep using the current
 generation during preparation; a failed or superseded preparation leaves it in
 place. Admitted runs retain their captured generation, and each usage-estimation
 operation uses one pricing context.
+
+Catalog reads and refresh writes run through the shared-state worker. If a
+background refresh fails, the Gateway records the error and keeps serving its
+accepted catalog. The next scheduled check runs six hours later; run
+`openclaw models refresh` to retry the download immediately.
 
 Remote data can update or add models only for providers declared by installed
 plugin manifests. It cannot supply API base URLs or request headers, and a

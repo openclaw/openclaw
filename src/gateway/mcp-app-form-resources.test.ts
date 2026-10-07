@@ -223,7 +223,6 @@ async function fixture(
       assertCurrent,
       prepareToolCall,
     },
-    requestId: "upstream-id",
     snapshot,
     signal: controller.signal,
     uploadResources,

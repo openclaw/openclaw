@@ -1,13 +1,18 @@
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { notifyListeners } from "../../../../src/shared/listeners.js";
+import { readOfflineStorageScope } from "../../app/boot-record.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { resolveUiConversationIdentity } from "../sessions/session-key.ts";
 import { compareChatQueueOrder } from "./chat-queue-order.ts";
 import type { ChatQueueItem } from "./chat-types.ts";
 import type { DurableChatDraftPresence } from "./composer-draft-store.runtime.ts";
 import {
-  observeOutboxRecoveryOwner,
-  outboxPayloadMatchesOwner,
-} from "./outbox-payload-store.runtime.ts";
+  chatOutboxAttentionOwners,
+  outboxOwnerKey,
+  storedChatOutboxItemNeedsReview,
+  subscribeChatOutboxAttentionChanges,
+} from "./outbox-owner-registry.ts";
+import { outboxPayloadMatchesOwner } from "./outbox-payload-store.runtime.ts";
 import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import type { StoredChatOutboxScope } from "./outbox-store-scope.ts";
 import {
@@ -40,7 +45,9 @@ export function createStoredChatOutboxReader() {
   let cached: {
     inputs: readonly unknown[];
     summary: ReturnType<typeof summarizeStoredChatOutboxes>["summary"];
-    draftSignature: string;
+    signature: string;
+    attentionOwner: ReturnType<typeof chatOutboxAttentionOwners.get>;
+    attentionRevision: number | undefined;
   } | null = null;
   let lastState: StoredOutboxReaderScope | undefined;
   const listeners = new Set<() => void>();
@@ -52,18 +59,15 @@ export function createStoredChatOutboxReader() {
   let durableStore: typeof import("./composer-draft-store.runtime.ts") | undefined;
   let unsubscribeDurable: (() => void) | undefined;
   let unsubscribeTab: (() => void) | undefined;
+  let unsubscribeAttention: (() => void) | undefined;
   const invalidate = () => {
     cached = null;
   };
   const notify = () => {
     invalidate();
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch (error) {
-        console.error("[openclaw] stored outbox reader listener failed", error);
-      }
-    }
+    notifyListeners(listeners, undefined, (error) =>
+      console.error("[openclaw] stored outbox reader listener failed", error),
+    );
   };
   const markStale = () => {
     generation += 1;
@@ -90,7 +94,7 @@ export function createStoredChatOutboxReader() {
       previous &&
       lastState &&
       inputs?.every((value, index) => Object.is(value, previous.inputs[index])) &&
-      summarizeStoredChatOutboxes(lastState, presence).draftSignature === previous.draftSignature
+      summarizeStoredChatOutboxes(lastState, presence).signature === previous.signature
     ) {
       // A durable write can replace tab input without changing any rendered badge.
       previous.inputs = readInputs(lastState);
@@ -136,12 +140,32 @@ export function createStoredChatOutboxReader() {
     subscribe(listener: () => void) {
       listeners.add(listener);
       unsubscribeTab ??= subscribeStoredChatOutboxChanges(notify);
+      unsubscribeAttention ??= subscribeChatOutboxAttentionChanges((key) => {
+        if (!lastState || key !== outboxOwnerKey(lastState)) {
+          return;
+        }
+        const attentionOwner = chatOutboxAttentionOwners.get(key);
+        const previous = cached;
+        if (
+          previous &&
+          readInputs(lastState).every((value, index) => Object.is(value, previous.inputs[index])) &&
+          summarizeStoredChatOutboxes(lastState, presence).signature === previous.signature
+        ) {
+          // Pane synchronization may publish without changing any visible badge.
+          previous.attentionOwner = attentionOwner;
+          previous.attentionRevision = attentionOwner?.attentionRevision;
+          return;
+        }
+        notify();
+      });
       void loadPresence();
       return () => {
         listeners.delete(listener);
         if (!listeners.size) {
           unsubscribeTab?.();
           unsubscribeTab = undefined;
+          unsubscribeAttention?.();
+          unsubscribeAttention = undefined;
           unsubscribeDurable?.();
           unsubscribeDurable = undefined;
           // Changes while detached must be observed on the next subscription.
@@ -154,7 +178,7 @@ export function createStoredChatOutboxReader() {
     read(state: StoredOutboxReaderScope) {
       lastState = state;
       const gatewayOwner = storageTargetForComposer(state).gatewayOwner;
-      const recoveryScope = observeOutboxRecoveryOwner(state);
+      const recoveryScope = readOfflineStorageScope(state);
       if (owner?.gatewayOwner !== gatewayOwner || owner?.recoveryScope !== recoveryScope) {
         owner = recoveryScope ? { gatewayOwner, recoveryScope } : undefined;
         presence = undefined;
@@ -162,11 +186,22 @@ export function createStoredChatOutboxReader() {
       }
       void loadPresence();
       const inputs = readInputs(state);
+      const attentionOwner = chatOutboxAttentionOwners.get(outboxOwnerKey(state));
       const previous = cached;
-      if (previous && inputs.every((value, index) => Object.is(value, previous.inputs[index]))) {
+      if (
+        previous &&
+        previous.attentionOwner === attentionOwner &&
+        previous.attentionRevision === attentionOwner?.attentionRevision &&
+        inputs.every((value, index) => Object.is(value, previous.inputs[index]))
+      ) {
         return previous.summary;
       }
-      cached = { inputs, ...summarizeStoredChatOutboxes(state, presence) };
+      cached = {
+        inputs,
+        attentionOwner,
+        attentionRevision: attentionOwner?.attentionRevision,
+        ...summarizeStoredChatOutboxes(state, presence),
+      };
       return cached.summary;
     },
   };
@@ -244,6 +279,7 @@ function summarizeStoredChatOutboxes(
   const idsByScope = new Map<string, { all: Set<string>; attention: Set<string> }>();
   const drafts = new Map<string, DurableChatDraftPresence>();
   const scopes = new Map<string, StoredChatOutboxScope>();
+  const attentionOwner = chatOutboxAttentionOwners.get(outboxOwnerKey(state));
   for (const { scope, session } of listStoredComposerRows(state)) {
     const scopeKey = storedChatOutboxScopeKey(scope);
     scopes.set(scopeKey, scope);
@@ -261,9 +297,9 @@ function summarizeStoredChatOutboxes(
       if (!item.pendingRunId) {
         ids.all.add(item.id);
         if (
-          item.sendState === "failed" ||
-          item.sendState === "unconfirmed" ||
-          item.sendState === "held"
+          attentionOwner
+            ? attentionOwner.needsReview(scope, item)
+            : storedChatOutboxItemNeedsReview(item)
         ) {
           ids.attention.add(item.id);
         }
@@ -296,9 +332,14 @@ function summarizeStoredChatOutboxes(
   const sessionScopeKey = (sessionKey: string) =>
     storedChatOutboxScopeKey(resolveUiConversationIdentity(state, sessionKey));
   return {
-    draftSignature: JSON.stringify(
+    signature: JSON.stringify([
+      total,
       [...drafts].flatMap(([scopeKey, draft]) => (draft.active ? [scopeKey] : [])).toSorted(),
-    ),
+      [...idsByScope]
+        .filter(([, ids]) => ids.attention.size)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([scopeKey, ids]) => [scopeKey, [...ids.attention].toSorted()]),
+    ]),
     summary: {
       total,
       sessions: [...scopes.entries()]

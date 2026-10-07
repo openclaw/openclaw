@@ -328,14 +328,20 @@ type QueuedCronRunReservation = {
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
   store: CronStoreFile | null;
-  /** One prepared list, invalidated by committed revisions and service mutations. */
-  listPageSnapshot?: {
+  /** Read facts share one generation across committed and scheduler-local mutations. */
+  readSnapshot?: {
     storeRevision: number;
-    filteredJobs: CronJob[];
-    sortBy: CronJobsSortBy;
-    sortDir: CronSortDir;
-    jobs: CronJob[];
-    snapshotRevision: string;
+    source: CronJob[] | undefined;
+    status: CronStatusSummary;
+    list?: {
+      filteredJobs: CronJob[];
+      sortBy: CronJobsSortBy;
+      sortDir: CronSortDir;
+      jobs: CronJob[];
+      snapshotRevision: string;
+    };
+    /** Requested rows are detached and frozen once for this list generation. */
+    readJobs: WeakMap<CronJob, CronJob>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */

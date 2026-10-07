@@ -53,57 +53,56 @@ function setup(
   };
 }
 
-it("keeps complete references within a small output budget and frees exact UTF-8 capacity", async () => {
-  const { run } = setup([], { codeMode: { maxSnapshotBytes: 1024, maxOutputBytes: 1024 } });
-  const saved = await run('return await results.save("🦞".repeat(255));');
-  expect(saved).toMatchObject({
-    status: "completed",
-    value: {
-      id: expect.any(String),
-      bytes: 1022,
-      count: 1,
-      shape: "string",
-      previewTruncated: true,
-    },
-  });
-  const id = JSON.stringify((saved.value as { id: string }).id);
-  expect(
-    await run(`let overflow; try { await results.save(123); } catch (error) { overflow = error.message; }
-    const length = (await results.load(${id})).length;
-    await results.delete(${id});
-    const replacement = await results.save("🦞".repeat(255));
-    return {overflow,length,bytes:replacement.bytes};`),
-  ).toMatchObject({
-    status: "completed",
-    value: {
-      overflow: expect.stringContaining("results capacity exceeded"),
-      length: 510,
-      bytes: 1022,
-    },
-  });
-  expect(await run(`return await results.load(${id});`)).toMatchObject({
-    status: "failed",
-    error: expect.stringContaining("unavailable or expired"),
-  });
-});
-
-it("caps entry count without evicting earlier values and reuses deleted capacity", async () => {
-  const result = await setup()
-    .run(`const refs = []; for (let i = 0; i < 64; i++) refs.push(await results.save(i));
-    let overflow; try { await results.save(65); } catch (error) { overflow = error.message; }
-    const first = await results.load(refs[0].id);
-    await results.delete(refs[1].id);
-    const replacement = await results.save({ok:true});
-    return {overflow,first, replacement:await results.load(replacement.id)};`);
-  expect(result).toMatchObject({
-    status: "completed",
-    value: {
-      overflow: expect.stringContaining("results capacity exceeded"),
-      first: 0,
-      replacement: { ok: true },
-    },
-  });
-});
+it.each(["UTF-8 bytes", "entry count"])(
+  "preserves saved data at the %s cap and reuses deleted capacity",
+  async (limit) => {
+    const bytes = limit === "UTF-8 bytes";
+    const { run } = setup(
+      [],
+      bytes ? { codeMode: { maxSnapshotBytes: 1024, maxOutputBytes: 1024 } } : undefined,
+    );
+    let id = "";
+    if (bytes) {
+      const saved = await run('return await results.save("🦞".repeat(255));');
+      expect(saved).toMatchObject({
+        status: "completed",
+        value: {
+          id: expect.any(String),
+          bytes: 1022,
+          count: 1,
+          shape: "string",
+          previewTruncated: true,
+        },
+      });
+      id = JSON.stringify((saved.value as { id: string }).id);
+    }
+    const seed = bytes
+      ? ""
+      : "const refs = []; for (let i = 0; i < 64; i++) refs.push(await results.save(i));";
+    const load = bytes ? id : "refs[0].id";
+    const remove = bytes ? id : "refs[1].id";
+    const replacement = bytes ? '"🦞".repeat(255)' : "{ok:true}";
+    const result = await run(`${seed}
+    let overflow; try { await results.save(${bytes ? 123 : 65}); } catch (error) { overflow = error.message; }
+    const first = await results.load(${load});
+    await results.delete(${remove});
+    const replacement = await results.save(${replacement});
+    return {overflow, ${bytes ? "length:first.length, bytes:replacement.bytes" : "first, replacement:await results.load(replacement.id)"}};`);
+    expect(result).toMatchObject({
+      status: "completed",
+      value: {
+        overflow: expect.stringContaining("results capacity exceeded"),
+        ...(bytes ? { length: 510, bytes: 1022 } : { first: 0, replacement: { ok: true } }),
+      },
+    });
+    if (bytes) {
+      expect(await run(`return await results.load(${id});`)).toMatchObject({
+        status: "failed",
+        error: expect.stringContaining("unavailable or expired"),
+      });
+    }
+  },
+);
 
 it.each(["replacement", "restriction", "clear", "abort", "run", "session"] as const)(
   "rejects saved data after %s invalidation",
@@ -275,23 +274,31 @@ it.each([
   expect(testing.activeRuns.size).toBe(0);
 });
 
-it("allows a rejected promise to be handled after yield", async () => {
-  const result = await rejectionHarness().run(
-    'const rejected = Promise.reject(new Error("handled later")); await yield_control(); await rejected.catch(() => {}); return "done";',
-  );
-  expect(result).toMatchObject({ status: "completed", value: "done" });
-  expect(testing.activeRuns.size).toBe(0);
-});
-
-it("preserves handled tool error diagnostics through wait", async () => {
-  const { run, failing } = rejectionHarness();
-  const result = await run(`
+it.each([
+  {
+    name: "a late catch",
+    diagnostics: false,
+    code: 'const rejected = Promise.reject(new Error("handled later")); await yield_control(); await rejected.catch(() => {}); return "done";',
+  },
+  {
+    name: "tool diagnostics",
+    diagnostics: true,
+    code: `
     const results = await Promise.allSettled([failing_tool({}), Promise.resolve("ok")]);
     const failure = results[0].reason;
     failure.code = "SYNTHETIC";
     await yield_control();
     text(failure); json({ results }); return { results };
-  `);
+  `,
+  },
+])("preserves handled rejection through wait: $name", async ({ code, diagnostics }) => {
+  const { run, failing } = rejectionHarness();
+  const result = await run(code);
+  expect(testing.activeRuns.size).toBe(0);
+  if (!diagnostics) {
+    expect(result).toMatchObject({ status: "completed", value: "done" });
+    return;
+  }
   const failure = {
     name: "Error",
     message: "lost failure",
@@ -313,7 +320,6 @@ it("preserves handled tool error diagnostics through wait", async () => {
   expect(JSON.parse((result.output as Array<{ text: string }>)[0]!.text)).toEqual(failure);
   expect(JSON.stringify(result.output)).not.toContain("controller.js");
   expect(failing.execute).toHaveBeenCalledOnce();
-  expect(testing.activeRuns.size).toBe(0);
 });
 
 it("projects nested Errors before their custom toJSON can hide the failure", async () => {

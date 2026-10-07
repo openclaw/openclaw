@@ -315,13 +315,12 @@ function countJsonlLines(filePath: string): number {
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
-  resolveRealPath: (targetPath: string) => string | null,
   pathOps: Pick<typeof path, "resolve" | "dirname" | "basename">,
 ): string | null {
   const missingSegments: string[] = [];
   let candidate = pathOps.resolve(targetPath);
   while (true) {
-    const resolved = resolveRealPath(candidate);
+    const resolved = safeRealpathSync(candidate);
     if (resolved) {
       return pathOps.resolve(resolved, ...missingSegments);
     }
@@ -437,19 +436,11 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
-function resolveLinuxStateMount(
-  stateDir: string,
-  deps?: {
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
+function resolveLinuxStateMount(stateDir: string): LinuxSdBackedStateDir | null {
   const linuxPath = path.posix;
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+    resolvePathThroughExistingAncestor(stateDir, linuxPath) ?? linuxPath.resolve(stateDir);
+  const mountInfo = tryReadLinuxMountInfo();
   const mountEntry = mountInfo
     ? findLinuxMountInfoEntryForPath(resolvedStatePath, parseLinuxMountInfo(mountInfo), linuxPath)
     : null;
@@ -464,28 +455,19 @@ function resolveLinuxStateMount(
 }
 
 /** Detects Linux state directories mounted from SD/eMMC-style block devices. */
-export function detectLinuxSdBackedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-    resolveDeviceRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxSdBackedStateDir(stateDir: string): LinuxSdBackedStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
   const linuxPath = path.posix;
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount) {
     return null;
   }
 
   const sourceCandidates = [stateMount.source];
   if (stateMount.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? safeRealpathSync)(stateMount.source);
+    const resolvedDevicePath = safeRealpathSync(stateMount.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
@@ -522,19 +504,11 @@ type LinuxVolatileStateDir = Omit<LinuxSdBackedStateDir, "source">;
 const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
 
 /** Detects Linux state directories mounted on filesystems that do not survive a reboot. */
-export function detectLinuxVolatileStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxVolatileStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxVolatileStateDir(stateDir: string): LinuxVolatileStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount || !VOLATILE_FS_TYPES.has(stateMount.fsType)) {
     return null;
   }
@@ -560,25 +534,17 @@ export function formatLinuxVolatileStateDirWarning(
 }
 
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
-export function detectMacCloudSyncedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    homedir?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): {
+export function detectMacCloudSyncedStateDir(stateDir: string): {
   path: string;
   storage: "iCloud Drive" | "CloudStorage provider";
 } | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
+  if (process.platform !== "darwin") {
     return null;
   }
 
   // Cloud-sync roots should always be anchored to the OS account home on macOS.
   // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
-  const homedir = deps?.homedir ?? os.homedir();
+  const homedir = os.homedir();
   const roots = [
     {
       storage: "iCloud Drive" as const,
@@ -589,10 +555,9 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     if (isPathUnderRoot(resolvedStatePath, root)) {
@@ -606,16 +571,12 @@ export function detectMacCloudSyncedStateDir(
 /** Detects Windows state directories under OneDrive sync roots. */
 export function detectWindowsCloudSyncedStateDir(
   stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    env?: NodeJS.ProcessEnv;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
+  env: NodeJS.ProcessEnv = process.env,
 ): {
   path: string;
   storage: "OneDrive" | "OneDrive for Business";
 } | null {
-  const platform = deps?.platform ?? process.platform;
+  const platform = process.platform;
   if (platform !== "win32") {
     return null;
   }
@@ -623,7 +584,6 @@ export function detectWindowsCloudSyncedStateDir(
   // The OneDrive sync client maintains these variables, so they are the
   // canonical sync-root source; path-shape heuristics would misfire on
   // ordinary local folders that merely contain "OneDrive" in a segment.
-  const env = deps?.env ?? process.env;
   const roots: { storage: "OneDrive" | "OneDrive for Business"; root: string }[] = [];
   const addRoot = (storage: "OneDrive" | "OneDrive for Business", root: string | undefined) => {
     if (root && root.trim() !== "") {
@@ -637,14 +597,13 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // A state dir that does not exist yet cannot be resolved directly, and
   // falling back to the lexical path misreads a not-yet-created leaf beneath a
   // OneDrive-named junction that actually resolves to local storage. Resolve
   // through the nearest existing ancestor, as the Linux detectors do, so the
   // junction is followed even when the leaf is absent.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     // Windows filesystems are case-insensitive by default; compare folded.
@@ -761,7 +720,7 @@ export function detectStateIntegrityHealthIssues(
     });
   }
 
-  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, { env });
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, env);
   if (windowsCloudSyncedStateDir) {
     issues.push({
       kind: "windows-cloud-state-dir",
@@ -1303,7 +1262,6 @@ export async function noteStateIntegrity(
       warnings,
       changes,
       confirmRepair: (params) => prompter.confirmRuntimeRepair(params),
-      countLabel,
     });
     // Session SQLite migration owns legacy transcript validation and archival.
     // Repeating it here turns healthy pending imports into integrity warnings.

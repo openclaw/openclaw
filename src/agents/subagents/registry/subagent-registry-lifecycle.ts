@@ -27,6 +27,7 @@ import {
   resumeAncestorCleanup,
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-attempt.js";
 import { completeCleanupBookkeeping } from "./subagent-registry-lifecycle-bookkeeping.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
@@ -76,6 +77,14 @@ export class SubagentSessionCleanupRevocationChangedError extends SubagentRegist
 // so ordinary live settles keep their existing latency and concurrency.
 const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
 
+const COMPLETION_SETTLING_ERROR = "Subagent completion is still settling; retry the session reset.";
+
+/** Terminal rows still carrying session effects must revoke them before a reset. */
+const ownsSessionEffects = (entry: SubagentRunRecord): boolean =>
+  entry.execution.status === "terminal" &&
+  entry.pauseReason !== "sessions_yield" &&
+  entry.execution.suppressSessionEffects !== true;
+
 function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
   const execution = entry.execution;
   const outcome = execution.outcome;
@@ -105,7 +114,7 @@ function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
 
 export class SubagentLifecycleController {
   readonly pendingRequesterSettleWakeCommits = new Map<object, PendingRequesterSettleWakeCommit>();
-  readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  readonly scheduledResumeTimers = new Map<object, ReturnType<typeof setTimeout>>();
   pendingRequesterSettleWakeRearms = new Set<object>();
   readonly cancelledRequesterSettleWakeRuns = new Set<object>();
   readonly scheduledRequesterSettleWakeRuns = new Set<object>();
@@ -185,8 +194,7 @@ export class SubagentLifecycleController {
   };
 
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean {
-    const published = getCurrentSubagentRunOwner(this.options.runs, entry);
-    const current = published && isSameSubagentRunOwner(published, entry) ? published : entry;
+    const current = getCurrentSubagentRunOwner(this.options.runs, entry) ?? entry;
     if (current.killReconciliation?.supersededAt !== undefined) {
       return true;
     }
@@ -204,37 +212,37 @@ export class SubagentLifecycleController {
     }
   }
 
+  private liveRow(entry: SubagentRunRecord): SubagentRunRecord | undefined {
+    return (
+      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry)
+    );
+  }
+
+  private sessionEffectsSuppressed(entry: SubagentRunRecord): boolean {
+    const current = this.liveRow(entry);
+    return (
+      (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
+      this.newerGenerationOwnsSession(entry) ||
+      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
+    );
+  }
+
   async shouldSuppressSessionEffects(
     entry: SubagentRunRecord,
     prospectiveEffects?: SubagentSessionEffects,
   ): Promise<boolean> {
     const boundEffects = this.terminalSessionEffects.get(getSubagentRunRuntimeKey(entry));
     const effects = prospectiveEffects ?? boundEffects;
-    const isSuppressed = () => {
-      const current =
-        this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
-      return (
-        (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
-        this.newerGenerationOwnsSession(entry) ||
-        shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
-      );
-    };
     return (
-      isSuppressed() ||
+      this.sessionEffectsSuppressed(entry) ||
       (await effects?.isCurrent()) === false ||
       this.terminalSessionEffects.get(getSubagentRunRuntimeKey(entry)) !== boundEffects ||
-      isSuppressed()
+      this.sessionEffectsSuppressed(entry)
     );
   }
 
   sessionEffectsHostCurrent(entry: SubagentRunRecord): boolean {
-    const current =
-      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
-    if (
-      (current !== undefined && !isSameSubagentRunOwner(current, entry)) ||
-      this.newerGenerationOwnsSession(entry) ||
-      shouldSuppressSubagentRecoverySessionEffects(current ?? entry)
-    ) {
+    if (this.sessionEffectsSuppressed(entry)) {
       return false;
     }
     try {
@@ -287,14 +295,8 @@ export class SubagentLifecycleController {
               "Subagent cleanup owner changed before reset",
             );
           }
-          if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
-            throw new Error("Subagent completion is still settling; retry the session reset.");
-          }
-          if (
-            entry.execution.status === "terminal" &&
-            entry.pauseReason !== "sessions_yield" &&
-            entry.execution.suppressSessionEffects !== true
-          ) {
+          this.assertCompletionSettled(entry);
+          if (ownsSessionEffects(entry)) {
             postimages.set(runId, {
               ...entry,
               execution: { ...entry.execution, suppressSessionEffects: true },
@@ -307,16 +309,16 @@ export class SubagentLifecycleController {
     );
   }
 
+  private assertCompletionSettled(entry: SubagentRunRecord): void {
+    if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
+      throw new Error(COMPLETION_SETTLING_ERROR);
+    }
+  }
+
   assertTerminalSessionEffectsRevoked(currentEntries: Iterable<SubagentRunRecord>): void {
     for (const entry of currentEntries) {
-      if (this.terminalCompletionLocks.has(getSubagentRunRuntimeKey(entry))) {
-        throw new Error("Subagent completion is still settling; retry the session reset.");
-      }
-      if (
-        entry.execution.status === "terminal" &&
-        entry.pauseReason !== "sessions_yield" &&
-        entry.execution.suppressSessionEffects !== true
-      ) {
+      this.assertCompletionSettled(entry);
+      if (ownsSessionEffects(entry)) {
         throw new SubagentSessionCleanupRevocationChangedError(
           "Subagent cleanup revocation changed before reset",
         );
@@ -324,8 +326,14 @@ export class SubagentLifecycleController {
     }
   }
 
+  scheduleResume = (
+    entry: SubagentRunRecord,
+    delayMs: number,
+    stateContext?: OpenClawStateWorkerContext,
+  ) => scheduleResumeSubagentRun(this, entry, delayMs, undefined, stateContext);
+
   clearScheduledResumeTimers = () => {
-    for (const timer of this.scheduledResumeTimers) {
+    for (const timer of this.scheduledResumeTimers.values()) {
       clearTimeout(timer);
     }
     this.scheduledResumeTimers.clear();
@@ -360,11 +368,7 @@ export class SubagentLifecycleController {
 
   isCleanupGeneration = (entry: SubagentRunRecord, generation: number): boolean =>
     this.cleanupGenerations.get(getSubagentRunRuntimeKey(entry)) === generation;
-  isCleanupGenerationCurrent = (
-    _runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean => {
+  isCleanupGenerationCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
@@ -372,23 +376,18 @@ export class SubagentLifecycleController {
       this.isCleanupGeneration(entry, generation)
     );
   };
-  isCleanupAttemptCurrent = (
-    runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean =>
+  isCleanupAttemptCurrent = (entry: SubagentRunRecord, generation: number): boolean =>
     getCurrentSubagentRunOwner(this.options.runs, entry)?.cleanupHandled === true &&
-    this.isCleanupGenerationCurrent(runId, entry, generation);
-  isCleanupOwnerCurrent = (_runId: string, entry: SubagentRunRecord): boolean => {
-    const current =
-      this.options.runs.get(entry.runId) ?? getCurrentSubagentRunOwner(this.options.runs, entry);
+    this.isCleanupGenerationCurrent(entry, generation);
+  isCleanupOwnerCurrent = (entry: SubagentRunRecord): boolean => {
+    const current = this.liveRow(entry);
     return (
       (current === undefined || isSameSubagentRunOwner(current, entry)) &&
       (current ?? entry).pauseReason !== "sessions_yield"
     );
   };
-  isEndedHookOwnerCurrent = (runId: string, entry: SubagentRunRecord): boolean =>
-    this.isCleanupOwnerCurrent(runId, entry) && !this.newerGenerationOwnsSession(entry);
+  isEndedHookOwnerCurrent = (entry: SubagentRunRecord): boolean =>
+    this.isCleanupOwnerCurrent(entry) && !this.newerGenerationOwnsSession(entry);
 
   bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged = false): number {
     const identity = this.trackRun(entry);
@@ -401,15 +400,10 @@ export class SubagentLifecycleController {
     return generation;
   }
 
-  isTerminalCallbackCurrent = (
-    _runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean => {
+  isTerminalCallbackCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
-      isSameSubagentRunOwner(current, entry) &&
       current.pauseReason !== "sessions_yield" &&
       this.terminalGenerations.get(getSubagentRunRuntimeKey(entry)) === generation &&
       isDeepStrictEqual(
@@ -495,9 +489,8 @@ export class SubagentLifecycleController {
     }, "subagents:lifecycle-complete");
   };
 
-  completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {
-    return completeCleanupBookkeeping(this, params);
-  };
+  completeCleanupBookkeeping = (params: CleanupBookkeepingParams) =>
+    completeCleanupBookkeeping(this, params);
 
   resumeAncestorCleanup = (settledEntry: SubagentRunRecord): void =>
     resumeAncestorCleanup(this, settledEntry);
@@ -525,15 +518,19 @@ export class SubagentLifecycleController {
         lastError: getDeliveryLastError(entry) ?? null,
       };
     }
-    Object.assign(delivery, { status: "discarded", queueId: undefined, nextAttemptAt: undefined });
-    delivery.payload = undefined;
-    Object.assign(delivery, { createdAt: undefined, lastAttemptAt: undefined });
     Object.assign(delivery, {
+      status: "discarded",
+      queueId: undefined,
+      nextAttemptAt: undefined,
+      payload: undefined,
+      createdAt: undefined,
+      lastAttemptAt: undefined,
       attemptCount: undefined,
       lastError: undefined,
       announcedAt: undefined,
+      suspendedAt: undefined,
+      suspendedReason: undefined,
     });
-    Object.assign(delivery, { suspendedAt: undefined, suspendedReason: undefined });
     Object.assign(entry, { wakeOnDescendantSettle: undefined, cleanupHandled: true });
     const completion = ensureCompletionState(entry);
     Object.assign(completion, { fallbackResultText: undefined, fallbackCapturedAt: undefined });
@@ -676,6 +673,6 @@ export class SubagentLifecycleController {
       },
     });
 
-  startSubagentAnnounceCleanupFlow = (runId: string, entry: SubagentRunRecord): boolean =>
-    startSubagentAnnounceCleanupFlow(this, runId, entry);
+  startSubagentAnnounceCleanupFlow = (entry: SubagentRunRecord): boolean =>
+    startSubagentAnnounceCleanupFlow(this, entry);
 }

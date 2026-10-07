@@ -19,7 +19,11 @@ import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+} from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { rootedAgentRunParams } from "../../agents/rooted-run-params.js";
 import {
@@ -212,11 +216,7 @@ function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const {
-      preparedRunAdmission,
-      messageActionTurnCapability,
-      close: closePromptAdmission,
-    } = prepareCronRunAdmission({
+    const cronAdmission = prepareCronRunAdmission({
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -246,12 +246,13 @@ function createCronPromptExecutor(
         jobId: params.job.id,
         jobConfigRevision: resolveCronJobConfigRevision(params.job),
         jobName: params.job.name,
+        standingGrantAuthority: cronAdmission.standingGrantAuthority,
       });
     } catch {
       // Non-canonicalizable job config: no grant registration for this run.
     }
     const fallbackResult = await runEmbeddedAgentEntry({
-      preparedRunAdmission,
+      preparedRunAdmission: cronAdmission.preparedRunAdmission,
       selection: {
         cfg: params.cfgWithAgentDefaults,
         provider: params.liveSelection.provider,
@@ -413,7 +414,7 @@ function createCronPromptExecutor(
         // Snapshot mutable session and transcript facts only when the runtime is invoked.
         const buildCommonRunParams = () =>
           ({
-            preparedRunAdmission,
+            preparedRunAdmission: cronAdmission.preparedRunAdmission,
             ...rootedAgentRunParams(params.workspaceDir, params.executionRoot),
             cwd: params.executionRoot ?? params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
@@ -422,7 +423,7 @@ function createCronPromptExecutor(
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
-            messageActionTurnCapability,
+            messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
             prompt: promptText,
             finalizePromptForResolvedTools,
@@ -531,10 +532,7 @@ function createCronPromptExecutor(
                     sourceReplyDeliveryMode,
                     requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
                   },
-                  toolsAllow: resolveCliRuntimeToolsAllow(
-                    params.agentPayload?.toolsAllow,
-                    params.agentPayload?.toolsAllowIsDefault,
-                  ),
+                  toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });
                 const classification = runOptions.classifyResult(candidateResult);
@@ -564,7 +562,7 @@ function createCronPromptExecutor(
                 return candidateResult;
               },
               {
-                preparedRunAdmission,
+                preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
                 trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -608,6 +606,12 @@ function createCronPromptExecutor(
           agentDir: params.agentDir,
           provider: providerOverride,
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
+          // Same capability the reply path and agent command prepare: harness-native effort lists
+          // (Codex `max`) reach the runtime model only through it.
+          modelThinkingCapability: prepareModelRunCapabilities(
+            [thinkingCatalog, []],
+            [providerOverride, modelOverride, candidateRuntime],
+          ).modelThinkingCapability,
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
@@ -650,7 +654,7 @@ function createCronPromptExecutor(
       })
       .finally(() => {
         unregisterCronRunExecSource();
-        closePromptAdmission();
+        cronAdmission.close();
       });
     const executionError =
       params.lifecycle.getDeferredError() ??

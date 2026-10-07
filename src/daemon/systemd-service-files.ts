@@ -11,8 +11,11 @@ import { normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir } from "./paths.js";
 import {
   ServiceDefinitionInspectionError,
+  ServiceStartRefusalError,
+  ServiceOwnershipRefusalError,
   findServiceOwnershipRefusal,
 } from "./service-inspection-error.js";
+import { resolveSystemdServiceStartRefusal } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceCommandSnapshot,
@@ -20,10 +23,14 @@ import type {
   GatewayServiceEnvironmentValueSource,
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
+  SystemdServiceReadTarget,
 } from "./service-types.js";
 import { createSystemdCommandQuery } from "./systemd-command-query.js";
-import { parseSystemdEnvironmentFileLine } from "./systemd-environment-file-parser.js";
-import { expandSystemdEnvironmentFilePattern } from "./systemd-environment-file-pattern.js";
+import {
+  resolveSystemdEnvironmentFiles,
+  type SystemdEnvironmentFileSpec,
+  type SystemdEnvironmentFilesParams,
+} from "./systemd-environment-files.js";
 import { assertSystemdServiceAccount } from "./systemd-service-identity.js";
 import {
   parseSystemdEnvAssignments,
@@ -35,11 +42,6 @@ import {
 const SYSTEMD_GATEWAY_DOTENV_FILENAME = "gateway.systemd.env";
 const SYSTEMD_NODE_DOTENV_FILENAME = "node.systemd.env";
 
-type SystemdEnvironmentFileSpec = [pathname: string, optional: boolean];
-type SystemdEnvironmentFilesParams = {
-  environmentFileSpecs: SystemdEnvironmentFileSpec[];
-  failOnUnavailable?: boolean;
-};
 type SystemdCommandSnapshotParams = SystemdEnvironmentFilesParams & {
   programArguments: string[];
   workingDirectory: string;
@@ -119,6 +121,7 @@ async function readSystemdManagerCommand(
   managedUnsetEnvironment: string[],
   opts?: GatewayServiceReadOptions,
   locationOnly = false,
+  expectedServiceAccount?: string,
 ): Promise<GatewayServiceCommandConfig | null | "not-loaded"> {
   const manager = "org.freedesktop.systemd1";
   const target = opts?.systemdReadTarget;
@@ -135,9 +138,6 @@ async function readSystemdManagerCommand(
   try {
     const assertAbsentWithoutLoading = async (): Promise<null> => {
       // Missing loaded objects do not prove an authored/native unit definition is absent.
-      if (localDefinition) {
-        throw unavailable();
-      }
       const fileState = await query(
         [
           "call",
@@ -150,7 +150,16 @@ async function readSystemdManagerCommand(
         ],
         ["s"],
       );
-      if (fileState !== null) {
+      const value = fileState?.[0];
+      const refusal = resolveSystemdServiceStartRefusal({
+        unit: unitName,
+        scope: target?.scope,
+        unitFileState: Array.isArray(value) && typeof value[0] === "string" ? value[0] : undefined,
+      });
+      if (refusal) {
+        throw new ServiceStartRefusalError(refusal);
+      }
+      if (fileState !== null || localDefinition) {
         throw unavailable();
       }
       return null;
@@ -186,10 +195,40 @@ async function readSystemdManagerCommand(
       Array.isArray(value) && value.every((entry) => typeof entry === "string");
     const unitProperties = await readProperties(
       "Unit",
-      ["FragmentPath", "DropInPaths", "NeedDaemonReload", "LoadState"],
-      ["s", "as", "b", "s"],
+      [
+        "FragmentPath",
+        "DropInPaths",
+        "NeedDaemonReload",
+        "LoadState",
+        "UnitFileState",
+        "ActiveState",
+        "CanStart",
+        "RefuseManualStart",
+      ],
+      ["s", "as", "b", "s", "s", "s", "b", "b"],
     );
-    const [sourcePath, dropInPaths, reloadPending, loadState] = unitProperties ?? [];
+    const [
+      sourcePath,
+      dropInPaths,
+      reloadPending,
+      loadState,
+      unitFileState,
+      activeState,
+      canStart,
+      refuseManualStart,
+    ] = unitProperties ?? [];
+    const startRefusal = resolveSystemdServiceStartRefusal({
+      unit: unitName,
+      scope: target?.scope,
+      loadState: typeof loadState === "string" ? loadState : undefined,
+      unitFileState: typeof unitFileState === "string" ? unitFileState : undefined,
+      activeState: typeof activeState === "string" ? activeState : undefined,
+      canStart: typeof canStart === "boolean" ? canStart : undefined,
+      refuseManualStart: refuseManualStart === true,
+    });
+    if (startRefusal && loadState === "masked") {
+      throw new ServiceStartRefusalError(startRefusal);
+    }
     // LoadUnit also returns objects for missing units; only LoadState proves absence.
     if (loadState === "not-found") {
       return opts?.requireLoaded ? await assertAbsentWithoutLoading() : null;
@@ -202,6 +241,9 @@ async function readSystemdManagerCommand(
       dropInPaths.some((pathname) => !pathname) ||
       typeof reloadPending !== "boolean"
     ) {
+      if (startRefusal) {
+        throw new ServiceStartRefusalError(startRefusal);
+      }
       throw unavailable();
     }
     const properties = await readProperties(
@@ -246,6 +288,10 @@ async function readSystemdManagerCommand(
       !isStringArray(unset) ||
       unset.some((assignment) => !assignment || assignment.startsWith("="))
     ) {
+      // Invalid ExecStart must not hide a known hold before update preflight reads runtime.
+      if (startRefusal) {
+        throw new ServiceStartRefusalError(startRefusal);
+      }
       throw unavailable();
     }
     const inlineEnvironment: Record<string, string> = {};
@@ -259,8 +305,14 @@ async function readSystemdManagerCommand(
     if (systemScope && !locationOnly && typeof user !== "string") {
       throw unavailable();
     }
+    if (expectedServiceAccount !== undefined && user !== expectedServiceAccount) {
+      throw new ServiceOwnershipRefusalError("systemd-account-refused");
+    }
     const account =
-      systemScope && !locationOnly && typeof user === "string"
+      systemScope &&
+      !locationOnly &&
+      typeof user === "string" &&
+      expectedServiceAccount === undefined
         ? opts?.requireEffective
           ? assertSystemdServiceAccount(user)
           : os.userInfo()
@@ -432,6 +484,34 @@ export async function readSystemdServiceExecStart(
   return command;
 }
 
+/** Root may inspect an explicitly selected service account; this grants no lifecycle authority. */
+export async function readSystemdServiceExecStartAsRoot(
+  env: GatewayServiceEnv,
+  target: SystemdServiceReadTarget,
+  expectedServiceAccount: string,
+  loadForInspection?: GatewayServiceReadOptions["loadForInspection"],
+): Promise<GatewayServiceCommandConfig | null> {
+  if (
+    process.geteuid?.() !== 0 ||
+    target.scope !== "system" ||
+    !expectedServiceAccount ||
+    expectedServiceAccount === "root" ||
+    expectedServiceAccount === "0"
+  ) {
+    throw new ServiceOwnershipRefusalError("systemd-account-refused");
+  }
+  const command = await readSystemdServiceCommand(
+    env,
+    { systemdReadTarget: target, requireEffective: true, requireLoaded: true, loadForInspection },
+    false,
+    expectedServiceAccount,
+  );
+  if (command === "not-loaded") {
+    throw new Error("Full service inspection cannot use a location-only observation.");
+  }
+  return command;
+}
+
 /** Loaded artifact location only; never an environment or service-mutation grant. */
 export async function readSystemdServiceCommandLocation(
   env: GatewayServiceEnv,
@@ -492,6 +572,7 @@ async function readSystemdServiceCommand(
   env: GatewayServiceEnv,
   options?: GatewayServiceReadOptions,
   locationOnly = false,
+  expectedServiceAccount?: string,
 ): Promise<GatewayServiceCommandConfig | null | "not-loaded"> {
   try {
     const target =
@@ -514,6 +595,7 @@ async function readSystemdServiceCommand(
         [],
         opts,
         locationOnly,
+        expectedServiceAccount,
       );
       opts?.onCommandInspection?.({ kind: command || content !== null ? "present" : "absent" });
       return command;
@@ -647,79 +729,4 @@ function parseSystemdEnvironmentFileSpec(
   const pathname = expandSystemdSpecifier(optional ? value.slice(1) : value, env);
   // Native systemd ignores relative declarations rather than resolving them beside the unit.
   return path.posix.isAbsolute(pathname) ? [pathname, optional] : undefined;
-}
-
-function serializeSystemdEnvironmentFileValue(value: string): string {
-  // Quote only systemd's supported escapes so credential bytes survive EnvironmentFile parsing.
-  if (!/[\s\\'"`$]/u.test(value)) {
-    return value;
-  }
-  const escaped = value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("`", "\\`")
-    .replaceAll("$", "\\$");
-  return `"${escaped}"`;
-}
-
-export function serializeSystemdEnvironmentFile(environment: Record<string, string>): string {
-  return Object.entries(environment)
-    .map(([key, value]) => `${key}=${serializeSystemdEnvironmentFileValue(value)}`)
-    .join("\n");
-}
-
-export async function readSystemdEnvironmentFile(pathname: string): Promise<{
-  environment: Record<string, string>;
-  literalShellReferenceKeys: Set<string>;
-}> {
-  const environment: Record<string, string> = {};
-  const literalShellReferenceKeys = new Set<string>();
-  const content = await fs.readFile(pathname, "utf8");
-  for (const rawLine of content.split(/\r?\n/)) {
-    const parsed = parseSystemdEnvironmentFileLine(rawLine);
-    if (!parsed) {
-      continue;
-    }
-    environment[parsed.key] = parsed.value;
-    if (parsed.literalShellReference) {
-      literalShellReferenceKeys.add(parsed.key);
-    } else {
-      literalShellReferenceKeys.delete(parsed.key);
-    }
-  }
-  return { environment, literalShellReferenceKeys };
-}
-
-async function resolveSystemdEnvironmentFiles(
-  params: SystemdEnvironmentFilesParams,
-): Promise<Record<string, string>> {
-  const resolved: Record<string, string> = {};
-  const failIfUnavailable = (error: unknown, optional: boolean) => {
-    if (params.failOnUnavailable && !optional) {
-      throw error;
-    }
-  };
-  for (const [pattern, optional] of params.environmentFileSpecs) {
-    let pathnames: string[];
-    try {
-      pathnames = await expandSystemdEnvironmentFilePattern(pattern);
-    } catch (error) {
-      failIfUnavailable(error, optional);
-      continue;
-    }
-    pathnames.sort();
-    if (params.failOnUnavailable && !optional && pathnames.length === 0) {
-      throw new Error("Missing systemd environment file");
-    }
-    for (const filePath of pathnames) {
-      try {
-        Object.assign(resolved, (await readSystemdEnvironmentFile(filePath)).environment);
-      } catch (error) {
-        failIfUnavailable(error, optional);
-        // Diagnostics skip unavailable files, including non-optional ones.
-        continue;
-      }
-    }
-  }
-  return resolved;
 }

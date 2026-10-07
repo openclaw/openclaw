@@ -5,6 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import * as worktreeGit from "../../agents/worktrees/git.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -121,7 +122,8 @@ function git(...args: string[]): string {
 
 function requestContext() {
   return {
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    logGateway: createSubsystemLogger("test/repository-files"),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     workerRepositoryWorkspaceMutationService: {
       mutate: async <T>(params: {
         assertCurrent: () => void;
@@ -278,7 +280,7 @@ async function withCheckpointAcceptance(failCapture = false) {
     ],
     ["starting", "active", { activeOwnerEpoch: identity.generation }],
   ] as const) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: identity.sessionId,
       from,
       to,
@@ -409,7 +411,7 @@ it("accepts editor bytes and Git-normalized publication before acknowledging the
       ).toBe("saved\n");
     },
   );
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([]);
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
   expect(accepted.placements.get(identity.sessionId)?.turnClaim).toBeNull();
 });
 
@@ -432,7 +434,7 @@ it("reports failed editor checkpoint capture and retains the durable recovery ow
     checkpointRef: source.checkpointRef,
     manifestHash: source.manifestHash,
   });
-  expect(accepted.placements.listPendingWorkspaceResults()).toEqual([
+  expect(await accepted.placements.listPendingWorkspaceResultsAsync()).toEqual([
     expect.objectContaining({
       sessionId: identity.sessionId,
       workspaceAcceptedAtMs: null,
@@ -753,7 +755,7 @@ it("keeps a timed-out remote save owned until its physical write drains before S
   await draining.promise;
   let stopEntered = false;
   let contentAtStop: string | undefined;
-  const stopping = runExclusiveSessionLifecycleMutation({
+  const stopping = runExclusiveSessionLifecycleMutation("drain", {
     scope: path.join(gatewayRoot, "sessions.sqlite"),
     identities: [sessionKey, identity.sessionId],
     run: async () => {

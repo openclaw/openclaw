@@ -718,7 +718,6 @@ describe("runQaCharacterEval", () => {
         "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: false },
       },
       judgeModels: ["openai/gpt-5.6-luna", "anthropic/claude-opus-4-8"],
-      judgeThinkingDefault: "medium",
       judgeModelOptions: {
         "openai/gpt-5.6-luna": { thinkingDefault: "xhigh", fastMode: true },
         "anthropic/claude-opus-4-8": { thinkingDefault: "high" },

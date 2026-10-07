@@ -36,7 +36,7 @@ import {
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   countPendingDescendantRuns,
-  getLatestSubagentRunByChildSessionKey,
+  buildLatestSubagentSessionListReadIndex,
   isSubagentSessionRunActive,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
@@ -115,21 +115,15 @@ export function hasUsableSessionEntry(entry: unknown): entry is Record<string, u
 }
 
 function stripAndClassifyReply(text: string): string | null {
-  let result = text;
-  let didStrip = false;
-  const hasLeadingSilentToken = startsWithSilentToken(result, SILENT_REPLY_TOKEN);
-  if (hasLeadingSilentToken) {
-    result = stripLeadingSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
+  const hasLeadingSilentToken = startsWithSilentToken(text, SILENT_REPLY_TOKEN);
+  if (!hasLeadingSilentToken && !text.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    return text;
   }
-  if (hasLeadingSilentToken || result.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
-    result = stripSilentToken(result, SILENT_REPLY_TOKEN);
-    didStrip = true;
-  }
-  if (didStrip && (!result.trim() || isSilentReplyText(result, SILENT_REPLY_TOKEN))) {
-    return null;
-  }
-  return result;
+  const result = stripSilentToken(
+    hasLeadingSilentToken ? stripLeadingSilentToken(text, SILENT_REPLY_TOKEN) : text,
+    SILENT_REPLY_TOKEN,
+  );
+  return !result || isSilentReplyText(result, SILENT_REPLY_TOKEN) ? null : result;
 }
 
 type SubagentAnnounceFlowParams = {
@@ -170,6 +164,7 @@ type SubagentAnnounceFlowParams = {
   isCompletionDeliveryAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -266,10 +261,10 @@ async function runSubagentAnnounceFlowBound(
       if (
         params.completionTarget !== "parent" &&
         requesterDepth >= 1 &&
-        shouldIgnorePostCompletionAnnounceForSession(
+        (await shouldIgnorePostCompletionAnnounceForSession(
           targetRequesterSessionKey,
           targetRequesterAgentId,
-        )
+        ))
       ) {
         return "delivered";
       }
@@ -303,7 +298,9 @@ async function runSubagentAnnounceFlowBound(
           childCompletionRows = dedupeLatestChildCompletionRows(
             filterCurrentDirectChildCompletionRows(directChildren, {
               requesterSessionKey: params.childSessionKey,
-              getLatestSubagentRunByChildSessionKey,
+              getLatestSubagentRunByChildSessionKey: buildLatestSubagentSessionListReadIndex(
+                directChildren.map((entry) => entry.childSessionKey),
+              ).getLatestSubagentRun,
             }),
           );
         }
@@ -475,10 +472,10 @@ async function runSubagentAnnounceFlowBound(
       if (!isSubagentSessionRunActive(targetRequesterSessionKey, targetRequesterAgentId)) {
         if (
           params.completionTarget !== "parent" &&
-          shouldIgnorePostCompletionAnnounceForSession(
+          (await shouldIgnorePostCompletionAnnounceForSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
-          )
+          ))
         ) {
           return "delivered";
         }
@@ -490,7 +487,7 @@ async function runSubagentAnnounceFlowBound(
             shouldDeleteChildSession = false;
             return "retryable";
           }
-          const fallback = resolveRequesterForChildSession(
+          const fallback = await resolveRequesterForChildSession(
             targetRequesterSessionKey,
             targetRequesterAgentId,
           );
@@ -619,6 +616,7 @@ async function runSubagentAnnounceFlowBound(
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
+      onExecutionStarted: params.onExecutionStarted,
       resolveGatewayContext: params.resolveGatewayContext,
     });
     await reportDeliveryResult(delivery);
@@ -643,6 +641,7 @@ async function runSubagentAnnounceFlowBound(
     ) {
       await deleteSubagentSessionForCleanup({
         callGateway: callSubagentLifecycleGateway,
+        gatewayBinding: { resolveGatewayContext: params.resolveGatewayContext },
         prepareCurrent: prepareChildSessionEffects,
         isCurrent: childSessionEffectsAllowed,
         childSessionKey: params.childSessionKey,

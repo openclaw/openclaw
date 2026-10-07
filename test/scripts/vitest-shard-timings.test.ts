@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveShardTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
+import {
+  createCompactSplitTimingGeneration,
+  resolveShardTimingKey,
+} from "../../scripts/lib/vitest-shard-metadata.mts";
 import {
   createShardTimingSample,
   readShardTimings,
@@ -19,6 +22,22 @@ afterEach(() => {
 });
 
 describe("scripts/lib/vitest-shard-timings.mts", () => {
+  it.each([
+    { stripes: [["a.test.ts", "a.test.ts"]], owners: "1 and 1" },
+    { stripes: [["a.test.ts"], ["a.test.ts"]], owners: "1 and 2" },
+  ])("identifies conflicting file ownership in $stripes", ({ stripes, owners }) => {
+    expect(() =>
+      createCompactSplitTimingGeneration({
+        configs: ["test/vitest/vitest.infra.config.ts"],
+        parentShardName: "changed-core-runtime-infra-storage-state",
+        stripes,
+      }),
+    ).toThrow(
+      `duplicate test ownership for a.test.ts in changed-core-runtime-infra-storage-state ` +
+        `(configs: test/vitest/vitest.infra.config.ts; stripes: ${owners})`,
+    );
+  });
+
   it("uses the config path as the timing key for whole-config runs", () => {
     expect(
       resolveShardTimingKey({

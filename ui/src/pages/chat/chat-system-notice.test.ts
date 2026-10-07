@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import { buildCachedChatItems, resetChatThreadState } from "./chat-thread.ts";
 
 const clients = [{ id: "cli", mode: "cli", displayName: "Release helper" }];
@@ -32,53 +33,20 @@ function render(
   pendingInputs: ChatPendingInputsPage["items"],
   searchQuery = "",
 ) {
-  return buildCachedChatItems({
-    paneId: "notices",
-    sessionKey: "main",
-    messages,
-    pendingInputs,
-    toolMessages: [],
-    streamSegments: [],
-    stream: null,
-    streamStartedAt: null,
-    showToolCalls: true,
-    searchOpen: Boolean(searchQuery),
-    searchQuery,
-  });
+  return buildCachedChatItems(
+    createProps({
+      paneId: "notices",
+      messages,
+      pendingInputs,
+      searchOpen: Boolean(searchQuery),
+      searchQuery,
+    }),
+  );
 }
 
 afterEach(() => resetChatThreadState());
 
 describe("system notices through pending-to-history promotion", () => {
-  it.each(["interrupted", "cancelled"] as const)(
-    "shows one accurate recovery notice when the request is %s before starting",
-    (state) => {
-      const message = {
-        ...baseMessage,
-        provenance: { kind: "internal_system", sourceTool: "main_session_restart_recovery" },
-      };
-      expect(render([], pending(message))).toMatchObject([
-        { kind: "notice", label: "System · restart recovery" },
-      ]);
-      expect(render([], pending(message, state))).toMatchObject([
-        {
-          kind: "notice",
-          label: "System · restart recovery",
-          text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
-          startsTurn: true,
-        },
-      ]);
-      expect(render([message], pending(message, state))).toMatchObject([
-        {
-          kind: "notice",
-          label: "System · restart recovery",
-          text: "Turn interrupted by a gateway restart — asked the agent to resume and finish the response.",
-          boundaryId: "send:run",
-        },
-      ]);
-    },
-  );
-
   it.each([
     [
       "main_session_restart_recovery",
@@ -128,6 +96,27 @@ describe("system notices through pending-to-history promotion", () => {
             }
           : baseMessage["__openclaw"],
       };
+      if (sourceTool === "main_session_restart_recovery") {
+        expect(render([], pending(message))).toMatchObject([{ kind: "notice", label }]);
+        for (const state of ["interrupted", "cancelled"] as const) {
+          expect(render([], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text: `The Gateway restarted. Automatic recovery was ${state} before the agent could resume. Send a message to continue.`,
+              startsTurn: true,
+            },
+          ]);
+          expect(render([message], pending(message, state))).toMatchObject([
+            {
+              kind: "notice",
+              label,
+              text,
+              boundaryId: "send:run",
+            },
+          ]);
+        }
+      }
       const inputs = pending(message);
       const before = { role: "user", content: "before", timestamp: 999 };
       const after = {

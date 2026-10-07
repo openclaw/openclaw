@@ -1,7 +1,3 @@
-/**
- * Reads and refreshes credentials stored by external CLI runtimes such as
- * Codex, Gemini, and MiniMax.
- */
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -31,7 +27,6 @@ let codexCliCache: CachedValue<CodexCliCredential> | null = null;
 let minimaxCliCache: CachedValue<MiniMaxCliCredential> | null = null;
 let geminiCliCache: CachedValue<GeminiCliCredential> | null = null;
 
-/** Credential shape parsed from Codex CLI storage. */
 export type CodexCliCredential = {
   type: "oauth";
   provider: OAuthProvider;
@@ -42,14 +37,12 @@ export type CodexCliCredential = {
   idToken?: string;
 };
 
-/** API-key credential parsed from the active Codex CLI auth mode. */
 export type CodexCliApiKeyCredential = {
   type: "api_key";
   provider: "openai";
   key: string;
 };
 
-/** Credential shape parsed from MiniMax portal CLI storage. */
 type MiniMaxCliCredential = {
   type: "oauth";
   provider: "minimax-portal";
@@ -58,7 +51,6 @@ type MiniMaxCliCredential = {
   expires: number;
 };
 
-/** Credential shape parsed from Gemini CLI storage. */
 export type GeminiCliCredential = {
   type: "oauth";
   provider: "google-gemini-cli";
@@ -289,25 +281,16 @@ function readCliOauthTokenFields(
   return { access: accessToken, refresh: refreshToken, expires: expiresAt };
 }
 
-function readPortalCliOauthCredentials<TProvider extends string>(
-  credPath: string,
-  provider: TProvider,
-): { type: "oauth"; provider: TProvider; access: string; refresh: string; expires: number } | null {
+function readMiniMaxCliCredentials(credPath: string): MiniMaxCliCredential | null {
   const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
   }
   const tokens = readCliOauthTokenFields(raw as Record<string, unknown>);
-  return tokens ? { type: "oauth", provider, ...tokens } : null;
+  return tokens ? { type: "oauth", provider: "minimax-portal", ...tokens } : null;
 }
 
-function readMiniMaxCliCredentials(options?: { homeDir?: string }): MiniMaxCliCredential | null {
-  const credPath = resolveMiniMaxCliCredentialsPath(options?.homeDir);
-  return readPortalCliOauthCredentials(credPath, "minimax-portal");
-}
-
-function readGeminiCliCredentials(options?: { homeDir?: string }): GeminiCliCredential | null {
-  const credPath = resolveGeminiCliCredentialsPath(options?.homeDir);
+function readGeminiCliCredentials(credPath: string): GeminiCliCredential | null {
   const raw = loadJsonFileThroughSymlink(credPath);
   if (!raw || typeof raw !== "object") {
     return null;
@@ -401,7 +384,6 @@ export function readCodexCliActiveApiKey(options?: {
   return key ? { type: "api_key", provider: "openai", key } : null;
 }
 
-/** Reads Codex CLI OAuth credentials from Keychain or CODEX_HOME auth.json. */
 function readCodexCliCredentials(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
@@ -438,7 +420,6 @@ function readCodexCliCredentials(options?: {
   return parseCodexOauthCredential(raw as Record<string, unknown>, fallbackExpiry);
 }
 
-/** Reads Codex CLI credentials with optional short-lived cache and file fingerprinting. */
 export function readCodexCliCredentialsCached(options?: {
   codexHome?: string;
   allowKeychainPrompt?: boolean;
@@ -469,7 +450,6 @@ export function readCodexCliCredentialsCached(options?: {
   });
 }
 
-/** Reads MiniMax CLI credentials with optional short-lived cache. */
 export function readMiniMaxCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
@@ -479,7 +459,7 @@ export function readMiniMaxCliCredentialsCached(options?: {
     ttlMs: options?.ttlMs ?? 0,
     cache: minimaxCliCache,
     cacheKey: credPath,
-    read: () => readMiniMaxCliCredentials({ homeDir: options?.homeDir }),
+    read: () => readMiniMaxCliCredentials(credPath),
     setCache: (next) => {
       minimaxCliCache = next;
     },
@@ -487,7 +467,6 @@ export function readMiniMaxCliCredentialsCached(options?: {
   });
 }
 
-/** Reads Gemini CLI credentials with optional short-lived cache. */
 export function readGeminiCliCredentialsCached(options?: {
   ttlMs?: number;
   homeDir?: string;
@@ -497,7 +476,7 @@ export function readGeminiCliCredentialsCached(options?: {
     ttlMs: options?.ttlMs ?? 0,
     cache: geminiCliCache,
     cacheKey: credPath,
-    read: () => readGeminiCliCredentials({ homeDir: options?.homeDir }),
+    read: () => readGeminiCliCredentials(credPath),
     setCache: (next) => {
       geminiCliCache = next;
     },

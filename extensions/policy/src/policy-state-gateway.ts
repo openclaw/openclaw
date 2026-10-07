@@ -56,28 +56,24 @@ export function scanPolicyGatewayExposure(
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-enabled",
-    "controlUi",
     controlUi.enabled,
     "oc://openclaw.config/gateway/controlUi/enabled",
   );
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-insecure-auth",
-    "controlUi",
     false,
     "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-device-auth-disabled",
-    "controlUi",
     false,
     "oc://openclaw.invariant/gateway/controlUi/deviceIdentity",
   );
   pushGatewayBooleanEvidence(
     entries,
     "gateway-control-ui-host-origin-fallback",
-    "controlUi",
     controlUi.dangerouslyAllowHostHeaderOriginFallback,
     "oc://openclaw.config/gateway/controlUi/dangerouslyAllowHostHeaderOriginFallback",
   );
@@ -129,14 +125,13 @@ export function scanPolicyGatewayExposure(
 function pushGatewayBooleanEvidence(
   entries: PolicyGatewayExposureEvidence[],
   id: string,
-  kind: PolicyGatewayExposureEvidence["kind"],
   value: unknown,
   source: string,
 ): void {
   if (typeof value !== "boolean") {
     return;
   }
-  entries.push({ id, kind, source, value });
+  entries.push({ id, kind: "controlUi", source, value });
 }
 
 function pushGatewayHttpEndpointEvidence(

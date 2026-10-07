@@ -134,9 +134,7 @@ test("sessions.create retains a cloud repository across replay without creating 
         fetchImpl,
         resolveGitRoot: async () => workspace,
       });
-      expect(getEventListeners(cacheLifetime.signal, "abort").length).toBeGreaterThan(
-        repositoryPins,
-      );
+      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       gitRead.mockClear();
       const preview = await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,

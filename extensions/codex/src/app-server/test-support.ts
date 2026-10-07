@@ -22,6 +22,17 @@ import {
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
 
+/** Synthetic transports declare their own trust and proxy profile, never the host's. */
+export function stubCodexInferenceTransportEnv(): void {
+  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
+    vi.stubEnv(key, undefined);
+  }
+  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+    vi.stubEnv(key, undefined);
+    vi.stubEnv(key.toLowerCase(), undefined);
+  }
+}
+
 /** Minimal deterministic host terminal observer for Codex harness tests. */
 export function createCodexTestToolTerminalObserver(): NonNullable<
   EmbeddedRunAttemptParams["observeToolTerminal"]
@@ -266,7 +277,7 @@ export function createClientHarness(
         const timer = setTimeout(() => {
           cleanup();
           reject(new Error(`Timed out waiting for app-server harness write ${index}`));
-        }, 1_000);
+        }, 5_000);
         writeEvents.on("write", onWrite);
       });
     },

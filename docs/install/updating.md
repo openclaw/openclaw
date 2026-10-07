@@ -40,10 +40,15 @@ those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
 that still contains these retired keys and directs you through the same bridge.
 
+The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
+before canonical tables are created. Preserve the original state and configuration,
+then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
+Unrelated tables with these generic names remain untouched.
+
 If a newer release has already upgraded your SQLite databases, use a compatible
 pre-update backup for the bridge. Older releases cannot open newer database
 schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
-before running `2026.9.5` against that state.
+before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -115,6 +120,25 @@ including Linux hosts without systemd, the update continues and records a warnin
 It leaves unverified service definitions unchanged and skips their automatic
 restart. Restart the Gateway you launched manually after the update, or use its
 actual supervisor. Doctor still checks for active state writers before migrations.
+
+On Linux, unmask a managed systemd unit before updating. A masked unit
+(`masked` or `masked-runtime`), `RefuseManualStart=yes`, or a disabled and inactive
+unit with no start path causes preflight to refuse before replacing files or
+running migrations. For the default user service:
+
+```bash
+systemctl --user unmask openclaw-gateway.service
+openclaw update
+```
+
+Use the unit and scope reported by `openclaw gateway status --deep` for a custom
+profile or system service. If an operator applies a mask or another start
+restriction during the update, OpenClaw retains the activated candidate and
+reports a service-definition warning instead of rolling back because systemd
+refused to start it. Gateway readiness is still unverified; remove the reported
+restriction, run `openclaw gateway start`, then check `openclaw gateway status --deep`.
+These checks belong to the installed updater; unmask before updating from an
+older release too. See [Linux maintenance holds](/cli/gateway/service#linux-maintenance-holds).
 
 Service membership uses the running Gateway's process ancestry and native supervisor
 facts. An external terminal that inherited service environment markers can still update after native
@@ -217,7 +241,7 @@ actual Bun executable against the Bun 1.4+ and WAL-safe `node:sqlite` requiremen
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.
-Bun-owned package-manager probes and installs use that verified executable, and the
+Bun-owned package-manager checks and installs use that verified executable, and the
 existing install/restart path retains the recorded runtime pin. A path under
 `~/.openclaw` alone does not establish Bun package-manager ownership. See
 [Bun-only installs](/install/bun-compatibility#bun-only-installs).
@@ -328,7 +352,8 @@ installation where possible, and prints a short next action. A running updated
 Gateway can also report a plugin that did not load without turning the core update
 into a failure. Individual plugin outcomes remain available in `--json` output.
 Failures to install core, repair required configuration or state, or start the
-updated Gateway remain update failures.
+updated Gateway remain update failures, except for the service-definition refusals
+described above.
 Local copies selected through `plugins.load.paths` are operator-managed. Updates
 and `openclaw update repair` retain the selected copy and any npm install it
 shadows, and record a `plugin-operator-managed` warning in the outcome and update
@@ -459,10 +484,25 @@ receipt remains in the control directory and is readable through
 A completed receipt is replaced only when the next update is admitted through
 the same original executor store; it is not authority to mutate an installation.
 
+On Linux, a filesystem remount can change device numbers without moving files.
+Update admission reconciles this change for completed receipts when the recorded
+inodes, installation path, and ownership still match. It refreshes verified
+identities while preserving the original journal format and completion intent,
+so older CLI versions can still read the completed receipt. The warning
+`filesystem device id changed; receipt identities refreshed` reports the repair
+without adding a new persisted intent. Active recovery operations and replaced
+files retain their existing identity checks.
+
 Missing, legacy or identity-mismatched recovery artifacts block the next mutable
 update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
+
+SQLite recovery and rollback custody verify file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes; replaced
+files or changed database or journal bytes still require recovery by their owner.
+Snapshot publication uses the same checks, including on older Linux kernels where
+reported file creation time changes after ordinary writes or hard-link removal.
 
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The

@@ -1,1 +1,1 @@
-export type UpdateInstallKind = "git" | "package" | "unknown" | "host";
+export type UpdateInstallKind = "git" | "package" | "immutable" | "unknown" | "host";

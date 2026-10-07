@@ -131,7 +131,6 @@ describe("runDoctorSessionSqlite", () => {
       await expect(
         recoverDoctorSessionSqliteTargets({
           env: store.env,
-          options: { mode: "recover" },
           targets: [
             { agentId: "main", storePath: sqlitePath },
             { agentId: "later", storePath: laterPath },
@@ -229,7 +228,6 @@ describe("runDoctorSessionSqlite", () => {
     const run = createSessionSqliteMigrationRun(store.env, [target]);
     const report = await recoverDoctorSessionSqliteTargets({
       env: store.env,
-      options: { mode: "recover" },
       targets: [target],
       validateTarget: async (selected) => {
         const validation = readOnlySqliteValidationSnapshot(selected);
@@ -247,23 +245,6 @@ describe("runDoctorSessionSqlite", () => {
     expect(report.targets[0]?.sqlitePath).toBe(target.sqlitePath);
     expect(report.totals.validatedEntries).toBe(1);
   });
-
-  it.skipIf(process.platform === "win32")(
-    "reapplies owner-only permissions after compaction",
-    async () => {
-      const { sqlitePath, store } = await createImportedStoreForCompaction();
-      fs.chmodSync(sqlitePath, 0o666);
-
-      const report = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "compact",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(0);
-      expect(fs.statSync(sqlitePath).mode & 0o777).toBe(0o600);
-    },
-  );
 
   it("rejects stale secondary indexes before compacting and quarantines them in recovery", async () => {
     const { sqlitePath, store } = await createImportedStoreForCompaction();

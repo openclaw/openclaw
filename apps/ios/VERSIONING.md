@@ -303,6 +303,13 @@ Connect finishes processing the upload, before notes and build selection are
 staged or TestFlight distribution begins. Existing refs are immutable; their
 presence proves the uploaded source, not successful completion of later staging.
 
+Source-ref reads and writes tolerate recognized transient Git failures, including
+GitHub's workflow-check timeout, with up to four attempts and waits of 5, 10, and
+20 seconds. Every push is reconciled against the remote ref before another
+attempt; an unreadable remote never authorizes another push. Authentication
+failures and conflicting source SHAs stop the release. These retries do not
+repeat the build or upload.
+
 ## Normal workflow
 
 1. Commit and land the app changes on `main`.

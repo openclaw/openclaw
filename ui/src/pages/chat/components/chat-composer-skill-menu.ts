@@ -120,13 +120,13 @@ function requestSkillCommandRefresh(
     return;
   }
   const refresh = host.refreshCommands();
-  if (!refresh || typeof refresh.then !== "function") {
+  if (!refresh) {
     return;
   }
   const generation = state.skillCommandRefreshGeneration + 1;
   state.skillCommandRefreshGeneration = generation;
   state.skillCommandRefreshPending = true;
-  void Promise.resolve(refresh)
+  void refresh
     .catch(() => undefined)
     .finally(() => {
       if (state.skillCommandRefreshGeneration !== generation) {
