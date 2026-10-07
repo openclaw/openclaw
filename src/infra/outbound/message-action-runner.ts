@@ -1,4 +1,3 @@
-// Stable facade for message-action normalization, routing, and execution.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -326,7 +325,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message)) {
       params.message = recommendations.text;
     }
   }
@@ -363,7 +362,6 @@ async function handleInternalSourceReplySendAction(
     }),
   });
   const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
     actionParams: params,
     input,
     agentId,
@@ -481,20 +479,24 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
+  // have no viewer here, so claim no visible delivery.
+  const receipt = input.sourceReplyTranscriptOnly
+    ? payload.dryRun
+      ? "Prepared reply for the current session transcript."
+      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+    : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length
     ? cards
         .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
         .join("\n")
-    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
-      ? payload.sourceReply.text
-      : undefined;
+    : recommendations?.text;
   const { sourceReplyDeliveryMode, ...details } = payload;
   const toolResult = textResult(
-    `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
     {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),

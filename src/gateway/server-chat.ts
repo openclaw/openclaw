@@ -171,22 +171,6 @@ export function resolveChatErrorKindFromError(error: unknown): ChatErrorKind | u
   return isTimeoutError(error) ? "timeout" : undefined;
 }
 
-function excludeConnIds(
-  connIds: ReadonlySet<string>,
-  excludedConnIds: ReadonlySet<string> | undefined,
-): ReadonlySet<string> {
-  if (!excludedConnIds || excludedConnIds.size === 0 || connIds.size === 0) {
-    return connIds;
-  }
-  const filtered = new Set<string>();
-  for (const connId of connIds) {
-    if (!excludedConnIds.has(connId)) {
-      filtered.add(connId);
-    }
-  }
-  return filtered;
-}
-
 export type AgentEventHandlerOptions = {
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -303,6 +287,7 @@ export function createAgentEventHandler({
   };
 
   type TerminalLifecycleOptions = {
+    publishLifecycle?: boolean;
     skipChatErrorFinal?: boolean;
     suppressRestartRecoveryProjection?: boolean;
     restartRecoveryState?: { suppress: boolean };
@@ -465,6 +450,7 @@ export function createAgentEventHandler({
       chatLink && !replyDispatchOwnsCompletion ? chatRunState.registry.shift(evt.runId) : undefined;
 
     if (
+      opts?.publishLifecycle !== false &&
       !replyDispatchOwnsCompletion &&
       !suppressRestartRecoveryProjection &&
       sessionKey &&
@@ -569,7 +555,7 @@ export function createAgentEventHandler({
           snapshotEvent?: AgentEventPayload,
           read?: SessionRowReadView,
         ) => {
-          if (parseCronRunScopeSuffix(sessionKey).runId) {
+          if (opts?.publishLifecycle === false || parseCronRunScopeSuffix(sessionKey).runId) {
             return;
           }
           const sessionEventConnIds = sessionEventSubscribers.getAll();
@@ -690,6 +676,7 @@ export function createAgentEventHandler({
       "chat",
       sessionKey,
       agentId,
+      run.assistantScope?.itemId,
       opts?.controlUiVisible ?? true,
     ]);
     const canvasBlocks = run.canvasBlocks;
@@ -700,8 +687,7 @@ export function createAgentEventHandler({
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "delta" as const,
-      deltaText: broadcastDelta.deltaText,
-      ...(broadcastDelta.replace ? { replace: true as const } : {}),
+      ...broadcastDelta,
       message: appendChatCanvasBlocksToMessage(
         { role: "assistant", content: [{ type: "text", text }], timestamp: now },
         canvasBlocks ?? [],
@@ -1270,6 +1256,7 @@ export function createAgentEventHandler({
     if (lifecyclePhase !== null && lifecyclePhase !== "error") {
       clearPendingTerminalLifecycleError(evt.runId);
     }
+    const publishLifecycle = evt.admitLifecyclePublication?.() ?? true;
 
     // Include sessionKey so Control UI can filter tool streams per session.
     const spawnedBy = sessionKey ? resolveSpawnedBy(sessionKey) : null;
@@ -1295,7 +1282,7 @@ export function createAgentEventHandler({
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
     const suppressHeartbeatToolEvents = isToolEvent && heartbeatPolicy === true;
-    if (last > 0 && evt.seq !== last + 1) {
+    if (publishLifecycle && last > 0 && evt.seq !== last + 1) {
       flushBufferedAgentDeltaIfNeeded(clientRunId);
       if (isControlUiVisible) {
         broadcast(
@@ -1339,7 +1326,7 @@ export function createAgentEventHandler({
         ...(explanation ? { explanation } : {}),
       };
     }
-    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents) {
+    if (recordsInFlightProgress && !isAborted && !suppressHeartbeatToolEvents && publishLifecycle) {
       // Persist the client-facing identity after run/session remapping. Route
       // changes discard transient UI rows, so history replay must use the same
       // payload identity as live delivery or tool results cannot reconcile.
@@ -1459,10 +1446,10 @@ export function createAgentEventHandler({
       // tool recipients. Mirror tool lifecycle onto a session-scoped event so
       // they can render live pending tool cards without polling history.
       if (isControlUiVisible && sessionKey && !suppressHeartbeatToolEvents) {
-        const sessionSubscribers = excludeConnIds(
-          sessionEventSubscribers.getAll(),
-          runToolRecipients,
-        );
+        const sessionSubscribers = new Set(sessionEventSubscribers.getAll());
+        for (const connId of runToolRecipients ?? []) {
+          sessionSubscribers.delete(connId);
+        }
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
             "session.tool",
@@ -1479,6 +1466,7 @@ export function createAgentEventHandler({
       const itemPhase = isItemEvent && typeof evt.data?.phase === "string" ? evt.data.phase : "";
       // The runtime error frame drains this text before retry cleanup retires its group.
       if (
+        publishLifecycle &&
         (itemPhase === "start" ||
           (lifecyclePhase === "error" && evt.data.completionSource !== "reply-dispatch")) &&
         (isControlUiVisible || hasSessionMessageSubscribers) &&
@@ -1500,16 +1488,17 @@ export function createAgentEventHandler({
         flushBufferedAgentDeltaIfNeeded(clientRunId);
       }
       if (
-        isControlUiVisible ||
-        (sessionKey &&
-          hasSessionMessageSubscribers &&
-          (isItemEvent ||
-            evt.stream === "thinking" ||
-            evt.stream === "approval" ||
-            evt.stream === "lifecycle" ||
-            (!isAborted &&
-              evt.stream === "assistant" &&
-              shouldMirrorAssistantEventToHiddenSessionMessages(evt.data))))
+        publishLifecycle &&
+        (isControlUiVisible ||
+          (sessionKey &&
+            hasSessionMessageSubscribers &&
+            (isItemEvent ||
+              evt.stream === "thinking" ||
+              evt.stream === "approval" ||
+              evt.stream === "lifecycle" ||
+              (!isAborted &&
+                evt.stream === "assistant" &&
+                shouldMirrorAssistantEventToHiddenSessionMessages(evt.data)))))
       ) {
         sendOrBufferAgentTextEvent(
           clientRunId,
@@ -1602,24 +1591,29 @@ export function createAgentEventHandler({
       if (isAborted || definitiveTerminal || lifecycleErrorRetryGraceMs <= 0) {
         // finalizeLifecycleEvent clears the buffer itself, after emitChatTerminal
         // has flushed the throttled tail and resolved the terminal message.
-        finalizeLifecycleEvent(evt, { skipChatErrorFinal, restartRecoveryState });
+        finalizeLifecycleEvent(evt, { skipChatErrorFinal, publishLifecycle, restartRecoveryState });
       } else {
         if (evt.data.completionSource !== "reply-dispatch") {
           // Runtime retries isolate failed text; reply-dispatch retains its
           // post-hook payloads and abort state until its own completion settles.
           chatRunState.clearRun(clientRunId);
         }
-        scheduleTerminalLifecycleError(evt, { skipChatErrorFinal, restartRecoveryState });
+        scheduleTerminalLifecycleError(evt, {
+          skipChatErrorFinal,
+          publishLifecycle,
+          restartRecoveryState,
+        });
       }
       return;
     }
 
     if (lifecyclePhase === "end") {
-      finalizeLifecycleEvent(evt, { restartRecoveryState });
+      finalizeLifecycleEvent(evt, { publishLifecycle, restartRecoveryState });
       return;
     }
 
     if (
+      publishLifecycle &&
       projectSessionLifecycle &&
       sessionKey &&
       (lifecyclePhase === "start" ||

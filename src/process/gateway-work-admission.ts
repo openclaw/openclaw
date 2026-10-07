@@ -188,19 +188,16 @@ async function runWithDetachedAsyncWork<T>(
 
 function invalidateSuspendAdmission(): void {
   const callback = GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated;
-  const wasClosed = GATEWAY_WORK_ADMISSION_STATE.suspendPhase !== "accepting";
   GATEWAY_WORK_ADMISSION_STATE.suspendInvalidated = undefined;
   GATEWAY_WORK_ADMISSION_STATE.suspendPhase = "accepting";
   GATEWAY_WORK_ADMISSION_STATE.suspendGeneration += 1;
   resolveSuspendOpenWaiters();
   // Restart drain supersedes suspension without reopening process admission.
-  if (wasClosed && GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
+  if (GATEWAY_WORK_ADMISSION_STATE.restartDrainReason === undefined) {
     admissionLog.info("admission reopened: suspend phase");
   }
   callback?.();
-  if (wasClosed) {
-    notifyGatewaySuspendAdmission();
-  }
+  notifyGatewaySuspendAdmission();
 }
 
 /** Reopens a reversible restart-signal fence; one-way restart drain retains admission. */

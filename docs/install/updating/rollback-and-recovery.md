@@ -10,6 +10,19 @@ title: "Rollback and recovery"
 
 Downgrades, automatic rollback, verified pre-update backups, and triage when an update leaves you stuck. Part of the [Updating](/install/updating) guide.
 
+## Before you upgrade
+
+- Create a [verified backup](#before-updating-create-a-verified-backup) and keep the same service account, profile, and state/configuration paths.
+- Compare `openclaw --version` with `openclaw status` and `openclaw gateway status --deep`. The first reports the CLI version; status reports a Gateway service targeting a different installation. In `openclaw status --json`, compare `update.root` with `gatewayService.layout.packageRootReal`; `gatewayService.layout.entrypointReal` identifies the service binary, and `gatewayService.installationDrift` explains a mismatch.
+- Check the actual Node executable and version with `node -p "process.execPath + ' ' + process.version"`. Compare them with the updater's detected runtime and required range, since the service can select a different Node than your shell. See [supported Node versions](/install/node).
+- Run `openclaw update --dry-run` and inspect any named preflight check. Restore service-manager access as the owning account when requested. An unavailable manager produces a warning and skips automatic service restart; an ownership refusal requires resolving the reported mismatch before retrying.
+- If installation paths differ, align entry points before considering a reinstall. On Windows, use `Get-Command openclaw -All` and `Get-Command node -All`; on macOS/Linux, use `type -a openclaw node`. Retry through the intended installation's absolute launcher and follow the updater's recovery command. Changing the shell's Node alone does not update the service definition.
+
+Preflight diagnostics identify the update installation and binary, the detected
+runtime, and the service installation when inspected. An unresolved service path
+means it could not be verified, not that no Gateway is running. Older installed
+updaters keep their original messages for the first upgrade hop.
+
 ## Downgrade
 
 Verify the upgrade and your session history before retiring recovery originals
@@ -151,7 +164,7 @@ updater owns this ordering; staging a newer candidate cannot change an
 already-running older updater.
 On Windows, an eligible capture first runs the same native SQLite exclusion check
 used by rollback. This settles any retained WAL before recording write fingerprints,
-so later probe cleanup is not mistaken for another writer. If another connection
+so later check cleanup is not mistaken for another writer. If another connection
 prevents exclusion, snapshots remain available for manual recovery.
 Snapshots taken while a Gateway may still be writing are available for
 manual recovery only until verified successful activation, even if it exits later.

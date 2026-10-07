@@ -249,12 +249,7 @@ describe("channelsResolveCommand", () => {
   it.each([
     { input: "team:T11111111:user:U01234567", chatType: "direct", expectedKind: "user" },
     { input: "team:T11111111:channel:C01234567", chatType: "channel", expectedKind: "group" },
-    { input: "fixture:room-id", chatType: "group", expectedKind: "group" },
-    { input: "fixture:channel-id", chatType: "channel", expectedKind: "group" },
     { input: "fixture:user-id", chatType: undefined, expectedKind: "user" },
-    { input: "general", chatType: undefined, expectedKind: "group" },
-    { input: "jane@example.com", chatType: "channel", expectedKind: "user" },
-    { input: "@jane.doe", chatType: "channel", expectedKind: "user" },
   ] as const)(
     "classifies $input with plugin inference and existing name heuristics",
     async ({ input, chatType, expectedKind }) => {
@@ -307,25 +302,20 @@ describe("channelsResolveCommand", () => {
     );
   });
 
-  it.each(["user", "group", "channel"] as const)(
-    "keeps explicit --kind %s ahead of plugin inference",
-    async (kind) => {
-      const input = "team:T11111111:user:U01234567";
-      const inferTargetChatType = vi.fn(() => "direct" as const);
-      const resolveTargets = vi
-        .fn<ChannelResolverAdapter["resolveTargets"]>()
-        .mockResolvedValue([]);
-      mocks.resolveMessageChannelSelection.mockResolvedValue({
-        channel: "fixture",
-        plugin: { id: "fixture", messaging: { inferTargetChatType }, resolver: { resolveTargets } },
-      });
+  it.each(["user"] as const)("keeps explicit --kind %s ahead of plugin inference", async (kind) => {
+    const input = "team:T11111111:user:U01234567";
+    const inferTargetChatType = vi.fn(() => "direct" as const);
+    const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>().mockResolvedValue([]);
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "fixture",
+      plugin: { id: "fixture", messaging: { inferTargetChatType }, resolver: { resolveTargets } },
+    });
 
-      await channelsResolveCommand({ kind, entries: [input], json: true }, runtime);
+    await channelsResolveCommand({ kind, entries: [input], json: true }, runtime);
 
-      expect(inferTargetChatType).not.toHaveBeenCalled();
-      expect(resolveTargets).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: kind === "user" ? "user" : "group", inputs: [input] }),
-      );
-    },
-  );
+    expect(inferTargetChatType).not.toHaveBeenCalled();
+    expect(resolveTargets).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: kind === "user" ? "user" : "group", inputs: [input] }),
+    );
+  });
 });

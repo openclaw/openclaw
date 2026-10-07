@@ -46,7 +46,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,11 +98,7 @@ internal fun SkillsSettingsScreen(
       filterInstalledSkills(skills, installedSearch, installedFilter)
     }
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) {
-      viewModel.refreshSkills()
-    }
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshSkills() }
 
   selectedSkillKey?.let { skillKey ->
     val selectedSkill = skills.firstOrNull { it.skillKey == skillKey }
@@ -120,9 +115,8 @@ internal fun SkillsSettingsScreen(
   }
 
   SettingsDetailFrame(
-    title = nativeString("Skills"),
     subtitle = nativeString("Manage installed skills and add trusted releases from ClawHub."),
-    icon = SettingsRoute.Skills.icon,
+    route = SettingsRoute.Skills,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, skillsState.refreshing, skillsState.errorText, viewModel::refreshSkills)
@@ -211,7 +205,7 @@ private fun SkillDetailSettingsScreen(
   SettingsDetailFrame(
     title = skill?.name ?: skillKey,
     subtitle = nativeString("Inspect and manage installed skill state."),
-    icon = SettingsRoute.Skills.icon,
+    route = SettingsRoute.Skills,
     onBack = onBack,
   ) {
     skill?.let { summary ->
@@ -229,7 +223,7 @@ private fun SkillDetailSettingsScreen(
         isMutating = isMutating,
         onSkillEnabledChange = onSkillEnabledChange,
       )
-      SkillSetupPanel(summary)
+      SettingsMessagePanel(title = nativeString("Setup"), text = skillConfigurationText(summary), spacing = 6.dp)
     }
     SkillDetailPanel(skill = skill, isConnected = isConnected)
   }
@@ -267,11 +261,9 @@ private fun SkillsOverviewPanel(
           .clip(RoundedCornerShape(ClawTheme.radii.pill))
           .background(ClawTheme.colors.surfacePressed),
     ) {
-      if (segments.sumOf { it.count } > 0) {
-        segments.forEach { segment ->
-          if (segment.count > 0) {
-            Box(modifier = Modifier.weight(segment.count.toFloat()).fillMaxHeight().background(segment.color))
-          }
+      segments.forEach { segment ->
+        if (segment.count > 0) {
+          Box(modifier = Modifier.weight(segment.count.toFloat()).fillMaxHeight().background(segment.color))
         }
       }
     }
@@ -374,14 +366,6 @@ private fun SkillSwitchPanel(
 }
 
 @Composable
-private fun SkillSetupPanel(skill: GatewaySkillSummary) {
-  ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-    Text(text = nativeString("Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-    Text(text = skillConfigurationText(skill), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-  }
-}
-
-@Composable
 private fun SkillDetailPanel(
   skill: GatewaySkillSummary?,
   isConnected: Boolean,
@@ -404,10 +388,7 @@ private fun SkillDetailPanel(
       ),
   )
   skill.description?.let { description ->
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(text = nativeString("Description"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = description, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+    SettingsMessagePanel(title = nativeString("Description"), text = description, spacing = 6.dp)
   }
 }
 
@@ -549,12 +530,7 @@ private fun ClawHubNoticeCard(
   val isError = errorText != null
   val rawText = errorText ?: messageText.orEmpty()
   val summary = rawText.substringBefore("\n\n").trim()
-  val details =
-    if ("\n\n" in rawText) {
-      rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
-    } else {
-      null
-    }
+  val details = rawText.substringAfter("\n\n", missingDelimiterValue = "").trim().takeIf(String::isNotBlank)
   var detailsExpanded by rememberSaveable(rawText) { mutableStateOf(false) }
   val accent = if (isError) ClawTheme.colors.danger else ClawTheme.colors.success
   val background = if (isError) ClawTheme.colors.dangerSoft else ClawTheme.colors.successSoft

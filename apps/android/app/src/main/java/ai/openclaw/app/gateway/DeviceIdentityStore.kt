@@ -44,21 +44,16 @@ class DeviceIdentityStore private constructor(
     cachedIdentity?.let { return it }
     migrateLegacyIdentity()
     val existing = load()
-    if (existing != null) {
-      val derived = deriveDeviceId(existing.publicKeyRawBase64)
-      if (derived != null && derived != existing.deviceId) {
-        val updated = existing.copy(deviceId = derived)
-        save(updated)
-        cachedIdentity = updated
-        return updated
+    val derived = existing?.let { deriveDeviceId(it.publicKeyRawBase64) }
+    val identity =
+      when {
+        existing == null -> generate()
+        derived != null && derived != existing.deviceId -> existing.copy(deviceId = derived)
+        else -> existing
       }
-      cachedIdentity = existing
-      return existing
-    }
-    val fresh = generate()
-    save(fresh)
-    cachedIdentity = fresh
-    return fresh
+    if (identity !== existing) save(identity)
+    cachedIdentity = identity
+    return identity
   }
 
   /** Signs gateway connect payload text with the persisted Ed25519 private key. */
@@ -140,10 +135,7 @@ class DeviceIdentityStore private constructor(
 
   private fun migrateLegacyIdentity() {
     if (!legacyIdentityFile.exists()) return
-    val legacy =
-      runCatching { legacyIdentityFile.readText(Charsets.UTF_8) }
-        .getOrNull()
-        ?.let(::readIdentity)
+    val legacy = readIdentity(runCatching { legacyIdentityFile.readText(Charsets.UTF_8) }.getOrNull())
     if (legacy == null) {
       legacyIdentityFile.delete()
       return

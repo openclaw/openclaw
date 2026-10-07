@@ -49,7 +49,6 @@ function normalizeSlackFetchInit(init?: RequestInit): RequestInit | undefined {
   return rest;
 }
 
-/** Build the dispatcher for Slack Web API fetches (paired with the runtime fetch). */
 function resolveSlackProxyDispatcher(): SlackProxyDispatcher | undefined {
   const options = resolveEnvHttpProxyAgentOptions();
   if (!options) {
@@ -194,15 +193,11 @@ function fenceSlackReadFetch(
   };
 }
 
-function resolveSlackApiUrlFromEnv(): string | undefined {
-  return process.env.SLACK_API_URL?.trim() || undefined;
-}
-
 function applySlackApiUrlAndProxyOptions(
   options: WebClientOptions,
   dispatcher?: SlackProxyDispatcher,
 ): void {
-  const slackApiUrl = options.slackApiUrl ?? resolveSlackApiUrlFromEnv();
+  const slackApiUrl = options.slackApiUrl ?? (process.env.SLACK_API_URL?.trim() || undefined);
   const fetch = options.fetch ?? buildSlackFetch(dispatcher);
   if (fetch) {
     options.fetch = fetch;
@@ -236,7 +231,6 @@ export function resolveSlackWebClientOptions(
 ): WebClientOptions {
   const resolved: WebClientOptions = Object.assign({}, options);
   applySlackApiUrlAndProxyOptions(resolved, dispatcher);
-  resolved.fetch ??= buildSlackFetch(dispatcher);
   applySlackRequestAuthority(resolved, dispatcher, assertDirectAdapterHandoff);
   resolved.retryConfig ??= SLACK_DEFAULT_RETRY_OPTIONS;
   return resolved;

@@ -166,6 +166,11 @@ type CronSessionParams = {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  /**
+   * The run executes in a hidden `:run:` row, so the base row's revision names
+   * this run's generation for continuation ownership and must be minted per run.
+   */
+  exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
 };
 
@@ -271,7 +276,13 @@ export function resolveCronSession(
       : entry
     : undefined;
 
-  const lifecycleRevision = crypto.randomUUID();
+  // Reusing an incarnation in place keeps its revision: spawned children and
+  // memory-audience leases bind to it and treat any change as a new incarnation.
+  const reusedLifecycleRevision =
+    !isNewSession && !sourceSessionDiffers && !params.exactRunSession
+      ? entry?.lifecycleRevision
+      : undefined;
+  const lifecycleRevision = reusedLifecycleRevision ?? crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.

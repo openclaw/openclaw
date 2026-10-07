@@ -5,6 +5,7 @@ import type {
   ChatHistoryPageParams,
 } from "../../config/sessions/session-history-types.js";
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
+import { createTranscriptDisplaySource } from "../../sessions/transcript-display-position.js";
 import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessagesWithState,
@@ -39,43 +40,33 @@ export type ChatHistoryPageKernelOptions = {
   readMessageSequence?: (message: unknown) => number | undefined;
 };
 
+function readPageMessageSequence(message: unknown, messageSequences?: Record<string, number>) {
+  return (
+    messageSequences?.[readChatHistoryPaginationKey(message) ?? ""] ??
+    readChatHistoryMessageSeq(message)
+  );
+}
+
 export function resolveChatHistoryNextOffset(params: {
   messages: unknown[];
-  projected: unknown[];
   totalMessages: number;
   offset: number;
   rawPageMessages: number;
   messageSequences?: Record<string, number>;
 }): number {
-  const sequence = (message: unknown) =>
-    params.messageSequences?.[readChatHistoryPaginationKey(message) ?? ""] ??
-    readChatHistoryMessageSeq(message);
+  const sequence = (message: unknown) => readPageMessageSequence(message, params.messageSequences);
   let oldestSeq: number | undefined;
-  let boundedSiblings = 0;
   for (const message of params.messages) {
-    const seq = sequence(message);
-    oldestSeq ??= seq;
-    if (seq !== undefined && seq === oldestSeq) {
-      boundedSiblings += 1;
+    oldestSeq = sequence(message);
+    if (oldestSeq !== undefined) {
+      break;
     }
   }
   if (oldestSeq === undefined) {
     return params.offset + params.rawPageMessages;
   }
   const recordOffset = params.totalMessages - oldestSeq + 1;
-  const replayOffset = recordOffset - 1;
-  if (replayOffset > params.offset) {
-    let projectedSiblings = 0;
-    for (const message of params.projected) {
-      if (sequence(message) === oldestSeq) {
-        projectedSiblings += 1;
-        if (projectedSiblings > boundedSiblings) {
-          return replayOffset;
-        }
-      }
-    }
-  }
-  // A replay cursor that does not advance strands every older transcript record.
+  // Every selected source row is complete, inline or by reference.
   return Math.max(params.offset + 1, recordOffset);
 }
 
@@ -130,27 +121,53 @@ export function enrichChatHistoryCompactionMarkers(
   return changed ? enriched : messages;
 }
 
-function resolveChatHistoryMessageGroup(
+export function resolveChatHistoryMessageGroup(
   messages: unknown[],
   index: number,
   messageCost: (message: unknown) => number,
+  messageSequences?: Record<string, number>,
 ): { start: number; end: number; cost: number } {
-  const seq = readChatHistoryMessageSeq(messages[index]);
+  const sequence = (message: unknown) => readPageMessageSequence(message, messageSequences);
+  const seq = sequence(messages[index]);
   let start = index;
   let end = index + 1;
   let cost = messageCost(messages[index]);
   if (seq === undefined) {
     return { start, end, cost };
   }
-  while (start > 0 && readChatHistoryMessageSeq(messages[start - 1]) === seq) {
+  while (start > 0 && sequence(messages[start - 1]) === seq) {
     start -= 1;
     cost += messageCost(messages[start]);
   }
-  while (end < messages.length && readChatHistoryMessageSeq(messages[end]) === seq) {
+  while (end < messages.length && sequence(messages[end]) === seq) {
     cost += messageCost(messages[end]);
     end += 1;
   }
   return { start, end, cost };
+}
+
+export function capChatHistoryTail(params: {
+  messages: unknown[];
+  maxCost: number;
+  messageCost: (message: unknown) => number;
+  messageSequences?: Record<string, number>;
+}): unknown[] {
+  let start = params.messages.length;
+  let cost = 0;
+  while (start > 0) {
+    const group = resolveChatHistoryMessageGroup(
+      params.messages,
+      start - 1,
+      params.messageCost,
+      params.messageSequences,
+    );
+    if (cost + group.cost > params.maxCost) {
+      break;
+    }
+    start = group.start;
+    cost += group.cost;
+  }
+  return start > 0 ? params.messages.slice(start) : params.messages;
 }
 
 export function capChatHistoryAroundMessage(params: {
@@ -158,6 +175,7 @@ export function capChatHistoryAroundMessage(params: {
   messageId: string;
   maxCost: number;
   messageCost?: (message: unknown) => number;
+  messageSequences?: Record<string, number>;
 }): unknown[] {
   const anchorIndex = params.messages.findIndex(
     (message) => readChatHistoryMessageId(message) === params.messageId,
@@ -166,7 +184,9 @@ export function capChatHistoryAroundMessage(params: {
     return [];
   }
   const messageCost = params.messageCost ?? (() => 1);
-  const anchorGroup = resolveChatHistoryMessageGroup(params.messages, anchorIndex, messageCost);
+  const groupAt = (index: number) =>
+    resolveChatHistoryMessageGroup(params.messages, index, messageCost, params.messageSequences);
+  const anchorGroup = groupAt(anchorIndex);
   if (!(anchorGroup.cost <= params.maxCost)) {
     return [params.messages[anchorIndex]];
   }
@@ -176,7 +196,7 @@ export function capChatHistoryAroundMessage(params: {
   let canGrowNewer = end < params.messages.length;
   while (canGrowOlder || canGrowNewer) {
     if (canGrowOlder) {
-      const olderGroup = resolveChatHistoryMessageGroup(params.messages, start - 1, messageCost);
+      const olderGroup = groupAt(start - 1);
       if (cost + olderGroup.cost <= params.maxCost) {
         start = olderGroup.start;
         cost += olderGroup.cost;
@@ -187,7 +207,7 @@ export function capChatHistoryAroundMessage(params: {
     canGrowOlder &&= start > 0;
 
     if (canGrowNewer) {
-      const newerGroup = resolveChatHistoryMessageGroup(params.messages, end, messageCost);
+      const newerGroup = groupAt(end);
       if (cost + newerGroup.cost <= params.maxCost) {
         end = newerGroup.end;
         cost += newerGroup.cost;
@@ -216,6 +236,7 @@ export async function readChatHistoryPageKernel(
     effectiveMaxChars,
     offset,
     messageId,
+    pageCursor,
   } = params;
   if (!sessionId || !storePath) {
     if (messageId) {
@@ -238,22 +259,62 @@ export async function readChatHistoryPageKernel(
   };
   const readSequence = options.readMessageSequence ?? readChatHistoryMessageSeq;
   if (messageId) {
+    const direction = pageCursor?.direction;
     const readPage = await options.readers.readSessionMessagesAroundIdWithStatsAsync(readScope, {
       messageId,
-      maxMessages: max,
+      // Directional pages exclude the anchor; older pages also need preceding turn context.
+      maxMessages: max + (direction === "older" ? 2 : direction === "newer" ? 1 : 0),
+      direction,
       allowResetArchiveFallback: true,
       readOnly: options.readOnly,
     });
+    const source = readPage.displaySource
+      ? createTranscriptDisplaySource([readPage.displaySource])
+      : undefined;
+    if (pageCursor && (!readPage.found || readPage.windowReset || source !== pageCursor.source)) {
+      return { messages: [], windowReset: true };
+    }
     if (!readPage.found) {
       return { messages: [] };
     }
-    const overreadContextMessage =
-      readPage.hasOverreadContext || readPage.messages.length > max
-        ? readPage.messages[0]
-        : undefined;
+    let pageMessages = readPage.messages;
+    let overreadContextMessage = readPage.hasOverreadContext ? pageMessages[0] : undefined;
+    if (direction) {
+      const anchorIndex = pageMessages.findIndex(
+        (message) => readChatHistoryMessageId(message) === messageId,
+      );
+      if (anchorIndex < 0) {
+        return { messages: [], windowReset: true };
+      }
+      const anchorSeq = readSequence(pageMessages[anchorIndex]);
+      let start = anchorIndex;
+      let end = anchorIndex + 1;
+      if (anchorSeq !== undefined) {
+        while (start > 0 && readSequence(pageMessages[start - 1]) === anchorSeq) {
+          start -= 1;
+        }
+        while (end < pageMessages.length && readSequence(pageMessages[end]) === anchorSeq) {
+          end += 1;
+        }
+      }
+      if (direction === "newer") {
+        overreadContextMessage = pageMessages[end - 1];
+        pageMessages = pageMessages.slice(end - 1);
+      } else {
+        pageMessages = pageMessages.slice(0, start);
+        const firstSeq = readSequence(pageMessages[0]);
+        if (anchorSeq !== undefined && firstSeq !== undefined && anchorSeq - firstSeq > max) {
+          overreadContextMessage = pageMessages[0];
+          pageMessages = [
+            overreadContextMessage,
+            ...pageMessages.filter((message) => readSequence(message) !== firstSeq),
+          ];
+        }
+      }
+    }
     const localMessages = dropChatHistoryOverreadContextMessage(
       dropPreSessionStartAnnouncePairs(
-        readPage.messages,
+        pageMessages,
         typeof entry?.sessionStartedAt === "number" ? entry.sessionStartedAt : undefined,
       ),
       overreadContextMessage,
@@ -272,7 +333,11 @@ export async function readChatHistoryPageKernel(
     const projection = project(localMessages);
     let projected = projection.messages;
     const newestPageSeq = readSequence(localMessages.at(-1));
-    if (readPage.offset > 0 && newestPageSeq !== undefined && projection.assistantErrorPending) {
+    if (
+      (direction === "older" || readPage.offset > 0) &&
+      newestPageSeq !== undefined &&
+      projection.assistantErrorPending
+    ) {
       const recoveryContext = await readChatHistoryRecoveryContext({
         messages: localMessages,
         createRecovery: (messages) => {
@@ -296,16 +361,31 @@ export async function readChatHistoryPageKernel(
         );
       }
     }
-    // Numeric offsets do not encode the selected historical transcript source.
+    const cursorMessages = dropChatHistoryOverreadContextMessage(
+      pageMessages,
+      overreadContextMessage,
+    );
+    const oldestSeq = readSequence(cursorMessages[0]);
     return {
       messages: await attachChatHistoryReplyMessages(
-        augmentChatHistoryWithCanvasBlocks(
-          capChatHistoryAroundMessage({ messages: projected, messageId, maxCost: max }),
-        ),
+        augmentChatHistoryWithCanvasBlocks(projected),
         params,
         options,
       ),
       ...(projection.activity.length ? { activity: projection.activity } : {}),
+      ...(source
+        ? {
+            anchor: {
+              sessionId,
+              source,
+              direction,
+              hasOlder: direction === "newer" || (oldestSeq !== undefined && oldestSeq > 1),
+              hasNewer: direction === "older" || readPage.offset > 0,
+              oldestMessageId: readChatHistoryMessageId(cursorMessages[0]),
+              newestMessageId: readChatHistoryMessageId(cursorMessages.at(-1)),
+            },
+          }
+        : {}),
     };
   }
 

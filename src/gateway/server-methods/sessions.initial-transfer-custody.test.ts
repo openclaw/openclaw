@@ -591,8 +591,8 @@ it.each([false, true])(
       await expect(opposite).rejects.toMatchObject({ outcome: "not-committed" });
       expect(writes).toBe(requesterYielded ? 2 : 1);
       const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-        typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-      >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+        typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+      >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
       const stored = expectDefined(
         loadSubagentRegistryFromSqlite().get(entry.runId),
         "settled child",
@@ -654,8 +654,8 @@ it("retains the committed cohort when release admission fails and the caller ret
     expect(attempts).toBe(2);
     expect(writes).toBe(1);
     const { loadSubagentRegistryFromSqlite } = await vi.importActual<
-      typeof import("../../agents/subagents/registry/subagent-registry.store.sqlite.js")
-    >("../../agents/subagents/registry/subagent-registry.store.sqlite.js");
+      typeof import("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js")
+    >("../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js");
     expect(loadSubagentRegistryFromSqlite().get(entry.runId)).toMatchObject({
       requesterTurnRunId: "staged-cohort-parent",
       requesterTurnYielded: true,

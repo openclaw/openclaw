@@ -1,6 +1,10 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
+import {
+  isMainRestartRecoveryCandidate,
+  normalizeMainSessionRecoveryRunFences,
+} from "../../config/sessions/restart-recovery-state.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
@@ -34,6 +38,7 @@ export function prepareCommandSessionRecoveryEntry(
   > & {
     deliveryContext?: DeliveryContext;
     now: number;
+    lifecycleGeneration: string;
     isSessionRollover: boolean;
   },
 ) {
@@ -50,6 +55,16 @@ export function prepareCommandSessionRecoveryEntry(
       ...entry,
       sessionId,
       updatedAt: now,
+      status: undefined,
+      abortedLastRun: false,
+      endedAt: undefined,
+      lastRunError: undefined,
+      restartRecoveryRuns: isMainRestartRecoveryCandidate(entry, params.sessionKey)
+        ? normalizeMainSessionRecoveryRunFences([
+            ...(entry.restartRecoveryRuns ?? []),
+            { runId, lifecycleGeneration: params.lifecycleGeneration },
+          ])
+        : entry.restartRecoveryRuns,
       sessionStartedAt: isSessionRollover ? now : entry.sessionStartedAt,
       lastInteractionAt: isSessionRollover ? now : entry.lastInteractionAt,
       ...buildCurrentRunRestartRecoveryClaim({
@@ -175,66 +190,48 @@ export async function prepareEmbeddedSessionState(params: {
     params.isNewSession || !currentSkillsSnapshot || skillSnapshotState.shouldRefresh;
   const skillsSnapshot = skillSnapshotState.snapshot;
 
-  if (
-    skillsSnapshot &&
-    params.sessionStore &&
-    params.sessionKey &&
-    needsSkillsSnapshot &&
-    !params.suppressVisibleSessionEffects
-  ) {
-    const now = Date.now();
-    const current = sessionEntry ?? {
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: now,
+  const { sessionStore, sessionKey } = params;
+  if (sessionStore && sessionKey && !params.suppressVisibleSessionEffects) {
+    const persistUpdate = (
+      initialEntry: SessionEntry | undefined,
+      update: (entry: SessionEntry, now: number) => void,
+    ) => {
+      const now = Date.now();
+      const entry = initialEntry ?? {
+        sessionId: params.sessionId,
+        updatedAt: now,
+        sessionStartedAt: now,
+      };
+      const next: SessionEntry = {
+        ...entry,
+        sessionId: params.sessionId,
+        updatedAt: now,
+        sessionStartedAt: entry.sessionStartedAt ?? now,
+      };
+      update(next, now);
+      return persistAgentSession({
+        agentId: params.sessionAgentId,
+        sessionStore,
+        sessionKey,
+        storePath: params.storePath,
+        initialEntry: entry,
+        entry: next,
+      });
     };
-    const next: SessionEntry = {
-      ...current,
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: current.sessionStartedAt ?? now,
-      skillsSnapshot,
-    };
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: current,
-      entry: next,
-    });
-  }
+    if (skillsSnapshot && needsSkillsSnapshot) {
+      sessionEntry = await persistUpdate(sessionEntry, (next) => {
+        next.skillsSnapshot = skillsSnapshot;
+      });
+    }
 
-  // Persist non-model-dependent command state before provider/model resolution.
-  // Thinking is written only after the selected runtime validates it.
-  const shouldPersistInitialSessionTouch =
-    params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride);
-  if (
-    params.sessionStore &&
-    params.sessionKey &&
-    !params.suppressVisibleSessionEffects &&
-    shouldPersistInitialSessionTouch
-  ) {
-    const now = Date.now();
-    const entry = params.sessionStore[params.sessionKey] ??
-      sessionEntry ?? { sessionId: params.sessionId, updatedAt: now, sessionStartedAt: now };
-    const next: SessionEntry = {
-      ...entry,
-      sessionId: params.sessionId,
-      updatedAt: now,
-      sessionStartedAt: entry.sessionStartedAt ?? now,
-      lastInteractionAt: now,
-      agentStatus: undefined,
-    };
-    applyVerboseOverride(next, params.verboseOverride);
-    sessionEntry = await persistAgentSession({
-      agentId: params.sessionAgentId,
-      sessionStore: params.sessionStore,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      initialEntry: entry,
-      entry: next,
-    });
+    // Persist non-model-dependent state first; thinking waits for runtime validation.
+    if (params.opts.skipInitialSessionTouch !== true || Boolean(params.verboseOverride)) {
+      sessionEntry = await persistUpdate(sessionStore[sessionKey] ?? sessionEntry, (next, now) => {
+        next.lastInteractionAt = now;
+        next.agentStatus = undefined;
+        applyVerboseOverride(next, params.verboseOverride);
+      });
+    }
   }
   if (params.sessionKey && !params.isSubagentLaneTurn) {
     const assertSignalCurrent = () => {

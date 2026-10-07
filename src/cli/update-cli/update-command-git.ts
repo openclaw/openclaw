@@ -391,7 +391,12 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     ? target.schemaVersions
       ? { schemaVersions: target.schemaVersions }
       : {}
-    : { metadataUnreadable: target.reason };
+    : {
+        metadataUnreadable: target.reason,
+        ...(target.reason.startsWith("git show ")
+          ? { failureCode: "target-git-cache-stale" as const }
+          : {}),
+      };
 }
 
 export async function updateGitInstall(params: {

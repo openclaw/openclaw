@@ -19,11 +19,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const payloadJSON =
-      typeof p.payloadJSON === "string"
-        ? p.payloadJSON
-        : p.payload !== undefined
-          ? JSON.stringify(p.payload)
-          : null;
+      p.payloadJSON ?? (p.payload !== undefined ? JSON.stringify(p.payload) : null);
     await respondUnavailableOnThrow(respond, async () => {
       const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "node";
       const nodeSession = context.nodeRegistry.get(nodeId);

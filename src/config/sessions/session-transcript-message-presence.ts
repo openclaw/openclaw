@@ -6,6 +6,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
+import { captureIncognitoSessionHistoryBinding } from "./session-incognito-binding.js";
 import {
   readIncognitoSessionHistory,
   type IncognitoSessionHistoryBinding,
@@ -15,8 +16,9 @@ import { withSessionTranscriptReadSource } from "./session-transcript-read-sourc
 /** Read the cold marker and both message probes in the history worker's one snapshot. */
 export function hasSessionTranscriptMessage(
   scope: SessionTranscriptReadScope,
-  incognito?: IncognitoSessionHistoryBinding,
+  suppliedIncognito?: IncognitoSessionHistoryBinding,
 ): Promise<boolean> {
+  const incognito = suppliedIncognito ?? captureIncognitoSessionHistoryBinding(scope);
   if (incognito) {
     return readIncognitoSessionHistory(incognito, scope, (target) => ({
       type: "session.history.message-presence",

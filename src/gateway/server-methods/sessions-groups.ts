@@ -75,7 +75,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         undefined,
       );
       // Catalog-only changes still need to reach other open clients.
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -193,7 +193,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         },
         undefined,
       );
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
     },
   ),
   "sessions.groups.delete": defineValidatedGatewayHandler(

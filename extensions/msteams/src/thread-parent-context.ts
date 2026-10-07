@@ -66,18 +66,11 @@ export async function fetchParentMessageCached(
   return message;
 }
 
-type ParentContextSummary = {
-  /** Display name of the parent message author, or "unknown". */
-  sender: string;
-  /** Stripped, single-line parent body text (or empty if unresolved). */
-  text: string;
-};
+type ParentContextSummary = NonNullable<ReturnType<typeof summarizeParentMessage>>;
 
 const PARENT_TEXT_MAX_CHARS = 400;
 
-export function summarizeParentMessage(
-  message: GraphThreadMessage | undefined,
-): ParentContextSummary | undefined {
+export function summarizeParentMessage(message: GraphThreadMessage | undefined) {
   if (!message) {
     return undefined;
   }

@@ -348,7 +348,7 @@ export async function dispatchChatSlashCommand(
       if (!requireChatSessionAction(host, "reset")) {
         return "failed";
       }
-      return await clearChatHistory(host);
+      return clearChatHistory(host);
     }
     case "compact":
       if (!requireChatSessionAction(host, "compact")) {
@@ -424,6 +424,8 @@ export async function dispatchChatSlashCommand(
   if (result.trackRunId && targetIsCurrent()) {
     host.chatRunId = result.trackRunId;
     host.chatStream = "";
+    host.chatStreamItemId = undefined;
+    host.chatStreamItemStartOffset = undefined;
     host.chatSending = false;
   }
 

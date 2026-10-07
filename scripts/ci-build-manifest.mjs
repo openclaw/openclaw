@@ -11,6 +11,8 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 
 // The script belongs to the trusted harness; target modules belong to the cwd.
 const fromTarget = (specifier) => pathToFileURL(path.resolve(process.cwd(), specifier)).href;
+const escapeSummaryHtml = (value) =>
+  value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
 const workflowEventName = process.env.OPENCLAW_CI_EVENT_NAME ?? "";
 // Dispatch fallbacks retain their existing scope even when they use PR planning.
@@ -1291,6 +1293,10 @@ if (sharedSdkDeclarations) {
     1,
   );
 }
+const runPrMadgeImportCycles =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true);
+const runPrKyselyGuardrails =
+  runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true);
 const checkTasks = [
   ...["guards", "npm-lock", "bundled-channel-config-metadata", "prod-types"].map((task) => ({
     check_name: `check-${task}`,
@@ -1317,6 +1323,17 @@ const checkTasks = [
     : narrowCheckScope.checkTasks.includes(row.task);
 });
 
+// Keep the selected source scans independent of the other PR guards.
+const guardRow = checkTasks.find(({ task }) => task === "guards");
+const splitPrGuards = guardRow !== undefined && (runPrMadgeImportCycles || runPrKyselyGuardrails);
+if (splitPrGuards) {
+  checkTasks.push({
+    check_name: "check-guards-architecture",
+    task: "guards-architecture",
+    runner: guardRow.runner,
+  });
+}
+
 // The selected guards row owns the same coercion scan; fast-only plans retain its row.
 if (
   !frozenTarget &&
@@ -1332,7 +1349,7 @@ if (
 
 // These rows need no compiler plan; retain their existing full-check placement.
 if (runCheckPlan && runNodeFull && !releaseFastLane) {
-  for (const task of ["guards", "dependencies"]) {
+  for (const task of ["guards", "guards-architecture", "dependencies"]) {
     const index = checkTasks.findIndex((row) => row.task === task);
     if (index >= 0) {
       const { task: group, ...row } = checkTasks.splice(index, 1)[0];
@@ -1395,12 +1412,10 @@ const manifest = {
   checks_node_core_nondist_matrix: createMatrix(nodeTestNonDistShards),
   run_checks_node_core_dist: runNodeCoreDist,
   run_check: runCheck,
-  // The existing guards row already runs the runtime-value cycle check.
   // Older scope owners retain these guards rather than silently dropping coverage.
-  run_pr_madge_import_cycles:
-    runCheck && ordinaryPullRequest && (proposedCheckScope?.madgeImportCycles ?? true),
-  run_pr_kysely_guardrails:
-    runCheck && ordinaryPullRequest && (proposedCheckScope?.kyselyGuardrails ?? true),
+  run_pr_madge_import_cycles: runPrMadgeImportCycles,
+  run_pr_kysely_guardrails: runPrKyselyGuardrails,
+  split_pr_guards: splitPrGuards,
   narrow_check_paths_json: runCheckPlan ? JSON.stringify(changedPaths) : "",
   run_check_plan: runCheckPlan,
   check_plan_input_json: runCheckPlan
@@ -1885,8 +1900,6 @@ if (process.env.GITHUB_STEP_SUMMARY) {
       }
     }
     // Paths are diff-controlled; render them as escaped HTML text, never Markdown.
-    const escape = (value) =>
-      value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     appendFileSync(
       process.env.GITHUB_STEP_SUMMARY,
       `### PR Node test selection (${nodeSelectionMode})\n\n` +
@@ -1895,7 +1908,7 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         "<details><summary>Selected files and selection rules</summary>\n<pre>" +
         selectedTestTargets
           .map((file) =>
-            escape(
+            escapeSummaryHtml(
               `${file}\t${[...(reasons.get(file) ?? [])].toSorted((left, right) => left.localeCompare(right)).join(", ")}`,
             ),
           )
@@ -1910,4 +1923,45 @@ if (process.env.GITHUB_STEP_SUMMARY) {
         ? "- Native app qualification: deferred; Linux, macOS, and Windows Node coverage retained.\n"
         : ""),
   );
+}
+
+// Preflight runs once per workflow attempt; shard selection stays silent.
+if (
+  process.env.GITHUB_ACTIONS === "true" &&
+  typeof testRuntimePolicy?.inspectNativeBunQualifications === "function"
+) {
+  try {
+    const { staleEntries, changedInputs } = testRuntimePolicy.inspectNativeBunQualifications(
+      process.cwd(),
+    );
+    if (staleEntries.length > 0) {
+      let detail = "Detailed job summary unavailable.";
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        try {
+          appendFileSync(
+            process.env.GITHUB_STEP_SUMMARY,
+            "### Native Bun qualification staleness\n\n" +
+              `${staleEntries.length} recorded native qualifications are stale. Existing Vitest coverage is retained.\n\n` +
+              "Changed or unreadable inputs:\n\n<pre>" +
+              changedInputs
+                .map(({ file, reason }) => escapeSummaryHtml(`${file}\t${reason}`))
+                .join("\n") +
+              "</pre>\n\n<details><summary>Stale entries</summary>\n<pre>" +
+              staleEntries.map(escapeSummaryHtml).join("\n") +
+              "</pre>\n</details>\n\n",
+          );
+          detail = "See the job summary for stale entries and changed inputs.";
+        } catch {
+          // Reporting is advisory even when the summary cannot be written.
+        }
+      }
+      console.warn(
+        `::notice title=Native Bun qualification staleness::${staleEntries.length} recorded entries have ${changedInputs.length} changed or unreadable inputs; existing Vitest coverage is retained. ${detail}`,
+      );
+    }
+  } catch {
+    console.warn(
+      "::notice title=Native Bun qualification staleness::Could not inspect native qualification fingerprints. Runtime selection is unchanged.",
+    );
+  }
 }

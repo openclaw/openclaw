@@ -22,9 +22,6 @@ export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
   return mentionIds.some((id) => id?.trim().toLowerCase() === "all");
 }
 
-/**
- * Extract mention targets from message event (excluding the bot itself)
- */
 export function extractMentionTargets(
   event: FeishuMessageEvent,
   botOpenId: string,

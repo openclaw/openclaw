@@ -151,18 +151,22 @@ export async function prepareNativeModelToolInput(
   request: NativeModelToolInputRequest,
   dependencies: InputDependencies,
 ): Promise<void> {
-  const state =
-    dependencies.parents.get(request.threadId) ??
-    dependencies.knownChildren.get(request.threadId)?.parent;
-  const owner =
-    state &&
-    resolveNativeModelParentOwner(
-      state,
-      request.turnId,
-      request.threadId,
-      dependencies.children,
-      dependencies.knownChildren,
-    );
+  const resolveSender = () => {
+    const state =
+      dependencies.parents.get(request.threadId) ??
+      dependencies.knownChildren.get(request.threadId)?.parent;
+    const owner =
+      state &&
+      resolveNativeModelParentOwner(
+        state,
+        request.turnId,
+        request.threadId,
+        dependencies.children,
+        dependencies.knownChildren,
+      );
+    return { state, owner };
+  };
+  const { state, owner } = resolveSender();
   const capture = owner?.modelSource?.capture();
   if (
     !state ||
@@ -175,7 +179,6 @@ export async function prepareNativeModelToolInput(
     throw new Error("Codex native input requires its exact admitted sender turn");
   }
   let preparedSource: NativeModelSourceOwner | undefined;
-  let captureTransferred = false;
   let pendingBinding: NativeModelBinding | undefined;
   let targetRevision: ReturnType<InputDependencies["retainTargetRevision"]> | undefined;
   let assertTargetCurrent: (() => void) | undefined;
@@ -308,7 +311,6 @@ export async function prepareNativeModelToolInput(
         },
         () => {},
       );
-      captureTransferred = true;
       preparedOwner.modelSource = preparedSource;
     }
     assertCurrent();
@@ -322,18 +324,7 @@ export async function prepareNativeModelToolInput(
         agentPath: readString(readThreadSpawnSource(thread), "agent_path"),
       });
     }
-    const currentState =
-      dependencies.parents.get(request.threadId) ??
-      dependencies.knownChildren.get(request.threadId)?.parent;
-    const currentOwner =
-      currentState &&
-      resolveNativeModelParentOwner(
-        currentState,
-        request.turnId,
-        request.threadId,
-        dependencies.children,
-        dependencies.knownChildren,
-      );
+    const { state: currentState, owner: currentOwner } = resolveSender();
     if (
       !currentOwner ||
       currentOwner.modelExecutionSettled ||
@@ -360,7 +351,7 @@ export async function prepareNativeModelToolInput(
   } finally {
     targetRevision?.release();
     preparedSource?.release();
-    if (!captureTransferred) {
+    if (!preparedSource) {
       capture.release();
     }
   }

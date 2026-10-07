@@ -1,6 +1,6 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { err, type Result } from "@openclaw/normalization-core/result";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -8,20 +8,13 @@ import {
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
 import {
   isIncognitoSessionKey,
-  LEGACY_IMPLICIT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
-import {
-  listOpenIncognitoAgentDatabases,
-  retainOpenClawAgentDatabaseReadCandidates,
-} from "../../state/openclaw-agent-db.js";
-import {
-  isIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../state/openclaw-agent-db.paths.js";
+import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
@@ -45,18 +38,30 @@ import {
   type CanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
 import { withOrderedSessionEntriesInWorker } from "./session-entry-read-ordered.js";
-import { captureSessionEntryWorkerRequest } from "./session-entry-read-request.js";
+import {
+  captureSessionEntryReadScope,
+  isNativeSessionEntryRead,
+  captureSessionEntryWorkerRequest,
+} from "./session-entry-read-request.js";
 import type {
   SessionEntryWorkerRead,
   PreparedSessionEntryWorkerRead,
+  SessionStoreWorkerReadInput,
   SessionStoreWorkerReadScope,
   SessionEntryReadSourcePreparation,
 } from "./session-entry-read-runtime.types.js";
 import type { SessionEntryListWorkerInput } from "./session-entry-read.types.js";
+import {
+  captureIncognitoSessionBinding,
+  withIncognitoSessionEntry,
+  withIncognitoSessionEntrySummaries,
+  type IncognitoSessionBinding,
+} from "./session-incognito-binding.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
+  isSessionStoreReadCandidateCurrent,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
@@ -64,44 +69,16 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import {
   maintenanceLane,
+  projectionLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export function captureSessionEntryReadScope(input: SessionEntryReadScope) {
-  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const scope = {
-    ...input,
-    env,
-    ...(input.storePath ? { storePath: path.resolve(input.storePath) } : {}),
-  };
-  const agentId = scope.agentId
-    ? normalizeAgentId(scope.agentId)
-    : parseAgentSessionKey(scope.sessionKey)?.agentId;
-  return { scope, env, agentId };
-}
-
-export function isNativeSessionEntryRead(
-  scope: SessionEntryReadScope,
-  agentId: string | undefined,
-) {
-  const storePath = scope.storePath;
-  return Boolean(
-    isIncognitoSessionKey(scope.sessionKey) ||
-    (storePath &&
-      (isIncognitoOpenClawAgentSqlitePath(storePath, {
-        agentId: agentId ?? scope.defaultAgentId ?? LEGACY_IMPLICIT_AGENT_ID,
-        env: scope.env,
-      }) ||
-        listOpenIncognitoAgentDatabases().some((owner) => owner.storePath === storePath))),
-  );
-}
-
 export type SessionEntryReadWorkerOwner = {
-  kind: "native" | "file" | "unresolved";
+  kind: "native" | "incognito" | "file" | "unresolved";
+  incognito?: IncognitoSessionBinding;
   assertCurrent: () => void;
   scope?: SessionEntryReadOnlyWorkerScope;
   selectedStore?: Readonly<Pick<SessionStoreReadCandidate, "path" | "physicalPath">>;
@@ -121,6 +98,16 @@ export async function withSessionEntryReadOnlyInWorker<T>(
 ): Promise<T> {
   const { scope, agentId } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    return withIncognitoSessionEntry(
+      binding,
+      resolveSqliteSessionKey(scope.sessionKey, binding.actor.agentId),
+      assertCallerCurrent,
+      (entry, assertCurrent) =>
+        consume(ok(entry), { kind: "incognito", incognito: binding, assertCurrent }),
+    );
+  }
   // Incognito keeps its native existing-only owner until that owner's complete cutover.
   if (isNativeSessionEntryRead(scope, agentId)) {
     const read = loadSessionEntryReadOnlyResultInScope(scope);
@@ -161,7 +148,12 @@ export async function withSessionEntryReadOnlyInWorker<T>(
       owner.assertCurrent();
       return value;
     },
-    { backing: true, dataOnly: true, logical: { assertCurrent: assertCallerCurrent, onReadError } },
+    {
+      backing: true,
+      lane: projectionLane,
+      dataOnly: true,
+      logical: { assertCurrent: assertCallerCurrent, onReadError },
+    },
   );
 }
 
@@ -227,14 +219,15 @@ export async function readSessionEntryInWorker(
   assertCallerCurrent: () => void = () => {},
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
 ) {
-  const env = cloneEnvWithPlatformSemantics(input.env ?? process.env);
-  env.OPENCLAW_STATE_DIR = resolveStateDir(env);
-  const scope = { ...input, env };
+  const { scope, env } = captureSessionEntryReadScope(input);
   assertCallerCurrent();
   const agentId = scope.agentId
     ? normalizeAgentId(scope.agentId)
     : parseAgentSessionKey(scope.sessionKey)?.agentId;
   let storePath = scope.storePath ? path.resolve(scope.storePath) : undefined;
+  if (captureIncognitoSessionBinding(scope)) {
+    return readSessionEntryReadOnlyInWorker(scope, assertCallerCurrent);
+  }
   // Incognito still belongs to its process-held native owner until that owner's complete cutover.
   if (isNativeSessionEntryRead(scope, agentId)) {
     return loadSessionEntry(scope);
@@ -265,16 +258,6 @@ export async function readSessionEntryInWorker(
             }
           : { expectedCreationIdentity: targetIdentity },
       );
-      const assertRetainedTarget = () => {
-        execution.assertCurrent();
-        const currentIdentity = readDatabasePathIdentitySync(options.path);
-        if (
-          currentIdentity.key !== targetIdentity.key ||
-          currentIdentity.canonicalPath !== targetIdentity.canonicalPath
-        ) {
-          throw new Error("Session database identity changed while awaiting admission");
-        }
-      };
       const assertCurrent = () => {
         execution.assertCurrent();
         owner.assertCurrent();
@@ -301,8 +284,8 @@ export async function readSessionEntryInWorker(
       let entry: SessionEntry | undefined;
       try {
         entry = await runOpenClawAgentWorkerWrite(options, async () => {
-          await owner.refreshBeforeDispatch(assertRetainedTarget);
-          assertRetainedTarget();
+          await owner.refreshBeforeDispatch(() => execution.assertCurrent());
+          execution.assertCurrent();
           await execution.prepare(source);
           return execution.runExisting(source, (worker) =>
             worker.execute({ type: "session.entry.read", input: { sessionKey } }),
@@ -328,6 +311,14 @@ export async function readSessionEntrySummariesInWorker(
     Pick<SessionEntryListWorkerInput["scope"], "agentId" | "cleanupSession">,
 ) {
   const { scope, agentId } = captureSessionEntryReadScope({ ...input, sessionKey: "" });
+  const binding = captureIncognitoSessionBinding(scope);
+  if (binding) {
+    return withIncognitoSessionEntrySummaries(binding, async (entries) =>
+      entries.filter(({ sessionKey, entry }) =>
+        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession),
+      ),
+    );
+  }
   if (isNativeSessionEntryRead(scope, agentId)) {
     // Process-held transcripts keep their existing native reader until its worker cutover.
     return listSessionEntriesReadOnly({
@@ -380,6 +371,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(inputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
+          lane: projectionLane,
           prepareSource: options.prepareSource?.bind(options, input),
         }),
       onReadAdmitted: options.onReadAdmitted,
@@ -461,7 +453,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "list", dataOnly, prepareSource },
+    { backing: input.projection === "list", lane: projectionLane, dataOnly, prepareSource },
   );
 }
 
@@ -537,10 +529,7 @@ type SessionStoreWorkerReader = Pick<
 };
 
 export async function withSessionStoreReaderInWorker<T>(
-  input: Omit<SessionStoreWorkerReadScope, "agentId"> & {
-    agentId?: string;
-    defaultAgentId?: string;
-  },
+  input: SessionStoreWorkerReadInput,
   read: (source: SessionStoreWorkerReader) => Promise<T>,
   {
     backing = false,
@@ -597,10 +586,7 @@ export async function withSessionStoreReaderInWorker<T>(
     logical?.assertCurrent?.();
     if (logical) {
       for (const candidate of candidates) {
-        if (
-          captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath !==
-          candidate.physicalPath
-        ) {
+        if (!isSessionStoreReadCandidateCurrent(candidate)) {
           throw new Error("Session store alias changed during discovery; retry the read.");
         }
       }
@@ -635,7 +621,7 @@ export async function withSessionStoreReaderInWorker<T>(
           (!logical || item.owner.receipt.agentId === database.agentId),
       )?.owner;
       return withSessionHistoryWorkerDatabase(
-        { ...database, env },
+        { ...database, requestedPaths: [storePath, sourcePath], env },
         async (reader) => {
           const sourceIdentity = prepareSource
             ? readDatabasePathIdentitySync(database.path)

@@ -1,5 +1,9 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  isSessionEntryDataSql,
+  observeHostDataSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { SessionWorkStartInvalidatedError } from "../config/sessions/lifecycle.js";
 import {
   deleteSessionEntryLifecycle,
@@ -7,7 +11,7 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { InternalSessionEntry, SessionDiffBaseline } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -135,12 +139,14 @@ describe("ensureSessionDiffBaseline", () => {
       const mainBefore = loadSessionEntry(mainScope);
       captureMocks.capture.mockResolvedValue(baseline(entry.sessionId));
 
+      const sql = observeHostDataSql();
       const settled = await ensureSessionDiffBaseline({
         ...target,
         cwd: "/workspace",
         isNewSession,
-      });
+      }).finally(sql.restore);
 
+      expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
       expect(settled.sessionDiffBaseline).toEqual(baseline(entry.sessionId));
       const persisted = loadSessionEntry(target);
       expect(persisted).toMatchObject({
@@ -241,7 +247,7 @@ describe("ensureSessionDiffBaseline", () => {
     });
     const target = await seedEntry({ entry });
     const read = vi
-      .spyOn(historyLane.pool, "run")
+      .spyOn(projectionLane.pool, "run")
       .mockRejectedValueOnce(new Error("authoritative read failed"));
     try {
       await expect(ensure(target)).rejects.toBeInstanceOf(SessionWorkStartInvalidatedError);

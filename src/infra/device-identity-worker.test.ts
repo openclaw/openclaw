@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -64,11 +65,12 @@ describe("device identity shared worker", () => {
           verifyDeviceSignature(first.publicKeyPem, "synthetic-identity-proof", signature),
         ).toBe(true);
         await closeOpenClawStateDatabaseByPathAsync(options.path);
-        const artifacts = await fs.readdir(path.dirname(options.path));
+        const bytes = await fs.readFile(options.path);
         const fileMode = (await fs.stat(options.path)).mode;
         expect(await loadDeviceIdentityIfPresentAsync(options)).toEqual(first);
         await closeOpenClawStateDatabaseByPathAsync(options.path);
-        expect(await fs.readdir(path.dirname(options.path))).toEqual(artifacts);
+        expect(await fs.readFile(options.path)).toEqual(bytes);
+        expect(statSync(`${options.path}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
         expect((await fs.stat(options.path)).mode).toBe(fileMode);
 
         expect(await loadDeviceIdentityIfPresentAsync(options)).toEqual(first);

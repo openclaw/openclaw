@@ -186,12 +186,10 @@ export function actionHasResourceReference(
   );
 }
 
-/** Reports whether an action normally needs a destination target. */
 export function actionRequiresTarget(action: ChannelMessageActionName): boolean {
   return MESSAGE_ACTION_TARGET_MODE[action] !== "none";
 }
 
-/** Detects whether an action invocation already carries a usable target. */
 export function actionHasTarget(
   action: ChannelMessageActionName,
   params: Record<string, unknown>,

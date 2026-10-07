@@ -227,6 +227,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     await emitToolExecutionStartEvent({ ctx, toolName: "read", toolCallId, args });
     await def.execute(toolCallId, args, undefined, undefined, extensionContext);
+    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
     await emitToolExecutionEndEvent({
       ctx,
       toolName: "read",
@@ -235,7 +236,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
       result: { content: [{ type: "text", text: "ok" }] },
     });
 
-    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith(
+    expect(beforeToolCallMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledExactlyOnceWith(
       toolCallId,
       "integration-test",
     );

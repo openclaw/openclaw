@@ -172,6 +172,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/infra/gateway-boot-lifecycle.kernel.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["inspectGatewayCrashLoopBreakerInDatabase"],
+        evidence:
+          "Extracted from the existing gateway-boot-lifecycle.ts boot exception. Native inspectGatewayCrashLoopBreaker is only called by cli/gateway-cli/run.ts beginBoot before starting the Gateway; runtime inspection and recovery commit revalidation execute via gatewayBootReadOperations and gateway-boot-lifecycle.worker.ts in the existing state workers.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db.ts",
     [
       {
@@ -386,9 +397,11 @@ const reviewedOperations = new Map([
           "readPreparedReservations",
           "createPreparedEnvironmentStoreOps.ensurePreparedIntent",
           "createPreparedEnvironmentStoreOps.requestPreparedDestroy",
+          "hasPlacementReference",
+          "consumePreparedEnvironment",
         ],
         evidence:
-          "Factory only in store.kernel.ts:99 -> store.worker.ts:48; native consume and shared reader stay T1",
+          "Prepared mutations run in store.worker.ts; consumption and its placement-reference predicate run only in placement-lifecycle.worker.ts.",
       },
     ],
   ],
@@ -397,15 +410,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorkerPlacementChangeSnapshotInDatabase"],
-        evidence: "Reporting snapshot only called by openclaw-state-read.worker.ts:644",
+        operations: [
+          "readWorkerPlacementChangeSnapshotInDatabase",
+          "readWorkerPlacementsInDatabase",
+        ],
+        evidence:
+          "Snapshots use openclaw-state-read.worker.ts; placement-lifecycle.worker.ts serves point lookups on the existing placement actor. Native reconciliation guards remain T1.",
       },
       {
         tier: "W",
         operations: ["updateTransition"],
-        binding: "activated",
         evidence:
-          "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
+          "Transitions run only in placement-transitions.worker.ts and prepared binding in placement-lifecycle.worker.ts.",
       },
       {
         tier: "W",
@@ -504,6 +520,17 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "List/mutations run only in node-worker-journal.worker.ts:14,19,26,31,36; selectRow/write are mutation-only helpers; native findSync at node-worker-prepared-workspace-store.ts:31 reaches only find, which stays T1",
+      },
+    ],
+  ],
+  [
+    "src/sessions/session-upstream-links.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listWatchedSessionUpstreamLinksInDatabase"],
+        evidence:
+          "Only sessionUpstream.listWatched dispatches this read; mutation kernels retain v2026.9.8 synchronous SDK callers until the next Plugin SDK major.",
       },
     ],
   ],
@@ -843,17 +870,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-status.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["readSessionEntriesByStatus"],
-        evidence:
-          "gateway/server-startup-session-migration.ts:103 and startup main-session recovery via agents/main-session-recovery/main-session-restart-recovery-runtime.ts:270 -> :94 -> main-session-restart-recovery-store.ts:207. Runtime expected-target retry takes :200 and skips enumeration; other direct reader is session-entry-read.worker.ts:306.",
-      },
-    ],
-  ],
-  [
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
     [
       {
@@ -971,6 +987,29 @@ const reviewedOperations = new Map([
         evidence:
           "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
       },
+      {
+        tier: "W",
+        operations: [
+          "deleteExactMove",
+          "requireExactAttachedEnvironment",
+          "createPlacementMoveOps.completeSourceToLocal",
+          "createPlacementMoveOps.beginPlacementMove",
+          "createPlacementMoveOps.recordPlacementMoveError",
+        ],
+        evidence:
+          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-drain.ts",
+    [
+      {
+        tier: "W",
+        operations: ["drainWorkerSessionPlacement"],
+        evidence:
+          "Only placement turn/transition workers and the move mutation kernel in placement-lifecycle.worker.ts drain placements.",
+      },
     ],
   ],
   [
@@ -1078,12 +1117,6 @@ const reviewedOperations = new Map([
         evidence:
           "Row reads are only completion/subagent-completion-admission.worker.ts:94,155 or its mutation kernel at :246,274,293,412,523,562,576 (admission.worker.ts:188). Session-list loader at store.sqlite.ts:409 is called only by src/state/openclaw-state-read.worker.ts:196; other native registry readers remain T1.",
       },
-      {
-        tier: "T2",
-        operations: ["hasSubagentSessionOwnerInDatabase"],
-        evidence:
-          "Only subagent-session-reconciliation.ts:255 invokes the ownership query, through server-startup-session-migration.ts:130. Callers are server-startup-plugins.ts:99 and server-agent-database-startup.ts:112; the latter is the one-time deferred boot-inspection continuation in src/state/agent-database-startup.ts:235,290,322, not request/timer maintenance.",
-      },
     ],
   ],
   [
@@ -1107,11 +1140,16 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "getRegistryWorktreeInDatabase",
+          "findLiveRegistryWorktreeByOwnerInDatabase",
+          "findLiveRegistryWorktreeByPathInDatabase",
+          "listRegistryWorktreesInDatabase",
+          "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Only worktrees/dispatch.worker.ts:31,39 calls these kernels; src/state/openclaw-state-worker-registry.ts:149 registers the handlers. Shared native worktree getters/list/provisioned-data readers remain T1.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -1123,9 +1161,10 @@ const reviewedOperations = new Map([
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
+          "runRegistryMigration",
         ],
         evidence:
-          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:78 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode and is invoked at src/commands/doctor-session-worktree-workspace.ts:30. Rewrite is called only by state-migrations.doctor.ts:1362, reached through Doctor/startup migration owner at :2488,2509,2717.",
+          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:84 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode. The private runRegistryMigration transaction is called only by discardLegacyRegistryWorktrees and rewriteRegistryWorktreePathsForMigration; their sole production caller is the managed-worktrees step at src/infra/state-migrations.doctor.ts:1256,1258 (Doctor/startup). It acquires the existing schema-maintenance owner before opening the transaction database.",
       },
       {
         tier: "T3",
@@ -1140,9 +1179,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorktreeRunLeaseStateInDatabase"],
+        operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
-          "Only src/state/openclaw-state-read-registry.ts:96 calls this reader, dispatched in openclaw-state-read.worker.ts:679. Host worktrees/registry-read.ts:71 uses the existing read worker; live lease/custody helpers retain their native tiers.",
+          "Run-lease inventory is dispatched by openclaw-state-read-registry.ts in the read worker. Registry mutation custody is called only by registry-run-end.worker.ts. The actual lease read/reap primitives remain synchronous exemptions.",
       },
     ],
   ],
@@ -1817,11 +1856,12 @@ const reviewedOperations = new Map([
           "resolveUserProfileGitHubAttributionInDatabase",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
+          "selectGitHubProfileAlias",
           "applyVerifiedGitHubIdentity",
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity.",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
@@ -2006,8 +2046,6 @@ const workerModules = new Set([
   "src/secrets/store/secret-store-config-ref.kernel.ts", // Config-ref writes are called only by the shared-state worker runtime.
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
   "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
-
-  "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
 
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.

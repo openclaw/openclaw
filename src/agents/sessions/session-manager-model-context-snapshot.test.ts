@@ -85,12 +85,13 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
     await source.appendMessageAsync(makeUserMessage("original", 1));
     const consuming = createDeferred();
     const release = createDeferred();
+    const disclose = vi.fn();
     let retained: Iterable<unknown> | undefined;
     const pending = SessionManager.readSessionContextAsync(target, async (messages) => {
       retained = messages;
       consuming.resolve();
       await release.promise;
-      return [...messages];
+      return Array.from(messages, disclose);
     });
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     try {
@@ -102,6 +103,7 @@ it("retains the full-context read owner until an awaited consumer settles", asyn
       closing = closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       release.resolve();
       await expect(pending).rejects.toThrow(/revoked|closed|current|admission/i);
+      expect(disclose).not.toHaveBeenCalled();
       expect([...retained!]).toEqual([]);
     } finally {
       release.resolve();
@@ -202,10 +204,11 @@ it("reads full durable context through workers and preserves the deprecated sync
       exec.mockRestore();
     }
     await expect(
-      SessionManager.readSessionContextAsync(target, async () => {
+      SessionManager.readSessionContextAsync(target, async (messages) => {
         await manager.appendMessageAsync(makeUserMessage("changed", 2));
+        return [...messages];
       }),
-    ).rejects.toThrow("changed during context read");
+    ).resolves.toEqual(expected);
     const missing = { ...target, storePath: path.join(state.agentDir("main"), "absent.sqlite") };
     await expect(
       SessionManager.readSessionContextAsync(missing, () => "unreadable", {

@@ -155,7 +155,13 @@ async function runStateLeaseOwnerInScope<T>(
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "operation", validated.leaseLabel);
     }
-    if (closed || timerHeartbeat?.isExpired()) {
+    if (
+      closed ||
+      timerHeartbeat?.isExpired() ||
+      (phase === "owned" &&
+        expiryObservation !== undefined &&
+        Number(Atomics.load(expiryObservation, leaseHeartbeatState.expiresAt)) <= Date.now())
+    ) {
       abortLost();
       throw leaseLost.signal.reason;
     }

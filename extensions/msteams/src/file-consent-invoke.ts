@@ -7,9 +7,6 @@ import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
 import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/**
- * Handle fileConsent/invoke activities for large file uploads.
- */
 async function handleMSTeamsFileConsentInvoke(
   context: MSTeamsTurnContext,
   log: MSTeamsMonitorLogger,
@@ -125,7 +122,7 @@ export async function runMSTeamsFileConsentInvokeHandler(
 ): Promise<void> {
   try {
     await withRevokedProxyFallback({
-      run: async () => await handleMSTeamsFileConsentInvoke(context, log),
+      run: () => handleMSTeamsFileConsentInvoke(context, log),
       onRevoked: async () => true,
       onRevokedLog: () => {
         log.debug?.("turn context revoked during file consent invoke; skipping delayed response");

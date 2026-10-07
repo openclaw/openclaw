@@ -3,16 +3,15 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.entry.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import {
-  listSessionMembersInWorker,
-  removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+import * as sharingStore from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
   initializeSessionReadContext,
   identifiedClient,
@@ -36,7 +35,10 @@ it("adds, lists, and removes session members without caller-thread SQL after col
       },
     );
     // Collaboration owns its cold admission; the worker-only entry seed does not admit it.
-    await removeSessionMember({ agentId: "main", sessionKey }, "absent-admission-fixture-member");
+    await sharingStore.removeSessionMember(
+      { agentId: "main", sessionKey },
+      "absent-admission-fixture-member",
+    );
     const manager = identifiedClient("owner");
     const requestContext = context(vi.fn());
     await initializeSessionReadContext(requestContext);
@@ -77,6 +79,48 @@ it("adds, lists, and removes session members without caller-thread SQL after col
   });
 });
 
+it("refuses membership evidence after a published foreign ownership change", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const sessionKey = "agent:main:sharing-snapshot-owner";
+    const scope = { agentId: "main", sessionKey };
+    await upsertSessionEntryCore(scope, {
+      sessionId: "sharing-snapshot-owner",
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: "owner" },
+    });
+    addSessionMember(scope, { identityId: "guest", addedBy: "owner" });
+    const manager = identifiedClient("owner");
+    const requestContext = context(vi.fn());
+    await initializeSessionReadContext(requestContext);
+    const projection = getSessionRowProjection(requestContext)!;
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const readMembers = sharingStore.readSessionMembersInWorker;
+    vi.spyOn(sharingStore, "readSessionMembersInWorker").mockImplementationOnce(async (input) => {
+      const snapshot = await readMembers(input);
+      const writer = new DatabaseSync(database.path);
+      try {
+        writer
+          .prepare(
+            "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.createdActor.id', ?) WHERE session_key = ?",
+          )
+          .run("other", sessionKey);
+      } finally {
+        writer.close();
+      }
+      sessionChanges.emit({ agentId: "main", sessionKey });
+      await projection.prepareSelection();
+      const current = projection.sharingTarget({ key: sessionKey, agentId: "main" });
+      expect(current?.entry.sessionId).toBe(snapshot.entry?.sessionId);
+      expect(current?.entry.lifecycleRevision).toBe(snapshot.entry?.lifecycleRevision);
+      expect(current?.entry.createdActor).toMatchObject({ id: "other" });
+      return snapshot;
+    });
+    await expect(
+      call("session.members.listEvidence", { sessionKey }, requestContext, manager),
+    ).rejects.toThrow("session ownership changed before sharing read");
+  });
+});
+
 it("refuses revoked managers and dirty membership at the worker commit grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     await upsertSessionEntryCore(
@@ -105,7 +149,7 @@ it("refuses revoked managers and dirty membership at the worker commit grant", a
         await initializeSessionReadContext(requestContext);
         const projection = getSessionRowProjection(requestContext)!;
         const target = projection.sharingTarget({ key: sessionKey, agentId: "main" })!;
-        const before = await listSessionMembersInWorker(scope);
+        const before = await sharingStore.readSessionMembersInWorker(scope);
         const createAdmission = admission.createSqliteWorkerOperationAdmission;
         let reachedCommit = false;
         const gate = vi
@@ -153,7 +197,7 @@ it("refuses revoked managers and dirty membership at the worker commit grant", a
         } finally {
           gate.mockRestore();
         }
-        expect(await listSessionMembersInWorker(scope)).toEqual(before);
+        expect(await sharingStore.readSessionMembersInWorker(scope)).toEqual(before);
       }
     }
   });
@@ -197,8 +241,8 @@ it("keeps the original session bound while membership preparation yields", async
     } finally {
       release.resolve();
     }
-    expect(await outcome).toMatchObject({ message: "session changed before sharing mutation" });
-    expect(await listSessionMembersInWorker(scope)).toMatchObject([
+    expect(await outcome).toBeInstanceOf(SessionMutationFactsUnavailableError);
+    expect((await sharingStore.readSessionMembersInWorker(scope)).members).toMatchObject([
       { identityId: "guest", addedBy: "replacement-owner" },
     ]);
     expect(requestContext.broadcast).not.toHaveBeenCalled();

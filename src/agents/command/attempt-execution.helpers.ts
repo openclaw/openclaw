@@ -202,7 +202,7 @@ export async function claudeCliSessionTranscriptHasContent(
   }
   const sessionId = normalizeClaudeCliSessionId(params.sessionId);
   cliBackendLog.warn(
-    `claude-cli transcript probe v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
+    `claude-cli transcript check v4 miss (sessionId-deterministic path, grace ${CLAUDE_CLI_TRANSCRIPT_FLUSH_GRACE_MS}ms): sessionId=${sessionId ?? ""} expectedPath=${expectedPath} fileExists=${second.fileExists}`,
   );
   return false;
 }
@@ -465,26 +465,17 @@ export function createAcpVisibleTextAccumulator() {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)) {
-          const stripped = stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN);
-          if (stripped) {
-            pendingSilentPrefix = "";
-            rawVisibleText = leadCandidate;
-            visibleText = stripped;
-            return { text: stripped, delta: stripped };
-          }
+        const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
+          ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
+          : leadCandidate;
+        if (!text) {
           pendingSilentPrefix = leadCandidate;
           return null;
         }
-        if (pendingSilentPrefix) {
-          pendingSilentPrefix = "";
-          rawVisibleText = leadCandidate;
-          visibleText = leadCandidate;
-          return {
-            text: visibleText,
-            delta: leadCandidate,
-          };
-        }
+        pendingSilentPrefix = "";
+        rawVisibleText = leadCandidate;
+        visibleText = text;
+        return { text, delta: text };
       }
 
       const delta =

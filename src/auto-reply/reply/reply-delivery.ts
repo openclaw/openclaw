@@ -1,4 +1,3 @@
-/** Delivers prepared block replies through streaming or direct paths. */
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
 import { trimTextPreservingCode } from "../../shared/text/text-projection.js";
@@ -45,7 +44,6 @@ export async function resolveReplyFailureVisibility(
   );
 }
 
-/** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;
   currentMessageId?: string;
@@ -141,7 +139,6 @@ async function sendDirectBlockReply(params: {
   }
 }
 
-/** Creates the handler used for assistant block replies during streaming/tool phases. */
 export function createBlockReplyDeliveryHandler(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
   currentMessageId?: string;

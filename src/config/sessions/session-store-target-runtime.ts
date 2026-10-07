@@ -15,6 +15,7 @@ import {
   type SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
+  projectionLane,
   withSessionHistoryWorkerReadCandidates,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -117,45 +118,49 @@ export function prepareSessionStoreTargetInventoryRead(
       ) => Promise<T>,
       assertCallerCurrent?: () => void,
     ) {
-      return withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-        const assertCurrent = () => {
-          assertCallerCurrent?.();
-          discovery.assertCurrent();
-          assertRegistryCurrent();
-        };
-        let inventory = await discovery.readTargetInventory({
-          ...prepared,
-          registeredDatabases: { status: "deferred" },
-        });
-        assertCurrent();
-        if (inventory.kind === "session-target-registry-required") {
-          registryStarted = true;
-          let current;
-          try {
-            current = await registry.read();
-          } catch (error) {
-            if (!(error instanceof AgentDatabaseRegistryChangedError)) {
-              throw error;
-            }
-            registry = captureRegistry();
-            current = await registry.read();
-          }
-          assertCurrent();
-          registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
-          inventory = await discovery.readTargetInventory({
+      return withSessionHistoryWorkerReadCandidates(
+        candidates,
+        async (discovery) => {
+          const assertCurrent = () => {
+            assertCallerCurrent?.();
+            discovery.assertCurrent();
+            assertRegistryCurrent();
+          };
+          let inventory = await discovery.readTargetInventory({
             ...prepared,
-            registeredDatabases:
-              current.result.status === "available"
-                ? current.result.entries
-                : { status: "unavailable" },
+            registeredDatabases: { status: "deferred" },
           });
           assertCurrent();
-        }
-        if (inventory.kind !== "session-target-inventory") {
-          throw new Error("Session store inventory requested registry rows twice");
-        }
-        return operation(inventory, assertCurrent);
-      });
+          if (inventory.kind === "session-target-registry-required") {
+            registryStarted = true;
+            let current;
+            try {
+              current = await registry.read();
+            } catch (error) {
+              if (!(error instanceof AgentDatabaseRegistryChangedError)) {
+                throw error;
+              }
+              registry = captureRegistry();
+              current = await registry.read();
+            }
+            assertCurrent();
+            registry = unchangedBy ? registry : prepareSessionStoreRegistryRead(request);
+            inventory = await discovery.readTargetInventory({
+              ...prepared,
+              registeredDatabases:
+                current.result.status === "available"
+                  ? current.result.entries
+                  : { status: "unavailable" },
+            });
+            assertCurrent();
+          }
+          if (inventory.kind !== "session-target-inventory") {
+            throw new Error("Session store inventory requested registry rows twice");
+          }
+          return operation(inventory, assertCurrent);
+        },
+        projectionLane,
+      );
     },
   };
 }

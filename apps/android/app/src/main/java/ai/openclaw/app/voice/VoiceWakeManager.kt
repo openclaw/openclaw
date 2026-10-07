@@ -10,7 +10,6 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import kotlinx.coroutines.CoroutineScope
@@ -133,7 +132,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
   private fun createRecognizer(session: VoiceWakeRecognitionSession): SpeechRecognizer =
     SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext).also { active ->
       active.setRecognitionListener(
-        object : RecognitionListener {
+        object : SpeechRecognitionListenerAdapter() {
           override fun onReadyForSpeech(params: Bundle?) {
             session.emit(VoiceWakeRecognitionEvent.Ready)
           }
@@ -155,16 +154,7 @@ internal class AndroidOnDeviceVoiceWakeRecognizer(
 
           override fun onBeginningOfSpeech() = Unit
 
-          override fun onRmsChanged(rmsdB: Float) = Unit
-
-          override fun onBufferReceived(buffer: ByteArray?) = Unit
-
           override fun onEndOfSpeech() = Unit
-
-          override fun onEvent(
-            eventType: Int,
-            params: Bundle?,
-          ) = Unit
         },
       )
     }
@@ -235,7 +225,7 @@ internal enum class VoiceWakeSuppressionReason {
 }
 
 internal class VoiceWakeManager(
-  private val context: Context,
+  context: Context,
   private val scope: CoroutineScope,
   private val recognizer: VoiceWakeRecognizer,
   initialTriggerWords: List<String>,
@@ -283,40 +273,29 @@ internal class VoiceWakeManager(
   val isAvailable: Boolean
     get() = recognizer.isAvailable
 
-  fun setEnabled(value: Boolean) {
-    val action =
-      synchronized(lock) {
-        enabled = value
-        reconcileLocked()
-      }
-    performRecognizerAction(action)
-  }
+  fun setEnabled(value: Boolean) =
+    reconcile {
+      enabled = value
+    }
 
-  fun setForeground(value: Boolean) {
-    val action =
-      synchronized(lock) {
-        foreground = value
-        reconcileLocked()
-      }
-    performRecognizerAction(action)
-  }
+  fun setForeground(value: Boolean) =
+    reconcile {
+      foreground = value
+    }
 
   fun setSuppressed(
     reason: VoiceWakeSuppressionReason,
     suppressed: Boolean,
     revision: Long? = null,
   ) {
-    val action =
-      synchronized(lock) {
-        if (revision != null) {
-          val currentRevision = suppressionRevisions[reason] ?: 0L
-          if (revision <= currentRevision) return
-          suppressionRevisions[reason] = revision
-        }
-        if (suppressed) suppressionReasons += reason else suppressionReasons -= reason
-        reconcileLocked()
+    reconcile {
+      if (revision != null) {
+        val currentRevision = suppressionRevisions[reason] ?: 0L
+        if (revision <= currentRevision) return
+        suppressionRevisions[reason] = revision
       }
-    performRecognizerAction(action)
+      if (suppressed) suppressionReasons += reason else suppressionReasons -= reason
+    }
   }
 
   fun updateTriggerWords(words: List<String>) {
@@ -325,8 +304,14 @@ internal class VoiceWakeManager(
     }
   }
 
-  fun refreshPermission() {
-    val action = synchronized(lock) { reconcileLocked() }
+  fun refreshPermission() = reconcile {}
+
+  private inline fun reconcile(update: () -> Unit) {
+    val action =
+      synchronized(lock) {
+        update()
+        reconcileLocked()
+      }
     performRecognizerAction(action)
   }
 

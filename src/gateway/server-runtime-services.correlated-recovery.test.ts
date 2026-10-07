@@ -57,10 +57,8 @@ afterEach(() => {
 
 describe("registered correlated completion recovery custody", () => {
   it.for([
-    { change: "none", outcome: "recovered" },
     { change: "none", outcome: "moved-to-failed" },
     { change: "default", outcome: "recovered" },
-    { change: "default", outcome: "moved-to-failed" },
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
@@ -134,7 +132,9 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.restore",
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {

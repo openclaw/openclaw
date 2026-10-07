@@ -12,7 +12,7 @@ import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js"
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  emitAgentEvent,
+  reserveAgentTerminalEvent,
   getAgentEventLifecycleGeneration,
   type AgentEventPayload,
 } from "../infra/agent-events.js";
@@ -20,6 +20,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
@@ -231,6 +232,7 @@ export function registerChatAbortController(params: {
       entry.registrationCleanupRequested = true;
       entry.projectSessionActive = false;
       entry.pendingTimeoutCompletion = undefined;
+      notifyGatewayWorkMetricsChanged();
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
       if (entry.projectSessionTerminalPending === true) {
@@ -300,12 +302,18 @@ export function registerChatAbortController(params: {
     resolveTerminalProducer: params.resolveTerminalProducer
       ? () => params.resolveTerminalProducer?.(entry)
       : undefined,
-    onRemoved: params.onRemoved,
+    onRemoved: () => {
+      controller.signal.removeEventListener("abort", notifyGatewayWorkMetricsChanged);
+      notifyGatewayWorkMetricsChanged();
+      params.onRemoved?.();
+    },
     projectSessionActive: params.projectSessionActive ?? true,
     kind: params.kind,
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
+  controller.signal.addEventListener("abort", notifyGatewayWorkMetricsChanged, { once: true });
+  notifyGatewayWorkMetricsChanged();
   return {
     controller,
     registered: true,
@@ -530,6 +538,13 @@ export function abortChatRunById(
     active.abortStopReason = stopReason;
   }
   active.abortDiagnosticReason = params.diagnosticReason;
+  const emitTerminal = reserveAgentTerminalEvent({
+    runId,
+    ...(active.lifecycleGeneration ? { lifecycleGeneration: active.lifecycleGeneration } : {}),
+    sessionKey,
+    sessionId: active.sessionId,
+    agentId: active.agentId,
+  });
   // Reserve transcript settlement while this exact producer still has authority.
   try {
     params.onAbortCommitted?.();
@@ -566,30 +581,22 @@ export function abortChatRunById(
       liveTextGroup,
     });
   }
-  emitAgentEvent({
-    runId,
-    ...(active.lifecycleGeneration ? { lifecycleGeneration: active.lifecycleGeneration } : {}),
-    sessionKey,
-    sessionId: active.sessionId,
-    agentId: active.agentId,
-    stream: "lifecycle",
-    data: {
-      phase: "end",
-      status: "cancelled",
-      aborted: true,
-      stopReason,
-      ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
-      // Pre-execution admission time is not an execution start.
-      startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
-      ...(active.executionStarted === false
-        ? {
-            executionStarted: false,
-            providerStarted: false,
-            ...(stopReason === "timeout" ? { timeoutPhase: "queue" } : {}),
-          }
-        : {}),
-      endedAt: Date.now(),
-    },
+  emitTerminal({
+    phase: "end",
+    status: "cancelled",
+    aborted: true,
+    stopReason,
+    ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
+    // Pre-execution admission time is not an execution start.
+    startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
+    ...(active.executionStarted === false
+      ? {
+          executionStarted: false,
+          providerStarted: false,
+          ...(stopReason === "timeout" ? { timeoutPhase: "queue" } : {}),
+        }
+      : {}),
+    endedAt: Date.now(),
   });
   // Gateway listeners synchronously stamp the terminal observation. Keep the
   // entry as suspension-visible ownership until its persistence write settles.

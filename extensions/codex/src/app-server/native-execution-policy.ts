@@ -53,9 +53,10 @@ export function resolveCodexNativeExecutionPolicy(params: {
     parseAgentIdFromSessionKey(sessionKey) ??
     tryResolveDefaultAgentId(config);
   const canReadSessionEntry =
-    Boolean(agentId) &&
+    agentId &&
+    sessionKey &&
     params.readRuntimeSessionEntry &&
-    shouldReadRuntimeSessionEntry({ config, sessionKey, agentId });
+    (parseAgentIdFromSessionKey(sessionKey) ?? tryResolveDefaultAgentId(config)) === agentId;
   const sessionEntry =
     params.sessionEntry ??
     (canReadSessionEntry && sessionKey && agentId
@@ -121,25 +122,6 @@ function parseAgentIdFromSessionKey(sessionKey?: string): string | undefined {
     return undefined;
   }
   return normalizeAgentIdOrDefault(parts[1]);
-}
-
-function shouldReadRuntimeSessionEntry(params: {
-  config: OpenClawConfig;
-  sessionKey?: string;
-  agentId?: string;
-}): boolean {
-  if (!params.sessionKey) {
-    return false;
-  }
-  const explicitAgentId = normalizeAgentIdOrDefault(params.agentId);
-  if (!explicitAgentId) {
-    return true;
-  }
-  const sessionAgentId = parseAgentIdFromSessionKey(params.sessionKey);
-  if (!sessionAgentId) {
-    return normalizeAgentId(explicitAgentId) === tryResolveDefaultAgentId(params.config);
-  }
-  return sessionAgentId === explicitAgentId;
 }
 
 function normalizeAgentIdOrDefault(value?: string | null): string | undefined {

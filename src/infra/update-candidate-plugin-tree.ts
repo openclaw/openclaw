@@ -1,15 +1,17 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertDirectoryIdentitySync, readDirectoryIdentity } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import { root as openRoot } from "./fs-safe.js";
 import { tryReadJson } from "./json-files.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isPackageUpdateRecoveryArtifactName } from "./package-update-backup-paths.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import { copyUpdateCandidatePluginFiles } from "./update-candidate-plugin-file.js";
 import {
   assertUpdateCandidatePluginEntryStat,
   isUpdateCandidateHostLauncher,
@@ -182,6 +184,9 @@ export async function prepareUpdateCandidatePluginTrees(params: {
         birthtimeNs: stat.birthtimeNs.toString(),
         mtimeNs: stat.mtimeNs.toString(),
         ctimeNs: stat.ctimeNs.toString(),
+        uid: stat.uid.toString(),
+        gid: stat.gid.toString(),
+        sha256: hashFileMutationSnapshotSync(file, stat),
       };
     } else if (stat.isSymbolicLink()) {
       const target =
@@ -607,15 +612,17 @@ export async function copyUpdateCandidatePluginTrees(
     targetStateDir: string;
     candidateRoot: string;
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<void> {
-  const targets = resolveUpdateCandidatePluginTreeTargets(plan, params);
+  const targets = resolveUpdateCandidatePluginTreeTargets(plan, params, params.onProgress);
   const { privateRoot, candidateRoot, copies, hostLinks, relocations, destinationFor } = targets;
   const assertEntry = async (entry: UpdateCandidatePluginEntry) => {
     assertUpdateCandidatePluginEntryStat(entry, await fs.lstat(entry.path, { bigint: true }));
     if (entry.kind === "symlink" && (await fs.readlink(entry.path)) !== entry.link) {
       throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
     }
+    params.onProgress?.();
   };
   const assertEntries = async () => {
     const checked = await runTasksWithConcurrency({
@@ -630,12 +637,15 @@ export async function copyUpdateCandidatePluginTrees(
   await targets.assertBindings();
   await assertEntries();
   await fs.mkdir(privateRoot, { recursive: true, mode: 0o700 });
+  const rootIdentity = await readDirectoryIdentity(privateRoot);
   const destinationRoot = await openRoot(privateRoot);
+  assertDirectoryIdentitySync(privateRoot, rootIdentity);
   const preparedDirectories = new Set([privateRoot]);
   for (const entry of plan.entries) {
     if (entry.kind === "directory") {
       const destination = destinationFor(entry.path);
       await fs.mkdir(destination, { recursive: true, mode: entry.mode | 0o700 });
+      params.onProgress?.();
       preparedDirectories.add(destination);
     }
   }
@@ -646,49 +656,25 @@ export async function copyUpdateCandidatePluginTrees(
       const parent = path.dirname(destinationFor(entry.path));
       if (!preparedDirectories.has(parent)) {
         await fs.mkdir(parent, { recursive: true, mode: 0o700 });
+        params.onProgress?.();
         preparedDirectories.add(parent);
       }
     }
   }
-  const copied = await runTasksWithConcurrency({
-    limit: 4,
-    errorMode: "stop",
-    tasks: plan.entries
-      .filter((entry) => entry.kind === "file")
-      .map((entry) => async () => {
-        await assertEntry(entry);
-        const destination = destinationFor(entry.path);
-        // copyIn owns portable create-only publication; no-replace move needs a
-        // native binding. Recheck the inventory before its private stage is published.
-        await destinationRoot.copyIn(path.relative(privateRoot, destination), entry.path, {
-          overwrite: false,
-          // Every destination parent is prepared before copies are admitted.
-          mkdir: false,
-          // Rehearsal payloads are disposable and never serve as recovery backups.
-          durable: false,
-          clone: "auto",
-          maxBytes: entry.size,
-          mode: entry.mode | 0o600,
-          sourceHardlinks: "allow",
-          assertBeforeMutation: () =>
-            assertUpdateCandidatePluginEntryStat(
-              entry,
-              fsSync.lstatSync(entry.path, { bigint: true }),
-            ),
-        });
-        await assertEntry(entry);
-      }),
+  const files = plan.entries.filter((entry) => entry.kind === "file");
+  await copyUpdateCandidatePluginFiles(files, {
+    privateRoot,
+    rootIdentity,
+    destinationRoot,
+    destinationFor,
+    onProgress: params.onProgress,
   });
-  // A failed copy can already have published bytes. Drain every admitted copy
-  // before the caller can clean up, or before any link publication begins.
-  if (copied.hasError) {
-    throw copied.firstError;
-  }
   for (const entry of plan.entries) {
     if (entry.kind === "symlink") {
       await assertEntry(entry);
       const destination = destinationFor(entry.path);
       await fs.symlink(entry.link, destination, entry.linkType);
+      params.onProgress?.();
     }
   }
   await targets.assertBindings();
@@ -700,6 +686,7 @@ export async function copyUpdateCandidatePluginTrees(
         entry.kind === "symlink" ? relocateRuntimeSymlink : resolveRuntimeFileRelocator(target);
       if (relocate) {
         await relocate(target, entry.path, target, relocations);
+        params.onProgress?.();
       }
     }
   }
@@ -709,7 +696,13 @@ export async function copyUpdateCandidatePluginTrees(
     hostLinks,
     aliases: targets.aliases,
   });
-  const verification = { privateRoot, candidateRoot, hostLinks, onCodeLink: params.onCodeLink };
+  const verification = {
+    privateRoot,
+    candidateRoot,
+    hostLinks,
+    onCodeLink: params.onCodeLink,
+    onProgress: params.onProgress,
+  };
   for (const alias of privateAliases) {
     await verifyUpdateCandidatePluginTree(alias, verification);
   }
@@ -719,11 +712,13 @@ export async function copyUpdateCandidatePluginTrees(
   for (const entry of plan.entries) {
     if (entry.kind === "file" && (entry.mode & 0o600) !== 0o600) {
       await fs.chmod(destinationFor(entry.path), entry.mode);
+      params.onProgress?.();
     }
   }
   for (const entry of plan.entries
     .filter((candidate) => candidate.kind === "directory")
     .toSorted((left, right) => right.path.length - left.path.length)) {
     await fs.chmod(destinationFor(entry.path), entry.mode);
+    params.onProgress?.();
   }
 }

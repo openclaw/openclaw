@@ -6,10 +6,6 @@ import { onAgentEvent } from "../../../infra/agent-events.js";
 import { registerSystemEventStoreOwner } from "../../../infra/system-event-ownership.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
-  bindGatewayContextResolver,
-  getGatewayContextResolver,
-} from "../../../plugins/runtime/gateway-request-scope.js";
-import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkAdmission,
   runWithGatewayIndependentRootWorkAdmission,
@@ -29,7 +25,7 @@ import {
   loadSubagentBrowserCleanupModule,
   resetSubagentRegistryRuntimeLoadersForTests,
 } from "./subagent-registry-deps.js";
-import { recoverSubagentRunGatewayOwner } from "./subagent-registry-gateway-owner.js";
+import { bindSubagentRunGatewayOwners } from "./subagent-registry-gateway-owner.js";
 import { ANNOUNCE_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -371,30 +367,15 @@ const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   getGatewayContextResolver: () => activeGatewayContextResolver,
   bindGatewayOwners: async () => {
-    const lifecycleGatewayContextResolver = activeGatewayContextResolver;
-    if (!lifecycleGatewayContextResolver?.()) {
+    if (
+      !(await bindSubagentRunGatewayOwners({
+        runs: subagentRuns,
+        resumedRuns,
+        getGatewayContextResolver: () => activeGatewayContextResolver,
+        onRecovered: subagentLifecycleController.markRequesterSettleWakeRestored,
+      }))
+    ) {
       return false;
-    }
-    for (const entry of subagentRuns.values()) {
-      const resolver = getGatewayContextResolver(entry);
-      if (resolver) {
-        if (entry.execution.status !== "terminal" || !entry.requesterSettleWake || resolver()) {
-          continue;
-        }
-        const previousResumeKey = getSubagentRunRuntimeKey(entry);
-        if (
-          await recoverSubagentRunGatewayOwner(
-            entry,
-            lifecycleGatewayContextResolver,
-            subagentLifecycleController.markRequesterSettleWakeRestored,
-          )
-        ) {
-          resumedRuns.delete(previousResumeKey);
-        }
-        continue;
-      }
-      bindGatewayContextResolver(entry, lifecycleGatewayContextResolver);
-      subagentRuns.commitOwnership(entry);
     }
     suspendReplacedNotificationsInBackground();
     return true;

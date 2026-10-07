@@ -75,14 +75,10 @@ export function createWebSocketTransport(
   let heartbeatSequence = 0;
 
   const clearConnectionHealthTimers = () => {
-    if (pingTimeout) {
-      clearTimeout(pingTimeout);
-      pingTimeout = undefined;
-    }
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pingTimeout);
+    pingTimeout = undefined;
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
   };
 
@@ -129,10 +125,8 @@ export function createWebSocketTransport(
 
   const recordConnectionActivity = () => {
     consecutiveMissedPongs = 0;
-    if (pongTimeout) {
-      clearTimeout(pongTimeout);
-      pongTimeout = undefined;
-    }
+    clearTimeout(pongTimeout);
+    pongTimeout = undefined;
     expectedPong = undefined;
     scheduleHeartbeatPing();
   };
@@ -267,7 +261,6 @@ function connectCodexAppServerUnixSocket(socketPath: string): net.Socket {
   return net.createConnection(socketPath);
 }
 
-/** Resolves the canonical or explicitly configured Codex control socket. */
 export function resolveCodexAppServerUnixSocketPath(
   options: Pick<CodexAppServerStartOptions, "env" | "transport" | "url">,
 ): string | undefined {

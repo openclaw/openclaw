@@ -84,7 +84,7 @@ completes. If migration state cannot be read, `migrationWarningsError` reports
 that failure while availability and run history remain visible.
 
 When the Gateway is reachable, status also reads its recorded channel warnings
-without probing channel services. JSON exposes these as `channelIssues`. This
+without checking channel services. JSON exposes these as `channelIssues`. This
 includes blocked channel startup after a local plugin requests trusted runtime
 state, with the source and supported installation remedy. An unavailable Gateway
 does not prevent availability or run-history output.
@@ -408,9 +408,9 @@ service and port inspection, health settlement, and final identity checks. The
 report and warning log record settlement, timeout with elapsed time and phase,
 or an unverified observation. A timeout is a warning and leaves the run eligible
 for later reconciliation; repeated diagnostics do not renew its abandonment timer.
-Runs without a recorded completed managed-service restart skip the probe and
+Runs without a recorded completed managed-service restart skip the check and
 record that skip. No fresh service-status read can permanently exclude a managed run.
-If native probe cleanup is still pending at the deadline, completion remains
+If native check cleanup is still pending at the deadline, completion remains
 unknown. Later cleanup confirmation preserves the original timeout; cleanup
 failure records both facts and names the failure in the report and warning log.
 Unknown cleanup never records success. Inspect `openclaw update status` before

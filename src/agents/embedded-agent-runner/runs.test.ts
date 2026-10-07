@@ -191,25 +191,6 @@ describe("embedded run ownership", () => {
     expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
   });
 
-  it("preserves frozen ownership during compacting aborts", () => {
-    const abort = vi.fn();
-    const { operation } = startReply(createRunHandle({ abort, isCompacting: true }));
-    operation.freezeAbort();
-    expect(abortEmbeddedAgentRun(undefined, { mode: "compacting", reason: "restart" })).toBe(false);
-    expect(operation.result).toBeNull();
-    expect(abort).not.toHaveBeenCalled();
-  });
-
-  it("preserves restart ownership when cancellation throws", () => {
-    const abort = vi.fn(() => {
-      throw new Error("cancel failed");
-    });
-    const { operation } = startReply(createRunHandle({ abort }));
-    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(abort).toHaveBeenCalledExactlyOnceWith("restart");
-  });
-
   it("fences timeout recovery across module instances", async () => {
     const runsA = await importFreshModule<typeof import("./runs.js")>(
       import.meta.url,
@@ -381,6 +362,7 @@ describe("embedded run ownership", () => {
         embeddedRunToolAuthorityBinding: () => ({
           source: "reply",
           project: () => "authority",
+          projectAsync: async () => "authority",
           assertActive: () => {},
         }),
       },

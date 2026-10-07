@@ -880,27 +880,32 @@ class SecurePrefs(
       }
     // A profile acknowledgement retires its queue entry, not a newer device-local choice.
     val applyLocally = key !in localOnlyAppearancePreferenceKeys
+
+    fun <T> complete(
+      value: T,
+      state: MutableStateFlow<T>,
+      writeValue: SharedPreferences.Editor.() -> Unit,
+    ) {
+      plainPrefs.edit {
+        if (applyLocally) writeValue()
+        persistPendingAppearancePreferences(this, next)
+      }
+      if (applyLocally) state.value = value
+    }
+
     when (key) {
       "ui.theme" -> {
         val family =
           AppearanceThemeFamily.entries.firstOrNull { it.rawValue == expectedValue }
             ?: return false
-        plainPrefs.edit {
-          if (applyLocally) putString(appearanceThemeFamilyKey, family.rawValue)
-          persistPendingAppearancePreferences(this, next)
-        }
-        if (applyLocally) _appearanceThemeFamily.value = family
+        complete(family, _appearanceThemeFamily) { putString(appearanceThemeFamilyKey, family.rawValue) }
       }
 
       "ui.themeMode" -> {
         val mode =
           AppearanceThemeMode.entries.firstOrNull { it.rawValue == expectedValue }
             ?: return false
-        plainPrefs.edit {
-          if (applyLocally) putString(appearanceThemeModeKey, mode.rawValue)
-          persistPendingAppearancePreferences(this, next)
-        }
-        if (applyLocally) _appearanceThemeMode.value = mode
+        complete(mode, _appearanceThemeMode) { putString(appearanceThemeModeKey, mode.rawValue) }
       }
 
       "ui.accent" -> {
@@ -909,17 +914,9 @@ class SecurePrefs(
             expectedValue == null -> null
             else -> parseHexColorArgb(expectedValue) ?: return false
           }
-        plainPrefs.edit {
-          if (applyLocally) {
-            if (argb == null) {
-              remove(appearanceAccentArgbKey)
-            } else {
-              putLong(appearanceAccentArgbKey, argb)
-            }
-          }
-          persistPendingAppearancePreferences(this, next)
+        complete(argb, _appearanceAccentArgb) {
+          if (argb == null) remove(appearanceAccentArgbKey) else putLong(appearanceAccentArgbKey, argb)
         }
-        if (applyLocally) _appearanceAccentArgb.value = argb
       }
 
       else -> {

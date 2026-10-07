@@ -34,7 +34,7 @@ import {
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
 import {
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -177,14 +177,10 @@ export async function withSessionManagerWrite<T>(
     runOpenClawAgentWriteAdmission(
       options,
       () =>
-        withOpenClawAgentDatabaseAsync(
+        withOpenClawAgentDatabaseRuntime(
           options,
           (database) => {
-            const current = manager.getSessionTarget();
-            if (!sameSessionTranscriptTargetBinding(identity, current)) {
-              throw new Error("Session manager identity changed before transcript write admission");
-            }
-            assertCurrent();
+            assertManager();
             // Each native kernel or worker command still validates live authority at commit.
             return write({ database, options, assertCurrent });
           },

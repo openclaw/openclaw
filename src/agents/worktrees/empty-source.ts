@@ -5,7 +5,9 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
-import { listRegistryWorktrees } from "./registry.js";
+import { readPendingWorktrees } from "./pending-slots.js";
+import { readRegistryWorktrees } from "./registry-read.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -51,6 +53,8 @@ export async function ensureEmptyWorktreeSource(params: {
   commitGuard: () => void;
 }): Promise<string> {
   const { env, commitGuard } = params;
+  const context = captureWorktreeRunEndContext(env);
+  const sourceDirectory = sourceParent(context.environment);
   // Isolate each session's Git metadata and configuration from other tasks.
   const gitEnv = Object.fromEntries(
     Object.entries(mergeProcessEnv([process.env, env])).filter(
@@ -68,18 +72,24 @@ export async function ensureEmptyWorktreeSource(params: {
   };
   params.signal?.throwIfAborted();
   commitGuard();
-  await fs.mkdir(sourceParent(env), { recursive: true, mode: 0o700 });
-  const ownerRoot = path.join(await fs.realpath(sourceParent(env)), sourceName(params.ownerId));
+  await fs.mkdir(sourceDirectory, { recursive: true, mode: 0o700 });
+  const ownerRoot = path.join(await fs.realpath(sourceDirectory), sourceName(params.ownerId));
   const sourceRoot = path.join(ownerRoot, "workspace");
   if (!(await worktreePathExists(sourceRoot))) {
-    if (
-      listRegistryWorktrees(env).some((record) => path.relative(sourceRoot, record.repoRoot) === "")
-    ) {
+    const retained =
+      (await readPendingWorktrees(context.environment)).some(
+        ({ record }) => path.relative(sourceRoot, record.repoRoot) === "",
+      ) ||
+      (await readRegistryWorktrees(context.environment, {}, context)).some(
+        (record) => path.relative(sourceRoot, record.repoRoot) === "",
+      );
+    context.admission.assertCurrent();
+    commitGuard();
+    if (retained) {
       throw new Error(
         `Empty workspace source is missing: ${sourceRoot}. Restore its original Git metadata before starting this workspace; existing session history and snapshots depend on it.`,
       );
     }
-    commitGuard();
     await fs.mkdir(ownerRoot, { recursive: true, mode: 0o700 });
     if (!(await fs.lstat(ownerRoot)).isDirectory()) {
       throw new Error(`Empty workspace source parent is not a directory: ${ownerRoot}`);
@@ -130,14 +140,15 @@ async function resolveEmptyWorktreeSourceRoot(params: {
   record: Pick<ManagedWorktreeRecord, "repoRoot" | "ownerKind" | "ownerId">;
 }): Promise<string | undefined> {
   const { env, record } = params;
+  const sourceDirectory = sourceParent(env);
   if (
     record.ownerKind !== "session" ||
     !record.ownerId ||
-    !(await worktreePathExists(sourceParent(env)))
+    !(await worktreePathExists(sourceDirectory))
   ) {
     return undefined;
   }
-  const ownerRoot = path.join(await fs.realpath(sourceParent(env)), sourceName(record.ownerId));
+  const ownerRoot = path.join(await fs.realpath(sourceDirectory), sourceName(record.ownerId));
   const expected = path.join(ownerRoot, "workspace");
   return path.relative(expected, record.repoRoot) === "" ? expected : undefined;
 }
@@ -150,12 +161,24 @@ export async function removeUnusedEmptyWorktreeSource(params: {
   commitGuard: () => void;
 }): Promise<void> {
   const { env, record, commitGuard } = params;
-  const expected = await resolveEmptyWorktreeSourceRoot(params);
+  const context = captureWorktreeRunEndContext(env);
+  const expected = await resolveEmptyWorktreeSourceRoot({ ...params, env: context.environment });
   if (!expected || !(await worktreePathExists(expected))) {
     return;
   }
   const ownerRoot = path.dirname(expected);
-  const otherRecords = listRegistryWorktrees(env).filter(
+  if (
+    (await readPendingWorktrees(context.environment)).some(
+      ({ record: pending }) => path.relative(expected, pending.repoRoot) === "",
+    )
+  ) {
+    return;
+  }
+  const records = await readRegistryWorktrees(context.environment, {}, context);
+  context.admission.assertCurrent();
+  params.signal?.throwIfAborted();
+  commitGuard();
+  const otherRecords = records.filter(
     (other) => other.id !== record.id && path.relative(expected, other.repoRoot) === "",
   );
   if (otherRecords.length > 0) {

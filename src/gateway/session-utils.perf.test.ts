@@ -8,8 +8,8 @@ import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import * as modelCatalogLookup from "../agents/model-catalog-lookup.js";
+import * as modelSelection from "../agents/model-selection-config.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
-import * as sessionModelRef from "../agents/session-model-ref.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -406,17 +406,16 @@ describe("session list resolver cache", () => {
   });
 
   test("resolves configured defaults once per agent for model search", async () => {
-    const search = "unmatched-model-search";
     await withStateDirEnv("openclaw-perf-default-model-", async () => {
       resetPluginRuntimeStateForTest();
       setActivePluginRegistry(createEmptyPluginRegistry());
       const cfg: OpenClawConfig = {
         agents: {
           entries: {
-            main: { model: "openai/gpt-5" },
-            work: { model: "anthropic/claude-sonnet-4-6" },
+            main: {},
+            work: { model: "fixture-b/model-work" },
           },
-          defaults: { thinkingDefault: "off" },
+          defaults: { model: { primary: "fixture-a/model-main" }, thinkingDefault: "off" },
         },
       };
       resetConfigRuntimeState();
@@ -429,33 +428,34 @@ describe("session list resolver cache", () => {
             {
               sessionId: `default-${index}`,
               updatedAt: index + 1,
-              modelProvider: "openai",
-              model: "previous-run-model",
+              ...(index % 4 < 2 ? { modelProvider: "fixture-a", model: "previous-run-model" } : {}),
             },
           ];
         }),
       );
       writeResidentEntries(store);
-      const resolver = vi.spyOn(sessionModelRef, "resolveSessionModelRefCore");
+      const resolver = vi.spyOn(modelSelection, "resolveDefaultModelForAgent");
       let projection: SessionRowProjection | undefined;
       try {
         projection = await createSessionRowProjection({ cfg });
         await projection.ensureMaterialized();
-        expect(resolver).toHaveBeenCalledTimes(2);
+        const page = await listProjectedSessions({ projection, opts: { limit: 40 } });
+        expect(page.count).toBe(40);
+        for (const row of page.sessions) {
+          expect([row.modelProvider, row.model]).toEqual(
+            row.agentId === "main" ? ["fixture-a", "model-main"] : ["fixture-b", "model-work"],
+          );
+        }
         resolver.mockClear();
         for (let request = 0; request < 2; request++) {
           const result = await listProjectedSessions({
             projection,
-            opts: { limit: 40, ...(search ? { search } : {}) },
+            opts: { limit: 40, search: `unmatched-model-search-${request}` },
           });
-          expect(result.count).toBe(search ? 0 : 40);
-          for (const row of result.sessions) {
-            expect([row.modelProvider, row.model]).toEqual(
-              row.agentId === "main" ? ["openai", "gpt-5"] : ["anthropic", "claude-sonnet-4-6"],
-            );
-          }
+          expect(result.sessions).toEqual([]);
+          expect(resolver.mock.calls.length).toBeLessThanOrEqual(request === 0 ? 2 : 0);
+          resolver.mockClear();
         }
-        expect(resolver).not.toHaveBeenCalled();
       } finally {
         projection?.dispose();
         resolver.mockRestore();

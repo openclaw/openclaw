@@ -8,7 +8,6 @@ import {
   resolveMissingRequestedScope,
   resolveScopeOutsideRequestedRoles,
 } from "../shared/operator-scope-compat.js";
-// Owner and bootstrap approval flows for pending device pairing requests.
 import type {
   DevicePairingAccessMetadata,
   ApproveDevicePairingResult,

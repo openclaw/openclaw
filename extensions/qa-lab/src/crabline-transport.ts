@@ -257,19 +257,13 @@ async function createCrablineState(params: {
           outboundEvents.push(lifecycle);
         }
       }
-      const normalizedEvent =
-        params.adapter.channel === "telegram" &&
-        isRecord(event) &&
-        isRecord(event.body) &&
-        normalizeStringifiedOptionalString(event.body.chat_id)
-          ? {
-              ...event,
-              body: {
-                ...event.body,
-                chat_id: normalizeStringifiedOptionalString(event.body.chat_id),
-              },
-            }
-          : event;
+      let normalizedEvent = event;
+      if (params.adapter.channel === "telegram" && isRecord(event) && isRecord(event.body)) {
+        const chatId = normalizeStringifiedOptionalString(event.body.chat_id);
+        if (chatId) {
+          normalizedEvent = { ...event, body: { ...event.body, chat_id: chatId } };
+        }
+      }
       const observation = params.adapter.createOutboundObservation({ event: normalizedEvent });
       if (!observation) {
         return;

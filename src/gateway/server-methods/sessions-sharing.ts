@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -16,11 +15,9 @@ import {
 import { addSessionMember, removeSessionMember } from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
-import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
-import { listSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
+import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-sharing-store.kernel.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
@@ -31,6 +28,7 @@ import {
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { projectSessionActor } from "../session-identity-projection.js";
+import { prepareSessionPublicShareGrant } from "../session-publication-grant.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import type { SessionSharingTarget } from "../session-sharing-policy.js";
 import {
@@ -187,34 +185,27 @@ function createSessionMembersListHandler(
       const profiles = await measureSessionCollaborationPhase(`${method}.profiles`, () =>
         listProfiles(),
       );
-      const evidenceMembers = (
-        await measureSessionCollaborationPhase(`${method}.evidence`, () =>
-          listSessionMembersInWorker({
-            agentId: managed.agentId,
-            sessionKey: managed.storeKey,
-            storePath: managed.storePath,
-          }),
-        )
-      ).map(projectSessionMemberEvidence);
       do {
         await measureSessionCollaborationPhase(`${method}.projection`, () =>
           Promise.resolve(projection.prepareSelection()),
         );
       } while (projection.needsSelectionPreparation());
-      const entry = await readSessionEntryReadOnlyInWorker(
-        {
-          agentId: managed.agentId,
-          sessionKey: managed.storeKey,
-          storePath: managed.storePath,
-          projection: "list",
-        },
-        access.assertCurrent,
+      const { entry, members: storedMembers } = await measureSessionCollaborationPhase(
+        `${method}.evidence`,
+        () =>
+          readSessionMembersInWorker({
+            agentId: managed.agentId,
+            sessionKey: managed.storeKey,
+            storePath: managed.storePath,
+          }),
       );
+      access.assertCurrent();
       if (!entry) {
         throw new Error("session changed before sharing read");
       }
       const currentCfg = context.getRuntimeConfig();
       const { target, role } = access.current(entry);
+      const evidenceMembers = storedMembers.map(projectSessionMemberEvidence);
       const publicShareGrant = resolveSessionPublicShare(entry);
       const actor = actorIdentity(client);
       const members = evidenceAware
@@ -345,17 +336,8 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             access.assertEntryManageable(entry);
             const previous = resolveSessionPublicShare(entry);
             const publicShareGrant = params.enabled
-              ? (previous ?? {
-                  id: randomBytes(24).toString("hex"),
-                  sessionId: entry.sessionId,
-                  createdAt: Date.now(),
-                })
+              ? prepareSessionPublicShareGrant(entry, current.canonicalKey)
               : undefined;
-            if (publicShareGrant) {
-              // Capability URLs may surface in free-form diagnostics where no
-              // structured field or query-name policy is available.
-              registerSecretValueForRedaction(publicShareGrant.id);
-            }
             publicShare =
               publicShareGrant && tokenCodec
                 ? projectPublicSessionShare({

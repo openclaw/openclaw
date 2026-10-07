@@ -121,9 +121,7 @@ internal class CronJobDetailRequestGuard {
     val id = rawId.trim().takeIf { it.isNotEmpty() } ?: return false
     return synchronized(lock) {
       if (selectedId != id) return@synchronized false
-      generation += 1
-      selectedId = null
-      onCancel()
+      cancel(onCancel)
       true
     }
   }

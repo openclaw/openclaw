@@ -19,6 +19,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -346,9 +347,5 @@ internal class ProviderAuthController(
 
   private fun resultError(result: JsonObject): NativeText? = if (result["error"] != null) nativeText("Sign-in could not finish. Review the sign-in step and try again.") else null
 
-  private fun terminalResult(result: JsonObject): JsonObject =
-    buildJsonObject {
-      put("done", true)
-      result.forEach { (key, value) -> put(key, value) }
-    }
+  private fun terminalResult(result: JsonObject): JsonObject = JsonObject(mapOf("done" to JsonPrimitive(true)) + result)
 }

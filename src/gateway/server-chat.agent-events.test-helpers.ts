@@ -5,6 +5,7 @@ import {
   type AgentEventPayload,
   type AgentEventStream,
 } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createChatRunState } from "./server-chat-state.js";
@@ -147,11 +148,12 @@ export function createDirectChatContext(
       };
     }),
     logGateway: {
+      ...createSubsystemLogger("test/gateway"),
       info: vi.fn(),
       warn: vi.fn(),
       error: vi.fn(),
       debug: vi.fn(),
-    },
+    } satisfies GatewayRequestContext["logGateway"],
     agentRunSeq: new Map(),
     chatAbortControllers: new Map(),
     chatQueuedTurns: new Map(),
@@ -170,6 +172,7 @@ export function createDirectChatContext(
       throw new Error("prepared chat metadata is unavailable in direct handler tests");
     }),
     recoveryRuntime: {
+      prepareRestartRecovery: () => undefined,
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),

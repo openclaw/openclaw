@@ -178,7 +178,7 @@ export function createPlacementRecoveryActions(deps: PlacementRecoveryDeps) {
           ownerEpoch: environment.ownerEpoch,
         });
       }
-      placements.adoptActive({
+      await placements.adoptActive({
         sessionId: placement.sessionId,
         expectedGeneration: placement.generation,
         environmentId: environment.environmentId,

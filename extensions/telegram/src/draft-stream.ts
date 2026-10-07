@@ -170,6 +170,9 @@ export function createTelegramDraftStream(params: {
   let lastRequestedPreview: TelegramDraftPreview | undefined;
   let pendingPlatformSendDispatch: (() => Promise<void>) | undefined;
   let pendingPlatformSendAuthorization: (() => void) | undefined;
+  // Counts requested updates: callers may reuse one assertion, so an earlier
+  // attempt must not settle the authority a newer update still needs.
+  let requestedUpdates = 0;
   let generation = 0;
   let finalPagePlan: { pages: TelegramTextDeliveryPage[]; nextPageIndex: number } | undefined;
   // Generations whose in-flight FIRST send was superseded by a reposition
@@ -240,9 +243,11 @@ export function createTelegramDraftStream(params: {
       await pendingPlatformSendDispatch();
       pendingPlatformSendDispatch = undefined;
     }
+    // Authority belongs to the pending update, not to one attempt: a skipped or
+    // failed attempt keeps it, so every retry rechecks it until the update lands
+    // or a newer one replaces it.
     const assertPlatformSendAuthorized = pendingPlatformSendAuthorization;
     assertPlatformSendAuthorized?.();
-    pendingPlatformSendAuthorization = undefined;
     const targetMessageId = streamMessageId;
     if (typeof targetMessageId === "number") {
       streamVisibleSinceMs ??= Date.now();
@@ -407,8 +412,17 @@ export function createTelegramDraftStream(params: {
 
     const previousSentPreviewKey = lastSentPreviewKey;
     lastSentPreviewKey = renderedPreviewKey;
+    const updateAtSend = requestedUpdates;
+    const settleAuthorization = () => {
+      if (requestedUpdates === updateAtSend) {
+        pendingPlatformSendAuthorization = undefined;
+      }
+    };
     try {
       const sent = await sendMessageTransportPreview(page, sendGeneration, disableLinkPreview);
+      if (sent) {
+        settleAuthorization();
+      }
       if (sendGeneration !== generation) {
         return true;
       }
@@ -423,6 +437,7 @@ export function createTelegramDraftStream(params: {
       const isEdit = typeof streamMessageId === "number";
       if (isEdit && isTelegramMessageNotModifiedError(err)) {
         // Telegram already shows exactly this text; count the edit as delivered.
+        settleAuthorization();
         consecutivePreviewFailures = 0;
         streamMessageSnapshot = toDraftSnapshot(page);
         return true;
@@ -620,15 +635,19 @@ export function createTelegramDraftStream(params: {
     lastRequestedText = text;
     pendingPlatformSendDispatch = onPlatformSendDispatch;
     pendingPlatformSendAuthorization = assertPlatformSendAuthorized;
+    requestedUpdates += 1;
     updateDraft(text);
   };
 
-  const updatePreview = (preview: TelegramDraftPreview) => {
+  const updatePreview = (
+    preview: TelegramDraftPreview,
+    assertPlatformSendAuthorized?: () => void,
+  ) => {
     const text = preview.text.trimEnd();
     if (!text) {
       return;
     }
-    requestDraftUpdate(text, { ...preview, text });
+    requestDraftUpdate(text, { ...preview, text }, undefined, assertPlatformSendAuthorized);
   };
 
   const stop = async () => {
@@ -724,6 +743,9 @@ export function createTelegramDraftStream(params: {
       lastDeliveredText = "";
       loop.resetPending();
       lastRequestedPreview = undefined;
+      // The dropped pending update takes its send authority with it.
+      pendingPlatformSendAuthorization = undefined;
+      requestedUpdates += 1;
     }
     loop.resetThrottleWindow();
   };
@@ -837,12 +859,23 @@ export function createTelegramDraftStream(params: {
         options?.onPlatformSendDispatch,
         options?.assertPlatformSendAuthorized,
       ),
-    updateLazy: (resolveText: () => string | undefined) => updateDraft({ resolveText }),
+    // An accepted lazy update replaces the pending one and carries no send
+    // authority; stopped or final streams ignore it and keep the pending update's.
+    updateLazy: (resolveText: () => string | undefined) => {
+      if (streamState.stopped || streamState.final) {
+        return;
+      }
+      pendingPlatformSendAuthorization = undefined;
+      requestedUpdates += 1;
+      updateDraft({ resolveText });
+    },
     updatePreview,
     flush,
     waitForInFlight,
     messageId: () => streamMessageId,
     lastDeliveredText: () => lastDeliveredText,
+    /** A failed preview stops editing for good; it can no longer carry live progress. */
+    isStopped: () => streamState.stopped,
     currentMessageSnapshot: (): TelegramDraftMessageSnapshot | undefined => {
       const ownsReplyTarget =
         !consumesReplyTarget ||

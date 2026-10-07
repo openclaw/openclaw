@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.GatewayCanvasHostRoute
 import java.net.URI
 import java.net.URLDecoder
 
@@ -28,7 +29,7 @@ internal object ChatWidgetUrlResolver {
   fun supportsTarget(target: String): Boolean = parseRelativeTarget(target) != null
 
   private fun resolve(
-    surface: ChatWidgetSurface,
+    surface: GatewayCanvasHostRoute,
     target: String,
     role: ChatWidgetSurfaceRole,
     attemptedRoles: Set<ChatWidgetSurfaceRole>,
@@ -60,22 +61,21 @@ internal object ChatWidgetUrlResolver {
     target: String,
     failedResource: ChatWidgetResource,
     currentSurfaceUrls: () -> ChatWidgetSurfaceUrls,
-    refreshNodeSurface: suspend (String?) -> ChatWidgetSurface?,
-    refreshOperatorSurface: suspend (String?) -> ChatWidgetSurface?,
+    refreshNodeSurface: suspend (String?) -> GatewayCanvasHostRoute?,
+    refreshOperatorSurface: suspend (String?) -> GatewayCanvasHostRoute?,
   ): ChatWidgetResource? {
     val observed = currentSurfaceUrls()
     val blockedRoles = failedResource.attemptedSurfaceRoles
     val attemptedRoles = blockedRoles + failedResource.surfaceRole
+
+    fun replacement(
+      surface: GatewayCanvasHostRoute?,
+      role: ChatWidgetSurfaceRole,
+    ): ChatWidgetResource? = surface?.let { resolve(it, target, role, attemptedRoles) }?.takeIf { isReplacement(it, failedResource) }
+
     if (ChatWidgetSurfaceRole.NODE !in blockedRoles) {
-      observed.node
-        ?.let { resolve(it, target, ChatWidgetSurfaceRole.NODE, attemptedRoles) }
-        ?.takeIf { isReplacement(it, failedResource) }
-        ?.let { return it }
-      val refreshed =
-        refreshNodeSurface(observed.node?.url)?.let {
-          resolve(it, target, ChatWidgetSurfaceRole.NODE, attemptedRoles)
-        }
-      if (refreshed != null && isReplacement(refreshed, failedResource)) return refreshed
+      replacement(observed.node, ChatWidgetSurfaceRole.NODE)?.let { return it }
+      replacement(refreshNodeSurface(observed.node?.url), ChatWidgetSurfaceRole.NODE)?.let { return it }
     }
 
     // A nil refresh can mean its route lease lost a reconnect race. Re-read
@@ -90,11 +90,7 @@ internal object ChatWidgetUrlResolver {
     )?.let { return it }
 
     if (ChatWidgetSurfaceRole.OPERATOR !in blockedRoles) {
-      val refreshedOperator =
-        refreshOperatorSurface(afterNodeRefresh.operator?.url)?.let {
-          resolve(it, target, ChatWidgetSurfaceRole.OPERATOR, attemptedRoles)
-        }
-      if (refreshedOperator != null && isReplacement(refreshedOperator, failedResource)) return refreshedOperator
+      replacement(refreshOperatorSurface(afterNodeRefresh.operator?.url), ChatWidgetSurfaceRole.OPERATOR)?.let { return it }
     }
 
     return resolvePreferred(
@@ -160,13 +156,8 @@ internal object ChatWidgetUrlResolver {
 }
 
 internal data class ChatWidgetSurfaceUrls(
-  val node: ChatWidgetSurface?,
-  val operator: ChatWidgetSurface?,
-)
-
-internal data class ChatWidgetSurface(
-  val url: String,
-  val tlsFingerprintSha256: String?,
+  val node: GatewayCanvasHostRoute?,
+  val operator: GatewayCanvasHostRoute?,
 )
 
 internal enum class ChatWidgetSurfaceRole {

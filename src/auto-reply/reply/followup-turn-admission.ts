@@ -61,7 +61,7 @@ type FollowupSessionOwner = {
 } & ({ kind: "detached" } | { kind: "session"; key: string; storePath?: string });
 
 export type AdmittedFollowupTurn = {
-  runId: string;
+  readonly runId: string;
   queued: FollowupRun;
   operation: ReplyOperation;
   config: OpenClawConfig;
@@ -101,7 +101,6 @@ function isSameSessionGeneration(
   );
 }
 
-/** Resolves one queued item into an admitted turn. */
 export async function admitFollowupTurn(params: {
   queued: FollowupRun;
   defaults: FollowupRunnerParams;

@@ -1,7 +1,10 @@
 import type { TriageFailureContext } from "../../commands/triage-prompt.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { collectUpdateDoctorFailureFacts } from "../../infra/update-doctor-result.js";
+import {
+  collectUpdateDoctorFailureFacts,
+  DoctorMaintenanceRefusalError,
+} from "../../infra/update-doctor-result.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -10,9 +13,14 @@ import { UPDATE_ACTIVATION_TIMEOUT_REASON } from "../../shared/update-outcome.js
 import { createUpdateCommandAuthority } from "./update-command-authority.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { captureMutableUpdateCompensation } from "./update-command-mutable-signals.js";
+import {
+  captureMutableUpdateCompensation,
+  withMutableUpdateForwardScope,
+  recordMutableUpdateInterruption,
+} from "./update-command-mutable-signals.js";
 import { createUpdateCommandFinalizationFence } from "./update-command-recovery.js";
 import { resolveAutomaticUpdateTriage, UpdateCommandFailure } from "./update-command-result.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { UpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
 import {
   publishUpdateCommandTerminalResult,
@@ -34,6 +42,12 @@ export function captureUpdateFinalization(params: FinishUpdateParams) {
     recordPhase,
     originalRun: params.opts.run,
     compensate: captureMutableUpdateCompensation(params.opts),
+    forward: <T>(work: () => Promise<T>) =>
+      withMutableUpdateForwardScope(params.opts, () =>
+        withOwnedManagedUpdateEnv(params.ownedManagedUpdateEnv, work),
+      ),
+    interruptedResult: (result: UpdateRunResult) =>
+      recordMutableUpdateInterruption(params.opts, result),
     beganSuccessfully: params.result.status === "ok",
     // Publication follows environment restoration; retain the admitted notice and sentinel scope.
     sentinelOptions: {
@@ -212,12 +226,24 @@ export function createPostUpdateFailureResult(
 ): { result: UpdateRunResult; message: string } {
   const message = formatErrorMessage(error);
   const failureFacts = collectUpdateDoctorFailureFacts(error);
+  const dataAtRisk = collectNestedErrorCandidates(error).some(
+    (cause) =>
+      cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind === "data-at-risk",
+  );
   return {
     message,
     result: {
       ...params.result,
       status: "error",
       reason: "post-update-failed",
+      ...(dataAtRisk
+        ? {
+            recovery: {
+              serviceRestartSafe: false as const,
+              reason: "runtime-verification-failed" as const,
+            },
+          }
+        : {}),
       steps: [
         ...params.result.steps,
         {

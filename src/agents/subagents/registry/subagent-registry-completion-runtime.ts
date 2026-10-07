@@ -177,7 +177,6 @@ export function createSubagentRegistryCompletionRuntime(config: {
     }
     if (
       !latest ||
-      typeof latest.execution.endedAt !== "number" ||
       typeof latest.cleanupCompletedAt === "number" ||
       latest.pauseReason === "sessions_yield"
     ) {
@@ -232,10 +231,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     const timer = setTimeout(() => {
       retryTimers.delete(timer);
       const current = getCurrentSubagentRunOwner(runs, expectedEntry);
-      if (
-        !isSameSubagentRunOwner(current, expectedEntry) ||
-        current?.generation !== expectedGeneration
-      ) {
+      if (!current || current.generation !== expectedGeneration) {
         return;
       }
       completeSubagentRunInBackground(
@@ -253,7 +249,7 @@ export function createSubagentRegistryCompletionRuntime(config: {
     source: string,
   ) {
     const entry = currentEntry(params);
-    if (!entry || (params.expectedEntry && !isSameSubagentRunOwner(params.expectedEntry, entry))) {
+    if (!entry) {
       return;
     }
     const generation = entry.generation;
@@ -352,7 +348,6 @@ export function createSubagentRegistryCompletionRuntime(config: {
     const generation = entry?.generation;
     if (
       !entry ||
-      (params.expectedEntry && !isSameSubagentRunOwner(entry, params.expectedEntry)) ||
       (params.recoveryCurrent && !(await params.recoveryCurrent.prepare())) ||
       params.recoveryCurrent?.isHostCurrent() === false ||
       !getCurrentSubagentRunOwner(runs, entry) ||

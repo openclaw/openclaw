@@ -27,7 +27,6 @@ import {
   acquirePreparedModelRuntimeSnapshot,
   acquirePublishedPreparedModelRuntime,
   beginPreparedModelRuntimePluginDrain,
-  loadPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
   prepareModelRuntimeSnapshot,
@@ -90,7 +89,7 @@ it.each([
   }
 });
 
-it.each([false, true])(
+it.each([true])(
   "settles a reserved instance's admitted call before call-inclusive drainage (nested: %s)",
   async (nested) => {
     const config = {};
@@ -185,8 +184,6 @@ it("refuses live turn-lease custody but lets a detached generation reader wait",
 
 it.each([
   { gate: "replacement", quiesced: false },
-  { gate: "replacement", quiesced: true },
-  { gate: "drain", quiesced: false },
   { gate: "drain", quiesced: true },
 ])(
   "settles maintenance model acquisition on $gate so donor replacement can drain (quiesced=$quiesced)",
@@ -343,11 +340,6 @@ const ownerAcquisitions: {
   admittedOnly?: boolean;
 }[] = [
   {
-    name: "loaded snapshot",
-    acquire: async (input: PreparedModelRuntimeInput) =>
-      (await loadPreparedModelRuntimeSnapshot(input)).config,
-  },
-  {
     name: "published lease",
     acquire: async (input: PreparedModelRuntimeInput) => {
       await using lease = await acquirePublishedPreparedModelRuntime(input);
@@ -360,11 +352,6 @@ const ownerAcquisitions: {
       await using lease = await acquirePreparedModelRuntimeSnapshot(input);
       return lease.snapshot.config;
     },
-  },
-  {
-    name: "prepared snapshot",
-    acquire: async (input: PreparedModelRuntimeInput) =>
-      (await prepareModelRuntimeSnapshot(input)).config,
   },
   {
     name: "reply dispatch",

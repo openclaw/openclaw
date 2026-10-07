@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { readChatHistoryDelta } from "../../gateway/server-methods/chat-history-delta.js";
+import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMetadataUnavailableError } from "../../state/session-metadata-unavailable-error.js";
@@ -459,9 +460,12 @@ it("retains aliases until native cleanup and preserves later read custody", asyn
   );
   cleanup.resolve();
   await discovery;
-  expect(observed.closeResources).toHaveBeenCalledWith(
-    JSON.stringify([{ path: request.database.path }]),
-  );
+  expect(decodeAgentDatabaseReaderRequest(observed.closeResources.mock.calls[0]?.[0])).toEqual({
+    kind: "close",
+    candidates: [{ path: request.database.path }],
+    retainedPaths: [request.database.path],
+    deleted: false,
+  });
   expect(observed.unregister).toHaveBeenCalledTimes(1);
   const retained = observed.resources.find((resource) => resource.agentId === "main");
   assert(retained);
@@ -702,7 +706,12 @@ it.each([false, true])(
         registeredDatabases: [],
       });
     });
-    const result = discovery.catch((error: unknown) => error);
+    let settled = false;
+    const result = discovery
+      .catch((error: unknown) => error)
+      .finally(() => {
+        settled = true;
+      });
     await cleanupEntered.promise;
     const alias = observed.resources.find((resource) => !resource.agentId);
     assert(alias?.revoke);
@@ -711,18 +720,24 @@ it.each([false, true])(
     await retirementEntered.promise;
     try {
       cleanup.resolve();
-      expect(await result).toMatchObject({ message: "Session target discovery was revoked" });
+      await cleanup.promise;
+      expect(settled).toBe(false);
       expect(observed.unregister).not.toHaveBeenCalled();
+      const revoked = { message: "Session reader custody was revoked during discovery cleanup" };
       if (fails) {
         const failure = new Error("overlapping retirement failed");
         retirement.reject(failure);
         expect(await closing).toBe(failure);
+        const error = await result;
+        expect(error).toBeInstanceOf(AggregateError);
+        expect(error).toMatchObject({ errors: [revoked, failure], cause: failure });
         expect(observed.unregister).not.toHaveBeenCalled();
         observed.rotate.mockResolvedValueOnce(undefined);
         await alias.close();
       } else {
         retirement.resolve();
         await closing;
+        expect(await result).toMatchObject(revoked);
       }
       expect(observed.unregister).toHaveBeenCalledTimes(1);
     } finally {

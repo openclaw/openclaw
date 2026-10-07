@@ -80,7 +80,7 @@ describe("main session recovery store", () => {
     return {
       sessionId: "session-1",
       updatedAt: 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       mainRestartRecovery: {
         cycleId: "cycle-1",
@@ -139,11 +139,11 @@ describe("main session recovery store", () => {
     return result.transition.reservation;
   }
 
-  it("persists a cycle before returning a legacy interrupted observation", async () => {
+  it("does not infer recovery authority from an interrupted outcome", async () => {
     await write({
       sessionId: "session-1",
       updatedAt: 100,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
     });
 
@@ -159,12 +159,9 @@ describe("main session recovery store", () => {
 
     expect(result.transition).toMatchObject({
       kind: "observed",
-      view: { status: "recoverable" },
+      view: { status: "inactive" },
     });
-    expect(read().mainRestartRecovery).toMatchObject({
-      cycleId: "cycle-1",
-      revision: 1,
-    });
+    expect(read().mainRestartRecovery).toBeUndefined();
   });
 
   it("preserves a concurrent foreground claim while cancelling its reservation", async () => {
@@ -331,7 +328,7 @@ describe("main session recovery store", () => {
     await write({
       sessionId: "session-2",
       updatedAt: 300,
-      status: "running",
+      status: "interrupted",
       abortedLastRun: true,
       mainRestartRecovery: {
         cycleId: "cycle-2",
@@ -583,14 +580,15 @@ describe("main session recovery store", () => {
     },
   );
 
-  it.each(["running", "done"] as const)(
-    "inspects and clears orphaned recovery residue from a %s row",
+  it.each([undefined, "done"] as const)(
+    "inspects and clears terminal recovery residue from a %s row",
     async (status) => {
       const residue = interruptedEntry({
         status,
-        abortedLastRun: status !== "running",
+        abortedLastRun: false,
         mainRestartRecovery: undefined,
         restartRecoveryRuns: [{ runId: "stale-run", lifecycleGeneration: "dead-generation" }],
+        restartRecoveryTerminalRunIds: ["stale-run"],
       });
       await write(residue);
       await expect(
@@ -600,14 +598,15 @@ describe("main session recovery store", () => {
           target: { sessionKey, storePath },
         }),
       ).resolves.toEqual({ kind: "not_required" });
+      expect(read().status).toBe(status);
       expect(read()).toMatchObject({
-        status,
         abortedLastRun: residue.abortedLastRun,
         restartRecoveryRuns: residue.restartRecoveryRuns,
       });
       expect(read().mainRestartRecovery).toBeUndefined();
       expect(await claimRecovery()).toEqual({ kind: "not_required", entry: read(), sessionKey });
-      expect(read()).toMatchObject({ sessionId: "session-1", status, abortedLastRun: false });
+      expect(read()).toMatchObject({ sessionId: "session-1", abortedLastRun: false });
+      expect(read().status).toBe(status);
       expect(read().restartRecoveryRuns).toBeUndefined();
       expect(read().mainRestartRecovery).toBeUndefined();
       expect(read().restartRecoveryDeliveryRunId).toBeUndefined();
@@ -750,7 +749,7 @@ describe("main session recovery store", () => {
     async (tombstoned) => {
       await write(
         interruptedEntry({
-          status: tombstoned ? "failed" : "running",
+          status: tombstoned ? "failed" : "interrupted",
           abortedLastRun: !tombstoned,
           mainRestartRecovery: {
             cycleId: "cycle-1",
@@ -825,6 +824,7 @@ describe("main session recovery store", () => {
           session: { scope: "global", store: opsStorePath },
         },
         gatewayRuntime: {
+          prepareRestartRecovery: () => undefined,
           dispatchSessionMethod: dispatch,
           dispatchAgent: dispatch,
           waitForAgent: dispatch,
@@ -942,6 +942,7 @@ describe("main session recovery store", () => {
   it("rejects a delayed admitted-interruption callback after lifecycle rotation", async () => {
     await write(
       interruptedEntry({
+        status: undefined,
         abortedLastRun: false,
         restartRecoveryRuns: [{ runId: "recovery-1", lifecycleGeneration }],
       }),
@@ -961,8 +962,8 @@ describe("main session recovery store", () => {
     expect(result.transition).toEqual({ kind: "rejected", reason: "stale_generation" });
     expect(read()).toMatchObject({
       sessionId: "session-1",
-      status: "running",
       abortedLastRun: false,
     });
+    expect(read().status).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import type { ChatCanvasBlock } from "./chat-display-projection.canvas.js";
 import {
   capLiveAssistantText,
   createLiveAssistantTextProjection,
+  normalizeLiveAssistantBufferedText,
   projectLiveAssistantBufferedText,
 } from "./live-chat-projector.js";
 import type { ChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
@@ -12,7 +13,6 @@ import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.j
 import {
   createToolEventRecipientRegistry,
   type ChatRunToolRecipientState,
-  type ToolEventRecipientRegistry,
 } from "./server-chat-tool-recipients.js";
 
 export type ChatRunTiming = {
@@ -88,12 +88,18 @@ type PendingLiveTextFlush = {
 };
 
 type LiveDisplayState = {
+  itemStartOffset?: number;
   projector: ReturnType<typeof createLiveAssistantTextProjection>;
   current: ReturnType<ReturnType<typeof createLiveAssistantTextProjection>["replace"]>;
   pendingRawDelta?: string | null;
   reset?: boolean;
   unsentDelta: string | null;
   sentText?: string;
+};
+
+type ScopedLiveAssistantProjection = ReturnType<typeof projectLiveAssistantBufferedText> & {
+  itemId?: string;
+  itemStartOffset?: number;
 };
 
 type ChatRunRecord = {
@@ -121,13 +127,9 @@ type ChatRunRecord = {
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
 
-type ChatRunRecordStore = {
-  runs: Map<string, ChatRunRecord>;
-  getOrCreate: (runId: string) => ChatRunRecord;
-  releaseIfEmpty: (runId: string) => void;
-};
+type ChatRunRecordStore = ReturnType<typeof createChatRunRecordStore>;
 
-function createChatRunRecordStore(): ChatRunRecordStore {
+function createChatRunRecordStore() {
   const runs = new Map<string, ChatRunRecord>();
   const getOrCreate = (runId: string) => {
     const existing = runs.get(runId);
@@ -203,31 +205,10 @@ function createChatRunRegistryForStore(store: ChatRunRecordStore): ChatRunRegist
   return { add, peek, shift: (sessionId) => takeRegistration(sessionId), remove: takeRegistration };
 }
 
-export type ChatRunState = {
-  runs: Map<string, ChatRunRecord>;
-  registry: ChatRunRegistry;
-  toolEventRecipients: ToolEventRecipientRegistry;
-  /** Acquire mutable state and record activity; readers use runs.get. */
-  getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (
-    runId: string,
-    options?: { final?: boolean },
-  ) => { text: string; suppress: boolean };
-  updateBuffer: (runId: string, input: Parameters<typeof mergeAssistantText>[1]) => string;
-  takeBufferDelta: (
-    runId: string,
-    text: string,
-  ) => { deltaText: string; replace?: true } | undefined;
-  flushPendingText: (runId: string) => void;
-  hasAbortMarker: (runId: string) => boolean;
-  deleteAbortMarker: (runId: string) => void;
-  recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
-  clearRun: (runId: string) => void;
-  clear: () => void;
-};
+export type ChatRunState = ReturnType<typeof createChatRunState>;
 
 /** Create the single record map used by Gateway chat-run runtime state. */
-export function createChatRunState(isConnectionActive?: (connId: string) => boolean): ChatRunState {
+export function createChatRunState(isConnectionActive?: (connId: string) => boolean) {
   const store = createChatRunRecordStore();
   const registry = createChatRunRegistryForStore(store);
   const toolEventRecipients = createToolEventRecipientRegistry(store, isConnectionActive);
@@ -287,15 +268,23 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       input.managedMediaUrls.forEach((url) => urls.add(url));
       if (display && urls.size !== previousSize) {
         display.reset = true;
+        delete display.itemStartOffset;
       }
     }
+    const previousScope = record.assistantScope;
     const snapshot = mergeAssistantText(
-      { text: record.rawBuffer ?? "", scope: record.assistantScope },
+      { text: record.rawBuffer ?? "", scope: previousScope },
       input,
       "live",
     );
+    if (display && (snapshot.scope !== previousScope || input.replace === true)) {
+      delete display.itemStartOffset;
+    }
     record.assistantScope = snapshot.scope;
     const text = capLiveAssistantText(snapshot);
+    if (display && text.length !== snapshot.text.length) {
+      delete display.itemStartOffset;
+    }
     record.rawBuffer = text;
     if (display) {
       display.reset ||= text.length !== snapshot.text.length || input.replace === true;
@@ -307,14 +296,38 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
     return text;
   };
 
-  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
+  const resolveBuffer = (
+    runId: string,
+    options?: { final?: boolean },
+  ): ScopedLiveAssistantProjection => {
     const record = store.runs.get(runId);
     if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
+    const withItemScope = <T extends { text: string; suppress: boolean }>(projected: T) => {
+      const scope = record.assistantScope;
+      if (!scope || options?.final) {
+        return projected;
+      }
+      const itemStartOffset =
+        record.display?.itemStartOffset ??
+        projectLiveAssistantBufferedText(
+          normalizeLiveAssistantBufferedText(scope.prefix + "\n".repeat(scope.separatorLength), {
+            managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+          }),
+        ).text.length;
+      if (record.display) {
+        record.display.itemStartOffset = itemStartOffset;
+      }
+      return {
+        ...projected,
+        itemId: scope.itemId,
+        itemStartOffset: Math.min(projected.text.length, itemStartOffset),
+      };
+    };
     const rawText = record.rawBuffer;
     if (rawText === undefined) {
-      return projectLiveAssistantBufferedText(record.buffer ?? "");
+      return withItemScope(projectLiveAssistantBufferedText(record.buffer ?? ""));
     }
     const createProjector = () =>
       createLiveAssistantTextProjection({
@@ -323,7 +336,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       });
     // Finalization releases ambiguous tails without changing the live projection.
     if (options?.final) {
-      return createProjector().replace(rawText);
+      return withItemScope(createProjector().replace(rawText));
     }
     let display = record.display;
     if (!display) {
@@ -351,6 +364,9 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         delta == null
           ? display.projector.replace(rawText)
           : display.projector.append(delta, rawText);
+      if (display.current.delta === null) {
+        delete display.itemStartOffset;
+      }
       display.unsentDelta =
         display.unsentDelta !== null && display.current.delta !== null
           ? display.unsentDelta + display.current.delta
@@ -359,7 +375,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
       delete display.reset;
     }
     record.buffer = display.current.text;
-    return display.current;
+    return withItemScope(display.current);
   };
 
   const takeBufferDelta = (runId: string, text: string) => {
@@ -382,22 +398,32 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
             : null;
     display.sentText = text;
     display.unsentDelta = text === visible ? "" : null;
-    return append === null
-      ? { deltaText: text, replace: true as const }
-      : append
-        ? { deltaText: append }
-        : undefined;
+    if (append === "") {
+      return undefined;
+    }
+    const itemScope =
+      projected.itemId &&
+      projected.itemStartOffset !== undefined &&
+      projected.itemStartOffset <= text.length
+        ? { itemId: projected.itemId, itemStartOffset: projected.itemStartOffset }
+        : {};
+    return {
+      deltaText: append === null ? text : append,
+      ...itemScope,
+      ...(append === null ? { replace: true as const } : {}),
+    };
   };
 
   return {
     runs: store.runs,
     registry,
     toolEventRecipients,
+    /** Acquire mutable state and record activity; readers use runs.get. */
     getOrCreate: store.getOrCreate,
     resolveBuffer,
     updateBuffer,
     takeBufferDelta,
-    flushPendingText: (runId) => {
+    flushPendingText: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;
@@ -408,8 +434,8 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         flush.flush();
       }
     },
-    hasAbortMarker: (runId) => store.runs.get(runId)?.abortMarker !== undefined,
-    deleteAbortMarker: (runId) => {
+    hasAbortMarker: (runId: string) => store.runs.get(runId)?.abortMarker !== undefined,
+    deleteAbortMarker: (runId: string) => {
       const record = store.runs.get(runId);
       if (!record) {
         return;

@@ -1,4 +1,3 @@
-/** Lazy runtime adapter for plugin-owned embedded-agent execution. */
 import { randomUUID } from "node:crypto";
 import {
   createOperationalRunInstanceRef,
@@ -16,26 +15,9 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSendableOutboundReplyParts } from "../../infra/outbound/reply-payload-parts.js";
-import {
-  delegateMemoryAudience,
-  isHostMemoryAudience,
-  type MemoryAudienceGrant,
-} from "../memory-audience.js";
+import { delegateMemoryAudience, isHostMemoryAudience } from "../memory-audience.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
-
-// Admission preparation is the last step before close() owns the delegated grant.
-function prepareDelegatedRunAdmission<T>(
-  delegated: MemoryAudienceGrant | undefined,
-  prepare: () => T,
-): T {
-  try {
-    return prepare();
-  } catch (error) {
-    delegated?.release();
-    throw error;
-  }
-}
 
 export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] = async (
   params,
@@ -77,8 +59,10 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
     : undefined;
   const decisionOccurrenceId = randomUUID();
   let admittedRunContext: AdmittedRunContext | undefined;
-  const preparedRunAdmission = prepareDelegatedRunAdmission(delegated, () =>
-    prepareAgentRunAdmission({
+  let preparedRunAdmission: ReturnType<typeof prepareAgentRunAdmission>;
+  // Admission preparation is the last step before close() owns the delegated grant.
+  try {
+    preparedRunAdmission = prepareAgentRunAdmission({
       cfg: config,
       operationalRunInstance: createOperationalRunInstanceRef(params.runId),
       facts: {
@@ -114,8 +98,11 @@ export const runPluginEmbeddedAgent: PluginRuntime["agent"]["runEmbeddedAgent"] 
           ]),
         });
       },
-    }),
-  );
+    });
+  } catch (error) {
+    delegated?.release();
+    throw error;
+  }
   let closed = false;
   let legacyReplyCustodyIndex = -1;
   let minimumReplyMessageIndex = 0;

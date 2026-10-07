@@ -166,11 +166,6 @@ export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackS
   }
 }
 
-function getSlackDefaultSendIdentity(accountId: string): SlackSendIdentity | undefined {
-  const normalizedAccountId = normalizeOptionalString(accountId);
-  return normalizedAccountId ? slackDefaultSendIdentities.get(normalizedAccountId) : undefined;
-}
-
 function enrichSlackWebApiError(err: unknown): unknown {
   if (!(err instanceof Error)) {
     return err;
@@ -412,7 +407,7 @@ function resolveSlackDelivery(params: {
     credential,
     identity:
       normalizeSlackSendIdentity(params.opts.identity) ??
-      getSlackDefaultSendIdentity(params.account.accountId),
+      slackDefaultSendIdentities.get(params.account.accountId),
     recipient: params.recipient,
     teamId: params.recipient.teamId,
     unfurl: params.recipient.teamId
@@ -466,7 +461,7 @@ function resolveSlackTextChunks(params: {
   textIsSlackMrkdwn?: boolean;
   preservePlainText?: boolean;
 }): string[] {
-  const text = params.preservePlainText ? params.text : params.text.trim();
+  const text = params.text;
   const chunkLimit = params.chunkLimit;
   if (params.preservePlainText) {
     return text ? chunkTextForOutbound(text, chunkLimit, { preserveWhitespace: true }) : [];

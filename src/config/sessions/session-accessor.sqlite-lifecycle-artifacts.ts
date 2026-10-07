@@ -56,24 +56,6 @@ function sessionKeyBelongsToAgent(sessionKey: string, agentId: string | undefine
   return parsed !== null && normalizeAgentId(parsed.agentId) === normalizeAgentId(agentId);
 }
 
-function readSessionTranscriptUpdatedAt(
-  database: Pick<OpenClawAgentDatabase, "db">,
-  sessionId: string,
-): number | undefined {
-  const db = getSessionKysely(database.db);
-  const row = executeSqliteQueryTakeFirstSync(
-    database.db,
-    db
-      .selectFrom("transcript_events")
-      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
-      .where("session_id", "=", sessionId),
-  );
-  if (row?.updated_at === null || row?.updated_at === undefined) {
-    return undefined;
-  }
-  return sqliteNumber(row.updated_at);
-}
-
 function sqliteTranscriptStateIsReclaimable(params: {
   database: Pick<OpenClawAgentDatabase, "db">;
   sessionUpdatedAt?: number;
@@ -87,7 +69,18 @@ function sqliteTranscriptStateIsReclaimable(params: {
   ) {
     return false;
   }
-  const transcriptUpdatedAt = readSessionTranscriptUpdatedAt(params.database, params.sessionId);
+  const db = getSessionKysely(params.database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    params.database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
+      .where("session_id", "=", params.sessionId),
+  );
+  const transcriptUpdatedAt =
+    row?.updated_at === null || row?.updated_at === undefined
+      ? undefined
+      : sqliteNumber(row.updated_at);
   const updatedAt =
     params.sessionUpdatedAt === undefined
       ? transcriptUpdatedAt

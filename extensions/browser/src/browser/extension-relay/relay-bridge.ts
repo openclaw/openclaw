@@ -5,6 +5,7 @@
 import { addAbortListener, once } from "node:events";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isSelectableCdpBrowserTarget } from "../cdp-target-filter.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
 import {
@@ -427,6 +428,10 @@ export class ExtensionRelayBridge {
   }
 
   private autoAttachTab(tabId: number): void {
+    const tab = this.tabs.get(tabId);
+    if (!tab || !isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url })) {
+      return;
+    }
     for (const client of this.autoAttachRecipients(tabId)) {
       void this.withAttachedTab(client, tabId, (attached) => {
         this.announceAttachedTab(
@@ -599,7 +604,10 @@ export class ExtensionRelayBridge {
     const identities = new Map<TabState, string | undefined>();
     const skipped = new Map<TabState, { url: string; reason: string }>();
     while (this.extensionConnected) {
-      const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
+      const pending = [...this.tabs].filter(
+        ([, tab]) =>
+          !identities.has(tab) && isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url }),
+      );
       if (pending.length === 0) {
         break;
       }
@@ -638,6 +646,9 @@ export class ExtensionRelayBridge {
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
+      if (!isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url })) {
+        continue;
+      }
       const refusal = skipped.get(tab);
       if (refusal && refusal.url === tab.info.url) {
         log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
@@ -1091,16 +1102,22 @@ export class ExtensionRelayBridge {
         client.autoAttach = autoAttach;
         if (autoAttach) {
           client.detachedTabs.clear();
+          // Puppeteer's TargetManager treats this reply as the initial attachment
+          // barrier. Announce granted targets first so its first page list is complete.
           const attachResults = await Promise.allSettled(
-            [...this.tabs.keys()].map((tabId) =>
-              this.withAttachedTab(client, tabId, (attached) => {
-                this.announceAttachedTab(
-                  tabId,
-                  attached,
-                  this.autoAttachRecipients(tabId, attached.sessionId),
-                );
-              }),
-            ),
+            [...this.tabs]
+              .filter(([, tab]) =>
+                isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url }),
+              )
+              .map(([tabId]) =>
+                this.withAttachedTab(client, tabId, (attached) => {
+                  this.announceAttachedTab(
+                    tabId,
+                    attached,
+                    this.autoAttachRecipients(tabId, attached.sessionId),
+                  );
+                }),
+              ),
           );
           for (const settled of attachResults) {
             if (settled.status === "rejected") {

@@ -114,16 +114,12 @@ function formatFallbackChainTraceBlock(
   return `🔎 Fallback Chain:\n~~~text\n${body}\n~~~`;
 }
 
-function toSnakeCase(value: string): string {
-  return value
+function resolveMetadataSegmentKey(label: string): string {
+  const normalized = label
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "");
-}
-
-function resolveMetadataSegmentKey(label: string): string {
-  const normalized = toSnakeCase(label);
   if (normalized === "conversation_info") {
     return "conversation_metadata";
   }

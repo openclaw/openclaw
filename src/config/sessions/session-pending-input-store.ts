@@ -25,6 +25,7 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import type { IncognitoSessionActor } from "./session-incognito-actor.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "./session-incognito-contract.js";
 import {
   readPendingInputMutationReceipt,
@@ -56,6 +57,7 @@ export async function preparePendingInputStore(
 ) {
   const captured = {
     ...scope,
+    incognito: scope.incognito ?? captureIncognitoSessionOperation(scope),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const incognito = isIncognitoSessionKey(captured.sessionKey);

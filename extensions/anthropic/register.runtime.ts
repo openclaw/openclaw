@@ -291,10 +291,7 @@ function buildAnthropicForwardCompatModel(
   // capability metadata (for example compat.codeMode) instead of dropping it.
   // Registry compat wins when present (it may carry config overrides); the
   // manifest index covers empty-registry runs such as env-key-only sessions.
-  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId) as
-    | Pick<ProviderRuntimeModel, "compat">
-    | null
-    | undefined;
+  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId);
   const compat =
     catalogModel?.compat ??
     (provider === PROVIDER_ID ? resolveAnthropicManifestModel(trimmedModelId)?.compat : undefined);
@@ -526,11 +523,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
           },
         },
         run: async (ctx: ProviderAuthContext) =>
-          await (await loadAuthRuntime()).runAnthropicCliMigration(ctx),
+          (await loadAuthRuntime()).runAnthropicCliMigration(ctx),
         runNonInteractive: async (ctx) =>
-          await (
-            await loadAuthRuntime()
-          ).runAnthropicCliMigrationNonInteractive({
+          (await loadAuthRuntime()).runAnthropicCliMigrationNonInteractive({
             config: ctx.config,
             runtime: ctx.runtime,
             agentDir: ctx.agentDir,
@@ -540,13 +535,14 @@ export function buildAnthropicProvider(): ProviderPlugin {
         ...setupToken,
         wizard: { ...setupToken.wizard, assistantPriority: 40 },
         run: async (ctx: ProviderAuthContext) =>
-          await (await loadAuthRuntime()).runAnthropicSetupTokenAuth(ctx, defaultAnthropicModel),
+          (await loadAuthRuntime()).runAnthropicSetupTokenAuth(ctx, defaultAnthropicModel),
         validateNonInteractive: async (ctx) =>
           Boolean((await loadAuthRuntime()).validateAnthropicSetupTokenNonInteractive(ctx)),
         runNonInteractive: async (ctx) =>
-          await (
-            await loadAuthRuntime()
-          ).runAnthropicSetupTokenNonInteractive(ctx, defaultAnthropicModel),
+          (await loadAuthRuntime()).runAnthropicSetupTokenNonInteractive(
+            ctx,
+            defaultAnthropicModel,
+          ),
       },
       createProviderApiKeyAuthMethod({
         providerId,

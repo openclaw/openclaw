@@ -5,6 +5,7 @@ import {
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
 import type { IncognitoSessionActor } from "../config/sessions/session-incognito-actor.js";
+import { withIncognitoSessionBinding } from "../config/sessions/session-incognito-binding.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
@@ -18,6 +19,7 @@ import {
   listOpenIncognitoAgentDatabases,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-execution.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 
@@ -286,6 +288,144 @@ export function startIncognitoActorSessionLifetime(params: {
       active = false;
       unsubscribe();
       await owner.stop();
+    },
+  };
+}
+
+/**
+ * Existing-only topology composition; production keeps the native sidecar until atomic activation.
+ * @internal Knip production exception; P7 installs this sidecar with actor acquisition.
+ */
+export function startIncognitoActorsSessionLifetime(params: {
+  context: GatewayRequestContext;
+  scheduler: GatewayScheduler;
+  logWarning: (message: string) => void;
+  env?: NodeJS.ProcessEnv;
+}): GatewayPostReadySidecarHandle {
+  const env = {
+    ...(params.env ?? process.env),
+    OPENCLAW_STATE_DIR: resolveStateDir(params.env ?? process.env),
+  };
+  const runInOwner = AsyncLocalStorage.snapshot();
+  const retained = new Map<
+    string,
+    {
+      identity: string;
+      stop(): Promise<void>;
+    }
+  >();
+  let active = true;
+  let tail = Promise.resolve();
+  const observe = () => {
+    if (!active) {
+      return;
+    }
+    // Capture topology before yielding; acquisition cannot adopt a replacement incarnation.
+    const targets = captureOpenClawAgentDatabaseExecution.listIncognito(env);
+    tail = tail
+      .then(async () => {
+        if (!active) {
+          return;
+        }
+        const current = new Map(targets.map((target) => [target.storePath, target]));
+        const retirements = new Map<string, Promise<void>>();
+        for (const [pathname, owner] of retained) {
+          if (current.get(pathname)?.identity.incarnation !== owner.identity) {
+            retirements.set(
+              pathname,
+              owner.stop().then(() => {
+                retained.delete(pathname);
+              }),
+            );
+          }
+        }
+        const acquisitions = targets.map(async (target) => {
+          await retirements.get(target.storePath);
+          if (!active || retained.has(target.storePath)) {
+            return;
+          }
+          target.assertCurrent();
+          const actor = await captureOpenClawAgentDatabaseExecution({
+            kind: "ephemeral",
+            agentId: target.agentId,
+            env,
+            existingOnly: true,
+            authority: { assertCurrent: target.assertCurrent },
+          });
+          if (!actor) {
+            return;
+          }
+          let installed = false;
+          try {
+            target.assertCurrent();
+            if (!active || actor.identity.incarnation !== target.identity.incarnation) {
+              return;
+            }
+            const sidecar = startIncognitoActorSessionLifetime({
+              ...params,
+              actor,
+              deleteSession: (deadline, assertCurrent) =>
+                withIncognitoSessionBinding({ actor }, async () => {
+                  const { deleteGatewaySession } =
+                    await import("./server-methods/sessions-delete.js");
+                  assertCurrent();
+                  const result = await deleteGatewaySession({
+                    params: {
+                      key: deadline.sessionKey,
+                      agentId: deadline.agentId,
+                      expectedSessionId: deadline.sessionId,
+                    },
+                    client: null,
+                    context: params.context,
+                    assertCurrent,
+                  });
+                  if (!result.ok) {
+                    throw new Error(result.error.message);
+                  }
+                }),
+            });
+            retained.set(target.storePath, {
+              identity: actor.identity.incarnation,
+              async stop() {
+                await sidecar.stop();
+                await actor.release();
+              },
+            });
+            installed = true;
+          } finally {
+            if (!installed) {
+              await actor.release();
+            }
+          }
+        });
+        const settled = await Promise.allSettled([...retirements.values(), ...acquisitions]);
+        if (settled.some((result) => result.status === "rejected")) {
+          params.logWarning("Incognito expiry could not reconcile a captured actor.");
+        }
+      })
+      .catch(() => {
+        params.logWarning("Incognito expiry could not reconcile its captured actors.");
+      });
+  };
+  const unsubscribe = sessionChanges.subscribeProjection(() => runInOwner(observe));
+  observe();
+  return {
+    async stop() {
+      active = false;
+      unsubscribe();
+      await tail;
+      const stopped = await Promise.allSettled(
+        [...retained].map(async ([pathname, owner]) => {
+          await owner.stop();
+          retained.delete(pathname);
+        }),
+      );
+      const failures = stopped.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length) {
+        throw new AggregateError(failures, "Incognito expiry owners could not finish cleanup");
+      }
     },
   };
 }

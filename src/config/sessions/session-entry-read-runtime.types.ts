@@ -1,4 +1,5 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
@@ -15,11 +16,17 @@ export type SessionEntryWorkerRead = SessionStoreWorkerReadScope &
   SessionExactEntriesWorkerSelection & {
     lifecycleSessionKey?: string;
     snapshotFields?: readonly SessionEntrySnapshotField[];
-    projection?: "full" | "sharing" | "list" | "exact";
+    projection?: "full" | "sharing" | "list" | "exact" | "worktree";
     includeMembers?: boolean;
     includeParticipantRecords?: boolean;
     includeAuthorization?: boolean;
   };
+
+export type SessionStoreWorkerReadInput = Omit<SessionStoreWorkerReadScope, "agentId"> & {
+  agentId?: string;
+  defaultAgentId?: string;
+  projection?: SessionEntryWorkerRead["projection"] | SessionEntryReadScope["projection"];
+};
 
 export type PreparedSessionEntryWorkerRead = {
   result: SessionExactEntriesWorkerResult;

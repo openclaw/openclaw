@@ -4,12 +4,10 @@ import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { closeCodexStartupClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexInferenceRouteConfig } from "./inference-routing.js";
-import { applyCodexNativeSkillIsolation } from "./native-skill-isolation.js";
 import { hasCodexNativeToolCatalog, loadCodexNativeToolCatalog } from "./native-tool-catalog.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import {
   isCodexPluginThreadBindingStale,
-  mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
 import {
@@ -37,6 +35,7 @@ import {
 import { resumeExistingCodexThread, startFreshCodexThread } from "./thread-lifecycle-io.js";
 import {
   buildCodexThreadBindingPolicy,
+  buildCodexThreadRequestConfig,
   prepareCodexThreadLifecyclePreflight,
   prepareCodexThreadFinalConfigPatch,
   prepareCodexThreadRequestContext,
@@ -95,7 +94,6 @@ export async function startOrResumeThread(
       legacyDynamicToolsFingerprint,
       legacyUserMcpServersFingerprint,
       lifecycleTiming,
-      nativeSkillIsolation,
       nativeSkillIsolationFingerprint,
       networkProxyConfigFingerprint,
       ringZeroActive,
@@ -103,7 +101,6 @@ export async function startOrResumeThread(
       ringZeroConfigFingerprint,
       restrictedToolSurface,
       restrictedToolSurfaceInheritedMcpServerNames,
-      userMcpServersConfigPatch,
       userMcpServersFingerprint,
       webSearchThreadConfigFingerprint,
     } = preflight;
@@ -160,14 +157,11 @@ export async function startOrResumeThread(
         requestContext.nativeModelInputTools,
       );
       const config = lifecycleTiming.measureSync("merge-thread-config", () =>
-        applyCodexNativeSkillIsolation(
-          mergeCodexThreadConfigs(
-            params.config,
-            userMcpServersConfigPatch,
-            pluginThreadConfig?.configPatch,
-            finalConfigPatch.configPatch,
-          ),
-          nativeSkillIsolation,
+        buildCodexThreadRequestConfig(
+          params,
+          preflight,
+          pluginThreadConfig?.configPatch,
+          finalConfigPatch.configPatch,
         ),
       );
       return publishCodexThreadInferenceBinding(

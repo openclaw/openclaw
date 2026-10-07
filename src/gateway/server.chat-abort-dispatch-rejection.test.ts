@@ -418,7 +418,7 @@ describe("gateway WebSocket chat abort ownership", () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-lifecycle-interrupt-");
     const storePath = path.join(sessionDirectory, "sessions.json");
     testState.sessionStorePath = storePath;
-    await writeMainSession("sess-main", { startedAt: 900, status: "running" });
+    await writeMainSession("sess-main", { startedAt: 900 });
 
     const socket = await gateway.openWs();
     const dispatchRelease = createDeferred();

@@ -130,7 +130,6 @@ function recoveryDelivery(
   lifecycleGeneration = getAgentEventLifecycleGeneration(),
 ): SessionSeed {
   return {
-    status: "running",
     abortedLastRun: false,
     restartRecoveryDeliveryRunId: "restart-recovery-run",
     restartRecoveryRuns: [{ runId, lifecycleGeneration }],
@@ -156,7 +155,7 @@ describe("heartbeat runner busy ownership", () => {
     "defers scheduled heartbeat while main-session restart recovery owns the session",
     heartbeatCase(async ({ seed, run, replySpy }) => {
       await seed({
-        status: "running",
+        status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: { cycleId: "restart-cycle", revision: 1, chargedAttempts: 0 },
       });
@@ -168,7 +167,6 @@ describe("heartbeat runner busy ownership", () => {
     "defers automatic heartbeat while an admitted recovery owns the current lifecycle",
     heartbeatCase(async ({ seed, run, replySpy }) => {
       await seed({
-        status: "running",
         abortedLastRun: false,
         mainRestartRecovery: {
           cycleId: "restart-cycle",

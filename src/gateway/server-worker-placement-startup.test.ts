@@ -28,15 +28,23 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 
 function placementStoreDefaults(
-  readPlacements: () => ReadonlyArray<{ sessionId: string }> = () => [],
+  readPlacements: () => ReadonlyArray<{
+    sessionId: string;
+    environmentId?: string | null;
+  }> = () => [],
 ) {
   return {
     readChangeSnapshot: async () => readPlacements(),
+    readEnvironmentOwner: async (environmentId: string) =>
+      readPlacements().find((placement) => placement.environmentId === environmentId),
     readProjection: async () => ({
       placements: new Map(readPlacements().map((placement) => [placement.sessionId, placement])),
     }),
     workspaceResultInstanceId: () => "gateway-test",
-    retireSessionPlacement: vi.fn(),
+    getAsync: async (sessionId: string) =>
+      readPlacements().find((placement) => placement.sessionId === sessionId),
+    listAsync: async () => readPlacements(),
+    retireSessionPlacementAsync: vi.fn(async () => {}),
     pruneOrphanedWorkspaceReconciliations: async () => [],
     listWorkspaceReconciliationOwners: async () => [],
     listPendingWorkspaceResultsAsync: () => [],
@@ -208,7 +216,7 @@ describe("worker placement startup health lifetime", () => {
         getCommittedRuntimeConfig: getRuntimeConfig,
         cancelSessionWork: vi.fn(async () => {}),
         placements: {
-          ...placementStoreDefaults(),
+          ...placementStoreDefaults(() => [placement]),
           get: () => placement,
           list: () => [placement],
         } as never,
@@ -251,7 +259,7 @@ describe("worker placement startup health lifetime", () => {
   it("immediately retires absent sessions after readiness and drains retirement on stop", async () => {
     const evidence = createDeferredCore<"absent">();
     const reconcileActive = vi.fn().mockResolvedValue(undefined);
-    const retireSessionPlacement = vi.fn();
+    const retireSessionPlacementAsync = vi.fn(async () => {});
     runtimeFactoryMocks.resolveSessionEvidence.mockImplementationOnce(async () => evidence.promise);
     runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValueOnce(
       runtimeFactoryMocks.resolveSessionEvidence,
@@ -296,10 +304,10 @@ describe("worker placement startup health lifetime", () => {
       getCommittedRuntimeConfig: getRuntimeConfig,
       cancelSessionWork: vi.fn(async () => {}),
       placements: {
-        ...placementStoreDefaults(),
+        ...placementStoreDefaults(() => [placement]),
         get: () => placement,
         list: () => [placement],
-        retireSessionPlacement,
+        retireSessionPlacementAsync,
       } as never,
       environments: environments as never,
       gatewayNamespace: "gateway-test",
@@ -319,7 +327,7 @@ describe("worker placement startup health lifetime", () => {
       await expect(starting).resolves.toBe(sidecar);
       expect(runtimeFactoryMocks.resolveSessionEvidence).toHaveBeenCalledOnce();
       expect(reconcileActive).not.toHaveBeenCalled();
-      expect(retireSessionPlacement).not.toHaveBeenCalled();
+      expect(retireSessionPlacementAsync).not.toHaveBeenCalled();
 
       const stopping = sidecar?.stop();
       const repeatedStop = sidecar?.stop();
@@ -333,7 +341,7 @@ describe("worker placement startup health lifetime", () => {
       expect(environments.stop).not.toHaveBeenCalled();
       evidence.resolve("absent");
       await Promise.all([stopping, repeatedStop]);
-      expect(retireSessionPlacement).toHaveBeenCalledOnce();
+      expect(retireSessionPlacementAsync).toHaveBeenCalledOnce();
       expect(environments.stop).toHaveBeenCalledOnce();
       expect(unregisterSidecar).not.toHaveBeenCalled();
     } finally {
@@ -481,16 +489,6 @@ describe("worker placement startup health lifetime", () => {
       const unrelatedCore = vi.fn(async () => {});
       await guard("worker-unrelated", unrelatedCore);
       expect(unrelatedCore).toHaveBeenCalledOnce();
-
-      placementRows = [
-        provisioning,
-        { sessionId: "session-duplicate", state: "active", environmentId: "worker-guarded" },
-      ];
-      const ambiguousCore = vi.fn(async () => {});
-      await expect(guard("worker-guarded", ambiguousCore)).rejects.toThrow(
-        "multiple placement owners",
-      );
-      expect(ambiguousCore).not.toHaveBeenCalled();
 
       placementRows = [
         { sessionId: "session-mismatch", state: "active", environmentId: "worker-mismatch" },

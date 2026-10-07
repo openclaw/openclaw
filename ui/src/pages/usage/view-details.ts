@@ -39,7 +39,6 @@ function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
-/** Aggregate usage stats from time series points within a timestamp range. */
 function computeFilteredUsage(
   baseUsage: NonNullable<UsageSessionEntry["usage"]>,
   points: TimeSeriesPoint[],

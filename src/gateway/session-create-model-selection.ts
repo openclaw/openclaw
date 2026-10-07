@@ -150,6 +150,54 @@ export function createSessionCreateCommitGuard(params: {
   };
 }
 
+/** Assemble the creation lifetime once, including host-only publication intent. */
+export function resolveSessionCreationCommitGuard(
+  params: CreateGatewaySessionParams,
+  prepared: {
+    readOperatorAuthority: () => AdmittedRunOperatorAuthority | undefined;
+    assertPreparedTargetCurrent: () => void;
+    validateSelection: () => ErrorShape | undefined;
+  },
+): (() => void) | undefined {
+  const assertCallerCurrent = params.childSessionPublication
+    ? () => {
+        params.commitGuard?.();
+        params.childSessionPublication?.assertCurrent();
+      }
+    : params.commitGuard;
+  if (
+    !(
+      params.personalModelSelection ||
+      params.operatorAuthority ||
+      params.personalAccountDefaults ||
+      params.activeParentFork ||
+      params.preparedModelSelection ||
+      params.preparedPermissionSelection ||
+      typeof params.model === "string" ||
+      params.agentRuntime !== undefined
+    )
+  ) {
+    return assertCallerCurrent;
+  }
+  return createSessionCreateCommitGuard({
+    assertCallerCurrent: () => {
+      assertCallerCurrent?.();
+      prepared.assertPreparedTargetCurrent();
+    },
+    get operatorAuthority() {
+      return prepared.readOperatorAuthority();
+    },
+    selections: [
+      params.activeParentFork,
+      params.preparedModelSelection,
+      params.preparedPermissionSelection,
+      params.personalModelSelection,
+      params.personalAccountDefaults,
+    ],
+    validateSelection: prepared.validateSelection,
+  });
+}
+
 /** New unpinned sessions bind an account for the caller's permitted default without storing a model pin. */
 export async function prepareSessionCreateDefaultAccount(params: {
   cfg: OpenClawConfig;

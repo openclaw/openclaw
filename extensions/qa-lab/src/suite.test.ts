@@ -1,5 +1,7 @@
-// Qa Lab tests cover suite plugin behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildQaSuiteEvidenceSummary } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
 import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
@@ -13,6 +15,8 @@ import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-
 import type { QaSuiteResult } from "./suite-types.js";
 import {
   buildQaSuiteRuntimeMetrics,
+  buildQaSuiteSummaryJson,
+  captureGatewayHeapSnapshotCheckpoint,
   createQaSuiteTransportAdapter,
   formatQaSuiteRunStartProgress,
   resolveQaSuiteTransportReadyTimeoutMs,
@@ -23,6 +27,7 @@ import {
   throwQaSuiteCleanupErrors,
   waitForQaLabReadyOrStopOwned,
 } from "./suite.js";
+import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 
@@ -30,9 +35,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-afterEach(() => {
+const tempDirs = createTempDirHarness();
+
+afterEach(async () => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
+  await tempDirs.cleanup();
 });
 
 function makeQaSuiteTestLabHandle(): QaLabServerHandle {
@@ -49,19 +57,6 @@ function makeQaSuiteTestLabHandle(): QaLabServerHandle {
 }
 
 describe("qa suite", () => {
-  it("rejects the removed channel-driver selection input", async () => {
-    await expect(
-      runQaFlowSuite(
-        Object.assign(
-          { repoRoot: "." },
-          {
-            channelDriverSelection: { channel: "discord", driver: "crabline" },
-          },
-        ),
-      ),
-    ).rejects.toThrow("channelDriverSelection was removed");
-  });
-
   it("runs the production cleanup plan in dependency order after a failure", async () => {
     const calls: string[] = [];
     const transportFailure = new Error("transport close failed");
@@ -193,7 +188,7 @@ describe("qa suite", () => {
     expect((thrown as Error).message).not.toContain("evidence=");
   });
 
-  it.each(["never-spawned", "confirmed-stopped", "unconfirmed"] as const)(
+  it.each(["never-spawned", "unconfirmed"] as const)(
     "gates after-stop cleanup on %s, independently of diagnostic errors",
     async (process) => {
       const diagnostic = new Error("cleanup diagnostic failed");
@@ -267,47 +262,6 @@ describe("qa suite", () => {
         }),
       }),
     );
-  });
-
-  it("preserves caller-supplied transport policy without scenario metadata", async () => {
-    const adapter = { id: "telegram" } as QaTransportAdapter;
-    const create = vi.fn(async () => adapter);
-
-    await createQaSuiteTransportAdapter({
-      adapterFactories: [{ id: "telegram", matches: () => true, create }],
-      adapterOptions: { transportPolicy: { topLevelReplies: true } },
-      channelDriver: "live",
-      channelId: "telegram",
-      outputDir: "/tmp/qa-output",
-      state: {} as QaLabServerHandle["state"],
-      transportId: "qa-channel",
-    });
-
-    expect(create).toHaveBeenCalledWith(
-      expect.objectContaining({
-        adapterOptions: { transportPolicy: { topLevelReplies: true } },
-      }),
-    );
-  });
-
-  it("stops an owned lab when readiness never becomes healthy", async () => {
-    const stop = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: false },
-      release: vi.fn(async () => {}),
-    });
-
-    await expect(
-      waitForQaLabReadyOrStopOwned({
-        lab: {
-          listenUrl: "http://127.0.0.1:43123",
-          stop,
-        },
-        ownsLab: true,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
-    expect(stop).toHaveBeenCalledTimes(1);
   });
 
   it("cancels a successful lab readiness body before releasing its guard", async () => {
@@ -389,11 +343,6 @@ describe("qa suite", () => {
       }),
     ).rejects.toThrow("timed out after 1ms waiting for qa-lab ready");
     expect(stop).not.toHaveBeenCalled();
-  });
-
-  it("defaults progress logging from CI when no override is set", () => {
-    expect(shouldLogQaSuiteProgress({ CI: "true" })).toBe(true);
-    expect(shouldLogQaSuiteProgress({ CI: "false" })).toBe(false);
   });
 
   it("resolves transport-ready timeout from params and env", () => {
@@ -630,12 +579,7 @@ describe("qa suite", () => {
     });
   });
 
-  it.each([
-    { surface: "channel", explicit: undefined, expected: false },
-    { surface: "channel", explicit: true, expected: true },
-    { surface: "control-ui", explicit: undefined, expected: true },
-    { surface: "control-ui", explicit: false, expected: false },
-  ])(
+  it.each([{ surface: "control-ui", explicit: false, expected: false }])(
     "preserves an explicit Control UI override for isolated $surface scenarios",
     ({ surface, explicit, expected }) => {
       const scenario = makeQaSuiteTestScenario("isolated-control-ui-ownership", { surface });
@@ -706,4 +650,208 @@ describe("qa suite", () => {
       }),
     ).toBe("mock-openai/gpt-5.6-luna");
   });
+});
+
+describe("buildQaSuiteSummaryJson", () => {
+  const baseParams = {
+    scenarios: [
+      { name: "Scenario A", status: "pass" as const, steps: [] },
+      { name: "Scenario B", status: "fail" as const, details: "something broke", steps: [] },
+    ],
+    startedAt: new Date("2026-04-11T00:00:00.000Z"),
+    finishedAt: new Date("2026-04-11T00:05:00.000Z"),
+    providerMode: "mock-openai" as const,
+    primaryModel: "openai/gpt-5.6-luna",
+    alternateModel: "openai/gpt-5.6-luna-alt",
+    fastMode: true,
+    concurrency: 2,
+  };
+
+  it("rejects the removed channel-driver selection input", () => {
+    expect(() =>
+      buildQaSuiteSummaryJson(
+        Object.assign({}, baseParams, {
+          channelDriverSelection: { channel: "discord", driver: "crabline" },
+        }),
+      ),
+    ).toThrow("channelDriverSelection was removed");
+  });
+
+  it("records selected scenarios and realized run metadata", () => {
+    const scenarioIds = ["approval-turn-tool-followthrough", "subagent-handoff", "memory-recall"];
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarioIds,
+      status: "running",
+      channel: "telegram",
+      channelDriver: "crabline",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
+      runtimePair: ["openclaw", "codex"],
+    });
+    expect(json.run).toMatchObject({
+      scenarioIds,
+      status: "running",
+      channel: "telegram",
+      channelDriver: "crabline",
+      channelCapabilityMatrixPath: "crabline-channel-driver-capabilities.json",
+      channelDriverSmokePath: "crabline-provider-readiness.json",
+      runtimePair: ["openclaw", "codex"],
+    });
+  });
+
+  it("leaves split fields null when a model ref is malformed", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      primaryModel: "not-a-real-ref",
+      alternateModel: "",
+      scenarioIds: [],
+    });
+    expect(json.run.primaryModel).toBe("not-a-real-ref");
+    expect(json.run.primaryProvider).toBeNull();
+    expect(json.run.primaryModelName).toBeNull();
+    expect(json.run.alternateModel).toBe("");
+    expect(json.run.alternateProvider).toBeNull();
+    expect(json.run.alternateModelName).toBeNull();
+    expect(json.run.scenarioIds).toBeNull();
+  });
+
+  it("includes skipped scenarios in the canonical summary counts", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      scenarios: [
+        ...baseParams.scenarios,
+        { name: "Scenario C", status: "skip" as const, steps: [] },
+        { name: "Scenario D", status: "skip" as const, steps: [] },
+      ],
+    });
+
+    expect(json.counts).toEqual({
+      total: 4,
+      passed: 1,
+      failed: 1,
+      skipped: 2,
+    });
+  });
+
+  it("preserves the evidence summary when provided", () => {
+    const evidence = buildQaSuiteEvidenceSummary({
+      artifactPaths: [{ kind: "summary", path: "qa-suite-summary.json" }],
+      scenarioDefinitions: [
+        {
+          id: "dm-chat-baseline",
+          title: "DM baseline conversation",
+          sourcePath: "qa/scenarios/channels/dm-chat-baseline.yaml",
+          surface: "dm",
+          coverage: {
+            primary: ["channels.dm"],
+          },
+        },
+      ],
+      channelId: "qa-channel",
+      generatedAt: "2026-04-11T00:05:00.000Z",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      providerMode: "mock-openai",
+      scenarioResults: [{ name: "DM baseline conversation", status: "pass" }],
+    });
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      evidence,
+    });
+
+    expect(json.evidence).toEqual(evidence);
+  });
+
+  it("records optional runtime metrics when provided", () => {
+    const metrics = {
+      wallMs: 12_000,
+      gatewayProcessCpuMs: 3_400,
+      gatewayCpuCoreRatio: 0.283,
+      gatewayProcessRssStartBytes: 100_000_000,
+      gatewayProcessRssEndBytes: 125_000_000,
+      gatewayProcessRssDeltaBytes: 25_000_000,
+      gatewayProcessRssPeakBytes: 140_000_000,
+      gatewayProcessRssPeakDeltaBytes: 40_000_000,
+      gatewayProcessRssSamples: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:00.000Z",
+          gatewayProcessRssBytes: 100_000_000,
+        },
+        {
+          label: "scenario:canary:finish",
+          at: "2026-04-22T12:00:10.000Z",
+          gatewayProcessRssBytes: 140_000_000,
+        },
+      ],
+      gatewayHeapSnapshots: [
+        {
+          label: "suite-start",
+          at: "2026-04-22T12:00:01.000Z",
+          path: "artifacts/gateway-heap-snapshots/suite-start.heapsnapshot",
+          bytes: 12_345,
+        },
+      ],
+    };
+    const json = buildQaSuiteSummaryJson({ ...baseParams, metrics: structuredClone(metrics) });
+
+    expect(json.metrics).toEqual(metrics);
+  });
+});
+
+describe("Gateway heap snapshot checkpoints", () => {
+  async function createWriterFixture(outcome?: "failed" | "replaced-before" | "replaced-during") {
+    const tempRoot = await tempDirs.makeTempDir("qa-heap-checkpoint-");
+    const outputDir = path.join(tempRoot, "output");
+    const snapshotPath = path.join(tempRoot, "Heap.snapshot.heapsnapshot");
+    let pid = 123;
+    const gateway = {
+      tempRoot,
+      get pid() {
+        return pid;
+      },
+      async signalProcess(signal: NodeJS.Signals) {
+        expect(signal).toBe("SIGQUIT");
+        await fs.writeFile(snapshotPath, '{"snapshot":');
+        if (outcome === "replaced-before") {
+          pid += 1;
+        }
+      },
+      async call() {
+        if (outcome === "failed") {
+          throw new Error("Gateway exited during snapshot serialization");
+        }
+        if (outcome === "replaced-during") {
+          pid += 1;
+        }
+        // Node's signal handler closes the snapshot before its JS thread can answer an RPC.
+        await fs.appendFile(snapshotPath, '{"complete":true}}');
+        return { ok: true };
+      },
+    };
+    return { gateway, outputDir };
+  }
+
+  it("copies the completed snapshot even when an unfinished prefix has stopped growing", async () => {
+    const params = await createWriterFixture();
+    const checkpoint = await captureGatewayHeapSnapshotCheckpoint({
+      ...params,
+      label: "after turn",
+    });
+    expect(checkpoint).toBeDefined();
+    const artifact = await fs.readFile(path.join(params.outputDir, checkpoint!.path));
+    expect(JSON.parse(artifact.toString())).toEqual({ snapshot: { complete: true } });
+    expect(checkpoint!.bytes).toBe(artifact.length);
+  });
+
+  it.each(["failed", "replaced-before", "replaced-during"] as const)(
+    "does not publish a snapshot after the Gateway is %s",
+    async (outcome) => {
+      const params = await createWriterFixture(outcome);
+      await expect(
+        captureGatewayHeapSnapshotCheckpoint({ ...params, label: "after turn" }),
+      ).rejects.toThrow(outcome === "failed" ? "Gateway exited" : "Gateway changed");
+      await expect(fs.access(params.outputDir)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
 });

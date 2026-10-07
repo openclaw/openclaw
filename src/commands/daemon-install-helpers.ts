@@ -1,4 +1,3 @@
-// Gateway daemon install plan builder, including service env and SecretRef passthrough policy.
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -548,7 +547,6 @@ async function buildGatewayInstallEnvironment(params: {
   };
 }
 
-/** Build command, working directory, and environment for installing the Gateway service. */
 export async function buildGatewayInstallPlan(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -687,7 +685,6 @@ function normalizeServicePathForCompare(
   return platform === "win32" ? path.win32.resolve(trimmed).toLowerCase() : path.resolve(trimmed);
 }
 
-/** Return the user-facing recovery hint for failed Gateway service installation. */
 export function gatewayInstallErrorHint(platform = process.platform): string {
   return platform === "win32"
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."

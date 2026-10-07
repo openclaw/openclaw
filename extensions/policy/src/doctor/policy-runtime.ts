@@ -99,15 +99,7 @@ export function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {
   return policySettings(ctx).workspaceRepairs === true;
 }
 
-export function readChannelDenyRules(
-  policy: unknown,
-  policyDocName: string,
-): readonly {
-  readonly id?: string;
-  readonly when?: { readonly provider?: string };
-  readonly reason?: string;
-  readonly requirement: string;
-}[] {
+export function readChannelDenyRules(policy: unknown, policyDocName: string) {
   if (
     !isRecord(policy) ||
     !isRecord(policy.channels) ||

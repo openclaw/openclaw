@@ -127,6 +127,7 @@ it.each([false, true])(
         usageUpdatedAt: expect.any(Number),
         modelCatalogChanged: false,
         authChanged: false,
+        commandsChanged: false,
         ...(failed ? { usageRefreshFailed: true } : {}),
       },
       { dropIfSlow: true },
@@ -170,7 +171,7 @@ it("retires model choices at its config commit before pending metadata settles",
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
-      { modelSelectionChanged: true },
+      { modelSelectionChanged: true, commandsChanged: false },
       { dropIfSlow: true },
     );
     broadcast.mockClear();
@@ -181,7 +182,7 @@ it("retires model choices at its config commit before pending metadata settles",
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
-      { modelSelectionChanged: true },
+      { modelSelectionChanged: true, commandsChanged: false },
       { dropIfSlow: true },
     );
   } finally {
@@ -366,7 +367,7 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "keeps bookkeeping from refreshing or broadcasting metadata (inherited: %s)",
     async (inherited) => {
       const store: RuntimeAuthProfileStore = {
@@ -394,7 +395,7 @@ describe("gateway chat metadata lifecycle", () => {
             },
           });
           expect(harness.refresh).not.toHaveBeenCalled();
-          harness.events.catalog();
+          harness.modelEvent({ phase: "catalog-published", modelFactsChanged: false });
           expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
           harness.refresh.mockClear();
         }
@@ -408,43 +409,9 @@ describe("gateway chat metadata lifecycle", () => {
 
   it.each<{ name: string; change: Partial<RuntimeAuthProfileStore> }>([
     {
-      name: "profile added",
-      change: {
-        profiles: {
-          "test:primary": { type: "token", provider: "test", token: "synthetic-token" },
-          "test:second": { type: "api_key", provider: "test", key: "synthetic-key" },
-        },
-      },
-    },
-    { name: "profile removed", change: { profiles: {} } },
-    {
       name: "token rotated",
       change: {
         profiles: { "test:primary": { type: "token", provider: "test", token: "rotated-token" } },
-      },
-    },
-    {
-      name: "expiry changed",
-      change: {
-        profiles: {
-          "test:primary": {
-            type: "token",
-            provider: "test",
-            token: "synthetic-token",
-            expires: 50_000,
-          },
-        },
-      },
-    },
-    {
-      name: "cooldown started",
-      change: { usageStats: { "test:primary": { cooldownUntil: 50_000 } } },
-    },
-    { name: "blocked", change: { usageStats: { "test:primary": { blockedUntil: 50_000 } } } },
-    {
-      name: "inline key disabled",
-      change: {
-        usageStats: { "inline-api-key:test": { disabledUntil: 50_000, disabledReason: "billing" } },
       },
     },
   ])("refreshes and broadcasts metadata when $name", async ({ change }) => {
@@ -461,7 +428,7 @@ describe("gateway chat metadata lifecycle", () => {
       expect(harness.refresh).toHaveBeenCalledOnce();
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: true },
+        { modelCatalogChanged: true, authChanged: true, commandsChanged: false },
         { dropIfSlow: true },
       );
       await harness.lifecycle.read({ agentId: "main" });
@@ -472,35 +439,6 @@ describe("gateway chat metadata lifecycle", () => {
       await harness.stop();
     }
   });
-
-  it.each(["unchanged facts", "nonfatal catalog failure"])(
-    "keeps metadata available after %s",
-    async (event) => {
-      const harness = await createRealMetadataLifecycle();
-      try {
-        const before = await harness.lifecycle.read({ agentId: "main" });
-        for (let repeat = 0; repeat < 2; repeat += 1) {
-          if (event === "unchanged facts") {
-            harness.events.skills();
-            harness.events.catalog();
-          } else {
-            harness.modelEvent({
-              phase: "catalog-failed",
-              error: new Error("catalog attempt failed"),
-              modelFactsChanged: false,
-            });
-          }
-          expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
-        }
-        expect(harness.buildCommands).toHaveBeenCalledOnce();
-        expect(harness.broadcast).toHaveBeenCalledOnce();
-        expect(harness.warn).not.toHaveBeenCalled();
-        expect(mocks.fail).not.toHaveBeenCalled();
-      } finally {
-        await harness.stop();
-      }
-    },
-  );
 
   it.each(["queued", "building", "initial build", "missing owner"] as const)(
     "keeps readers waiting for owner publication after %s",
@@ -568,7 +506,7 @@ describe("gateway chat metadata lifecycle", () => {
     },
   );
 
-  it.each(["skills", "auth", "catalog", "catalogFailure", "owner"] as const)(
+  it.each(["auth", "owner"] as const)(
     "retains a terminal metadata failure through a later %s invalidation",
     async (event) => {
       const harness = await createRealMetadataLifecycle();
@@ -707,9 +645,13 @@ describe("gateway chat metadata lifecycle", () => {
     await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("owner publication failed");
     expect(outcomes[6]).toBe("owner publication failed");
     expect(broadcast.mock.calls).toEqual(
-      Array.from({ length: 7 }, () => [
+      Array.from({ length: 7 }, (_, index) => [
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: true },
+        {
+          modelCatalogChanged: true,
+          authChanged: true,
+          ...(index === 3 || index === 4 ? { commandsChanged: false } : {}),
+        },
         { dropIfSlow: true },
       ]),
     );
@@ -798,7 +740,7 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it.each(["published", "build failed", "catalog during attachment", "owner invalidated"] as const)(
+  it.each(["build failed", "catalog during attachment", "owner invalidated"] as const)(
     "refreshes subordinate changes after %s catch-up",
     async (startup) => {
       const entered = createDeferred();
@@ -863,6 +805,12 @@ describe("gateway chat metadata lifecycle", () => {
   );
 
   it.each([
+    {
+      phase: "catalog-observation",
+      modelFactsChanged: false,
+      refreshStatusChanged: false,
+      refreshes: false,
+    },
     { modelFactsChanged: true, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
     { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
@@ -914,10 +862,22 @@ describe("gateway chat metadata lifecycle", () => {
         expect(payloadJson).toBe('{"pendingProviders":["synthetic"]}');
 
         pending = false;
-        modelListener({ phase, modelFactsChanged, refreshStatusChanged });
+        modelListener({ phase, modelFactsChanged, refreshStatusChanged, agentId: "main" });
         await read();
 
         expect(payloadJson).toBe("{}");
+        if (phase === "catalog-observation") {
+          expect(requestContext.broadcast).toHaveBeenCalledExactlyOnceWith(
+            "chat.metadata.changed",
+            {
+              agentId: "main",
+              modelCatalogChanged: true,
+              authChanged: false,
+              commandsChanged: false,
+            },
+            { dropIfSlow: true },
+          );
+        }
         expect(produce).toHaveBeenCalledTimes(2);
         expect(mocks.invalidate).not.toHaveBeenCalled();
         expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);

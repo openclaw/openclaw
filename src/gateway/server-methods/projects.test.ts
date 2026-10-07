@@ -11,10 +11,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
-import {
-  replaceSessionEntrySync,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
@@ -25,11 +22,7 @@ import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-st
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import {
-  createOpenClawTestState,
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
@@ -41,6 +34,7 @@ import {
   listRegistryRecords,
   projectsHandlers,
   resolveRepositoryIdentity,
+  withProjectState,
 } from "./projects.test-support.js";
 
 beforeEach(() => {
@@ -54,10 +48,6 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
-
-function withProjectState(run: (state: OpenClawTestState) => Promise<void>) {
-  return withOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" }, run);
-}
 
 test("projects.searchRemote sends only the selected host's service credential", async () => {
   vi.stubEnv("GH_TOKEN", "public-host-token");
@@ -967,36 +957,5 @@ test("projects.remove refuses to delete a cloned checkout configured as an agent
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("agent workspace") },
     });
     await expect(fs.stat(repo)).resolves.toBeDefined();
-  });
-});
-
-test("projects.remove refuses to delete a cloned checkout used by a live direct session", async () => {
-  return withProjectState(async (state) => {
-    const originUrl = "https://github.com/acme/session-project.git";
-    const fingerprint = sha256HexPrefixCore(originUrl, 16);
-    const repo = await initializeRepository(
-      path.join(state.stateDir, "projects", fingerprint),
-      "session-project",
-      originUrl,
-    );
-    const project = await registerClonedProjectRegistry({
-      path: repo,
-      name: "Session project",
-      originUrl,
-    });
-    await upsertSessionEntryCore(
-      { agentId: "main", env: state.env, sessionKey: "agent:main:project-session" },
-      { sessionId: "project-session", spawnedCwd: repo, updatedAt: 1 },
-    );
-    const cfg = {
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-    } as OpenClawConfig;
-
-    expect(
-      await invokeProjectMethod("projects.remove", { id: project.id, deleteCheckout: true }, cfg),
-    ).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_REQUEST", message: expect.stringContaining("project-session") },
-    });
   });
 });

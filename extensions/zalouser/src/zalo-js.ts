@@ -367,11 +367,10 @@ function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
 }
 
 async function ensureApi(
-  profileInput?: string | null,
+  profile: string,
   timeoutMs = API_LOGIN_TIMEOUT_MS,
   credentialPersistence: CredentialPersistenceMode = "persist",
 ): Promise<API> {
-  const profile = normalizeProfile(profileInput);
   const env = captureZalouserCredentialsEnv();
   const pendingRevocation = credentials.pendingRevocation(profile);
   if (pendingRevocation) {
@@ -461,8 +460,7 @@ async function withZaloApi<T>(
   return result;
 }
 
-function invalidateApi(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
+function invalidateApi(profile: string): void {
   const api = apiByProfile.get(profile);
   if (api) {
     try {
@@ -479,8 +477,7 @@ function isQrLoginFresh(login: ActiveZaloQrLogin): boolean {
   return Date.now() - login.startedAt < QR_LOGIN_TTL_MS;
 }
 
-function resetQrLogin(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
+function resetQrLogin(profile: string): void {
   const active = activeQrLogins.get(profile);
   if (!active) {
     return;
@@ -557,9 +554,7 @@ function clearCachedGroupContext(profile: string): void {
   }
 }
 
-function extractGroupMembersFromInfo(
-  groupInfo: (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] }) | undefined,
-): string[] | undefined {
+function extractGroupMembersFromInfo(groupInfo: GroupInfo | undefined): string[] | undefined {
   if (!groupInfo || !Array.isArray(groupInfo.currentMems)) {
     return undefined;
   }
@@ -767,9 +762,7 @@ export async function listZaloGroupMembers(
 ): Promise<ZaloGroupMember[]> {
   return await withZaloApi(profileInput, async (api) => {
     const infoResponse = await api.getGroupInfo(groupId);
-    const groupInfo = infoResponse.gridInfoMap?.[groupId] as
-      | (GroupInfo & { memVerList?: unknown })
-      | undefined;
+    const groupInfo = infoResponse.gridInfoMap?.[groupId];
     if (!groupInfo) {
       return [];
     }
@@ -840,9 +833,7 @@ export async function resolveZaloGroupContext(
 
   return await withZaloApi(profile, async (api) => {
     const response = await api.getGroupInfo(normalizedGroupId);
-    const groupInfo = response.gridInfoMap?.[normalizedGroupId] as
-      | (GroupInfo & { currentMems?: unknown[]; memVerList?: unknown[] })
-      | undefined;
+    const groupInfo = response.gridInfoMap?.[normalizedGroupId];
     const context: ZaloGroupContext = {
       groupId: normalizedGroupId,
       name: normalizeOptionalString(groupInfo?.name),
@@ -1101,11 +1092,7 @@ export async function startZaloQrLogin(params: {
 
           if (event.actions?.abort) {
             current.abort = () => {
-              try {
-                event.actions?.abort?.();
-              } catch {
-                // ignore
-              }
+              event.actions?.abort?.();
             };
           }
 
@@ -1278,11 +1265,7 @@ export async function waitForZaloQrLogin(params: {
 export async function logoutZaloProfile(
   profileInput?: string | null,
   options?: { assertCurrent?: () => void },
-): Promise<{
-  cleared: boolean;
-  loggedOut: boolean;
-  message: string;
-}> {
+) {
   const profile = normalizeProfile(profileInput);
   options?.assertCurrent?.();
   resetQrLogin(profile);

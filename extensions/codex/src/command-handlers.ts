@@ -43,9 +43,7 @@ import {
   startThreadAction,
 } from "./command-handler-actions.js";
 import {
-  buildCodexComputerUseMenuReply,
-  buildCodexFastMenuReply,
-  buildCodexPermissionsMenuReply,
+  buildCodexChoiceMenuReply,
   buildCodexSubcommandPickerReply,
   isMenuVerb,
   splitArgs,
@@ -280,13 +278,13 @@ export async function handleCodexSubcommand(
   }
   if (normalized === "fast") {
     if (isMenuVerb(rest)) {
-      return buildCodexFastMenuReply();
+      return buildCodexChoiceMenuReply("fast");
     }
     return { text: await setConversationFastMode(deps, ctx, rest) };
   }
   if (normalized === "permissions") {
     if (isMenuVerb(rest)) {
-      return buildCodexPermissionsMenuReply();
+      return buildCodexChoiceMenuReply("permissions");
     }
     return { text: await setConversationPermissions(deps, ctx, rest) };
   }
@@ -294,17 +292,11 @@ export async function handleCodexSubcommand(
     return { text: await startThreadAction(deps, ctx, options.pluginConfig, normalized, rest) };
   }
   if (normalized === "diagnostics") {
-    return await handleCodexDiagnosticsFeedback(
-      deps,
-      ctx,
-      options.pluginConfig,
-      rest.join(" "),
-      "/codex diagnostics",
-    );
+    return await handleCodexDiagnosticsFeedback(deps, ctx, options.pluginConfig, rest.join(" "));
   }
   if (normalized === "computer-use" || normalized === "computeruse") {
     if (isMenuVerb(rest)) {
-      return buildCodexComputerUseMenuReply();
+      return buildCodexChoiceMenuReply("computer-use");
     }
     return {
       text: await handleComputerUseCommand(deps, ctx, options.pluginConfig, rest),

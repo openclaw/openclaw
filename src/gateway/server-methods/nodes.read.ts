@@ -9,9 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updatePairedNodeSessionHost } from "../../infra/device-pairing-node-facts.js";
-import { projectPairedDeviceNodeBindings } from "../../infra/device-pairing-node-state.js";
-import { listNodePairing, projectNodePairing } from "../../infra/device-pairing-node.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listNodePairing } from "../../infra/device-pairing-node.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   formatNodeRunnerInventoryIssue,
@@ -22,11 +20,8 @@ import {
 import { resolveLocalNodeId } from "../../node-host/local-id.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../skills/runtime/remote.js";
-import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
-import {
-  collectNodeCatalogRuntimeState,
-  updateNodeRunnerInventory,
-} from "../node-registry-private.js";
+import { readKnownNodeCatalog } from "../node-catalog-read.js";
+import { updateNodeRunnerInventory } from "../node-registry-private.js";
 import type { NodeSession } from "../node-registry.js";
 import {
   hasAuthorizedClientPluginNodeCapabilityUrl,
@@ -68,29 +63,19 @@ async function listNodesForClient(params: {
   client: GatewayClient | null;
   context: GatewayRequestContext;
   nodeId?: string;
-}): Promise<{ nodes: NodeListNode[]; connectedNodes: NodeSession[] }> {
-  const devicePairing = await listDevicePairing();
-  const nodePairing = projectNodePairing(devicePairing.paired);
-  const connectedNodes = params.context.nodeRegistry.listConnectedForPairingStates(
-    projectPairedDeviceNodeBindings(devicePairing.paired),
-  );
-  const runtimeState = collectNodeCatalogRuntimeState(params.context.nodeRegistry, connectedNodes);
-  const catalog = createKnownNodeCatalog({
-    pairedDevices: devicePairing.paired,
-    pairedNodes: nodePairing.paired,
-    pendingNodes: nodePairing.pending,
-    connectedNodes,
-    ...runtimeState,
-  });
+}): Promise<{ nodes: NodeListNode[]; connectedNodes: readonly NodeSession[] }> {
   const localNodeId = await resolveLocalNodeId().catch((error: unknown) => {
     params.context.logGateway.warn(
       `failed to resolve same-install node-host identity: ${formatErrorMessage(error)}`,
     );
     return null;
   });
+  const { nodes: preparedNodes, connectedNodes } = await readKnownNodeCatalog(
+    params.context.nodeRegistry,
+  );
   const catalogNodes = params.nodeId
-    ? [getKnownNode(catalog, params.nodeId)].filter((node) => node !== null)
-    : listKnownNodes(catalog);
+    ? preparedNodes.filter((node) => node.nodeId === params.nodeId)
+    : preparedNodes;
   const nodes = catalogNodes.map((node) =>
     node.nodeId === localNodeId ? Object.assign({}, node, { gatewayLocal: true }) : node,
   );
@@ -204,7 +189,7 @@ export function refreshConnectedNodeSurfaceCaches(params: {
     cfg,
   }).catch((err: unknown) =>
     params.context.logGateway.warn(
-      `remote bin probe failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
+      `remote bin check failed for ${nodeSession.nodeId}: ${formatErrorMessage(err)}`,
     ),
   );
 }

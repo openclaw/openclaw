@@ -12,6 +12,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
@@ -596,19 +600,20 @@ export async function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous?: boolean },
 ): Promise<PreparedGitHubSourceReadIdentity> {
   const selected = resolveGitHubToolIdentity(params);
-  const profileId = selected.source === "system-detected" ? undefined : selected.config.profileId;
-  const kind = selected.source === "system-detected" ? undefined : selected.config.kind;
-  const assertSelected = () => {
-    params.assertActive();
-    const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
-    if (
-      current.source !== selected.source ||
-      (current.source !== "system-detected" &&
-        (current.config.profileId !== profileId || current.config.kind !== kind))
-    ) {
-      throw new GitHubIdentityError("changed");
-    }
-  };
+  const { profileId, kind } = selected.source === "system-detected" ? {} : selected.config;
+  const assertSelected = composeSessionSourceAssertion([
+    captureExternalSessionCommitGuard(params.assertActive),
+    () => {
+      const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
+      if (
+        current.source !== selected.source ||
+        (current.source !== "system-detected" &&
+          (current.config.profileId !== profileId || current.config.kind !== kind))
+      ) {
+        throw new GitHubIdentityError("changed");
+      }
+    },
+  ]);
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();

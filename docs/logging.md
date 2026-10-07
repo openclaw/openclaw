@@ -200,6 +200,16 @@ openclaw gateway --verbose --ws-log full
 
 ### Steering and input cancellation
 
+Ordinary channel reply routing logs
+`steering rejected; applying follow-up policy` at warning level when steering
+falls back. The fixed `reason` code distinguishes an unavailable owner or
+injection path, a pending source operation, changed authority, terminal-reply
+state, and runtime rejection.
+Records include the channel, opaque session ID, and input or active run IDs when
+supplied. `disposition` distinguishes a follow-up policy decision, confirmed
+or rejected queue admission, and a known queue-cap rejection; it does not confirm delivery.
+These records omit message text, attachments, session keys, and raw exceptions.
+
 When retained reply-delivery state prevents steering, the Gateway logs
 `chat steering rejected; falling back to follow-up dispatch`. Its structured
 fields distinguish the incoming input's `runId` from `activeRunId` and record
@@ -609,13 +619,48 @@ Gateway `status` responses include `workerPools.transcriptReconciliation` and
 `workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
 `activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
 worker at a time. Pending tasks include queued and executing work; creation counts
-belong to the current pool lifetime. The startup trace's `memory.ready` record also
-includes these pool counts.
+belong to the current pool lifetime. `workerPools.modelCatalog` also reports
+`workerFailures`: how many model-catalog workers have failed (run out of memory,
+exited, or timed out) since the Gateway started. A failed pool is replaced, so this
+count survives replacement. Each failure also logs one
+`model catalog worker failed` warning when it happens, with the worker's reason and
+the number of agent catalogs to republish on a new worker. A worker that exits while
+idle is counted and logged at once; the next catalog request replaces it.
+Shutdown and plugin retirement are not counted. The startup trace's `memory.ready`
+record also includes these pool counts.
 
 These figures describe worker and task counts. Process RSS includes every isolate
 and native allocation; Node's process heap flags can override a worker's requested
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
+
+### Slow Git content reads
+
+With process diagnostics and info-level logging enabled, `git/worker` emits
+`slow Git content read` after a diff, diff-baseline, or PR branch-facts operation
+lasting at least one second. The journal message includes the same fields as the
+structured file log. Records are limited to 60 per minute.
+
+`operation` identifies the caller family. `checkoutId` is a truncated SHA-256 of
+the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
+is `managed` when the caller supplies managed-index ownership, otherwise
+`unspecified`. Paths, refs, command arguments, and output contents are not logged.
+
+`workerQueueWaitMs` measures admission wait (null if never dispatched).
+`firstHostRequestMs` includes that wait plus worker startup and work before the
+first host request. `workerMs` covers subsequent worker and host work;
+`settlementMs` covers final cleanup. `summedGitQueueWaitMs` measures waiting for
+shared content-process slots, while `summedGitWallMs` sums command execution
+including process settlement. Concurrent commands overlap, so their sum can
+exceed operation duration; these are wall times, not CPU times.
+
+`gitCommandCount` counts started host command requests, not Git's own subprocesses.
+`gitStdoutBytes` and `gitStderrBytes` count captured bytes, excluding any truncated
+output. `gitTimeoutCount` counts returned timeouts; `slowestGitCommand` records
+the longest command's allowlisted name, diff mode when applicable, duration, and
+termination. An operation can return successfully after a command times out
+because optional statistics fall back to unknown. Artifact and maintenance
+operations contribute to aggregate Git worker metrics but do not emit this log.
 
 ### Slow worktree cleanup
 
@@ -787,9 +832,9 @@ errors. These elapsed durations do not measure SQL CPU time or establish a
 causal link to a nearby request.
 
 Older builds report `session.reclamation.commit-settlement` for a parent-side
-synchronous SQLite probe after authorizing a reclamation or cold-storage commit.
+synchronous SQLite check after authorizing a reclamation or cold-storage commit.
 The parent now atomically accepts the commit after checking live authority and
-awaits settlement asynchronously, without that probe or its lock wait.
+awaits settlement asynchronously, without that check or its lock wait.
 
 Hot transcript reads identify their purpose in `operation`: `session transcript
 <purpose> read`, where `<purpose>` is `identity`, `header`, `tail`, `incremental`,

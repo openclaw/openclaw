@@ -13,6 +13,7 @@ import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
+import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../components/elapsed-time.ts";
 import "./chat-subagents-panel.css";
@@ -28,6 +29,8 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) presentationId = "single";
   @property({ attribute: false }) inputRegion: ChatInputRegion = "page";
   @property({ type: Boolean }) presented = true;
+  /** The pane's request to show one subagent, or the list for null; taken once. */
+  @property({ attribute: false }) showRequest?: () => string | null | undefined;
   @property({ attribute: false }) onSessionSelect?: (
     sessionKey: string,
     options?: PaneSessionChangeOptions,
@@ -73,6 +76,12 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     } else if (parentChanged || changed.has("presented")) {
       this.syncData();
     }
+    const requested = changed.has("showRequest") ? this.showRequest?.() : undefined;
+    if (requested !== undefined) {
+      this.selected = requested
+        ? { key: requested, agentId: this.subagentAgentId(requested) }
+        : null;
+    }
     if (this.selected && this.data && !this.data.loading) {
       const denied = this.data.error && this.data.rows.length === 0;
       // An incomplete page cannot establish that a previously selected child was removed.
@@ -99,12 +108,13 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     await this.data?.refresh();
   }
 
+  private subagentAgentId(key: string): string {
+    const session = this.data?.rows.find((row) => row.session.key === key)?.session;
+    return session?.agentId ?? parseAgentSessionKey(key)?.agentId ?? this.agentId;
+  }
+
   private select(row: SubagentsPanelRow): void {
-    this.selected = {
-      key: row.session.key,
-      agentId:
-        row.session.agentId ?? parseAgentSessionKey(row.session.key)?.agentId ?? this.agentId,
-    };
+    this.selected = { key: row.session.key, agentId: this.subagentAgentId(row.session.key) };
   }
 
   private readonly backToSubagents = (): void => {
@@ -224,7 +234,7 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
 
     const rows = this.data?.rows ?? [];
     const unfinished = (row: SubagentsPanelRow) =>
-      row.session.status === "queued" || isSessionRunActive(row.session);
+      row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = rows.filter(unfinished);
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;

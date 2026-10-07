@@ -8,6 +8,7 @@ import {
   type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
+import { trackSubagentProgressYield } from "./subagent-progress-draft.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
 import {
   mutateSubagentRuns,
@@ -21,6 +22,7 @@ import {
   isRequesterCompletionCohortCurrent,
   isRequesterYieldCohortMember,
   isRequesterSettleWakeForRun,
+  sameRequesterSettleBatch,
 } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
@@ -287,12 +289,7 @@ export async function markRequesterTurnYieldedInRuns(params: {
           params.requesterAgentId,
           requesterTurnRunId,
         );
-        if (
-          selected.length !== selectedEntries.length ||
-          selected.some(
-            (entry) => !selectedEntries.some((old) => isSameSubagentRunOwner(old, entry)),
-          )
-        ) {
+        if (!sameRequesterSettleBatch(selected, selectedEntries)) {
           throw new SubagentRegistryMutationRejectedError(
             "Requester yield membership changed before admission",
           );
@@ -629,6 +626,7 @@ export async function settleRequesterTurnAfterSessionSpawns(params: {
     },
     finish: (members) => {
       const entries = children(members);
+      trackSubagentProgressYield(requesterTurnRunId, entries);
       promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
       promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
       if (rearmGeneration !== undefined && params.requesterAgentId) {

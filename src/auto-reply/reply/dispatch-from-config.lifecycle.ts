@@ -13,7 +13,7 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  prepareSessionWorkerPlacementMutationCheck,
+  prepareSessionWorkerPlacementMutationCheckAsync,
   resolveWorkerPlacementArchiveRestoreError,
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
@@ -133,7 +133,7 @@ async function restoreArchivedDispatchSession(params: {
         assertCommitAllowed = await restoreSessionWorktree({
           entry: currentEntry,
           scope,
-          commitGuard: prepareSessionWorkerPlacementMutationCheck({
+          commitGuard: await prepareSessionWorkerPlacementMutationCheckAsync({
             context: placementContext,
             sessionId: currentEntry.sessionId,
           }),

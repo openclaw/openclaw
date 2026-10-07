@@ -1,5 +1,3 @@
-// Shared Gateway HTTP helpers handle small JSON/text responses, SSE headers,
-// body-size errors, and client disconnect aborts.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { z } from "zod";
 import { buildMissingScopeErrorDetails } from "../../packages/gateway-protocol/src/index.js";
@@ -220,6 +218,10 @@ export function retainGatewayHttpResponseWork(res: ServerResponse): () => void {
   };
   res.once("finish", release);
   res.once("close", release);
+  // Input preparation can outlive a response that already closed or finished.
+  if (res.destroyed || res.writableFinished) {
+    release();
+  }
   return release;
 }
 

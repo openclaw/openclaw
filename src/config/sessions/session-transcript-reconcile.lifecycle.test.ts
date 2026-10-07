@@ -311,8 +311,11 @@ describe("session transcript reconcile worker lifecycle", () => {
         hostLeases.toSorted(),
       );
       const idleLeases = retainedLeases.filter((lease) => !hostLeases.includes(lease));
-      expect(idleLeases).toHaveLength(1);
-      expect([...canonical.leases.values()]).toContain(idleLeases[0]);
+      // Planner leases are released while the four most recent canonical executors stay idle.
+      expect(idleLeases).toHaveLength(4);
+      for (const lease of idleLeases) {
+        expect([...canonical.leases.values()]).toContain(lease);
+      }
     } finally {
       operationSpy.mockRestore();
       canonical.restore();
@@ -739,7 +742,10 @@ describe("session transcript reconcile worker lifecycle", () => {
           });
           await waitForSessionTranscriptIndexReconcile(options);
           const database = openOpenClawAgentDatabase(options);
-          if (mode !== "clean") {
+          if (mode === "clean") {
+            // Admit the initial status once; the measured clean read needs no write grants.
+            await reconcileSessionTranscriptIndexes(options);
+          } else {
             database.db
               .prepare(
                 "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?",

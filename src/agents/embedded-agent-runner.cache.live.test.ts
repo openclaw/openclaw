@@ -7,7 +7,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { AssistantMessage, Message, Tool } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../test-utils/env.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
@@ -695,7 +695,7 @@ describeCacheLive("embedded agent runner prompt caching (live)", () => {
     previousCacheTraceEnv = undefined;
     liveCacheTraceFile = undefined;
     if (liveRunnerPaths) {
-      disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
+      await disposeOpenClawAgentDatabaseByPath(liveRunnerPaths.storePath);
       await fs.rm(liveRunnerPaths.rootDir, { recursive: true, force: true });
     }
     liveRunnerPaths = undefined;

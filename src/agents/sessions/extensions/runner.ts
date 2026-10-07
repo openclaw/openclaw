@@ -114,7 +114,6 @@ const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltI
   return builtinKeybindings;
 };
 
-/** Combined result from all before_agent_start handlers */
 interface BeforeAgentStartCombinedResult {
   messages?: NonNullable<BeforeAgentStartEventResult["message"]>[];
   systemPrompt?: string;
@@ -164,10 +163,6 @@ export type ExtensionErrorListener = (error: ExtensionError) => void;
 
 export type ShutdownHandler = () => void;
 
-/**
- * Helper function to emit session_shutdown event to extensions.
- * Returns true if the event was emitted, false if there were no handlers.
- */
 export async function emitSessionShutdownEvent(
   extensionRunner: ExtensionRunner,
   event: SessionShutdownEvent,
@@ -349,7 +344,6 @@ export class ExtensionRunner {
     return Array.from(toolsByName.values());
   }
 
-  /** Get a tool definition by name. Returns undefined if not found. */
   getToolDefinition(toolName: string): RegisteredTool["definition"] | undefined {
     for (const ext of this.extensions) {
       const tool = ext.tools.get(toolName);
@@ -581,7 +575,7 @@ export class ExtensionRunner {
   }
 
   private async dispatchHandlers<TResult>(
-    eventType: Exclude<ExtensionEvent["type"], "tool_call">,
+    eventType: ExtensionEvent["type"],
     invoke: (
       handler: NonNullable<ReturnType<Extension["handlers"]["get"]>>[number],
       ctx: ExtensionContext,
@@ -600,6 +594,9 @@ export class ExtensionRunner {
             return result;
           }
         } catch (err) {
+          if (eventType === "tool_call") {
+            throw err;
+          }
           // Runtime faults must escape before another handler can run.
           rethrowIncognitoSessionError(err);
           if (err instanceof SessionMetadataCommittedError) {
@@ -701,23 +698,17 @@ export class ExtensionRunner {
   }
 
   async emitToolCall(event: ToolCallEvent): Promise<ToolCallEventResult | undefined> {
-    let ctx: ExtensionContext | undefined;
     let result: ToolCallEventResult | undefined;
-
-    for (const ext of this.extensions) {
-      for (const handler of ext.handlers.get("tool_call") ?? []) {
-        ctx ??= this.createContext();
-        const handlerResult = await handler(event, ctx);
-
-        if (handlerResult) {
-          result = handlerResult as ToolCallEventResult;
-          if (result.block) {
-            return result;
-          }
+    await this.dispatchHandlers("tool_call", async (handler, ctx) => {
+      const handlerResult = await handler(event, ctx);
+      if (handlerResult) {
+        result = handlerResult as ToolCallEventResult;
+        if (result.block) {
+          return result;
         }
       }
-    }
-
+      return undefined;
+    });
     return result;
   }
 

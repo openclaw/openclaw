@@ -9,9 +9,7 @@ import type { AgentMessage } from "./runtime/index.js";
 import { repairToolUseResultPairing, stripToolResultDetails } from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 
-/** Default share of context window targeted for compaction chunks. */
 const BASE_CHUNK_RATIO = 0.4;
-/** Lower bound for adaptive compaction chunk sizing. */
 const MIN_CHUNK_RATIO = 0.15;
 /** Buffer for estimateTokens() inaccuracy. */
 export const SAFETY_MARGIN = 1.2;

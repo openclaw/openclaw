@@ -381,7 +381,7 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
     }
     // Mention-only turns need non-empty agent text; the shared reply runner rejects empty
     // bodies before model invocation. The guard above ensures this fallback is a bot mention.
-    const bodyForAgent = bodyText || rawText.trim();
+    const bodyForAgent = bodyText || rawText;
     core.channel.activity.record({
       channel: "mattermost",
       accountId: account.accountId,

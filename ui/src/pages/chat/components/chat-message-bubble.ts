@@ -77,6 +77,7 @@ import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolOutcome,
+  type ToolRenderOptions,
 } from "./chat-tool-content.ts";
 import { renderWorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { renderToolPreview } from "./widget-card.ts";
@@ -214,6 +215,7 @@ export function renderGroupedMessage(
     githubRepo?: MarkdownRenderOptions["githubRepo"];
     githubRepositories?: MarkdownRenderOptions["githubRepositories"];
     onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
+    subagents?: ToolRenderOptions["subagents"];
     fileLinkSessionKey?: string;
     avatar?: TemplateResult | typeof nothing;
     entryId?: string;

@@ -77,6 +77,7 @@ export type GatewayReachability = {
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
   probeError?: string;
   staleConnection?: GatewayStaleConnectionReason;
 };
@@ -204,15 +205,30 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
   });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+type ChannelProbeResult = { id: string } & (
+  | { status: "healthy" }
+  | { status: "unhealthy" | "timed-out"; error: string }
+);
+
+function readChannelProbeResults(health: unknown): ChannelProbeResult[] {
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  return Object.entries(channels ?? {}).flatMap(([id, summary]) => {
+  return Object.entries(channels ?? {}).flatMap<ChannelProbeResult>(([id, summary]) => {
     const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (probe?.ok !== false) {
+    if (!probe) {
       return [];
     }
-    const error = probe.error;
-    return [{ id, error: typeof error === "string" && error.trim() ? error : "probe failed" }];
+    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+    if (probe.timedOut === true || probe.ok === false) {
+      return [
+        {
+          id,
+          status: probe.timedOut === true ? "timed-out" : "unhealthy",
+          error:
+            typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+        },
+      ];
+    }
+    return probe.ok === true ? [{ id, status: "healthy" }] : [];
   });
 }
 
@@ -293,7 +309,16 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    result.channelProbeErrors = readChannelProbeErrors(health);
+    const channelProbes = readChannelProbeResults(health);
+    result.channelProbeErrors = channelProbes.flatMap((probe) =>
+      probe.status === "unhealthy" ? [{ id: probe.id, error: probe.error }] : [],
+    );
+    const timeouts = channelProbes.flatMap((probe) =>
+      probe.status === "timed-out" ? [{ id: probe.id, error: probe.error }] : [],
+    );
+    if (timeouts.length) {
+      result.channelProbeTimeouts = timeouts;
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket

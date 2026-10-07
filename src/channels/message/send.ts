@@ -171,20 +171,6 @@ export function serializeDurableMessagePayloadOutcomes(
 
 const neverAbortedSignal = new AbortController().signal;
 
-function toDurableMessageIntent(
-  intent: OutboundDeliveryIntent,
-  renderedBatch: RenderedMessageBatch<ReplyPayload>,
-): DurableMessageSendIntent<ReplyPayload> {
-  return {
-    id: intent.id,
-    channel: intent.channel,
-    to: intent.to,
-    ...(intent.accountId ? { accountId: intent.accountId } : {}),
-    durability: intent.queuePolicy === "required" ? "required" : "best_effort",
-    renderedBatch,
-  };
-}
-
 export type DurableMessageSendContextParams = DurableMessageBatchSendParams & {
   durability?: Exclude<MessageDurabilityPolicy, "disabled">;
   /** Runs after the durable queue intent exists and before platform delivery starts. */
@@ -311,7 +297,14 @@ async function withMessageSendContext<T>(
           },
           onDeliveryIntent: (intent) => {
             deliveryIntent = intent;
-            const durableIntent = toDurableMessageIntent(intent, rendered);
+            const durableIntent: DurableMessageSendIntent<ReplyPayload> = {
+              id: intent.id,
+              channel: intent.channel,
+              to: intent.to,
+              ...(intent.accountId ? { accountId: intent.accountId } : {}),
+              durability: intent.queuePolicy === "required" ? "required" : "best_effort",
+              renderedBatch: rendered,
+            };
             ctx.intent = durableIntent;
             onDeliveryIntent?.(durableIntent);
           },

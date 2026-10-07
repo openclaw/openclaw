@@ -1,3 +1,4 @@
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
@@ -33,7 +34,11 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
-import { hasSessionsYieldCall, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
+import {
+  hasSessionsYieldCall,
+  pendingSessionsYield,
+  projectSessionsYieldItems,
+} from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -97,6 +102,8 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
+  /** Set while a run that handed off is idle and its subagents are still running. */
+  subagentWait?: { startedAt: number; runId: string };
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
@@ -135,15 +142,24 @@ export function buildChatItems(
   const queuedSends = props.queue ?? [];
   const segments = props.streamSegments;
   let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
-  const resolveProgress = () =>
-    (progress ??= resolveWorkingProgress(
+  const resolveProgress = () => {
+    if (progress) {
+      return progress;
+    }
+    // A run that handed off has ended, but its live rows stay until the next
+    // run starts. The status that follows must not take that run's identity or
+    // count from its first tool call.
+    const handedOff = props.runId ? undefined : pendingSessionsYield(props.messages)?.runId;
+    progress = resolveWorkingProgress(
       props.sessionKey,
       props.runId ?? null,
       props.streamStartedAt,
       queuedSends,
-      segments,
-      tools,
-    ));
+      handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
+      handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+    );
+    return progress;
+  };
   // Retention and live status share the same explicit or inferred run ownership.
   const activeCommentaryRunId =
     props.persistCommentary === false && (props.runWorking || props.runActive)
@@ -164,6 +180,16 @@ export function buildChatItems(
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
+  const persistedCommentaryKeys = new Map<string, string>();
+  for (const [index, message] of history.entries()) {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    if (identity) {
+      persistedCommentaryKeys.set(
+        `${identity.runId ?? ""}\u0000${identity.itemId}`,
+        historyItems[index]!.key,
+      );
+    }
+  }
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -468,6 +494,17 @@ export function buildChatItems(
   }
   const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
     const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
+    const pendingItemId = normalizeOptionalString(segment.pendingCommentaryPrefixFor);
+    const persistedCommentaryKey = pendingItemId
+      ? (persistedCommentaryKeys.get(
+          `${normalizeOptionalString(segment.runId) ?? ""}\u0000${pendingItemId}`,
+        ) ?? persistedCommentaryKeys.get(`\u0000${pendingItemId}`))
+      : undefined;
+    const bounds = resolveProjectionBounds(
+      segment.runId,
+      segment.boundaryRunId,
+      afterBoundaryRunId,
+    );
     projections.push({
       item: {
         kind: "stream",
@@ -478,7 +515,7 @@ export function buildChatItems(
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
       },
-      bounds: resolveProjectionBounds(segment.runId, segment.boundaryRunId, afterBoundaryRunId),
+      bounds: persistedCommentaryKey ? { ...bounds, beforeKey: persistedCommentaryKey } : bounds,
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -633,6 +670,16 @@ export function buildChatItems(
       ...optionalRunIdentity(workingRunId),
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });
+  } else if (props.subagentWait && !initialHistoryLoad) {
+    // The handoff ended the parent's run, not its work. Carrying that run's
+    // identity keeps the claw in the same frame instead of opening another row.
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: `waiting-subagents:${props.sessionKey}`,
+      startedAt: props.subagentWait.startedAt,
+      waitingOn: "subagents",
+      runId: props.subagentWait.runId,
+    });
   }
   // Place output against the complete transcript before search hides any rows.
   // Pending/local inputs contribute people and turn boundaries just like history;
@@ -641,16 +688,11 @@ export function buildChatItems(
     hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
-  const projectYields = (source: ChatItem[]) =>
-    projectSessionsYieldItems(
-      source,
-      props.runActive || props.runWorking
-        ? { runId: currentRunId, startedAt: props.streamStartedAt }
-        : undefined,
-      props.showToolCalls,
-    );
-  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden)), {
-    items: hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined,
+  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+    projectSessionsYieldItems(source, props.showToolCalls, complete);
+  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
+    items: complete,
     people: props.replyPeople,
     localPerson: props.replyLocalPerson,
   });

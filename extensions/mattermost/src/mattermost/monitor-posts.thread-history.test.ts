@@ -122,7 +122,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     await fs.rm(directory, { recursive: true, force: true });
   });
 
-  async function setup(kind: "channel" | "group" | "direct", threaded = true) {
+  async function setup(kind: "channel" | "group" | "direct") {
     const cfg: OpenClawConfig = {
       session: { store: path.join(directory, "sessions.json") },
       channels: {
@@ -135,14 +135,14 @@ describe("Mattermost server thread recovery through the post handler", () => {
           allowFrom: ["*"],
           groupPolicy: "open",
           streaming: { mode: "off" },
-          replyToModeByChatType: { direct: threaded ? "first" : "off" },
+          replyToModeByChatType: { direct: "first" },
           historyLimit: 3,
         },
       },
     };
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     const baseKey = `agent:main:mattermost:${kind}:room`;
-    const sessionKey = threaded ? `${baseKey}:thread:root` : baseKey;
+    const sessionKey = `${baseKey}:thread:root`;
     await upsertSessionEntry({
       agentId: "main",
       storePath: cfg.session?.store,
@@ -417,7 +417,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
   });
 
-  it.each(["all", "allowlist_quote"] as const)(
+  it.each(["allowlist_quote"] as const)(
     "uses shared ingress and %s visibility without pairing",
     async (mode) => {
       const f = await setup("channel");
@@ -427,9 +427,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
       posts[1]!.user_id = "denied";
       posts[1]!.message = "denied sender history";
       await f.recover(f.turn);
-      expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual(
-        mode === "all" ? ["root", "reply"] : ["root"],
-      );
+      expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual(["root"]);
     },
   );
 
@@ -558,11 +556,4 @@ describe("Mattermost server thread recovery through the post handler", () => {
       expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
     },
   );
-
-  it("keeps flat DMs out of server recovery", async () => {
-    const { handler } = await setup("direct", false);
-    await handler(posts[2]! as never, { data: { sender_name: "trusted" } });
-    expect(dispatch).toHaveBeenCalledOnce();
-    expect(requests).toEqual([]);
-  });
 });

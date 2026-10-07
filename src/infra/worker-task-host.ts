@@ -13,7 +13,8 @@ import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
-import { trackWorkerRequest, workerRequestKind } from "./worker-request-diagnostics.js";
+import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
+import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
@@ -57,9 +58,13 @@ export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): Wo
       await removeTemporaryArtifacts(directory, "Worker task");
     },
     captureTaskContext: captureDeletedAgentDatabaseFences,
-    createTaskObserver(url, sharedCompute) {
-      const kind = workerRequestKind(url, sharedCompute);
-      return () => trackWorkerRequest(kind, "task");
+    createTaskObserver(url) {
+      const kind = workerRequestKind(url);
+      return (operation) =>
+        trackWorkerRequest(
+          kind,
+          operation === undefined ? "task" : classifyWorkerRequest(operation),
+        );
     },
     receiveMessage: receiveWorkerMemoryPort,
     workerStarted: attributeWorkerToPool,

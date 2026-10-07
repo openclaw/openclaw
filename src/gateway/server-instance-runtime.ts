@@ -18,6 +18,7 @@ import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import "./agent-turn/agent-job.js";
 import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
+import { retainInternalApprovalCommitGuard } from "./internal-approval-authority.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   ADMIN_SCOPE,
@@ -61,6 +62,7 @@ type GatewayInstanceRuntimeOptions = {
   getMethodRegistry: () => GatewayMethodRegistry;
   isDispatchAvailable: () => boolean;
   logError?: (message: string) => void;
+  prepareRestartRecovery?: GatewayRecoveryRuntime["prepareRestartRecovery"];
 };
 
 /** Creates closed internal principals bound to one concrete Gateway lifecycle. */
@@ -128,7 +130,7 @@ export function createGatewayInstanceRuntime(
         requestIdPrefix: "gateway-internal",
         timeoutMs: params.timeoutMs,
         signal: params.signal,
-        sessionMutationCommitGuard: assertCurrent,
+        sessionMutationCommitGuard: retainInternalApprovalCommitGuard(assertCurrent),
       }),
     );
     assertCurrent();
@@ -159,6 +161,15 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: (signal) => {
+      signal?.throwIfAborted();
+      assertDispatchAvailable("restart recovery");
+      return options.prepareRestartRecovery?.(signal)?.then((pausedUntilMs) => {
+        signal?.throwIfAborted();
+        assertDispatchAvailable("restart recovery");
+        return pausedUntilMs;
+      });
+    },
     dispatchSessionMethod: (method, payload, requestOptions = {}) =>
       dispatch({
         allowedMethods: recoverySessionMethods,

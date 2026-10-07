@@ -37,7 +37,8 @@
             "strict": false
           }
         }
-      ]
+      ],
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {
@@ -159,7 +160,8 @@
           }
         }
       ],
-      "max_completion_tokens": 4096
+      "max_completion_tokens": 4096,
+      "reasoning_effort": "medium"
     },
     "eventTrace": [
       {

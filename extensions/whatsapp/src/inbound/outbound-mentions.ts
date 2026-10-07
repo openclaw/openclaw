@@ -27,10 +27,6 @@ type MentionTarget = {
   replacementText?: string;
 };
 
-function isWhatsAppGroupJid(jid: string): boolean {
-  return jid.endsWith("@g.us");
-}
-
 export function mayContainWhatsAppOutboundMention(text: string): boolean {
   return /@\+?\d/.test(text);
 }
@@ -170,7 +166,7 @@ export function resolveWhatsAppOutboundMentions(params: {
   participants?: readonly WhatsAppOutboundMentionParticipant[];
 }): WhatsAppOutboundMentionResolution {
   if (
-    !isWhatsAppGroupJid(params.chatJid) ||
+    !params.chatJid.endsWith("@g.us") ||
     !mayContainWhatsAppOutboundMention(params.text) ||
     !params.participants?.length
   ) {

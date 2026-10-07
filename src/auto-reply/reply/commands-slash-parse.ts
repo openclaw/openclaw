@@ -1,4 +1,3 @@
-/** Shared parser for slash commands with action and argument tails. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Matches a whole, case-insensitive command token and preserves its argument text. */
@@ -38,7 +37,6 @@ export function parseSendPolicyCommandBody(normalized: string): {
   return { hasCommand: true, mode };
 }
 
-/** Parses a slash command or returns null when the prefix does not match. */
 export function parseSlashCommandOrNull(
   raw: string,
   slash: string,

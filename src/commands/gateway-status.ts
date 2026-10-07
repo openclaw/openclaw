@@ -1,4 +1,3 @@
-/** CLI entrypoint for `openclaw gateway probe`. */
 import { isRich } from "../../packages/terminal-core/src/theme.js";
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
@@ -18,7 +17,6 @@ import {
 } from "./gateway-status/output.js";
 import { runGatewayStatusProbePass } from "./gateway-status/probe-run.js";
 
-/** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
     url?: string;

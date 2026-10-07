@@ -15,7 +15,8 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { updateRegistryWorktreeInDatabase } from "./registry-run-end.worker.js";
 import * as registry from "./registry.js";
-import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
+import { updateRegistryWorktree } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import * as leases from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -297,6 +298,15 @@ describe("exact-state retirement admission and recovery", () => {
       const recover = () => service.restore({ id: f.record.id, recoverExactState: f.exactState });
       if (phase !== "run-admission") {
         await expect(recover()).rejects.toThrow("controlled native move acknowledgement loss");
+      }
+      if (phase === "move-ack") {
+        expect(await refNames("refs/openclaw/removals/" + f.record.id)).not.toBe("");
+        await expect(leases.acquireWorktreeRunLease(f.record.id, { env })).rejects.toThrow(
+          "Worktree removal is incomplete",
+        );
+        expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(false);
+      }
+      if (phase === "cleanup-ack") {
         const liveRun = await leases.acquireWorktreeRunLease(f.record.id, { env });
         try {
           await expect(recover()).rejects.toThrow(/busy|locked by live pid/);
@@ -312,6 +322,10 @@ describe("exact-state retirement admission and recovery", () => {
         }
         expect(await fs.readFile(f.indexPath)).toEqual(f.index);
         expect(await refNames("refs/openclaw/removals/" + f.record.id)).toBe("");
+        if (phase === "move-ack") {
+          admitted = await leases.acquireWorktreeRunLease(f.record.id, { env });
+          expect(leases.hasLiveWorktreeRunLease(env, f.record.id)).toBe(true);
+        }
       } finally {
         await admitted?.release();
       }

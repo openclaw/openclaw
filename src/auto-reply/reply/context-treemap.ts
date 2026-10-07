@@ -7,7 +7,6 @@ import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { encodePngRgba } from "../../media/png-encode.js";
 
-/** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
   x: number;
   y: number;
@@ -379,7 +378,6 @@ function drawLegend(canvas: PngCanvas, groups: TreemapGroup[], rect: Rect, total
   });
 }
 
-/** Renders a prompt context treemap PNG and returns the written file path. */
 export async function renderContextTreemapPng(params: {
   report: SessionSystemPromptReport;
   session: ContextTreemapSessionStats;

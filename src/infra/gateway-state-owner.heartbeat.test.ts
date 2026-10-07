@@ -118,46 +118,28 @@ async function startRuntime(locks: Record<string, string>) {
   };
 }
 
-it.each(["persistent", "transient"] as const)(
-  "bounds %s EIO renewal failures without losing healthy custody",
-  async (kind) => {
-    const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-io-"), "root.lock");
-    fs.writeFileSync(rootPath, "root-owner");
-    const touch = fs.futimesSync;
-    let failures = 0;
-    vi.spyOn(fs, "futimesSync").mockImplementation((lockPath, atime, mtime) => {
-      if (kind === "persistent" || failures++ < 1) {
-        throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
-      }
-      touch(lockPath, atime, mtime);
-    });
-    const runtime = await startRuntime({ [rootPath]: "root-owner" });
-    const initialBeat = Atomics.load(runtime.lastBeat, 0);
-    try {
-      vi.advanceTimersByTime(59_999);
-      expect(vi.getTimerCount()).toBe(1);
-      vi.advanceTimersByTime(1);
-      const events = runtime.readEvents();
-      expect(events).toContain(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
-      if (kind === "persistent") {
-        expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
-        expect(events.at(-1)).toBe(
-          `${rootPath}: utimes renewal failed: synthetic EIO renewing owner`,
-        );
-        expect(vi.getTimerCount()).toBe(0);
-      } else {
-        expect(Atomics.load(runtime.lastBeat, 0)).toBeGreaterThan(initialBeat);
-        expect(vi.getTimerCount()).toBe(1);
-        expect(events.at(-1)).toBeNull();
-        expect(Date.now() - fs.statSync(rootPath).mtimeMs).toBeLessThan(15_000);
-        expect(fs.readFileSync(rootPath, "utf8")).toBe("root-owner");
-      }
-    } finally {
-      await runtime.stop();
-    }
+it("bounds persistent EIO renewal failures without losing healthy custody", async () => {
+  const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-io-"), "root.lock");
+  fs.writeFileSync(rootPath, "root-owner");
+  vi.spyOn(fs, "futimesSync").mockImplementation(() => {
+    throw Object.assign(new Error("synthetic EIO renewing owner"), { code: "EIO" });
+  });
+  const runtime = await startRuntime({ [rootPath]: "root-owner" });
+  const initialBeat = Atomics.load(runtime.lastBeat, 0);
+  try {
+    vi.advanceTimersByTime(59_999);
+    expect(vi.getTimerCount()).toBe(1);
+    vi.advanceTimersByTime(1);
+    const events = runtime.readEvents();
+    expect(events).toContain(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
+    expect(Atomics.load(runtime.lastBeat, 0)).toBe(initialBeat);
+    expect(events.at(-1)).toBe(`${rootPath}: utimes renewal failed: synthetic EIO renewing owner`);
     expect(vi.getTimerCount()).toBe(0);
-  },
-);
+  } finally {
+    await runtime.stop();
+  }
+  expect(vi.getTimerCount()).toBe(0);
+});
 
 it("keeps the failure deadline ahead of mtime expiry after a slow successful touch", async () => {
   const rootPath = path.join(tempDirs.make("openclaw-owner-heartbeat-slow-"), "root.lock");

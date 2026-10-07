@@ -79,13 +79,7 @@ export async function requestCodexAppServerClientJson<T = JsonValue | undefined>
   observeControlPhase(params.controlObservation, phase);
   try {
     const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-    const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-      method: params.method,
-      requestParams: params.requestParams,
-      config: params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.sessionId,
-    });
+    const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock(params);
     if (sandboxBlock) {
       throw new Error(sandboxBlock);
     }
@@ -138,7 +132,6 @@ type CodexAppServerJsonClientOptions = Pick<
   controlObservation?: CodexControlRequestObservation;
 };
 
-/** Sends a typed Codex app-server request and returns the method-specific response shape. */
 export async function requestCodexAppServerJson<M extends CodexAppServerRequestMethod>(
   params: CodexAppServerJsonClientOptions & {
     method: M;
@@ -154,13 +147,7 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(
   // Fail closed before spawning or leasing a client for a guard-blocked method.
   observeControlPhase(params.controlObservation, "prepare");
   const { resolveCodexAppServerDirectSandboxBypassBlock } = await import("./sandbox-guard.js");
-  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
-    method: params.method,
-    requestParams: params.requestParams,
-    config: params.config,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-  });
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock(params);
   if (sandboxBlock) {
     throw new Error(sandboxBlock);
   }

@@ -21,6 +21,7 @@ For Docker, Podman, and Kubernetes image replacements, see
 image entrypoint runs Doctor before starting the Gateway and exits if mounted
 state cannot be repaired safely.
 
+Before upgrading, follow the [preflight checklist](/install/updating/rollback-and-recovery#before-you-upgrade).
 Before a significant update, [create a verified backup](#before-updating-create-a-verified-backup).
 Automatic config copies and migration recovery originals are not a full-state
 backup.
@@ -241,7 +242,7 @@ actual Bun executable against the Bun 1.4+ and WAL-safe `node:sqlite` requiremen
 Bun's emulated Node version is not checked against `engines.node`. If the updater
 runs on Node, its Node must also satisfy the target package's engine and SQLite
 requirements before package replacement, because finalization uses that runtime.
-Bun-owned package-manager probes and installs use that verified executable, and the
+Bun-owned package-manager checks and installs use that verified executable, and the
 existing install/restart path retains the recorded runtime pin. A path under
 `~/.openclaw` alone does not establish Bun package-manager ownership. See
 [Bun-only installs](/install/bun-compatibility#bun-only-installs).
@@ -483,6 +484,15 @@ receipt remains in the control directory and is readable through
 `openclaw update status --json` as `packageActivation`, even after helper removal.
 A completed receipt is replaced only when the next update is admitted through
 the same original executor store; it is not authority to mutate an installation.
+
+On Linux, a filesystem remount can change device numbers without moving files.
+Update admission reconciles this change for completed receipts when the recorded
+inodes, installation path, and ownership still match. It refreshes verified
+identities while preserving the original journal format and completion intent,
+so older CLI versions can still read the completed receipt. The warning
+`filesystem device id changed; receipt identities refreshed` reports the repair
+without adding a new persisted intent. Active recovery operations and replaced
+files retain their existing identity checks.
 
 Missing, legacy or identity-mismatched recovery artifacts block the next mutable
 update. They are not silently migrated or deleted. Preserve them and use their

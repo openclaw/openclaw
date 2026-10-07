@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { statSync } from "node:fs";
 import fs from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -62,10 +63,12 @@ it("keeps cold, warm, read-only, ordered token-data operations and cleanup off t
         await tokens.loadOriginDeviceToken({ ...origin, gatewayScope: "wss://other.example" }),
       ).toBeNull();
       await closeOpenClawStateDatabaseAsync();
-      const artifacts = (await fs.readdir(state.statePath("state"))).toSorted();
+      const databasePath = state.statePath("state", "openclaw.sqlite");
+      const bytes = await fs.readFile(databasePath);
       expect(await tokens.loadOriginDeviceTokenReadOnly(origin)).toEqual(stored);
       await closeOpenClawStateDatabaseAsync();
-      expect((await fs.readdir(state.statePath("state"))).toSorted()).toEqual(artifacts);
+      expect(await fs.readFile(databasePath)).toEqual(bytes);
+      expect(statSync(`${databasePath}-wal`, { throwIfNoEntry: false })?.size ?? 0).toBe(0);
       expect(await tokens.clearOriginDeviceToken(origin)).toBe(true);
       await closeOpenClawStateDatabaseAsync();
       expect(Object.values(sql.counts().data)).toEqual(Array(7).fill(0));

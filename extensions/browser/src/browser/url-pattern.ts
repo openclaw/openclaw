@@ -22,10 +22,7 @@ export function matchBrowserUrlPattern(pattern: string, url: string): boolean {
   if (!trimmedPattern) {
     return false;
   }
-  if (trimmedPattern === url) {
-    return true;
-  }
-  if (trimmedPattern === "*") {
+  if (trimmedPattern === url || trimmedPattern === "*") {
     return true;
   }
   if (trimmedPattern.includes("*")) {

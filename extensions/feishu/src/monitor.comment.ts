@@ -551,20 +551,7 @@ async function fetchDriveCommentContext(
     botOpenIds?: Iterable<string | undefined>;
     abortSignal?: AbortSignal;
   },
-): Promise<{
-  documentTitle?: string;
-  documentUrl?: string;
-  isWholeComment?: boolean;
-  quoteText?: string;
-  rootCommentText?: string;
-  targetReplyText?: string;
-  rootCommentContent?: ParsedCommentContent;
-  targetReplyContent?: ParsedCommentContent;
-  currentCommentThreadReplies: ResolvedCommentReplyContext[];
-  wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[];
-  nearestBotWholeCommentAfter?: ResolvedWholeCommentTimelineEntry;
-  nearestBotWholeCommentBefore?: ResolvedWholeCommentTimelineEntry;
-}> {
+) {
   const [metaResponse, commentResponse] = await Promise.all([
     requestFeishuOpenApi<FeishuDriveMetaBatchQueryResponse>({
       client: params.client,
@@ -606,15 +593,12 @@ async function fetchDriveCommentContext(
       `count=${embeddedReplies.length} summary=${summarizeCommentRepliesForLog(embeddedReplies)}`,
   );
   const embeddedTargetReply = params.replyId
-    ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+    ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId)
     : embeddedReplies.at(-1);
 
   let replies = embeddedReplies;
-  let fetchedMatchedReply = params.replyId
-    ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
-    : undefined;
-  const needsExtraReplies =
-    !embeddedTargetReply || replies.length === 0 || commentCard?.has_more === true;
+  let fetchedMatchedReply = params.replyId ? embeddedTargetReply : undefined;
+  const needsExtraReplies = !embeddedTargetReply || commentCard?.has_more === true;
   if (needsExtraReplies) {
     params.logger?.(
       `feishu[${params.accountId}]: fetching extra comment replies comment=${params.commentId} ` +
@@ -633,7 +617,7 @@ async function fetchDriveCommentContext(
       );
       replies = fetched.items;
       fetchedMatchedReply = params.replyId
-        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId)
         : undefined;
     }
     if (params.replyId && !embeddedTargetReply && !fetchedMatchedReply) {
@@ -673,7 +657,7 @@ async function fetchDriveCommentContext(
 
   const rootReply = replies[0] ?? embeddedReplies[0];
   const targetReply = params.replyId
-    ? (embeddedTargetReply ?? fetchedMatchedReply ?? undefined)
+    ? (embeddedTargetReply ?? fetchedMatchedReply)
     : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
   const matchSource = params.replyId
     ? embeddedTargetReply
@@ -878,8 +862,8 @@ function buildDriveCommentSurfacePrompt(
   if (params.isWholeComment === true) {
     lines.push("This is a whole-document comment.");
   }
-  if (params.replyId?.trim()) {
-    lines.push(`reply_id: ${params.replyId.trim()}`);
+  if (params.replyId) {
+    lines.push(`reply_id: ${params.replyId}`);
   }
   if (params.targetReplyContent?.semanticText) {
     lines.push(

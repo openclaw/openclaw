@@ -305,11 +305,6 @@ export class SidebarPeopleRuntime {
     this.portal.mount(active.row, card, "horizontal", true, () => render(nothing, card));
   }
 
-  private returnFocus(): void {
-    this.portal.returnFocus(this.active?.trigger ?? null);
-    this.portal.focusInside = document.activeElement === this.active?.trigger;
-  }
-
   private readonly outsideInteraction = (event: Event) => {
     if (
       event.target instanceof Node &&
@@ -326,7 +321,8 @@ export class SidebarPeopleRuntime {
       event.preventDefault();
       event.stopPropagation();
       if (this.portal.card?.contains(document.activeElement)) {
-        this.returnFocus();
+        this.portal.returnFocus(this.active?.trigger ?? null);
+        this.portal.focusInside = document.activeElement === this.active?.trigger;
       }
       this.close();
     }

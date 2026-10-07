@@ -37,7 +37,6 @@ import {
   createBackupResourcePlan,
   type BackupAgentRoot,
   type BackupRegenerableKind,
-  type BackupResourcePlan,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
@@ -89,17 +88,6 @@ type SkippedBackupAsset = {
   displayPath: string;
   reason: BackupSkipReason;
   coveredBy?: string;
-};
-
-type BackupPlan = {
-  configCapture?: BackupConfigCapture;
-  stateDir: string;
-  configPath: string;
-  oauthDir: string;
-  workspaceDirs: string[];
-  resources: BackupResourcePlan;
-  included: BackupAsset[];
-  skipped: SkippedBackupAsset[];
 };
 
 type BackupAssetCandidate = {
@@ -173,7 +161,7 @@ async function resolveBackupPlanFromPaths(params: {
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = params.stateDir;
@@ -240,7 +228,7 @@ async function resolveBackupPlanFromPaths(params: {
       included: exists
         ? [{ ...asset, archivePath: buildBackupArchivePath(archiveRoot, sourcePath) }]
         : [],
-      skipped: exists ? [] : [{ ...asset, reason: "missing" }],
+      skipped: exists ? [] : [{ ...asset, reason: "missing" as const }],
     };
   }
 
@@ -551,7 +539,7 @@ export async function resolveBackupPlanFromDisk(
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
-): Promise<BackupPlan> {
+) {
   if (params.onlyConfig) {
     return await resolveBackupPlanFromState(params);
   }
@@ -563,7 +551,7 @@ async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
-}): Promise<BackupPlan> {
+}) {
   const includeWorkspace = params.includeWorkspace ?? true;
   const onlyConfig = params.onlyConfig ?? false;
   const stateDir = resolveStateDir();

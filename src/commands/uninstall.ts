@@ -1,6 +1,3 @@
-// Implements `openclaw uninstall`.
-// Handles interactive scope selection, service removal, state/workspace cleanup, and macOS app cleanup.
-
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
@@ -85,7 +82,6 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<bool
   return result.ok;
 }
 
-/** Runs the uninstall flow for selected service/state/workspace/app scopes. */
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const scopes = new Set(
     (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),

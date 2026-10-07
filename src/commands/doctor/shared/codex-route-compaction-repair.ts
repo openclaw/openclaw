@@ -146,7 +146,6 @@ function rewriteLosslessCompactionModel(
       agentPath: params.path,
       agentId: params.agentId,
       modelRef: inheritedCanonicalModel,
-      isDefaults: params.path === "agents.defaults",
       preRepairCfg: params.preRepairCfg,
       changes: params.runtimePolicyChanges,
       env: params.env,
@@ -166,7 +165,6 @@ function preserveCodexRuntimePolicyForHits(
       agentId: params.agentId,
       modelRef: hit.canonicalModel,
       legacyModelRef: hit.model,
-      isDefaults: params.path === "agents.defaults",
       preRepairCfg: params.preRepairCfg,
       changes: params.runtimePolicyChanges,
       env: params.env,
@@ -336,7 +334,6 @@ function preserveMigratedLosslessCodexRuntimePolicy(params: {
       agentPath: ownerPath,
       agentId: agentIdFromAgentPath(ownerPath),
       modelRef: params.summaryModel,
-      isDefaults: ownerPath === "agents.defaults",
       changes: params.changes,
       env: params.env,
     });

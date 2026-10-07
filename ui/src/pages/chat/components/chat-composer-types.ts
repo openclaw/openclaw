@@ -44,9 +44,7 @@ import type { SkillMenuState } from "./chat-composer-skill-menu.ts";
 import type { SlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatPermissionPickerProps } from "./chat-permission-picker.ts";
 
-/** One shape for queued-row edit state and actions. */
 type ChatQueuedEditProps = {
-  /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
   editingMentions?: readonly HumanMention[];

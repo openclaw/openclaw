@@ -82,12 +82,12 @@ function findSseEventBoundary(
 }
 
 async function cancelReaderBestEffort(
-  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+  reader: ReadableStreamDefaultReader<Uint8Array>,
   reason?: unknown,
 ): Promise<void> {
   // Reader cancellation is cleanup. An upstream cancel failure must not replace
   // the wrapper's authoritative stream error or downstream cancellation.
-  await reader?.cancel(reason).catch(() => undefined);
+  await reader.cancel(reason).catch(() => undefined);
 }
 
 function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Response {
@@ -95,18 +95,15 @@ function capNonOkResponseBodyLazily(response: Response, maxBytes: number): Respo
   if (!source) {
     return response;
   }
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const reader = source.getReader();
   let total = 0;
   // Own the reader: Node can leak an internal pipeThrough writer rejection when
   // downstream cancellation races the cap terminating the transform.
   const capped = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
     async pull(controller) {
       try {
-        const chunk = await reader?.read();
-        if (!chunk || chunk.done) {
+        const chunk = await reader.read();
+        if (chunk.done) {
           controller.close();
           return;
         }
@@ -149,18 +146,15 @@ function sanitizeOpenAISdkSseResponse(
     const source = response.body;
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const reader = source.getReader();
     let buffer = "";
     let totalBytes = 0;
     const sseBody = new ReadableStream<Uint8Array>({
-      start() {
-        reader = source.getReader();
-      },
       async pull(controller) {
         try {
           for (;;) {
-            const chunk = await reader?.read();
-            if (!chunk || chunk.done) {
+            const chunk = await reader.read();
+            if (chunk.done) {
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
@@ -203,7 +197,7 @@ function sanitizeOpenAISdkSseResponse(
   const source = response.body;
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  const reader = source.getReader();
   let buffer = "";
   let scanOffset = 0;
 
@@ -238,17 +232,14 @@ function sanitizeOpenAISdkSseResponse(
   };
 
   const sanitizedBody = new ReadableStream<Uint8Array>({
-    start() {
-      reader = source.getReader();
-    },
     async pull(controller) {
       try {
         for (;;) {
           if (enqueueSanitized(controller, "")) {
             return;
           }
-          const chunk = await reader?.read();
-          if (!chunk || chunk.done) {
+          const chunk = await reader.read();
+          if (chunk.done) {
             const tail = decoder.decode();
             if (tail) {
               enqueueSanitized(controller, tail);

@@ -127,7 +127,13 @@ final class StatusMenuRenderer: NSObject {
     }
 
     func reconcile(_ descriptor: StatusMenuDescriptor) {
-        let entries = self.flatten(descriptor)
+        var entries: [RenderEntry] = []
+        for section in descriptor.sections where !section.entries.isEmpty {
+            if !entries.isEmpty {
+                entries.append(.separator("separator.\(section.id)"))
+            }
+            entries.append(contentsOf: section.entries.map(RenderEntry.content))
+        }
         let liveItems = self.menu.items
 
         func matches(_ item: NSMenuItem, _ entry: RenderEntry) -> Bool {
@@ -166,17 +172,6 @@ final class StatusMenuRenderer: NSObject {
         for (offset, entry) in entries[prefix..<(entries.count - suffix)].enumerated() {
             self.menu.insertItem(self.makeItem(for: entry), at: prefix + offset)
         }
-    }
-
-    private func flatten(_ descriptor: StatusMenuDescriptor) -> [RenderEntry] {
-        var entries: [RenderEntry] = []
-        for section in descriptor.sections where !section.entries.isEmpty {
-            if !entries.isEmpty {
-                entries.append(.separator("separator.\(section.id)"))
-            }
-            entries.append(contentsOf: section.entries.map(RenderEntry.content))
-        }
-        return entries
     }
 
     private func makeItem(for entry: RenderEntry) -> NSMenuItem {
@@ -287,11 +282,8 @@ final class StatusMenuRenderer: NSObject {
         item.keyEquivalent = ""
 
         switch action {
-        case .settings:
-            item.keyEquivalent = ","
-            item.keyEquivalentModifierMask = [.command]
-        case .quit:
-            item.keyEquivalent = "q"
+        case .settings, .quit:
+            item.keyEquivalent = action == .settings ? "," : "q"
             item.keyEquivalentModifierMask = [.command]
         case .quickChat:
             if let shortcut = KeyboardShortcuts.getShortcut(for: .toggleQuickChat),

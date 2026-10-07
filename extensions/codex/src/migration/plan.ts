@@ -377,32 +377,19 @@ function normalizeExistingAllowDestructiveActions(
   return asBoolean(value);
 }
 
-function readExistingPluginPolicyRepairs(
-  config: MigrationProviderContext["config"],
-): Record<string, Record<string, unknown>> {
-  return Object.fromEntries(
-    Object.entries(readExistingCodexPluginEntries(config)).flatMap(([configKey, entry]) => {
-      const pluginEntry = isRecord(entry) ? entry : undefined;
-      if (pluginEntry?.allow_destructive_actions !== "on-request") {
-        return [];
-      }
-      return [[configKey, { ...pluginEntry, allow_destructive_actions: "auto" }]];
-    }),
-  );
-}
-
 export function buildCodexPluginsConfigValue(
   entries: readonly CodexPluginMigrationConfigEntry[],
   config: MigrationProviderContext["config"],
 ) {
-  const plugins: Record<string, Record<string, unknown>> = {
-    ...readExistingPluginPolicyRepairs(config),
-    ...Object.fromEntries(
-      entries
-        .toSorted((a, b) => a.configKey.localeCompare(b.configKey))
-        .map((entry) => [entry.configKey, pluginConfigValue(entry)]),
-    ),
-  };
+  const plugins = new Map<string, Record<string, unknown>>();
+  for (const [key, entry] of Object.entries(readExistingCodexPluginEntries(config))) {
+    if (isRecord(entry) && entry.allow_destructive_actions === "on-request") {
+      plugins.set(key, { ...entry, allow_destructive_actions: "auto" });
+    }
+  }
+  for (const entry of entries.toSorted((a, b) => a.configKey.localeCompare(b.configKey))) {
+    plugins.set(entry.configKey, pluginConfigValue(entry));
+  }
   return {
     enabled: true,
     config: {
@@ -415,7 +402,7 @@ export function buildCodexPluginsConfigValue(
               "allow_destructive_actions",
             ]),
           ) ?? true,
-        plugins,
+        plugins: Object.fromEntries(plugins),
       },
     },
   };

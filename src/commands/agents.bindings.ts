@@ -11,13 +11,13 @@ import { isRouteBinding, listRouteBindings } from "../config/bindings.js";
 import type { AgentRouteBinding } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPluginContributionIds } from "../plugins/plugin-registry.js";
-import { DEFAULT_ACCOUNT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAccountId, normalizeAgentId } from "../routing/session-key.js";
 import type { ChannelChoice } from "./onboard-types.js";
 
 function bindingMatchKey(match: AgentRouteBinding["match"]) {
-  const accountId = normalizeOptionalString(match.accountId) || DEFAULT_ACCOUNT_ID;
+  const accountId = normalizeOptionalString(match.accountId);
   const identityKey = bindingMatchIdentityKey(match);
-  return JSON.stringify([identityKey, accountId]);
+  return JSON.stringify([identityKey, accountId === "*" ? "*" : normalizeAccountId(accountId)]);
 }
 
 function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
@@ -32,16 +32,7 @@ function bindingMatchIdentityKey(match: AgentRouteBinding["match"]) {
   ]);
 }
 
-export function applyAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  added: AgentRouteBinding[];
-  updated: AgentRouteBinding[];
-  skipped: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function applyAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = [...listRouteBindings(cfg)];
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const existingMatchMap = new Map<string, string>();
@@ -119,15 +110,7 @@ export function applyAgentBindings(
   };
 }
 
-export function removeAgentBindings(
-  cfg: OpenClawConfig,
-  bindings: AgentRouteBinding[],
-): {
-  config: OpenClawConfig;
-  removed: AgentRouteBinding[];
-  missing: AgentRouteBinding[];
-  conflicts: Array<{ binding: AgentRouteBinding; existingAgentId: string }>;
-} {
+export function removeAgentBindings(cfg: OpenClawConfig, bindings: AgentRouteBinding[]) {
   const existingRoutes = listRouteBindings(cfg);
   const nonRouteBindings = (cfg.bindings ?? []).filter((binding) => !isRouteBinding(binding));
   const removeIndexes = new Set<number>();

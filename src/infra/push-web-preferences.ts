@@ -101,23 +101,19 @@ function normalizeQuietHours(value: unknown) {
   };
 }
 
-function normalizeCategoryDefaults(value: unknown): WebPushNotificationPreferences["categories"] {
-  const source = isRecord(value) ? value : {};
-  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
-  for (const key of CATEGORY_KEYS) {
-    if (typeof source[key] === "boolean") {
-      categories[key] = source[key];
-    }
-  }
-  return categories;
-}
-
 export function normalizeWebPushNotificationPreferences(
   value: unknown,
 ): WebPushNotificationPreferences {
   const source = isRecord(value) ? value : {};
+  const categorySource = isRecord(source.categories) ? source.categories : {};
+  const categories = { ...DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.categories };
+  for (const key of CATEGORY_KEYS) {
+    if (typeof categorySource[key] === "boolean") {
+      categories[key] = categorySource[key];
+    }
+  }
   return {
-    categories: normalizeCategoryDefaults(source.categories),
+    categories,
     detailLevel:
       detailLevel(source.detailLevel) ?? DEFAULT_WEB_PUSH_NOTIFICATION_PREFERENCES.detailLevel,
     quietHours:

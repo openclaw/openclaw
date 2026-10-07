@@ -482,7 +482,7 @@ impl Routing {
 
     fn document_failed(&mut self, label: &str, lifetime: &str) -> Option<DocumentEvent> {
         let event = self.document_event(label, lifetime)?;
-        if !self.document_event_current(&event) {
+        if self.closing {
             return None;
         }
         let doc = self.windows.get_mut(label)?.document.as_mut()?;
@@ -866,25 +866,21 @@ impl Routing {
             self.upgrade_selection(&intent, explicit);
             return SelectionDisposition::Pending;
         }
-        let loading = self.windows.get(label).is_some_and(|route| {
-            route.target == target
-                && route.document.as_ref().is_some_and(|doc| {
-                    doc.completion.is_some()
-                        && doc.nonce.is_none()
-                        && doc.phase != NavigationPhase::Failed
-                })
-        });
-        if loading {
+        let loading = self
+            .windows
+            .get_mut(label)
+            .filter(|route| route.target == target)
+            .and_then(|route| route.document.as_mut())
+            .filter(|doc| {
+                doc.completion.is_some()
+                    && doc.nonce.is_none()
+                    && doc.phase != NavigationPhase::Failed
+            });
+        if let Some(doc) = loading {
             if explicit {
                 self.selection_sequence = self.selection_sequence.wrapping_add(1);
                 self.selection_target = Some(target.to_string());
-                if let Some(doc) = self
-                    .windows
-                    .get_mut(label)
-                    .and_then(|route| route.document.as_mut())
-                {
-                    doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
-                }
+                doc.completion = Some(SelectionCompletion::Explicit(self.selection_sequence));
             }
             return SelectionDisposition::Pending;
         }

@@ -59,20 +59,30 @@ export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
 
   constructor(
-    message: string,
+    message: string | { message: string; failureFacts: UpdateFailureFact[] },
     cause: unknown,
     inspectionReason?: ServiceInspectionReason,
     code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   ) {
-    super(inspectionReason ? formatServiceInspectionReason(inspectionReason) : message, { cause });
+    super(
+      typeof message === "string"
+        ? inspectionReason
+          ? formatServiceInspectionReason(inspectionReason)
+          : message
+        : message.message,
+      { cause },
+    );
     this.name = "GatewayServiceUpdateOwnershipError";
-    this.failureFacts = [
-      createUpdateFailureFact({
-        check: "managed-service",
-        code: inspectionReason ?? code ?? "service-ownership-unverified",
-        message: this.message,
-      }),
-    ];
+    this.failureFacts =
+      typeof message !== "string"
+        ? message.failureFacts
+        : [
+            createUpdateFailureFact({
+              check: "managed-service",
+              code: inspectionReason ?? code ?? "service-ownership-unverified",
+              message: this.message,
+            }),
+          ];
   }
 }
 

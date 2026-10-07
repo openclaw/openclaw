@@ -47,15 +47,13 @@ internal class MessageSpeechClient(
 ) : MessageSpeechSynthesizing {
   override suspend fun synthesize(text: String): TalkSpeakAudio? {
     val response =
-      try {
+      runCatchingCancellable {
         requestDetailed(
           "tts.speak",
           buildJsonObject { put("text", text) }.toString(),
           60_000,
         )
-      } catch (err: CancellationException) {
-        throw err
-      } catch (err: Throwable) {
+      }.getOrElse { err ->
         Log.d(TAG, "tts.speak request failed: ${err.message ?: err::class.simpleName}")
         return null
       }
@@ -162,12 +160,10 @@ internal class MessageSpeechController(
 
   private suspend fun playClip(clip: TalkSpeakAudio?): Boolean {
     if (clip == null) return false
-    return try {
+    return runCatchingCancellable {
       player.play(clip)
       true
-    } catch (err: CancellationException) {
-      throw err
-    } catch (err: Throwable) {
+    }.getOrElse { err ->
       Log.w(TAG, "clip playback failed: ${err.message ?: err::class.simpleName}")
       false
     }

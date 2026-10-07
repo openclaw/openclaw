@@ -209,7 +209,7 @@ export function applySkillEnvOverrides(params: { skills: SkillEntry[]; config?: 
       config,
       primaryEnv: entry.metadata?.primaryEnv,
       requiredEnv: entry.metadata?.requires?.env,
-      skillKey: resolveSkillKey(entry.skill, entry),
+      skillKey: resolveSkillKey(entry),
     });
   }
 

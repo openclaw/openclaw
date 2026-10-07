@@ -1,6 +1,5 @@
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 
-/** Current Codex marketplace, app, skill, hook, and config wire contracts. */
 export type CodexExperimentalFeatureListParams = {
   cursor?: string | null;
   limit?: number | null;
@@ -196,6 +195,7 @@ type CodexSkillMetadata = {
   path: string;
   scope: CodexSkillScope;
   enabled: boolean;
+  pluginId?: string | null;
 };
 
 type CodexSkillErrorInfo = {

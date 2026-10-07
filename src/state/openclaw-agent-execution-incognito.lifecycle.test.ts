@@ -16,6 +16,7 @@ import {
   prepareSessionForkTranscript,
   resolveSessionParentForkDecision,
 } from "../config/sessions/session-accessor.sqlite-parent-session.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type {
   IncognitoLifecycleEntry,
@@ -517,101 +518,138 @@ it("refuses an asynchronous fork grant before committing", async () => {
   ).toBeUndefined();
 });
 
-it("composes parent fork facades with token decisions, CLI bindings, and no caller-thread SQL", async () => {
-  const parentKey = "agent:main:dashboard:incognito-facade-parent";
-  const created = await actor.sessions.create(authority, {
-    sessionKey: parentKey,
-    entry: {
-      sessionId: "facade-parent",
-      updatedAt: 10_000,
-      incognito: true,
-      cliSessionBindings: {
-        synthetic: {
-          sessionId: "native-parent",
-          resumeCheckpointId: "checkpoint",
-          forceReuse: true,
-        },
-      },
-    },
-  });
-  assert(created.entry);
-  const parent = { sessionKey: parentKey, entry: created.entry };
-  const appended = await append(parent, "inherited facade answer");
-  assert(appended.ok && appended.value.append);
-  const childKey = "agent:main:dashboard:incognito-facade-child";
-  const binding = { source: { actor, authority, sessionKey: parentKey } };
-  const registry = createEmptyPluginRegistry();
-  registry.cliBackends.push({
-    pluginId: "synthetic-fork",
-    source: "test",
-    backend: {
-      id: "synthetic",
-      config: { command: "synthetic", forkArg: "--fork", resumeAtArg: "--resume-at" },
-    },
-  });
-  markPluginRegistryActive(registry);
+it("deletes only the bound lifecycle target and preserves stale-entry refusal without caller SQL", async () => {
+  const target = await create("bound-delete");
+  const sibling = await create("bound-delete-sibling");
+  const params = {
+    agentId: actor.agentId,
+    env,
+    storePath: actor.path,
+    target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+    archiveTranscript: false,
+    deleteTranscriptWithoutArchive: true,
+    deleteDeliveryArtifacts: true,
+    expectedEntry: target.entry,
+  };
   const sql = observeHostDataSql();
   try {
-    const params = {
-      storePath: actor.path,
-      parentEntry: parent.entry,
-      parentSessionKey: parentKey,
-      sessionKey: childKey,
-    };
-    expect(await resolveSessionParentForkDecision(params, binding)).toMatchObject({
-      status: "fork",
-    });
-    const prepared = await prepareSessionForkTranscript(params, binding);
-    expect(prepared.status).toBe("prepared");
-    const entryParams: ParentForkEntryParams = {
-      storePath: actor.path,
-      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey, parentKey] },
-      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey, childKey] },
-      fallbackEntry: { sessionId: "placeholder", updatedAt: 10_000, incognito: true },
-    };
-    const fork = await withPluginRuntimeRegistryScope(registry, () =>
-      forkSessionEntryFromParentTargetWithPatch(
-        entryParams,
-        { forked: { label: "Forked child" } },
-        binding,
-      ),
-    );
-    assert(fork.status === "forked");
-    expect(fork.sessionEntry).toMatchObject({
-      label: "Forked child",
-      forkSource: { sessionKey: parentKey, sessionId: parent.entry.sessionId },
-      cliSessionBindings: {
-        synthetic: {
-          sessionId: "native-parent",
-          resumeCheckpointId: "checkpoint",
-          forkNextResume: true,
+    await withIncognitoSessionActor(actor, async () => {
+      expect(await deleteSessionEntryLifecycle({ ...params, expectedUpdatedAt: -1 })).toMatchObject(
+        {
+          deleted: false,
+          expectedEntryMismatch: true,
         },
-      },
-    });
-    expect(fork.sessionEntry.cliSessionBindings?.synthetic?.forceReuse).toBeUndefined();
-    const appendedChild = await append(
-      { sessionKey: childKey, entry: fork.sessionEntry },
-      "child answer",
-    );
-    assert(appendedChild.ok && appendedChild.value.append);
-    expect(appendedChild.value.append.effectiveParentId).toBe(appended.value.append.messageId);
-    expect(
-      await forkSessionEntryFromParentTargetWithPatch(
-        entryParams,
-        { skipExisting: true, skipped: { label: "Skipped existing" } },
-        binding,
-      ),
-    ).toMatchObject({
-      status: "skipped",
-      reason: "existing-entry",
-      sessionEntry: { sessionId: fork.sessionEntry.sessionId, label: "Skipped existing" },
+      );
+      const deleting = deleteSessionEntryLifecycle(params);
+      params.target.canonicalKey = sibling.sessionKey;
+      params.target.storeKeys[0] = sibling.sessionKey;
+      expect(await deleting).toMatchObject({
+        deleted: true,
+        deletedSessionId: target.entry.sessionId,
+        archivedTranscripts: [],
+      });
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: sibling.sessionKey })).entry?.sessionId,
+      ).toBe(sibling.entry.sessionId);
     });
     expect(sql.queries).toEqual([]);
   } finally {
     sql.restore();
-    markPluginRegistryRetired(registry);
   }
 });
+
+it("composes parent fork facades with token decisions, CLI bindings, and no caller-thread SQL", async () =>
+  withIncognitoSessionActor(actor, async () => {
+    const parentKey = "agent:main:dashboard:incognito-facade-parent";
+    const created = await actor.sessions.create(authority, {
+      sessionKey: parentKey,
+      entry: {
+        sessionId: "facade-parent",
+        updatedAt: 10_000,
+        incognito: true,
+        cliSessionBindings: {
+          synthetic: {
+            sessionId: "native-parent",
+            resumeCheckpointId: "checkpoint",
+            forceReuse: true,
+          },
+        },
+      },
+    });
+    assert(created.entry);
+    const parent = { sessionKey: parentKey, entry: created.entry };
+    const appended = await append(parent, "inherited facade answer");
+    assert(appended.ok && appended.value.append);
+    const childKey = "agent:main:dashboard:incognito-facade-child";
+    const registry = createEmptyPluginRegistry();
+    registry.cliBackends.push({
+      pluginId: "synthetic-fork",
+      source: "test",
+      backend: {
+        id: "synthetic",
+        config: { command: "synthetic", forkArg: "--fork", resumeAtArg: "--resume-at" },
+      },
+    });
+    markPluginRegistryActive(registry);
+    const sql = observeHostDataSql();
+    try {
+      const params = {
+        storePath: actor.path,
+        parentEntry: parent.entry,
+        parentSessionKey: parentKey,
+        sessionKey: childKey,
+      };
+      expect(await resolveSessionParentForkDecision(params)).toMatchObject({
+        status: "fork",
+      });
+      const prepared = await prepareSessionForkTranscript(params);
+      expect(prepared.status).toBe("prepared");
+      const entryParams: ParentForkEntryParams = {
+        storePath: actor.path,
+        parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey, parentKey] },
+        sessionTarget: { canonicalKey: childKey, storeKeys: [childKey, childKey] },
+        fallbackEntry: { sessionId: "placeholder", updatedAt: 10_000, incognito: true },
+      };
+      const fork = await withPluginRuntimeRegistryScope(registry, () =>
+        forkSessionEntryFromParentTargetWithPatch(entryParams, {
+          forked: { label: "Forked child" },
+        }),
+      );
+      assert(fork.status === "forked");
+      expect(fork.sessionEntry).toMatchObject({
+        label: "Forked child",
+        forkSource: { sessionKey: parentKey, sessionId: parent.entry.sessionId },
+        cliSessionBindings: {
+          synthetic: {
+            sessionId: "native-parent",
+            resumeCheckpointId: "checkpoint",
+            forkNextResume: true,
+          },
+        },
+      });
+      expect(fork.sessionEntry.cliSessionBindings?.synthetic?.forceReuse).toBeUndefined();
+      const appendedChild = await append(
+        { sessionKey: childKey, entry: fork.sessionEntry },
+        "child answer",
+      );
+      assert(appendedChild.ok && appendedChild.value.append);
+      expect(appendedChild.value.append.effectiveParentId).toBe(appended.value.append.messageId);
+      expect(
+        await forkSessionEntryFromParentTargetWithPatch(entryParams, {
+          skipExisting: true,
+          skipped: { label: "Skipped existing" },
+        }),
+      ).toMatchObject({
+        status: "skipped",
+        reason: "existing-entry",
+        sessionEntry: { sessionId: fork.sessionEntry.sessionId, label: "Skipped existing" },
+      });
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      markPluginRegistryRetired(registry);
+    }
+  }));
 
 it.each([false, true])(
   "composes transcript-only forks with token refusal and commit authority (cross-agent: %s)",

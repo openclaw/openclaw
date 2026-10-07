@@ -8,6 +8,7 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { buildRemoteCommand } from "../../agents/sandbox/remote-shell-command.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveEnvironmentValue } from "../../infra/process-env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -228,10 +229,6 @@ export function buildTerminalEnv(
   return env;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 /** Converts a policy-approved plan into the exact local PTY spawn. */
 export function resolveTerminalSpawnPlan(
   plan: TerminalLaunchPlan,
@@ -254,7 +251,7 @@ export function resolveTerminalSpawnPlan(
   return {
     agentId: plan.agentId,
     shell: plan.shell,
-    args: ["-il", "-c", command.map(shellQuote).join(" ")],
+    args: ["-il", "-c", buildRemoteCommand(command)],
     cwd,
   };
 }

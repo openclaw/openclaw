@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import { getRegistryWorktree } from "../agents/worktrees/registry.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";

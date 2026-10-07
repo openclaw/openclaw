@@ -710,16 +710,19 @@ describe("offline device placement abandonment", () => {
   });
 
   it("retains the durable decision when authorization closes after teardown", async () => {
-    const harness = createHarness(database, placements);
+    let revoked = false;
+    const harness = createHarness(database, placements, {
+      afterDestroy: () => {
+        revoked = true;
+      },
+    });
     const active = await harness.service.dispatch(REQUEST);
     harness.markEnvironmentNodeDeviceId("device-1");
     seedEnvironment(active);
-    let checks = 0;
 
     await expect(
       harness.service.move(requestFor(active), undefined, () => {
-        checks += 1;
-        if (checks === 2) {
+        if (revoked) {
           throw new Error("session access revoked after teardown");
         }
       }),

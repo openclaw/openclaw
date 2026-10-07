@@ -508,7 +508,9 @@ describe("frozen admission upgrade Docker aliases", () => {
       const omitted =
         lane === "update-first-hop-compat" ? [UPDATE_FIRST_HOP_MISSING_LOAD_PATH_LANE] : [];
       expect(record.docker).toEqual({
-        lanes: requestedLanes.filter((requested) => !omitted.includes(requested)),
+        lanes: requestedLanes
+          .filter((requested) => !omitted.includes(requested))
+          .toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
         omitted,
         status: "ADMITTED",
       });

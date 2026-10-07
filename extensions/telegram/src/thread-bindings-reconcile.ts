@@ -1,5 +1,6 @@
 import {
   readAcpSessionEntry,
+  prepareAcpSessionEntryRead,
   type AcpSessionEntryPreparer,
   type PreparedAcpSessionEntryRead,
 } from "openclaw/plugin-sdk/acp-runtime";
@@ -42,7 +43,7 @@ async function reconcileTelegramAcpBindings(
   const staleSessionKeys = new Set<string>();
   for (const targetSessionKey of acpSessionKeys) {
     const input = { sessionKey: targetSessionKey };
-    const preparation = params.prepareSession?.(input);
+    const preparation = (params.prepareSession ?? prepareAcpSessionEntryRead)(input);
     if (!preparation && !isAcpSessionKey(targetSessionKey)) {
       continue;
     }

@@ -153,16 +153,7 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],

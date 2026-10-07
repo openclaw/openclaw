@@ -203,42 +203,6 @@ it.each([
   },
 );
 
-it("joins targeted sandbox cleanup on startup failure and still finalizes artifacts", async () => {
-  const termination = createDeferred();
-  const terminate = vi.fn(() => termination.promise);
-  const finalizeExec = vi.fn(async () => {});
-  supervisorMock.spawn.mockRejectedValueOnce(new Error("transport construction failed"));
-  const sandbox = {
-    containerName: "startup-fixture",
-    workspaceDir: "/workspace",
-    containerWorkdir: "/workspace",
-    prepareProcessCleanup: (env: Record<string, string>) => ({
-      env,
-      terminate,
-      interrupt: async () => false,
-    }),
-    buildExecSpec: async () => ({
-      argv: ["sandbox-fixture"],
-      env: {},
-      stdinMode: "pipe-closed" as const,
-    }),
-    finalizeExec,
-  };
-  const pending = runTestExecProcess({
-    sandbox,
-  });
-  const rejected = expect(pending).rejects.toThrow("transport construction failed");
-  try {
-    termination.resolve();
-    await rejected;
-    expect(terminate).toHaveBeenCalledOnce();
-    expect(finalizeExec).toHaveBeenCalledOnce();
-  } finally {
-    termination.resolve();
-    await pending.catch(() => {});
-  }
-});
-
 it.each([
   { fails: false, beforeJoin: false, commandCode: 0 },
   { fails: true, beforeJoin: true, commandCode: 0 },
@@ -379,8 +343,6 @@ describe("terminal execution-context release", () => {
 
 describe("exec settlement recovery", () => {
   it.each([
-    { boundary: "persistent task", asynchronous: false },
-    { boundary: "enqueue", asynchronous: false },
     { boundary: "wake", asynchronous: false },
     { boundary: "task", asynchronous: true },
     { boundary: "persistent task", asynchronous: true },

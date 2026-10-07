@@ -243,6 +243,7 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
+  let interruptedSessions = 0;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
   );
@@ -298,11 +299,13 @@ export async function runSessionStartupMigration(params: {
     let alreadyOpen: boolean | undefined;
     let handedOff = false;
     try {
+      const { repairLegacySessionRunOutcomes } =
+        await import("../../commands/doctor/shared/session-entry-rewrite.js");
       if (
         !(await runUnlessDeleted(async () => {
           alreadyOpen = isOpenClawAgentDatabaseOpen(databasePath);
+          const mainKey = params.cfg.session?.mainKey;
           try {
-            const mainKey = params.cfg.session?.mainKey;
             if (
               !registeredDatabases.has(`${options.agentId}\0${databasePath}`) ||
               !isCanonicalSqliteSessionMainKeyCurrent(options, mainKey)
@@ -319,6 +322,10 @@ export async function runSessionStartupMigration(params: {
               `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
             );
           }
+          interruptedSessions += await repairLegacySessionRunOutcomes(
+            { agentId: options.agentId, env, storePath: databasePath },
+            () => params.assertCurrent?.(),
+          );
         }))
       ) {
         return;
@@ -383,5 +390,8 @@ export async function runSessionStartupMigration(params: {
       throw firstError;
     }
   });
+  if (interruptedSessions > 0) {
+    params.log.info(`session: normalized ${interruptedSessions} legacy run(s) to interrupted`);
+  }
   params.assertCurrent?.();
 }

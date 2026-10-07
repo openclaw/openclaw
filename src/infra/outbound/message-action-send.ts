@@ -13,7 +13,6 @@ import {
 import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasLegacyInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -52,8 +51,8 @@ import {
   withSendNormalization,
 } from "./message-action-send-payload.js";
 import {
-  prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
+  resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
 import { maybeApplyTtsToMessageActionSendPayload } from "./message-action-tts.js";
 import {
@@ -70,7 +69,6 @@ function resolveReplyMediaAttachmentType(value: unknown): ReplyMediaAttachment["
 }
 
 export async function buildMessagePayload(params: {
-  cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   input: MessageActionInput;
   channel?: ChannelId;
@@ -249,7 +247,7 @@ export async function buildMessagePayload(params: {
       input.messageActionAuthorization?.scheduled ? input.assertDirectAdapterHandoff : undefined,
       () =>
         applyMessageCrossContextMarker({
-          cfg: params.cfg,
+          cfg: input.cfg,
           channel,
           action: "send",
           target,
@@ -374,7 +372,6 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
   const action: ChannelMessageActionName = "send";
   const to = readToolStringParam(params, "to", { required: true });
   let sendPayload = await buildMessagePayload({
-    cfg,
     actionParams: params,
     input,
     channel,
@@ -422,22 +419,37 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     toolContext: input.toolContext,
     matchesToolContextTarget: channelPlugin?.threading?.matchesToolContextTarget,
   });
-  const { resolvedThreadId, outboundRoute } = await prepareOutboundMirrorRoute({
+  const resolvedThreadId = resolveAndApplyOutboundThreadId(params, {
     cfg,
-    channel,
     to,
-    actionParams: params,
     accountId,
     toolContext: input.toolContext,
-    agentId,
-    currentSessionKey: input.sessionKey,
-    dryRun,
-    resolvedTarget,
     resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
     resolveReplyTransport: channelPlugin?.threading?.resolveReplyTransport,
     replyToIsExplicit: initialReply?.source === "explicit",
-    resolveOutboundSessionRoute,
   });
+  // Route resolution is read-only; persist only after the send succeeds so a
+  // failed probe cannot rebind the main session's delivery route.
+  const outboundRoute =
+    agentId && !dryRun
+      ? await resolveOutboundSessionRoute({
+          cfg,
+          channel,
+          agentId,
+          accountId,
+          target: to,
+          currentSessionKey: input.sessionKey,
+          resolvedTarget,
+          replyToId: readToolStringParam(params, "replyTo"),
+          threadId: resolvedThreadId,
+        })
+      : null;
+  if (outboundRoute) {
+    params["__sessionKey"] = outboundRoute.sessionKey;
+  }
+  if (agentId) {
+    params["__agentId"] = agentId;
+  }
   const canonicalReplyToId = readToolStringParam(params, "replyTo");
   const reply =
     initialReply && canonicalReplyToId && canonicalReplyToId !== initialReply.replyToId

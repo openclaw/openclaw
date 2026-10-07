@@ -91,7 +91,7 @@ function scheduleChatMetadataRefresh(callback: () => void) {
 }
 
 export async function refreshChatCommands(host: ChatPageHost) {
-  await refreshSlashCommands({
+  return refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),
     sessionKey: host.sessionKey,
@@ -193,6 +193,10 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
             applyCachedChatModelCatalog(host, binding);
           }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
+          if (update.scope === "session" && binding.catalogRequest) {
+            // The foreground picker already owns replacement of its retired catalog read.
+            return;
+          }
           void refreshChatMetadata(host, { automatic: true });
           return;
         }

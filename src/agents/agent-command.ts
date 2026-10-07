@@ -175,10 +175,7 @@ async function agentCommandInternal(
             cfg,
             agentId: sessionAgentId,
             sessionKey,
-            assertSourceCurrent: () => {
-              opts.abortSignal?.throwIfAborted();
-              opts.assertSourceCurrent?.();
-            },
+            currentSource: () => opts,
           })
         : undefined;
     if (
@@ -326,8 +323,7 @@ async function agentCommandInternal(
       ) {
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
-        const allowCreateRestartRecoveryEntry =
-          currentStoreEntry === undefined && sessionEntry === undefined;
+        const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
@@ -340,6 +336,7 @@ async function agentCommandInternal(
             sessionKey,
             runId,
             agentId: sessionAgentId,
+            lifecycleGeneration,
             opts,
             deliveryContext: currentRunDeliveryContext,
             now,
@@ -361,12 +358,7 @@ async function agentCommandInternal(
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(
-                    current,
-                    sessionId,
-                    runId,
-                    allowCreateRestartRecoveryEntry,
-                  ))
+                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
             );
           },
         });

@@ -1,3 +1,4 @@
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import type {
   ElevatedLevel,
@@ -58,7 +59,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
-import { patchSessionStatusModel } from "./session-status-model.js";
+import { patchSessionStatusModel, withActiveStatusModelIdentity } from "./session-status-model.js";
 import {
   listImplicitDefaultDirectFallbackKeys,
   resolveImplicitCurrentSessionFallback,
@@ -86,8 +87,6 @@ import {
 } from "./sessions-helpers.js";
 
 const loadCommandsStatusRuntime = createLazyPromise(() => import("../../status/status-text.js"));
-
-type ActiveStatusModelIdentity = { provider?: string; model: string };
 
 type SessionStatusRouteDetails = {
   origin?: SessionStatusOriginDetails;
@@ -188,22 +187,6 @@ function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): st
 \`\`\`json
 ${JSON.stringify(details, null, 2)}
 \`\`\``;
-}
-
-function withActiveStatusModelIdentity(
-  entry: SessionEntry,
-  identity: ActiveStatusModelIdentity,
-): SessionEntry {
-  const next: SessionEntry = {
-    ...entry,
-    model: identity.model,
-    ...(identity.provider ? { modelProvider: identity.provider } : {}),
-  };
-  delete next.providerOverride;
-  delete next.modelOverride;
-  delete next.modelOverrideSource;
-  delete next.modelOverrideRouteResolution;
-  return next;
 }
 
 export function createSessionStatusTool(opts?: {
@@ -408,6 +391,7 @@ export function createSessionStatusTool(opts?: {
       let resolved = deferTargetOwnerResolution
         ? undefined
         : readStatusEntry(requestedKeyInput, requestedKeyInput !== "current");
+      resolved = isPromiseLike(resolved) ? await resolved : resolved;
 
       if (
         !resolved &&
@@ -470,6 +454,7 @@ export function createSessionStatusTool(opts?: {
             mainKey,
           });
           resolved = readStatusEntry(requestedKeyInput);
+          resolved = isPromiseLike(resolved) ? await resolved : resolved;
         } else if (!resolvedSession.notFound || resolvedSession.status === "forbidden") {
           throw new Error(resolvedSession.error);
         }
@@ -477,10 +462,12 @@ export function createSessionStatusTool(opts?: {
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
         resolved = readStatusEntry(effectiveRequesterLookupKey, false);
+        resolved = isPromiseLike(resolved) ? await resolved : resolved;
       }
 
       if (!resolved && requestedKeyInput === "current") {
         resolved = readStatusEntry(requestedKeyInput, true);
+        resolved = isPromiseLike(resolved) ? await resolved : resolved;
       }
 
       if (!resolved && requestedKeyParam === undefined) {
@@ -489,6 +476,7 @@ export function createSessionStatusTool(opts?: {
           mainKey,
         })) {
           resolved = readStatusEntry(fallbackKey, true);
+          resolved = isPromiseLike(resolved) ? await resolved : resolved;
           if (resolved) {
             resolvedViaImplicitCurrentFallback = true;
             break;
@@ -757,4 +745,3 @@ export function createSessionStatusTool(opts?: {
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

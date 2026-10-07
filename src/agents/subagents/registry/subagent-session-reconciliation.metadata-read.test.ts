@@ -143,7 +143,6 @@ it("reads subagent lifecycle and policy metadata without decoding unrelated sess
         {
           sessionId: "successor",
           updatedAt: 4000,
-          status: "running",
         },
       );
       expect(await resolveSubagentSessionCompletion(params)).toBeNull();

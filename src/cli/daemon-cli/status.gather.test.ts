@@ -1686,7 +1686,7 @@ describe("gatherDaemonStatus", () => {
           expect(status.rpc?.authWarning).toContain(
             "gateway.auth.token SecretRef is unresolved in this command path",
           );
-          expect(status.rpc?.authWarning).toContain("probing without configured auth credentials");
+          expect(status.rpc?.authWarning).toContain("checking without configured auth credentials");
         }
         return;
       }
@@ -1769,7 +1769,7 @@ describe("gatherDaemonStatus", () => {
       "parse/handle error: Error: ENOSPC: no space left on device, write",
     );
     const output = capturePrintedDaemonStatus(status, { json: false }).errors;
-    expect(output).toContain("Connectivity probe: failed");
+    expect(output).toContain("Connectivity check: failed");
     expect(output).toContain("gateway closed (1000):");
     expect(output).toContain(
       "Last gateway error: parse/handle error: Error: ENOSPC: no space left on device, write",

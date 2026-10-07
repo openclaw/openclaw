@@ -54,7 +54,6 @@ import {
 
 const log = createSubsystemLogger("agents/model-registry");
 
-type MaxTokensSource = "configured" | "discovered";
 type RegistryProviderSources = Record<
   string,
   ProviderModelCatalog &
@@ -63,21 +62,30 @@ type RegistryProviderSources = Record<
     }
 >;
 
-function captureInventoryProvider(
-  provider: ProviderModelCatalog,
-  source: "static" | "composed",
+function captureProviderSource(
+  ...[provider, source]:
+    | [provider: RegistryProviderSources[string], source: "authored"]
+    | [provider: ProviderModelCatalog, source: "static" | "composed"]
 ): RegistryProviderSources[string] {
   return {
-    api: provider.api,
-    baseUrl: provider.baseUrl,
-    compat: provider.compat,
-    models: provider.models?.map(({ headers: _headers, ...model }) => ({
-      ...model,
-      api: model.api ?? provider.api,
-      baseUrl: model.baseUrl ?? provider.baseUrl,
-      maxTokensSource: source === "static" ? "discovered" : model.maxTokensSource,
-      compat: source === "static" ? mergeCompat(provider.compat, model.compat) : model.compat,
-    })),
+    ...(source === "authored"
+      ? provider
+      : { api: provider.api, baseUrl: provider.baseUrl, compat: provider.compat }),
+    models: provider.models?.map((model) => {
+      const { headers: _headers, ...inventory } = model;
+      const maxTokensSource: typeof model.maxTokensSource =
+        source === "composed"
+          ? model.maxTokensSource
+          : source === "static"
+            ? "discovered"
+            : "configured";
+      return Object.assign(source === "authored" ? model : inventory, {
+        api: model.api ?? provider.api,
+        baseUrl: model.baseUrl ?? provider.baseUrl,
+        maxTokensSource,
+        compat: source === "composed" ? model.compat : mergeCompat(provider.compat, model.compat),
+      });
+    }),
   };
 }
 
@@ -129,6 +137,10 @@ type ModelRegistryCatalogSnapshot = {
   oauthProviders: OAuthProviderInterface[];
 };
 
+function cloneMapValues<T extends object>(source: ReadonlyMap<string, T>): Map<string, T> {
+  return new Map([...source].map(([key, value]) => [key, { ...value }]));
+}
+
 function mergeCompat(
   baseCompat: Model["compat"],
   overrideCompat: Model["compat"],
@@ -139,26 +151,13 @@ function mergeCompat(
 
   const baseCompletions = baseCompat as OpenAICompletionsCompat | undefined;
   const overrideCompletions = overrideCompat as OpenAICompletionsCompat;
-  return {
-    ...baseCompat,
-    ...overrideCompat,
-    ...(baseCompletions?.openRouterRouting || overrideCompletions.openRouterRouting
-      ? {
-          openRouterRouting: {
-            ...baseCompletions?.openRouterRouting,
-            ...overrideCompletions.openRouterRouting,
-          },
-        }
-      : {}),
-    ...(baseCompletions?.vercelGatewayRouting || overrideCompletions.vercelGatewayRouting
-      ? {
-          vercelGatewayRouting: {
-            ...baseCompletions?.vercelGatewayRouting,
-            ...overrideCompletions.vercelGatewayRouting,
-          },
-        }
-      : {}),
-  };
+  const merged = { ...baseCompat, ...overrideCompletions };
+  for (const routing of ["openRouterRouting", "vercelGatewayRouting"] as const) {
+    if (baseCompletions?.[routing] || overrideCompletions[routing]) {
+      merged[routing] = { ...baseCompletions?.[routing], ...overrideCompletions[routing] };
+    }
+  }
+  return merged;
 }
 
 export class ModelRegistry {
@@ -203,9 +202,7 @@ export class ModelRegistry {
       this.sourceSnapshot = sourceSnapshot;
       this.baseCatalogSnapshot = sourceSnapshot;
       this.restoreSourceCatalog(sourceSnapshot);
-      this.registeredProviders = new Map(
-        [...source.registeredProviders].map(([provider, config]) => [provider, { ...config }]),
-      );
+      this.registeredProviders = cloneMapValues(source.registeredProviders);
       getAuthStorageOAuthProviderRegistry(authStorage).reset();
       for (const oauthProvider of sourceSnapshot.oauthProviders) {
         getAuthStorageOAuthProviderRegistry(authStorage).register(oauthProvider);
@@ -234,12 +231,8 @@ export class ModelRegistry {
   private captureCatalogSnapshot(): ModelRegistryCatalogSnapshot {
     return {
       models: structuredClone(this.models),
-      providerRequestConfigs: new Map(
-        [...this.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
-      ),
-      modelRequestHeaders: new Map(
-        [...this.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
-      ),
+      providerRequestConfigs: cloneMapValues(this.providerRequestConfigs),
+      modelRequestHeaders: cloneMapValues(this.modelRequestHeaders),
       loadError: this.loadError,
       pluginMetadataSnapshot: this.pluginMetadataSnapshot,
       oauthProviders: [...this.authStorage.getOAuthProviders()],
@@ -248,12 +241,8 @@ export class ModelRegistry {
 
   private restoreSourceCatalog(source: ModelRegistryCatalogSnapshot): void {
     this.models = structuredClone(source.models);
-    this.providerRequestConfigs = new Map(
-      [...source.providerRequestConfigs].map(([provider, config]) => [provider, { ...config }]),
-    );
-    this.modelRequestHeaders = new Map(
-      [...source.modelRequestHeaders].map(([key, headers]) => [key, { ...headers }]),
-    );
+    this.providerRequestConfigs = cloneMapValues(source.providerRequestConfigs);
+    this.modelRequestHeaders = cloneMapValues(source.modelRequestHeaders);
     this.loadError = source.loadError;
     this.pluginMetadataSnapshot = source.pluginMetadataSnapshot;
   }
@@ -278,9 +267,6 @@ export class ModelRegistry {
     return new ModelRegistry(authStorage, undefined, { sourceSnapshot: this }, publishedModels);
   }
 
-  /**
-   * Reload models from disk (models.json).
-   */
   refresh(): void {
     this.providerRequestConfigs.clear();
     this.modelRequestHeaders.clear();
@@ -371,7 +357,7 @@ export class ModelRegistry {
         : Object.fromEntries(
             Object.entries(this.staticProviderConfigs ?? {}).map(([provider, config]) => [
               provider,
-              captureInventoryProvider(config, "static"),
+              captureProviderSource(config, "static"),
             ]),
           ),
       capturedPluginResult.providers,
@@ -404,7 +390,7 @@ export class ModelRegistry {
         })),
       };
       providers[providerId] = inherited
-        ? mergeProviderModels(captureInventoryProvider(inherited, "composed"), current, {
+        ? mergeProviderModels(captureProviderSource(inherited, "composed"), current, {
             providerId,
             modelIdMatching: "exact",
             sourceModelFields: sourceFields,
@@ -528,7 +514,6 @@ export class ModelRegistry {
       this.validateConfig(configForUse);
 
       const generated = options.requireGeneratedCatalog === true;
-      const maxTokensSource: MaxTokensSource = generated ? "discovered" : "configured";
       let sourceProviders: RegistryProviderSources = {};
       for (const [providerName, providerConfig] of Object.entries(configForUse.providers)) {
         if (!generated && (providerConfig.models ?? []).length > 0) {
@@ -536,25 +521,9 @@ export class ModelRegistry {
         }
         // Generated catalogs supply inventory, never request authority. Record the
         // source before merging so their headers cannot replace an authored row's.
-        sourceProviders[providerName] = {
-          ...(generated
-            ? {
-                api: providerConfig.api,
-                baseUrl: providerConfig.baseUrl,
-                compat: providerConfig.compat,
-              }
-            : providerConfig),
-          models: providerConfig.models?.map((model) => {
-            const { headers: _headers, ...inventory } = model;
-            // Capture route and effective compatibility before provider defaults merge.
-            return Object.assign(generated ? inventory : model, {
-              maxTokensSource,
-              api: model.api ?? providerConfig.api,
-              baseUrl: model.baseUrl ?? providerConfig.baseUrl,
-              compat: mergeCompat(providerConfig.compat, model.compat),
-            });
-          }),
-        };
+        sourceProviders[providerName] = generated
+          ? captureProviderSource(providerConfig, "static")
+          : captureProviderSource(providerConfig, "authored");
       }
 
       const pluginCatalogErrors: string[] = [];
@@ -869,9 +838,6 @@ export class ModelRegistry {
     return providerApiKey ? resolveConfigValueUncached(providerApiKey) : undefined;
   }
 
-  /**
-   * Check if a model is using OAuth credentials (subscription).
-   */
   isUsingOAuth(model: Model): boolean {
     const cred = this.authStorage.get(model.provider);
     return cred?.type === "oauth";
@@ -888,7 +854,17 @@ export class ModelRegistry {
   registerProvider(providerName: string, config: ProviderConfigInput): void {
     this.validateProviderConfig(providerName, config);
     this.applyProviderConfig(providerName, config);
-    this.upsertRegisteredProvider(providerName, config);
+    const existing = this.registeredProviders.get(providerName);
+    if (!existing) {
+      this.registeredProviders.set(providerName, config);
+      return;
+    }
+    // Undefined registration fields preserve the stored provider configuration.
+    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
+      if (config[k] !== undefined) {
+        (existing as Record<string, unknown>)[k] = config[k];
+      }
+    }
   }
 
   /**
@@ -905,25 +881,6 @@ export class ModelRegistry {
     }
     this.registeredProviders.delete(providerName);
     this.refresh();
-  }
-
-  /**
-   * Upsert a provider config into registeredProviders.
-   * If the provider is already registered, defined values in the incoming config
-   * override existing ones; undefined values are preserved from the stored config.
-   * If the provider is not registered, the incoming config is stored as-is.
-   */
-  private upsertRegisteredProvider(providerName: string, config: ProviderConfigInput): void {
-    const existing = this.registeredProviders.get(providerName);
-    if (!existing) {
-      this.registeredProviders.set(providerName, config);
-      return;
-    }
-    for (const k of Object.keys(config) as (keyof ProviderConfigInput)[]) {
-      if (config[k] !== undefined) {
-        (existing as Record<string, unknown>)[k] = config[k];
-      }
-    }
   }
 
   private validateProviderConfig(providerName: string, config: ProviderConfigInput): void {

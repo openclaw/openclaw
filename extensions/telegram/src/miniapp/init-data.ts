@@ -1,4 +1,3 @@
-// Telegram Mini App init-data validation.
 import crypto from "node:crypto";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 

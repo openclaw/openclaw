@@ -184,6 +184,7 @@ jobs:
       run_check: ${{ steps.manifest.outputs.run_check }}
       run_pr_madge_import_cycles: ${{ steps.manifest.outputs.run_pr_madge_import_cycles }}
       run_pr_kysely_guardrails: ${{ steps.manifest.outputs.run_pr_kysely_guardrails }}
+      split_pr_guards: ${{ steps.manifest.outputs.split_pr_guards }}
       startup_corpus_node_revision: ${{ steps.manifest.outputs.startup_corpus_node_revision }}
       startup_corpus_test_files_json: ${{ steps.manifest.outputs.startup_corpus_test_files_json }}
       changed_core_test_paths_json: ${{ steps.manifest.outputs.changed_core_test_paths_json }}
@@ -1695,6 +1696,7 @@ jobs:
             pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
+        if: github.event_name == 'workflow_dispatch' && (startsWith(inputs.dispatch_id, 'full-release-validation-') || startsWith(inputs.dispatch_id, 'release-native-android-'))
         run: node .ci-harness/scripts/ci-production-audit.mjs
 
       - name: Setup differential guard dependencies
@@ -3674,6 +3676,7 @@ jobs:
           FORMAT_CHECK: ${{ needs.preflight.outputs.run_format_check }}
           RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           RUN_PR_KYSELY_GUARDRAILS: ${{ needs.preflight.outputs.run_pr_kysely_guardrails }}
+          SPLIT_PR_GUARDS: ${{ needs.preflight.outputs.split_pr_guards }}
           RELEASE_GATE: &release_gate ${{ inputs.release_gate && (needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') && 'true' || 'false' }}
           RUN_CONTROL_UI_I18N: ${{ needs.preflight.outputs.run_control_ui_i18n }}
           RUN_UI_TESTS: ${{ needs.preflight.outputs.run_ui_tests }}
@@ -3713,6 +3716,15 @@ jobs:
             fi
             finish_static_checks
           fi
+          run_architecture_guards() {
+            pnpm check:import-cycles
+            if [[ "${RUN_PR_MADGE_IMPORT_CYCLES:-false}" == "true" ]]; then
+              GOGC="${GOGC:-30}" GOMEMLIMIT="${GOMEMLIMIT:-3GiB}" pnpm check:madge-import-cycles
+            fi
+            if [[ "${RUN_PR_KYSELY_GUARDRAILS:-false}" == "true" ]]; then
+              pnpm lint:kysely
+            fi
+          }
           case "$TASK" in
             guards)
               if [ -z "${NARROW_CHECK_PATHS_JSON:-}" ]; then
@@ -3765,13 +3777,12 @@ jobs:
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
               pnpm lint:auth:pairing-account-scope
-              pnpm check:import-cycles
-              if [[ "${RUN_PR_MADGE_IMPORT_CYCLES:-false}" == "true" ]]; then
-                GOGC="${GOGC:-30}" GOMEMLIMIT="${GOMEMLIMIT:-3GiB}" pnpm check:madge-import-cycles
+              if [[ "${SPLIT_PR_GUARDS:-false}" != "true" ]]; then
+                run_architecture_guards
               fi
-              if [[ "${RUN_PR_KYSELY_GUARDRAILS:-false}" == "true" ]]; then
-                pnpm lint:kysely
-              fi
+              ;;
+            guards-architecture)
+              run_architecture_guards
               ;;
             npm-lock)
               if [[ "$SKIP_NPM_LOCK" == "true" ]]; then
@@ -4283,7 +4294,7 @@ jobs:
         with: *sdk_main_restore_inputs
 
       - name: Run additional check shard
-        if: matrix.group != 'guards' && matrix.group != 'dependencies'
+        if: matrix.group != 'guards' && matrix.group != 'guards-architecture' && matrix.group != 'dependencies'
         env:
           SDK_DIFF_BASE: ${{ needs.preflight.outputs.diff_base_revision }}
           SDK_DIFF_HEAD: ${{ needs.preflight.outputs.diff_head_revision }}
@@ -4301,11 +4312,12 @@ jobs:
         run: bash .ci-harness/scripts/ci-additional-checks.sh
 
       - name: Run independent checks
-        if: matrix.group == 'guards' || matrix.group == 'dependencies'
+        if: matrix.group == 'guards' || matrix.group == 'guards-architecture' || matrix.group == 'dependencies'
         env:
           TASK: ${{ matrix.group }}
           RUN_PR_MADGE_IMPORT_CYCLES: ${{ needs.preflight.outputs.run_pr_madge_import_cycles }}
           RUN_PR_KYSELY_GUARDRAILS: ${{ needs.preflight.outputs.run_pr_kysely_guardrails }}
+          SPLIT_PR_GUARDS: ${{ needs.preflight.outputs.split_pr_guards }}
           OPENCLAW_LOCAL_CHECK: "0"
           FROZEN_TARGET: *frozen_target
           HISTORICAL_TARGET: *historical_target

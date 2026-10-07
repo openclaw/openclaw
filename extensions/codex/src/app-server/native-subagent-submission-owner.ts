@@ -7,8 +7,6 @@ import {
 } from "./native-subagent-assignment.js";
 import { readNativeTurnEnd } from "./native-subagent-history-recovery.js";
 import type {
-  NativeModelInputRequest,
-  NativeModelSourceRequest,
   ParentOwner,
   ParentState,
   ChildState,
@@ -22,16 +20,11 @@ import {
 } from "./native-subagent-recovery-coordinator.js";
 import { delayForAttempt } from "./native-subagent-retry.js";
 import {
-  admitSubmissionModelInput,
-  acceptSubmissionModelInteraction,
   acceptNativeSubmission,
-  assertSubmissionModelInputsCurrent,
-  hasPendingSubmissionModelInput,
+  createNativeSubagentSubmissionCalls,
   hasSubmissionCallCustody,
-  observeSubmissionCall,
   observeSubmissionPredecessor,
   readObservedSubmissionTurn,
-  retireReceiverModelInputs,
   settleSubmissionModelInput,
   type NativeSubmissionCallDependencies,
   pruneSubmissionCalls,
@@ -89,10 +82,14 @@ export class CodexNativeSubagentSubmissionOwner {
   private readonly pending = new Map<ParentState, Map<string, SubmissionCustody>>();
   private readonly writes = new Map<ParentState, Set<Promise<void>>>();
   private readonly pollDelays: readonly number[];
+  readonly modelInputs: ReturnType<typeof createNativeSubagentSubmissionCalls>;
   private disposed = false;
 
   constructor(private readonly dependencies: SubmissionDependencies) {
     this.pollDelays = dependencies.recoveryPollDelaysMs ?? DEFAULT_RECOVERY_POLL_DELAYS_MS;
+    this.modelInputs = createNativeSubagentSubmissionCalls(this.calls, dependencies, (state) =>
+      this.isCurrent(state),
+    );
   }
 
   private isCurrent(state: ParentState): boolean {
@@ -129,60 +126,6 @@ export class CodexNativeSubagentSubmissionOwner {
       return false;
     }
     return true;
-  }
-
-  observeCall(state: ParentState, turnId: string | undefined, item: JsonObject): void {
-    observeSubmissionCall(state, turnId, item, this.calls, this.dependencies, () =>
-      this.isCurrent(state),
-    );
-  }
-
-  admitModelInput(
-    state: ParentState,
-    owner: ParentOwner,
-    request: NativeModelInputRequest,
-    pendingModelSources: number,
-    preparedOwner?: ParentOwner,
-  ): void {
-    admitSubmissionModelInput({
-      state,
-      owner,
-      request,
-      pendingModelSources,
-      preparedOwner,
-      calls: this.calls,
-      dependencies: this.dependencies,
-      isCurrent: () => this.isCurrent(state),
-    });
-  }
-
-  acceptInteraction(
-    state: ParentState,
-    turnId: string | undefined,
-    itemId: string | undefined,
-    threadId: string,
-    accept: (owner: ParentOwner) => void,
-  ): boolean {
-    return acceptSubmissionModelInteraction(
-      this.calls.get(state),
-      turnId,
-      itemId,
-      threadId,
-      accept,
-      this.dependencies,
-    );
-  }
-
-  hasPendingModelInput(request: NativeModelSourceRequest): boolean {
-    return hasPendingSubmissionModelInput(this.calls, request);
-  }
-
-  retireReceiverModelInputs(threadId: string): void {
-    retireReceiverModelInputs(this.calls, threadId, this.dependencies);
-  }
-
-  assertModelInputCurrent(threadId: string, owner: ParentOwner): void {
-    assertSubmissionModelInputsCurrent(this.calls.values(), threadId, owner);
   }
 
   observeOutput(state: ParentState, turnId: string | undefined, item: JsonObject): void {
@@ -305,9 +248,7 @@ export class CodexNativeSubagentSubmissionOwner {
     this.calls.delete(state);
     for (const custody of this.pending.get(state)?.values() ?? []) {
       custody.phase = "settled";
-      if (custody.timer) {
-        clearTimeout(custody.timer);
-      }
+      clearTimeout(custody.timer);
       custody.release();
       custody.completionCustody?.release();
     }
@@ -443,9 +384,7 @@ export class CodexNativeSubagentSubmissionOwner {
       return;
     }
     custody.phase = "promoting";
-    if (custody.timer) {
-      clearTimeout(custody.timer);
-    }
+    clearTimeout(custody.timer);
     // Native history owns execution. Keep its existing submission receipt until
     // the result is acknowledged; there is no task row to take restart custody.
   }
@@ -523,9 +462,7 @@ export class CodexNativeSubagentSubmissionOwner {
 
   private finishCustody(state: ParentState, custody: SubmissionCustody): void {
     custody.phase = "settled";
-    if (custody.timer) {
-      clearTimeout(custody.timer);
-    }
+    clearTimeout(custody.timer);
     const entries = this.pending.get(state);
     for (const [key, entry] of entries ?? []) {
       if (entry === custody) {

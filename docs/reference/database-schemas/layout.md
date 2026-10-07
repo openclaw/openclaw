@@ -74,6 +74,30 @@ so reactions from a previous reset instance remain inert.
 The table is not secret storage. See the
 [same-version contract](/reference/database-schemas/versioning#versioning-contract).
 
+### Session run outcomes and liveness
+
+The canonical session entry's optional `status` stores only `done`, `failed`,
+`killed`, `timeout`, or `interrupted`. Starting a run clears the previous outcome.
+`GatewaySessionRow.status` may also expose `running` or `queued`, derived from the
+run registry and queue owner rather than durable session metadata. Storage workers
+receive live session keys from their scheduling owner and revalidate protection
+before committing maintenance or cold-storage changes.
+
+Restart and crash recovery use the existing recovery claim, run-fence, reply-phase,
+and delivery fields. Eligible admissions arm their claim with the user-turn write,
+including turns without a channel route. An interrupted outcome alone does not
+authorize resumption or delivery. See [Restart recovery](/gateway/restart-recovery).
+
+Doctor and startup share a one-time normalization of legacy persisted `running`
+and `queued` entries to `interrupted`, before canonical session reads; verified legacy
+yields retain an unset outcome so their child continuation keeps ownership. Eligible
+legacy `running` entries acquire recovery custody if they lack a claim; existing
+claims, transcripts, and activity timestamps remain intact. This changes no table or schema
+version: the existing SQL status index still projects `interrupted` as `failed`;
+canonical entry JSON retains the distinct outcome. Older releases still infer
+activity from their persisted flag, so they cannot provide the new liveness or
+claim-only recovery behavior when reopened on these entries.
+
 ### Activity session recaps
 
 [Activity](/web/control-ui/settings#activity-tab) stores one optional `activitySummary` object in the existing `session_nodes.entry_json` session metadata. This is a reconstructible cache; the transcript remains canonical. The [approved persistence design](https://github.com/openclaw/openclaw/issues/147383) adds no SQL table, column, or database schema-version change. Current and `v2026.9.4` metadata serializers preserve unknown optional fields; unknown recap payload versions are treated as cache misses.
@@ -392,7 +416,7 @@ latest interrupted verification or correct its `abandoned` result to `succeeded`
 only after all recorded drivers are positively dead and fresh installed-build,
 serving-build, readiness, and generation checks agree. Recovery descriptors and
 recorded repair, failure, or rollback evidence prevent that correction. The transaction
-rechecks the complete row and latest-run identity after probing, then records the
+rechecks the complete row and latest-run identity after checking, then records the
 verification, outcome, and an explanatory warning together. Older rows without
 the target identity remain unchanged, and Doctor explains the missing evidence.
 This uses existing step and verification fields; schemas and rollback readers
@@ -439,7 +463,7 @@ This change requires no schema migration. See the
 
 [Managed worktree acceleration](/concepts/managed-worktrees#filesystem-acceleration) uses the first-use `worktree_templates` table in the shared state database. Each row records a reconstructible source template: repository and Git common directory, destination root, filesystem backend, artifact path, source commit, checkout content key, preparation status, and creation and last-use timestamps. The cache key allows one template per repository and destination root. The template contains no provisioned ignored files or repository setup output.
 
-The worktree service owns template creation, reuse, invalidation, and cleanup under its existing allocation lease. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Durable mutations recheck the lease inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
+The worktree service owns template creation, reuse, invalidation, and cleanup under a mutation lease for each template cache key. It reserves a `preparing` row before creating the artifact and publishes `ready` only after preparation completes. Persisted readers retain the generation while checkouts clone independently; cleanup and replacement defer while readers remain. Durable mutations recheck custody inside synchronous state transactions; filesystem work runs outside those transactions. Cleanup uses the reserved template ID so an old operation cannot delete its replacement. Templates are replaced when the commit or checkout policy changes and retired after seven days without use.
 
 The additive table is ensured on first use and does not change the numeric database schema version. Existing worktree and snapshot records retain their meaning; no existing checkout is migrated or moved. Template artifacts are reconstructible, while registered worktree contents and recovery snapshots retain their existing preservation rules.
 

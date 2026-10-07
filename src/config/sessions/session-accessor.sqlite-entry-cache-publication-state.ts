@@ -8,9 +8,15 @@ import type {
   SessionEntryReplacementPublication,
   SessionSharingEntry,
 } from "./session-accessor.sqlite-entry-cache.types.js";
+import { stageIncognitoSharingPublication } from "./session-accessor.sqlite-incognito-sharing.js";
 import {
+  projectSessionEntryPredicateChange,
+  publishRetainedSessionEntryPredicate,
+  publishRetainedSessionGeneration,
+  recordAcquiringSessionEntry,
   reconcileSessionSharingAcquisition,
   type CommittedSessionSharingFacts,
+  type PreparedSessionEntryPredicate,
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
@@ -25,10 +31,39 @@ export const pendingSessionEntryPublications = resolveGlobalSingleton(
   () => new Map<string, Set<PendingSessionEntryPublication>>(),
 );
 
+export function stageSessionSharingPublication(
+  database: SessionEntryCacheDatabase,
+  sessionKey: string,
+  change?: Extract<SessionRowFacts, { kind: "member" | "owner" }>,
+) {
+  const releaseIncognito = !database.db.location()
+    ? stageIncognitoSharingPublication(database.db, sessionKey)
+    : undefined;
+  const reads = [...(retainedSharingReads(database, sessionKey) ?? [])];
+  const token = {};
+  for (const read of reads) {
+    read.pending.add(token);
+    const predicate = read.predicate;
+    const postimage = predicate && change && projectSessionEntryPredicateChange(predicate, change);
+    // A known partial assignment may leave this reader's selected metadata unchanged.
+    if (predicate && (!postimage || !predicate.matches(postimage))) {
+      predicate.pending.add(token);
+    }
+  }
+  return () => {
+    releaseIncognito?.();
+    for (const read of reads) {
+      read.pending.delete(token);
+      read.predicate?.pending.delete(token);
+    }
+  };
+}
+
 export function recordCommittedSessionEntryPublication(
   database: SessionEntryCacheDatabase | string,
   sessionKey: string,
   entry: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  before?: PendingSessionEntryPublication,
 ): void {
   const identity =
     typeof database === "string" ? database : findOpenClawAgentDatabaseIdentity(database)?.identity;
@@ -37,6 +72,9 @@ export function recordCommittedSessionEntryPublication(
   }
   for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
     []) {
+    if (pending === before) {
+      break;
+    }
     pending.superseded.set(
       sessionKey,
       entry
@@ -49,7 +87,17 @@ export function recordCommittedSessionEntryPublication(
 export function recordCommittedSessionMetadataPublication(
   database: SessionEntryCacheDatabase,
   sessionKey: string,
+  change?: SessionRowFacts,
+  entry?: SessionEntry,
 ): void {
+  for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+    const postimage =
+      entry ??
+      (read.predicate && change
+        ? projectSessionEntryPredicateChange(read.predicate, change)
+        : undefined);
+    publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined);
+  }
   const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
   if (typeof identity === "string") {
     for (const pending of pendingSessionEntryPublications.get(`file:${identity}\0${sessionKey}`) ??
@@ -72,6 +120,19 @@ export function recordCommittedSessionOwnerPublication(
       pending.ownerChanges.set(sessionKey, structuredClone(change));
     }
   }
+}
+
+/** Commit receipts remain current only until their stored fields are superseded. */
+export function readCurrentSessionEntryProjection(
+  owner: PendingSessionEntryPublication,
+  replacement: SessionEntryReplacementPublication | undefined,
+  sessionKey: string,
+) {
+  return !owner.superseded.has(sessionKey) &&
+    !owner.metadataSuperseded.has(sessionKey) &&
+    !owner.projectionSuperseded.has(sessionKey)
+    ? replacement?.projection?.get(sessionKey)
+    : undefined;
 }
 
 export function applyPendingSessionEntryOwnerChanges(
@@ -100,11 +161,36 @@ export function applyPendingSessionEntryOwnerChanges(
   return { ...replacement, current };
 }
 
+export function publishRetainedSessionEntryChange(
+  database: SessionEntryCacheDatabase | string,
+  sessionKey: string,
+  entry: SessionSharingEntry | undefined,
+  previousIdentity: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined,
+  known: boolean,
+  metadataEntry?: SessionEntry,
+): void {
+  recordCommittedSessionEntryPublication(database, sessionKey, entry);
+  for (const read of retainedSharingReads(database, sessionKey) ?? []) {
+    publishRetainedSessionEntryPredicate(read, metadataEntry, known);
+    recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
+    publishRetainedSessionGeneration(read, entry, known);
+    const previous = read.facts;
+    read.facts =
+      entry &&
+      previous?.entry &&
+      previous.entry.sessionId === entry.sessionId &&
+      previous.entry.lifecycleRevision === entry.lifecycleRevision
+        ? { entry, membership: previous.membership }
+        : undefined;
+  }
+}
+
 /** The existing entry writer advances retained facts before any commit observer can reenter. */
 export function retainPreparedSessionSharingFacts(params: SessionSharingRetentionRequest) {
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
+    predicate: params.predicate,
     pending: new Set(),
     facts: initial && {
       entry: initial.entry,
@@ -118,8 +204,8 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
-  const pending = (membership: boolean) =>
-    read.pending.size > 0 ||
+  const pending = (membership: boolean, staged = read.pending) =>
+    staged.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
@@ -128,6 +214,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
           (membership && publication.membershipInvalidated.has(params.sessionKey))),
     );
   return {
+    hasPendingPublication: () => pending(false, read.predicate?.pending),
     prepareRead: (): Promise<void> | undefined => {
       // Publication begins only after writer admission; queued writers cannot block their owner.
       const completions = [...(pendingSessionEntryPublications.get(key) ?? [])].flatMap(
@@ -159,6 +246,51 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       if (reads.size === 0 && preparedSharingReads.get(key) === reads) {
         preparedSharingReads.delete(key);
       }
+    },
+  };
+}
+
+/** Exact reader consumers acknowledge refreshes before releasing their physical source. */
+export function retainPreparedSessionEntryPredicate(params: {
+  databaseIdentity: string;
+  sessionKey: string;
+  entry: SessionEntry | undefined;
+  matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
+}) {
+  const predicate: PreparedSessionEntryPredicate = {
+    entry: params.entry,
+    matches: (entry) => params.matches(params.entry, entry),
+    state: "current",
+    revision: 0,
+    pending: new Set(),
+  };
+  const retained = retainPreparedSessionSharingFacts({
+    ...params,
+    predicate,
+    membership: new Set(),
+  });
+  let active = true;
+  const canRefresh = () => active && predicate.state !== "changed";
+  return {
+    isCurrent: () =>
+      canRefresh() && predicate.state === "current" && !retained.hasPendingPublication(),
+    canRefresh,
+    captureRevision: () => predicate.revision,
+    acknowledge: (entry: SessionEntry | undefined, revision: number) => {
+      if (!canRefresh() || retained.hasPendingPublication() || revision !== predicate.revision) {
+        return false;
+      }
+      if (!predicate.matches(entry)) {
+        predicate.state = "changed";
+        return false;
+      }
+      predicate.entry = entry;
+      predicate.state = "current";
+      return true;
+    },
+    release: () => {
+      active = false;
+      retained.release();
     },
   };
 }

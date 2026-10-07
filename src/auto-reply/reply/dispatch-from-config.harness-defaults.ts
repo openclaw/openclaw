@@ -10,10 +10,8 @@ import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-r
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import {
-  captureSessionEntryReadScope,
-  readSessionEntryReadOnlyInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+import { captureSessionEntryReadScope } from "../../config/sessions/session-entry-read-request.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";

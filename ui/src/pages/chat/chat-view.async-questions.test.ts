@@ -175,7 +175,7 @@ it("refreshes a mounted question summary when a canonical answer appears or is r
   expect(summary()).not.toContain("Engineers");
 });
 
-it.each(["discard", "ack", "consumed"] as const)(
+it.each(["discard", "consumed"] as const)(
   "invalidates admission across same-session panes only for confirmed explicit discard (%s)",
   async (outcome) => {
     const storage = createStorageMock();

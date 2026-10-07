@@ -12,12 +12,12 @@ type PlacementTeardownStore = Pick<
   | "transition"
 >;
 
-export function completeRecoveredWorkspaceTeardown(params: {
-  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMove">;
+export async function completeRecoveredWorkspaceTeardown(params: {
+  placements: PlacementTeardownStore & Pick<WorkerSessionPlacementStore, "getPlacementMoveAsync">;
   placement: Extract<WorkerSessionPlacementRecord, { state: "active" | "draining" }>;
   turnClaim: WorkerSessionTurnClaim;
 }) {
-  const move = params.placements.getPlacementMove(params.placement.sessionId);
+  const move = await params.placements.getPlacementMoveAsync(params.placement.sessionId);
   return completeWorkerWorkspaceTeardown({
     placements: params.placements,
     turnClaim: params.turnClaim,
@@ -53,7 +53,7 @@ export async function completeWorkerWorkspaceTeardown(params: {
     throw new Error(`Session ${params.turnClaim.sessionId} did not enter reconciliation`);
   }
   if (params.operationId !== undefined) {
-    const completed = params.placements.completePlacementMoveSourceToLocal({
+    const completed = await params.placements.completePlacementMoveSourceToLocal({
       operationId: params.operationId,
       sessionId: reconciling.sessionId,
       expectedGeneration: reconciling.generation,

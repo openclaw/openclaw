@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Npm Prepublish Verify script supports OpenClaw repository automation.
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";

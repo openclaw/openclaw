@@ -24,7 +24,6 @@ type ConversationLabelAttempt = {
   phase: LabelModelPhase;
 };
 
-/** Inputs for generating a short conversation label from the configured utility model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;
@@ -135,6 +134,7 @@ async function runLabelAttempts(
         cfg: params.cfg,
       });
       const completion = await runIsolatedCompletion({
+        purpose: "conversation-label",
         config: params.cfg,
         provider: selection.runtimeProvider ?? selection.provider,
         model: selection.modelId,

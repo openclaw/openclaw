@@ -14,7 +14,6 @@ const loadMessageActionTtsRuntime = createLazyRuntimeModule(
   () => import("../../tts/tts.runtime.js"),
 );
 
-/** Reads the session-level TTS auto mode for a message-action send. */
 function resolveMessageActionSessionTtsAuto(params: {
   cfg: OpenClawConfig;
   sessionKey?: string;
@@ -39,7 +38,6 @@ function resolveMessageActionSessionTtsAuto(params: {
   }
 }
 
-/** Applies automatic TTS to a message-action send payload when config/session policy allows it. */
 export async function maybeApplyTtsToMessageActionSendPayload(params: {
   payload: ReplyPayload;
   cfg: OpenClawConfig;
@@ -53,11 +51,7 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
   if (params.dryRun) {
     return params.payload;
   }
-  const ttsAuto = resolveMessageActionSessionTtsAuto({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
+  const ttsAuto = resolveMessageActionSessionTtsAuto(params);
   const explicitTts = getReplyPayloadMetadata(params.payload)?.ttsExplicit === true;
   const preparedTtsPreferences = await prepareTtsPreferences();
   if (

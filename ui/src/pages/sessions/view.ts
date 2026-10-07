@@ -285,7 +285,6 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   return formatDurationCompact(runtimeMs) ?? "0ms";
 }
 
-// Goal state is a dot + summary; the tooltip carries the objective detail.
 function renderSessionGoalStatus(goal: GatewaySessionRow["goal"]) {
   if (!goal) {
     return nothing;
@@ -327,8 +326,6 @@ function sessionDetailItems(
   add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
-  // The roster dropped its Runtime column; the drawer is where agent runtime
-  // and run duration live now.
   add(t("sessionsView.runtime"), formatAgentRuntimeLabel(row.agentRuntime));
   add(t("sessionsView.runDuration"), formatRuntimeMs(row.runtimeMs));
   add(t("sessionsView.surface"), row.surface);
@@ -653,10 +650,7 @@ function renderSessionsTable(props: SessionsProps) {
                 paginated.length > 0
                   ? html`<input
                       type="checkbox"
-                      .checked=${
-                        paginated.length > 0 &&
-                        paginated.every((r) => props.selectedKeys.has(r.key))
-                      }
+                      .checked=${paginated.every((r) => props.selectedKeys.has(r.key))}
                       .indeterminate=${
                         paginated.some((r) => props.selectedKeys.has(r.key)) &&
                         !paginated.every((r) => props.selectedKeys.has(r.key))

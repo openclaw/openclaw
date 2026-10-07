@@ -1,14 +1,19 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readSessionActivitySummary } from "./activity-summary.js";
+import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import { hasPendingSessionTranscriptArchives } from "./session-accessor.sqlite-archive-store-kernel.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import {
   sessionSharingEntriesEqual,
+  type SessionEntryProjectionFacts,
   type SessionEntryReplacementPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
+import { prepareExactSessionEntryRowReads } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionNodesGeneration } from "./session-accessor.sqlite-entry-revision.js";
 import {
   deleteLegacySessionEntryRows,
@@ -27,6 +32,9 @@ import type {
   SessionEntryReplacementCommitted,
 } from "./session-accessor.sqlite-replacement-types.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
+import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
+import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
 /** Receipts carry only publication facts, never saved prompts or maintenance payloads. */
@@ -41,13 +49,46 @@ export function prepareSessionEntryReplacementPublication(
   );
   const invalidated = new Set([...result.membershipInvalidatedKeys, ...archived]);
   const current = new Map<string, SessionEntry>();
+  const projection = new Map<string, SessionEntryProjectionFacts>();
+  let readCommitted: ReturnType<typeof prepareExactSessionEntryRowReads> | undefined;
   for (const key of result.current.keys()) {
+    readCommitted ??= prepareExactSessionEntryRowReads(
+      database,
+      [...result.current.keys()],
+      "list",
+      undefined,
+      { includeBoardPresence: true },
+    );
     // Read the final persisted bytes and side tables after assignment, alias moves and maintenance.
-    const committed = readExactSessionEntryRow(database, key, "list");
+    const committed = readCommitted(key);
     if (!committed) {
       throw new Error(`Session publication lost its committed metadata: ${key}`);
     }
     current.set(key, freezeJsonSnapshot(committed.entry));
+    const { entry } = committed;
+    projection.set(
+      key,
+      freezeJsonSnapshot({
+        membership: [
+          key,
+          isInternalSessionEffectsKey(key)
+            ? null
+            : (normalizeOptionalString(entry.category) ?? null),
+          listSessionMembersInDatabase(database, key).map(({ identityId }) => identityId),
+          {
+            ...(entry.participants ? { participants: entry.participants } : {}),
+            ...(entry.participantCount === undefined
+              ? {}
+              : { participantCount: entry.participantCount }),
+          },
+          entry.sessionId,
+        ],
+        hasBoard: committed.row.board_present === 1,
+        activitySummaryWatermark: readSessionActivitySummary(entry)
+          ? readSessionTranscriptWatermarkInDatabase(database, entry.sessionId)
+          : undefined,
+      }),
+    );
   }
   return {
     kind: "session-entry-replacements",
@@ -65,6 +106,7 @@ export function prepareSessionEntryReplacementPublication(
       ]),
     ),
     current,
+    projection,
     ageChanges: [...current].map(([sessionKey, entry]) =>
       captureSessionEntryMaintenanceAgeChange({
         sessionKey,
@@ -89,6 +131,7 @@ export function commitSessionEntryReplacementsInDatabase(
   database: OpenClawAgentDatabase,
   input: SessionEntryReplacementCommit,
   beforeReplacements: () => void,
+  refreshCandidates?: (sessionKeys: readonly string[]) => SessionMaintenancePreservationSnapshot,
 ): SessionEntryReplacementCommitted {
   if (input.labelClaim) {
     assertSessionCreationLabelAvailable(
@@ -181,7 +224,13 @@ export function commitSessionEntryReplacementsInDatabase(
   const preservation = maintenance?.preservation;
   const maintenancePlan =
     maintenance && preservation
-      ? applySessionEntryMaintenanceInDatabase(database, maintenance, () => preservation)
+      ? applySessionEntryMaintenanceInDatabase(
+          database,
+          maintenance,
+          () => preservation,
+          undefined,
+          refreshCandidates,
+        )
       : emptySessionEntryMaintenancePlan();
   return {
     // Fresh creation must not retry another session's failed export.

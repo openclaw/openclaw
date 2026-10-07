@@ -1,4 +1,3 @@
-// Matrix plugin module implements the live SDK's SQLite sync store.
 import {
   MemoryStore,
   SyncAccumulator,
