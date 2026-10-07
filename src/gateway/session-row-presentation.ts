@@ -422,7 +422,10 @@ export function prepareProjectedSessionPresentation(
       }
     }
     if (signature !== undefined) {
-      const snapshot = freezeJsonSnapshot(structuredClone(row));
+      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
+      const encoded = JSON.stringify(row);
+      const snapshot: GatewaySessionRow = freezeJsonSnapshot(JSON.parse(encoded));
+      encodings.set(snapshot, encoded);
       views?.set(signature, snapshot);
       return projectModels(snapshot);
     }
