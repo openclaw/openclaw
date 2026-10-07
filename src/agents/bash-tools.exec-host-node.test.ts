@@ -367,9 +367,17 @@ vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
 
-vi.mock("../infra/node-shell.js", () => ({
-  buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
-}));
+vi.mock("../infra/node-shell.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/node-shell.js")>();
+  return {
+    ...actual,
+    buildNodeShellCommand: vi.fn(() => ["/bin/sh", "-lc", "bun ./script.ts"]),
+    buildNodeCommandInvocation: vi.fn((command: string) => ({
+      argv: ["/bin/sh", "-lc", "bun ./script.ts"],
+      rawCommand: command,
+    })),
+  };
+});
 
 vi.mock("../infra/system-run-approval-context.js", () => ({
   parsePreparedSystemRunPayload: parsePreparedSystemRunPayloadMock,
@@ -740,7 +748,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "node-1",
         commands: ["system.run", "system.run.prepare"],
         connected: true,
-        platform: process.platform,
+        platform: "linux",
       },
     ]);
     parsePreparedSystemRunPayloadMock.mockReset();
@@ -2499,7 +2507,7 @@ describe("executeNodeHostCommand", () => {
         nodeId: "node-1",
         commands: ["system.run", "system.run.prepare"],
         connected: false,
-        platform: process.platform,
+        platform: "linux",
       },
     ]);
 
@@ -2637,7 +2645,7 @@ describe("executeNodeHostCommand", () => {
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
         connected: true,
-        platform: process.platform,
+        platform: "linux",
       },
     ]);
     const result = await executeNodeHostCommand(
@@ -2659,14 +2667,14 @@ describe("executeNodeHostCommand", () => {
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
         connected: true,
-        platform: process.platform,
+        platform: "linux",
       },
       {
         nodeId: "aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaa7777bbb88889999",
         displayName: "other-node",
         commands: ["system.run", "system.run.prepare"],
         connected: true,
-        platform: process.platform,
+        platform: "linux",
       },
     ]);
     await expect(
@@ -2689,7 +2697,7 @@ describe("executeNodeHostCommand", () => {
         displayName: "home-wsl-debian",
         commands: ["system.run", "system.run.prepare"],
         connected: true,
-        platform: process.platform,
+        platform: "linux",
       },
     ]);
     await expect(

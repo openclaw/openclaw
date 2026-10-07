@@ -31,7 +31,7 @@ import {
   hasPosixShellStartupBeforeInlineCommand,
   isBlockedShellWrapperCommand,
 } from "../infra/exec-wrapper-resolution.js";
-import { buildNodeShellCommand } from "../infra/node-shell.js";
+import { buildNodeCommandInvocation } from "../infra/node-shell.js";
 import { buildExecRoutingEnv } from "../infra/openclaw-exec-env.js";
 import {
   parsePreparedSystemRunPayload,
@@ -41,8 +41,12 @@ import {
   extractShellCommandFromArgv,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
+import { isWindowsPlatform } from "../infra/windows-shell-command.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
-import { resolveNodeAutoApprovalEligibility } from "./bash-tools.exec-host-node-approval-eligibility.js";
+import {
+  evaluateNodeDirectArgvAllowlist,
+  resolveNodeAutoApprovalEligibility,
+} from "./bash-tools.exec-host-node-approval-eligibility.js";
 import {
   formatNodeInvokeFailureToolResult,
   invokeNodeSystemRun,
@@ -59,6 +63,7 @@ type NodeExecutionTarget = {
   nodeId: string;
   platform?: string | null;
   argv: string[];
+  rawCommand: string;
   env: Record<string, string> | undefined;
   executionContext?: SystemRunExecutionContext;
   invokeDeadlineMs: number;
@@ -270,7 +275,7 @@ export async function resolveNodeExecutionTarget(
   return {
     nodeId: nodeInfo.nodeId,
     platform: nodeInfo.platform,
-    argv: buildNodeShellCommand(params.command, nodeInfo.platform),
+    ...buildNodeCommandInvocation(params.command, nodeInfo.platform),
     // Peers without the capability retain the shipped env transport, including rejections.
     env:
       !executionContext && params.executionContext
@@ -391,7 +396,7 @@ export async function prepareNodeSystemRun(params: {
         command: params.target.argv,
         security: params.request.security,
         ask: params.request.ask,
-        rawCommand: params.request.command,
+        rawCommand: params.target.rawCommand,
         ...(params.request.workdir != null ? { cwd: params.request.workdir } : {}),
         ...(params.target.env !== undefined ? { env: params.target.env } : {}),
         executionContext: params.target.executionContext,
@@ -429,15 +434,28 @@ export async function analyzeNodeApprovalRequirement(params: {
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
   // Bare-name resolution must not fall back to the Gateway's PATH during precheck.
   const analysisEnv = { ...params.target.env, PATH: "", Path: "" };
-  const baseAllowlistEval = await evaluateShellAllowlistWithAuthorization({
-    command: approvalCommand,
-    allowlist: [],
-    safeBins: new Set(),
-    cwd: approvalCwd,
-    env: analysisEnv,
-    platform: params.target.platform,
-    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-  });
+  const directWindowsArgv =
+    isWindowsPlatform(params.target.platform) &&
+    extractPreparedNodeShellPayload(params.prepared.argv) === null
+      ? params.prepared.argv
+      : null;
+  const evaluateCommand = (
+    command: string,
+    cwd: string | undefined,
+    allowlist: ExecAllowlistEntry[],
+  ) => {
+    const context = {
+      allowlist,
+      cwd,
+      env: analysisEnv,
+      platform: params.target.platform,
+      trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+    };
+    return directWindowsArgv && command.trim() === approvalCommand.trim()
+      ? evaluateNodeDirectArgvAllowlist({ ...context, argv: directWindowsArgv })
+      : evaluateShellAllowlistWithAuthorization({ ...context, command, safeBins: new Set() });
+  };
+  const baseAllowlistEval = await evaluateCommand(approvalCommand, approvalCwd, []);
   const bindingCommandEvals: NodePolicyCommandEval[] = [
     {
       command: approvalCommand,
@@ -460,15 +478,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     entries.push({
       command: normalizedCommand,
       cwd,
-      allowlistEval: await evaluateShellAllowlistWithAuthorization({
-        command: normalizedCommand,
-        allowlist: [],
-        safeBins: new Set(),
-        cwd,
-        env: analysisEnv,
-        platform: params.target.platform,
-        trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-      }),
+      allowlistEval: await evaluateCommand(normalizedCommand, cwd, []),
     });
   };
   const preparedCommand = resolveSystemRunCommandRequest({
@@ -537,15 +547,11 @@ export async function analyzeNodeApprovalRequirement(params: {
         // accepting either the prepared wrapper or its semantic inner command.
         const allowlistEvals = await Promise.all(
           bindingCommandEvals.map(async (entry) => {
-            const allowlistEval = await evaluateShellAllowlistWithAuthorization({
-              command: entry.command,
-              allowlist: resolved.allowlist,
-              safeBins: new Set(),
-              cwd: entry.cwd,
-              env: analysisEnv,
-              platform: params.target.platform,
-              trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-            });
+            const allowlistEval = await evaluateCommand(
+              entry.command,
+              entry.cwd,
+              resolved.allowlist,
+            );
             return {
               command: entry.command,
               allowlistEligible:

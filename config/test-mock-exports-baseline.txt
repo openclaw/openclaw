@@ -2167,7 +2167,6 @@
 ["src/agents/bash-tools.exec-host-node.integration.test.ts","./tools/gateway.js","efb1b182471be6ef23d97537a8583d48115e05c515b1c2af99d5c6c5b9b2ec9e",1]
 ["src/agents/bash-tools.exec-host-node.test.ts","../infra/command-analysis/inline-eval.js","1ba0af752cae57455acd5d7249a9e2123fb5a28d8c87eeaa857264623b4e064e",1]
 ["src/agents/bash-tools.exec-host-node.test.ts","../infra/exec-approvals.js","b6ac9c05138291558fd58c425ba8046510df36c8bbc4773cdfb45dafa41bb89d",1]
-["src/agents/bash-tools.exec-host-node.test.ts","../infra/node-shell.js","96244f14b2f88f174d41efdfb8d23b8dcf970378422006e24a09ee12da4c1aba",1]
 ["src/agents/bash-tools.exec-host-node.test.ts","../infra/system-run-approval-context.js","0e4dec6c4badb05b39302dc8dacefb27dc8082c4cec196a9102f54993001a4cd",1]
 ["src/agents/bash-tools.exec-host-node.test.ts","../logger.js","d70c526f932072e3fb53ae2ce044c1221cc85db03dd4ecfae73e6639e730654c",1]
 ["src/agents/bash-tools.exec-host-node.test.ts","./bash-tools.exec-approval-request.js","6c3a61200ead16572c9b238063be4684704536c3bebba9d07a9354944ce3219a",1]

@@ -1,6 +1,6 @@
 // Covers platform shell argv construction.
 import { describe, expect, it } from "vitest";
-import { buildNodeShellCommand } from "./node-shell.js";
+import { buildNodeCommandInvocation, buildNodeShellCommand } from "./node-shell.js";
 
 describe("buildNodeShellCommand", () => {
   it("uses cmd.exe for win-prefixed platform labels", () => {
@@ -38,5 +38,43 @@ describe("buildNodeShellCommand", () => {
     expect(buildNodeShellCommand("echo hi")).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi", null)).toEqual(["/bin/sh", "-lc", "echo hi"]);
     expect(buildNodeShellCommand("echo hi", "   ")).toEqual(["/bin/sh", "-lc", "echo hi"]);
+  });
+});
+
+describe("buildNodeCommandInvocation", () => {
+  it.each(["win32", "windows", " Windows 11 "])(
+    "sends an eligible command to a %j node as a direct argv",
+    (platform) => {
+      expect(
+        buildNodeCommandInvocation(
+          '"C:\\Program Files\\Tool\\tool.exe"  "deux mots é" x',
+          platform,
+        ),
+      ).toEqual({
+        argv: ["C:\\Program Files\\Tool\\tool.exe", "deux mots é", "x"],
+        rawCommand: '"C:\\Program Files\\Tool\\tool.exe" "deux mots é" x',
+      });
+    },
+  );
+
+  it.each(["echo hi", "tool a & tool b", "tool (x)", "build.cmd", 'tool "open'])(
+    "keeps %j on the unchanged cmd.exe envelope",
+    (command) => {
+      expect(buildNodeCommandInvocation(command, "win32")).toEqual({
+        argv: ["cmd.exe", "/d", "/s", "/c", command],
+        rawCommand: command,
+      });
+    },
+  );
+
+  it.each([
+    ["linux", ["/bin/sh", "-lc", "/usr/bin/printf ok"]],
+    ["darwin", ["/bin/sh", "-c", "/usr/bin/printf ok"]],
+    [null, ["/bin/sh", "-lc", "/usr/bin/printf ok"]],
+  ])("keeps the %j shell transport unchanged", (platform, argv) => {
+    expect(buildNodeCommandInvocation("/usr/bin/printf ok", platform)).toEqual({
+      argv,
+      rawCommand: "/usr/bin/printf ok",
+    });
   });
 });
