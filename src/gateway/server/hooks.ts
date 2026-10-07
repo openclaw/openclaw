@@ -6,7 +6,6 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { listAgentIds } from "../../agents/agent-scope.js";
-import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import { canonicalizeMainSessionAlias, resolveAgentMainSessionKey } from "../../config/sessions.js";
@@ -22,10 +21,8 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
-import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
-import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent, enqueueSystemEventWithReceipt } from "../../infra/system-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -36,6 +33,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import {
   type HookAgentDispatchPayload,
   type HooksConfigResolved,
+  normalizePluginHookAgentDelivery,
   normalizeHookDispatchSessionKey,
 } from "../hooks.js";
 import type { HookAgentCompletion, HookAgentDispatchResult } from "../hooks.types.js";
@@ -45,6 +43,7 @@ import {
 } from "../scheduled-run-gateway-context.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { validateHookAgentDeliveryAccount } from "./hook-delivery-account.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -171,45 +170,6 @@ function createSessionKeyedHookDispatchQueue() {
   };
 }
 
-async function validateHookAgentDeliveryAccount(params: {
-  cfg: OpenClawConfig;
-  value: HookAgentDispatchPayload;
-}): Promise<HookAgentDispatchPayload> {
-  // Mapped hooks can defer partial/last targets to cron and cannot select an account.
-  // Bind only direct hook announces whose destination is already complete.
-  if (
-    params.value.delivery.mode !== "announce" ||
-    params.value.delivery.channel === "last" ||
-    !params.value.delivery.to
-  ) {
-    return params.value;
-  }
-  const accountId = params.value.delivery.accountId
-    ? await validateExplicitMessageAccountSelection({
-        cfg: params.cfg,
-        channel: params.value.delivery.channel,
-        accountId: params.value.delivery.accountId,
-      })
-    : (() => {
-        const plugin = resolveOutboundChannelPlugin({
-          channel: params.value.delivery.channel,
-          cfg: params.cfg,
-        });
-        if (!plugin) {
-          throw new Error(`Channel ${params.value.delivery.channel} is unavailable.`);
-        }
-        return resolveChannelDefaultAccountId({ plugin, cfg: params.cfg });
-      })();
-  if (!accountId) {
-    throw new Error(`Channel ${params.value.delivery.channel} did not resolve an account.`);
-  }
-  return {
-    ...params.value,
-    accountId,
-    delivery: { ...params.value.delivery, accountId },
-  };
-}
-
 type PluginHookDispatch = PluginRuntime["hooks"]["dispatchHookAgentTurn"];
 type PluginHookDispatchParams = Parameters<PluginHookDispatch>[0];
 type PluginHookDispatchResult = Awaited<ReturnType<PluginHookDispatch>>;
@@ -273,7 +233,7 @@ export function createGatewayHookDispatcher(params: {
     });
     const sessionKey = target.eventSessionKey;
     const eventOptions = { sessionKey };
-    const queued = enqueueSystemEventWithReceipt(
+    const queued = enqueueSystemEvent(
       value.text,
       isUnscopedSessionKeySentinel(sessionKey)
         ? withSystemEventOwner(eventOptions, agentId)
@@ -657,6 +617,10 @@ export function createGatewayHookDispatcher(params: {
     if (value.externalContentSource !== "email") {
       return { ok: false, reason: "externalContentSource must be email" };
     }
+    const deliveryFields = normalizePluginHookAgentDelivery(value);
+    if (!deliveryFields.ok) {
+      return { ok: false, reason: deliveryFields.error };
+    }
     const run = async (): Promise<PluginHookDispatchResult> => {
       const result = await dispatchAgentHook(
         {
@@ -665,7 +629,7 @@ export function createGatewayHookDispatcher(params: {
           effectiveAgentId: agentId,
           sessionKey,
           message: value.message,
-          deliver: value.deliver,
+          ...deliveryFields.value,
           model: value.model,
           thinking: value.thinking,
           timeoutSeconds: value.timeoutSeconds,
@@ -673,8 +637,6 @@ export function createGatewayHookDispatcher(params: {
           sessionMode: "isolated",
           sourcePath: `plugin:${pluginId}`,
           wakeMode: "now",
-          channel: "last",
-          delivery: value.deliver ? { mode: "announce", channel: "last" } : { mode: "none" },
           externalContentSource: "email",
         },
         pluginId,
@@ -700,6 +662,7 @@ export function createGatewayHookDispatcher(params: {
       message: value.message,
       externalContentSource: value.externalContentSource,
       deliver: value.deliver,
+      delivery: value.delivery,
       model: value.model,
       thinking: value.thinking,
       timeoutSeconds: value.timeoutSeconds,

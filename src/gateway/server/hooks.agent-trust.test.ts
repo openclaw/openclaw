@@ -37,8 +37,6 @@ const resolveChannelDefaultAccountIdMock = vi.fn(() => "default");
 vi.mock("../../infra/system-events.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: enqueueSystemEventMock,
-  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
-    enqueueSystemEventMock(...args) ? () => true : null,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
@@ -54,6 +52,10 @@ vi.mock("../../infra/outbound/channel-resolution.js", () => ({
 }));
 vi.mock("../../channels/plugins/helpers.js", () => ({
   resolveChannelDefaultAccountId: resolveChannelDefaultAccountIdMock,
+}));
+vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/plugins/index.js")>()),
+  listChannelPlugins: () => [{ id: "telegram" }],
 }));
 vi.mock("../../config/sessions.js", () => ({
   resolveMainSessionKeyFromConfig: resolveMainSessionKeyMock,
@@ -82,7 +84,8 @@ vi.mock("./hooks-request-handler.js", () => ({
   }),
 }));
 
-const { createGatewayHooksRequestHandler } = await import("./hooks.js");
+const { createGatewayHookDispatcher, createGatewayHooksRequestHandler } =
+  await import("./hooks.js");
 const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 function waitForFast<T>(
@@ -288,6 +291,66 @@ describe("dispatchAgentHook trust handling", () => {
       job: { delivery },
     });
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("passes an explicit plugin delivery route through to the isolated CronJob", async () => {
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+      delivered: true,
+    });
+    const dispatcher = createGatewayHookDispatcher(buildMinimalParams());
+
+    const result = await dispatcher.dispatchHookAgentTurn(
+      {
+        name: "IMAP inbox",
+        agentId: "main",
+        sessionKey: "hook:imap:inbox:17:2",
+        message: "Email content",
+        externalContentSource: "email",
+        deliver: true,
+        delivery: { channel: "telegram", to: "123456" },
+      },
+      "imap",
+    );
+
+    expect(result).toMatchObject({ ok: true });
+    expect(runCronIsolatedAgentTurnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({
+          delivery: {
+            mode: "announce",
+            channel: "telegram",
+            to: "123456",
+            accountId: "default",
+          },
+        }),
+      }),
+    );
+    await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  });
+
+  it("rejects an incomplete explicit plugin delivery route", async () => {
+    const dispatcher = createGatewayHookDispatcher(buildMinimalParams());
+
+    const result = await dispatcher.dispatchHookAgentTurn(
+      {
+        name: "IMAP inbox",
+        agentId: "main",
+        sessionKey: "hook:imap:inbox:17:2",
+        message: "Email content",
+        externalContentSource: "email",
+        deliver: true,
+        delivery: { channel: "telegram" },
+      } as never,
+      "imap",
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      reason: "channel and to must be set together for hook delivery",
+    });
+    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
   });
 
   it("gives a queued hook run its owning Gateway context and broker", async () => {
