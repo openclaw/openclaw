@@ -143,8 +143,22 @@ export type RuntimeGatewayRequestOptions = {
   };
 };
 
+/**
+ * Host-scoped delegated ownership for `before_dispatch` plugins. The Host
+ * derives owner identity, task scope, and delegation/lineage refs; the returned
+ * handles are correlation only and never carry establishment authority.
+ */
+export type PluginRuntimeDelegation = {
+  /** Establish delegated ownership for the exact inbound dispatch the current `before_dispatch` handler owns. */
+  establishCurrent: (params?: { delegateGoalRef?: string | null }) => Promise<{
+    delegationRef: string;
+    lineageRef: string;
+  }>;
+};
+
 /** Trusted in-process runtime surface injected into native plugins. */
 export type PluginRuntime = PluginRuntimeCore & {
+  delegation: PluginRuntimeDelegation;
   gateway: {
     /** Whether this process owns an active Gateway request context. */
     isAvailable: () => Promise<boolean>;

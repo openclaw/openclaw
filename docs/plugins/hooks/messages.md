@@ -90,6 +90,39 @@ first-class fields before reading legacy metadata.
 `before_dispatch` receives the canonical inbound `messageId` in both its event
 and context.
 
+### Delegated ownership from `before_dispatch`
+
+A trusted `before_dispatch` handler can take responsibility for the current
+inbound dispatch as the delegated owner with
+`api.runtime.delegation.establishCurrent()`. The Host derives every identity:
+owner kind (`plugin`), owner id (the executing plugin registration), the task
+scope of the current dispatch, and the Host-generated `delegationRef` and
+`lineageRef`.
+
+```typescript
+api.registerHook("before_dispatch", async () => {
+  const { delegationRef, lineageRef } = await api.runtime.delegation.establishCurrent();
+  // Only now may the delegated owner drive the task (for example, delegate it).
+  return { handled: true };
+});
+```
+
+The capability is scoped, not token-based:
+
+- It works only while the exact handler for the exact current dispatch is
+  running and its Host hook binding is still current.
+- Calling it outside `before_dispatch`, after the handler settles, from another
+  plugin, or through a retained reference fails closed.
+- The returned `delegationRef` and `lineageRef` are correlation handles only;
+  possessing or copying them grants no establishment authority.
+- Repeated calls in the same turn are idempotent and create no duplicate
+  ownership rows.
+
+Once establishment succeeds, ordinary dispatch must not resume, even if the
+handler later throws, times out, unloads, returns `handled: false`, or returns
+no result. Establishment transfers responsibility only: it never approves a
+tool, action, or financial/security/destructive operation.
+
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
 

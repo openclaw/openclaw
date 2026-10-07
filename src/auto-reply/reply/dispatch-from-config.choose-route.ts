@@ -11,6 +11,12 @@ import { runWithDelegatedExecutionLineage } from "../../delegation/delegated-exe
 import { readHostDelegationIntent } from "../../delegation/host-delegation-intent.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  createBeforeDispatchDelegationSlot,
+  deriveBeforeDispatchDelegationTaskScopeRef,
+  type BeforeDispatchDelegationScope,
+  type PluginDelegationEstablishment,
+} from "../../plugins/before-dispatch-delegation.js";
 import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import { createPluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
 import {
@@ -583,6 +589,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
     hookRunner?.hasHooks("before_dispatch") === true;
   let beforeDispatchHandled: { text: string | undefined } | undefined;
+  let beforeDispatchDelegation: PluginDelegationEstablishment | undefined;
   const attemptBeforeDispatchOwnerHandoff = async (): Promise<DelegateOwnerHandoff> => {
     if (!canAttemptBeforeDispatchOwner || !hookRunner) {
       return {
@@ -602,6 +609,23 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         threadId: routeReplyThreadId,
       },
     });
+    // Host-owned delegation capability for this exact dispatch. The outcome
+    // slot is authoritative for the fail-closed decision below; the task scope
+    // is Host-derived from the routed inbound facts and never plugin-supplied.
+    const beforeDispatchDelegationSlot = createBeforeDispatchDelegationSlot();
+    const beforeDispatchDelegationScope: BeforeDispatchDelegationScope = {
+      slot: beforeDispatchDelegationSlot,
+      taskScopeRef: deriveBeforeDispatchDelegationTaskScopeRef([
+        "before-dispatch",
+        beforeDispatchSessionKey,
+        state.hookState.hookContext.channelId,
+        state.hookState.hookContext.accountId,
+        state.hookState.inboundClaimContext.conversationId,
+        state.hookState.hookContext.messageId,
+      ]),
+      context: state,
+      assertCurrent: () => state.assertCurrentBindingRoute(),
+    };
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
       runWithDispatchLifecycleAdmission(async () => {
         return await runWithDispatchAbortSignal(
@@ -640,11 +664,21 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                 { prepare: state.assertCurrentBindingRoute },
               ),
               pluginSubagentRequester,
+              // The Host-driven delegation-intent path already established
+              // ownership for this dispatch, so the plugin-driven capability is
+              // intentionally unavailable there — the two flows never stack.
+              hostDelegationIntent ? undefined : beforeDispatchDelegationScope,
             ),
           trackDispatchLifecycleWork,
         );
       }),
     );
+    // The Host-owned slot — not the hook result — is authoritative. Once a
+    // plugin established delegated ownership the durable lock exists, and the
+    // hook result cannot reopen ordinary dispatch.
+    if (beforeDispatchDelegationSlot.established) {
+      beforeDispatchDelegation = beforeDispatchDelegationSlot.handles;
+    }
     if (beforeDispatchResult?.handled) {
       beforeDispatchHandled = { text: beforeDispatchResult.text };
       return { kind: "owner-available" };
@@ -711,6 +745,24 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     return {
       status: "complete" as const,
       result: attachSourceReplyDeliveryMode({ queuedFinal, counts }),
+    };
+  }
+
+  if (beforeDispatchDelegation) {
+    // Fail-closed: a before_dispatch plugin established delegated ownership for
+    // this dispatch, so ordinary OpenClaw dispatch must not resume — even though
+    // the hook did not claim the turn (handled=false, thrown, timed out, or the
+    // plugin disappeared). The durable Host lock, not a plugin marker, proves it.
+    recordProcessed("completed", { reason: "before_dispatch_delegated" });
+    markIdle("message_completed");
+    commitInboundDedupeIfClaimed();
+    completeDispatchReplyOperation();
+    return {
+      status: "complete" as const,
+      result: attachSourceReplyDeliveryMode({
+        queuedFinal: false,
+        counts: dispatcher.getQueuedCounts(),
+      }),
     };
   }
 

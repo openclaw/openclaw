@@ -470,6 +470,12 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
     version: "1.0.0-test",
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
     gateway: createPluginGatewayRuntimeMock(),
+    delegation: {
+      establishCurrent: vi.fn(async () => ({
+        delegationRef: "delegation:mock",
+        lineageRef: "lineage:mock",
+      })),
+    },
     config: {
       current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
