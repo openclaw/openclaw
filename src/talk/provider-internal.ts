@@ -6,17 +6,27 @@
  * RealtimeVoiceProviderPlugin contract.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  RealtimeVoicePublicClientHints,
+  RealtimeVoicePublicProjection,
+} from "../plugins/provider-policy-surface.js";
+import { resolveBundledProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
+  RealtimeVoiceProviderConfiguredContext,
 } from "./provider-types.js";
 
 const INTERNAL_REALTIME_VOICE_PROVIDER = Symbol.for("openclaw.internal.realtime-voice-provider.v1");
 
 export type InternalRealtimeVoiceProviderCapabilities = RealtimeVoiceProviderCapabilities & {
+  /** Dynamic voice choices for the effective route without exposing its model identifier. */
+  voices?: readonly string[];
+  /** Treat absent configured voices as unsupported and fall back to the provider default. */
+  voiceSelectionPolicy?: "allowlist-default";
   /** Model-specific voice choices; the provider's voices remain the default catalog. */
   voicesByModel?: Record<string, readonly string[]>;
   /** The provider owns agent delegation instead of exposing client-side function tools. */
@@ -36,30 +46,25 @@ export type InternalRealtimeVoiceBrowserSessionCreateRequest =
     }>;
   };
 
-type InternalRealtimeVoiceProviderApi = {
-  isBrowserSessionConfigured: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean;
-  resolveBrowserSessionCapabilities?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-    /** Effective per-session model after request overrides. */
-    model?: string;
-    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-  }) => InternalRealtimeVoiceProviderCapabilities;
-  isGatewayRelayConfigured?: (ctx: {
-    cfg?: OpenClawConfig;
-    providerConfig: RealtimeVoiceProviderConfig;
-    agentId?: string;
-  }) => boolean | undefined;
+export type InternalRealtimeVoiceProviderApi = {
+  isBrowserSessionConfigured: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean;
+  resolveBrowserSessionCapabilities?: (
+    ctx: RealtimeVoiceProviderConfiguredContext & {
+      /** Effective per-session model after request overrides. */
+      model?: string;
+      clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+    },
+  ) => InternalRealtimeVoiceProviderCapabilities;
+  isGatewayRelayConfigured?: (ctx: RealtimeVoiceProviderConfiguredContext) => boolean | undefined;
   resolveGatewayRelayCapabilities?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
     model?: string;
   }) => InternalRealtimeVoiceProviderCapabilities;
+  projectPublicProjection?: (ctx: {
+    providerConfig: RealtimeVoiceProviderConfig;
+    config: RealtimeVoiceProviderConfig;
+  }) => RealtimeVoicePublicProjection;
   validateGatewayRelayLaunch?: (ctx: {
     cfg?: OpenClawConfig;
     providerConfig: RealtimeVoiceProviderConfig;
@@ -85,12 +90,11 @@ function readInternalRealtimeVoiceProviderApi(
     : undefined;
 }
 
-export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
+export function isInternalRealtimeVoiceBrowserSessionConfigured(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+  },
+): boolean | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.isBrowserSessionConfigured({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -98,14 +102,13 @@ export function isInternalRealtimeVoiceBrowserSessionConfigured(params: {
   });
 }
 
-export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-  model?: string;
-  clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
-}): InternalRealtimeVoiceProviderCapabilities | undefined {
+export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+    model?: string;
+    clientControl?: RealtimeVoiceBrowserSessionCreateRequest["clientControl"];
+  },
+): InternalRealtimeVoiceProviderCapabilities | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.resolveBrowserSessionCapabilities?.(
     {
       cfg: params.cfg,
@@ -117,12 +120,11 @@ export function resolveInternalRealtimeVoiceBrowserSessionCapabilities(params: {
   );
 }
 
-export function isInternalRealtimeVoiceGatewayRelayConfigured(params: {
-  provider: RealtimeVoiceProviderPlugin;
-  cfg?: OpenClawConfig;
-  providerConfig: RealtimeVoiceProviderConfig;
-  agentId?: string;
-}): boolean | undefined {
+export function isInternalRealtimeVoiceGatewayRelayConfigured(
+  params: RealtimeVoiceProviderConfiguredContext & {
+    provider: RealtimeVoiceProviderPlugin;
+  },
+): boolean | undefined {
   return readInternalRealtimeVoiceProviderApi(params.provider)?.isGatewayRelayConfigured?.({
     cfg: params.cfg,
     providerConfig: params.providerConfig,
@@ -141,6 +143,43 @@ export function resolveInternalRealtimeVoiceGatewayRelayCapabilities(params: {
     providerConfig: params.providerConfig,
     model: params.model,
   });
+}
+
+export function projectInternalRealtimeVoicePublicConfig<
+  T extends RealtimeVoiceProviderConfig,
+>(params: {
+  provider?: RealtimeVoiceProviderPlugin;
+  providerId?: string;
+  providerConfig: RealtimeVoiceProviderConfig;
+  config: T;
+}): T {
+  return projectInternalRealtimeVoicePublicProjection(params).config;
+}
+
+export function projectInternalRealtimeVoicePublicProjection<
+  T extends RealtimeVoiceProviderConfig,
+>(params: {
+  provider?: RealtimeVoiceProviderPlugin;
+  providerId?: string;
+  providerConfig: RealtimeVoiceProviderConfig;
+  config: T;
+}): { config: T; clientHints?: RealtimeVoicePublicClientHints } {
+  const project =
+    (params.provider
+      ? readInternalRealtimeVoiceProviderApi(params.provider)?.projectPublicProjection
+      : undefined) ??
+    (params.providerId
+      ? resolveBundledProviderPolicySurface(params.providerId)?.projectRealtimeVoicePublicProjection
+      : undefined);
+  const projected = project?.({ providerConfig: params.providerConfig, config: params.config });
+  if (projected) {
+    return {
+      ...projected,
+      // SAFETY: projections only remove or replace `model`; other fields stay intact.
+      config: projected.config as T,
+    };
+  }
+  return { config: params.config };
 }
 
 export function resolveInternalRealtimeVoiceGatewayRelayLaunchError(params: {

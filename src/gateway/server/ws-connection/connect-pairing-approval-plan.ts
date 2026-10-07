@@ -44,15 +44,12 @@ function resolveTrustedProxyDeviceAutoApproveScopes(params: {
     return configuredScopes;
   }
   const configured = new Set(configuredScopes);
-  const requestedScopes = normalizeSortedUniqueTrimmedStringList(params.requestedScopes);
   // Trusted-proxy Control UI tabs can remain open across upgrades. Grant newly
   // required default UI scopes without widening an explicitly configured cap.
-  if (params.configuredScopes === undefined) {
-    requestedScopes.push("operator.questions");
-  }
-  return normalizeSortedUniqueTrimmedStringList(requestedScopes).filter((scope) =>
-    configured.has(scope),
-  );
+  return normalizeSortedUniqueTrimmedStringList([
+    ...params.requestedScopes,
+    ...(params.configuredScopes === undefined ? ["operator.questions"] : []),
+  ]).filter((scope) => configured.has(scope));
 }
 
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */
@@ -64,7 +61,6 @@ export type PairingApprovalPlan = {
   trustedProxyUser: string | undefined;
   isTrustedProxySameKeyUpgrade: boolean;
   allowSetupCodeHandoffBootstrapPairing: boolean;
-  allowControlUiOwnerBootstrapPairing: boolean;
   bootstrapApprovalProfile: DeviceBootstrapProfile | null;
   bootstrapPairingRoles: string[] | undefined;
   bootstrapPairingScopes: string[] | undefined;
@@ -102,8 +98,19 @@ export function resolveLocalPairingApproval(
 ): PairingApprovalPlan["localApproval"] {
   const { reason, existingPairedDevice, state, configSnapshot, scopes } = params;
   const { role, isControlUi, isWebchat, isNativeAppUi, authMethod, pairingLocality } = state;
+  // Adding a first node role is not a token replacement. Keep real node-token
+  // repairs, scope upgrades, and browser requests on their existing approval path.
+  const addingLocalNodeRole =
+    role === "node" &&
+    reason === "role-upgrade" &&
+    existingPairedDevice?.publicKey === state.devicePublicKey &&
+    !existingPairedDevice?.tokens?.node &&
+    scopes.length === 0 &&
+    !params.hasBrowserOriginHeader &&
+    !isControlUi &&
+    !isWebchat;
   const allowSilentLocalPairing =
-    !(existingPairedDevice && role !== "operator") &&
+    (!existingPairedDevice || role === "operator" || addingLocalNodeRole) &&
     shouldAllowSilentLocalPairing({
       autoApproveLocal: configSnapshot.gateway?.nodes?.pairing?.autoApproveLocal,
       locality: pairingLocality,
@@ -142,6 +149,7 @@ export async function resolvePairingApprovalPlan(
     isControlUi,
     isBrowserOperatorUi,
     isWebchat,
+    isNativeAppUi,
     authMethod,
     authResult,
     bootstrapTokenCandidate,
@@ -151,7 +159,7 @@ export async function resolvePairingApprovalPlan(
     configSnapshot.gateway?.auth?.trustedProxy?.deviceAutoApprove;
   const trustedProxyUser = authResult.user?.trim();
   // A scope upgrade from a device whose paired public key matches the one
-  // this connect just proved by signature is the same physical browser
+  // this connect just proved by signature is the same physical device
   // behind the SSO proxy — auto-approvable like a first pairing. A key
   // mismatch stays a manual owner decision (possible deviceId squat).
   const isTrustedProxySameKeyUpgrade =
@@ -159,7 +167,7 @@ export async function resolvePairingApprovalPlan(
   const trustedProxyAutoApproveScopes =
     ((reason === "not-paired" && !existingPairedDevice) || isTrustedProxySameKeyUpgrade) &&
     role === "operator" &&
-    (isBrowserOperatorUi || isWebchat) &&
+    (isBrowserOperatorUi || isWebchat || isNativeAppUi) &&
     authMethod === "trusted-proxy" &&
     Boolean(trustedProxyUser) &&
     trustedProxyAutoApproveConfig?.enabled === true
@@ -180,12 +188,9 @@ export async function resolvePairingApprovalPlan(
     clientMode: connectParams.client.mode,
   });
   const allowBoundBootstrapProfileLookup =
-    (reason === "not-paired" &&
-      !existingPairedDevice &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"))) ||
-    (reason === "scope-upgrade" &&
-      Boolean(existingPairedDevice) &&
-      (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator")));
+    ((reason === "not-paired" && !existingPairedDevice) ||
+      (reason === "scope-upgrade" && Boolean(existingPairedDevice))) &&
+    (isSetupCodeMobileNodeConnect || (isControlUi && role === "operator"));
   const boundBootstrapProfile =
     authMethod === "bootstrap-token" && bootstrapTokenCandidate && allowBoundBootstrapProfileLookup
       ? await getBoundDeviceBootstrapProfile({
@@ -258,7 +263,6 @@ export async function resolvePairingApprovalPlan(
     trustedProxyUser,
     isTrustedProxySameKeyUpgrade,
     allowSetupCodeHandoffBootstrapPairing,
-    allowControlUiOwnerBootstrapPairing,
     bootstrapApprovalProfile: setupCodeHandoffBootstrapProfile ?? controlUiOperatorBootstrapProfile,
     bootstrapPairingRoles,
     bootstrapPairingScopes,

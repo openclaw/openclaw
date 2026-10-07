@@ -18,10 +18,6 @@ import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snaps
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import type { FollowupRun } from "./queue.js";
 
-function sessionEntryMatchesSnapshot(entry: SessionEntry, snapshot: SessionEntry): boolean {
-  return isDeepStrictEqual(entry, snapshot);
-}
-
 function sessionEntryOnlyUpdatedAtChanged(entry: SessionEntry, snapshot: SessionEntry): boolean {
   if (entry.updatedAt === snapshot.updatedAt) {
     return false;
@@ -40,66 +36,63 @@ export function resolveRunAfterAutoFallbackPrimaryProbeRecheck(params: {
   if (!probe || !params.sessionKey || !params.entry) {
     return params.run;
   }
-  const resolveEntrySelectionRun = (): FollowupRun["run"] => {
-    const entryRef = resolvePersistedOverrideModelRef({
-      defaultProvider: params.run.provider,
-      overrideProvider: params.entry?.providerOverride,
-      overrideModel: params.entry?.modelOverride,
-    });
-    const hasEntryModelOverride = Boolean(entryRef);
-    const authProfileId = normalizeOptionalString(params.entry?.authProfileOverride);
-    const fallbackRun: FollowupRun["run"] = {
-      ...params.run,
-      provider: entryRef?.provider ?? params.run.provider,
-      model: entryRef?.model ?? params.run.model,
-      requestedRouteResolution: entryRef
-        ? resolveSessionModelOverrideRouteResolution(params.entry)
-        : params.run.requestedRouteResolution,
-      autoFallbackPrimaryProbe: undefined,
-    };
-    if (hasEntryModelOverride) {
-      fallbackRun.hasSessionModelOverride = true;
-      fallbackRun.hasAutoFallbackProvenance =
-        hasSessionAutoModelFallbackProvenance(params.entry) || undefined;
-    } else {
-      delete fallbackRun.hasSessionModelOverride;
-      delete fallbackRun.hasAutoFallbackProvenance;
-    }
-    if (hasEntryModelOverride && params.entry?.modelOverrideSource) {
-      fallbackRun.modelOverrideSource = params.entry.modelOverrideSource;
-    } else {
-      delete fallbackRun.modelOverrideSource;
-    }
-    if (hasEntryModelOverride && authProfileId) {
-      fallbackRun.authProfileId = authProfileId;
-      const authProfileIdSource = resolveCollapsedSessionAuthPinSource(params.entry);
-      if (authProfileIdSource) {
-        fallbackRun.authProfileIdSource = authProfileIdSource;
-      } else {
-        delete fallbackRun.authProfileIdSource;
-      }
-    } else if (hasEntryModelOverride) {
-      delete fallbackRun.authProfileId;
-      delete fallbackRun.authProfileIdSource;
-    }
-    return fallbackRun;
-  };
   const refreshedProbe = resolveAutoFallbackPrimaryProbe({
     entry: params.entry,
     sessionKey: params.sessionKey,
     primaryProvider: probe.provider,
     primaryModel: probe.model,
   });
-  if (!refreshedProbe) {
-    return resolveEntrySelectionRun();
+  if (refreshedProbe) {
+    return {
+      ...params.run,
+      provider: refreshedProbe.provider,
+      model: refreshedProbe.model,
+      requestedRouteResolution: "resolved",
+      autoFallbackPrimaryProbe: refreshedProbe,
+    };
   }
-  return {
+  const entryRef = resolvePersistedOverrideModelRef({
+    defaultProvider: params.run.provider,
+    overrideProvider: params.entry.providerOverride,
+    overrideModel: params.entry.modelOverride,
+  });
+  const authProfileId = normalizeOptionalString(params.entry.authProfileOverride);
+  const fallbackRun: FollowupRun["run"] = {
     ...params.run,
-    provider: refreshedProbe.provider,
-    model: refreshedProbe.model,
-    requestedRouteResolution: "resolved",
-    autoFallbackPrimaryProbe: refreshedProbe,
+    provider: entryRef?.provider ?? params.run.provider,
+    model: entryRef?.model ?? params.run.model,
+    requestedRouteResolution: entryRef
+      ? resolveSessionModelOverrideRouteResolution(params.entry)
+      : params.run.requestedRouteResolution,
+    autoFallbackPrimaryProbe: undefined,
   };
+  if (entryRef) {
+    fallbackRun.hasSessionModelOverride = true;
+    fallbackRun.hasAutoFallbackProvenance =
+      hasSessionAutoModelFallbackProvenance(params.entry) || undefined;
+  } else {
+    delete fallbackRun.hasSessionModelOverride;
+    delete fallbackRun.hasAutoFallbackProvenance;
+  }
+  const modelOverrideSource = params.entry.modelOverrideSource;
+  if (entryRef && modelOverrideSource && modelOverrideSource !== "default") {
+    fallbackRun.modelOverrideSource = modelOverrideSource;
+  } else {
+    delete fallbackRun.modelOverrideSource;
+  }
+  if (entryRef && authProfileId) {
+    fallbackRun.authProfileId = authProfileId;
+    const authProfileIdSource = resolveCollapsedSessionAuthPinSource(params.entry);
+    if (authProfileIdSource) {
+      fallbackRun.authProfileIdSource = authProfileIdSource;
+    } else {
+      delete fallbackRun.authProfileIdSource;
+    }
+  } else if (entryRef) {
+    delete fallbackRun.authProfileId;
+    delete fallbackRun.authProfileIdSource;
+  }
+  return fallbackRun;
 }
 
 /** Clears a recovered primary probe without overwriting a newer session selection. */
@@ -181,7 +174,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
     return;
   }
   if (authoritativeEntry) {
-    if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+    if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
       params.activeSessionStore[params.sessionKey] = authoritativeEntry;
       return;
     }
@@ -196,7 +189,7 @@ export async function clearRecoveredAutoFallbackPrimaryProbeSelection(params: {
       next: authoritativeEntry,
       current: currentEntry,
     });
-  } else if (sessionEntryMatchesSnapshot(currentEntry, activeSessionEntryBeforeUpdate)) {
+  } else if (isDeepStrictEqual(currentEntry, activeSessionEntryBeforeUpdate)) {
     delete params.activeSessionStore[params.sessionKey];
   }
 }

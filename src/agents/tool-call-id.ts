@@ -1,8 +1,9 @@
 import type { AgentMessage } from "@openclaw/agent-core";
 import {
-  extractToolCallsFromAssistant as extractPairingToolCalls,
-  extractToolResultId as extractPairingToolResultId,
-  extractToolResultIds as extractPairingToolResultIds,
+  createToolCallOccurrenceQueue,
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+  extractToolResultIds,
 } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 /**
  * Tool call id normalization and extraction helpers.
@@ -11,7 +12,11 @@ import {
  */
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
-import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
+import {
+  createCompletedToolCallPredicate,
+  isAllowedToolCallName,
+  normalizeAllowedToolNames,
+} from "./tool-call-shared.js";
 
 export type ToolCallIdMode = "strict" | "strict9";
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
@@ -20,11 +25,6 @@ const OPENAI_TOOL_CALL_ID_RE = /^call_[A-Za-z0-9_-]+$/;
 
 const STRICT9_LEN = 9;
 const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
-
-type ToolCallLike = {
-  id: string;
-  name?: string;
-};
 
 type ReplaySafeToolCallBlock = {
   type?: unknown;
@@ -41,11 +41,8 @@ type ReplaySafeToolCallBlock = {
  * - "strict9" mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
  */
 function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string {
-  if (!id || typeof id !== "string") {
-    if (mode === "strict9") {
-      return "defaultid";
-    }
-    return "defaulttoolid";
+  if (!id) {
+    return mode === "strict9" ? "defaultid" : "defaulttoolid";
   }
 
   if (mode === "strict9") {
@@ -53,13 +50,10 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
     if (alphanumericOnly.length >= STRICT9_LEN) {
       return alphanumericOnly.slice(0, STRICT9_LEN);
     }
-    if (alphanumericOnly.length > 0) {
-      return shortHash(alphanumericOnly, STRICT9_LEN);
-    }
-    return shortHash("sanitized", STRICT9_LEN);
+    return sha256HexPrefixCore(alphanumericOnly || "sanitized", STRICT9_LEN);
   }
 
-  if (isNativeKimiToolCallId(id)) {
+  if (NATIVE_KIMI_TOOL_CALL_ID_RE.test(id)) {
     return id;
   }
 
@@ -68,23 +62,9 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
-export function extractToolCallsFromAssistant(
-  msg: Extract<AgentMessage, { role: "assistant" }>,
-): ToolCallLike[] {
-  return extractPairingToolCalls(msg);
-}
+export { extractToolCallsFromAssistant, extractToolResultId, extractToolResultIds };
 
-export function extractToolResultId(
-  msg: Extract<AgentMessage, { role: "toolResult" }>,
-): string | null {
-  return extractPairingToolResultId(msg);
-}
-
-export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
-  return extractPairingToolResultIds(msg);
-}
-
-function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
+export function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
   const hasInput = "input" in block ? block.input !== undefined && block.input !== null : false;
   const hasArguments =
     "arguments" in block ? block.arguments !== undefined && block.arguments !== null : false;
@@ -100,6 +80,7 @@ function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
 function isReplaySafeThinkingAssistantMessage(
   message: Extract<AgentMessage, { role: "assistant" }>,
   allowedToolNames: Set<string> | null,
+  isCompleted: ReturnType<typeof createCompletedToolCallPredicate>,
 ): boolean {
   const content = message.content;
   if (!Array.isArray(content)) {
@@ -127,7 +108,7 @@ function isReplaySafeThinkingAssistantMessage(
       !hasToolCallInput(typedBlock) ||
       !toolCallId ||
       seenToolCallIds.has(toolCallId) ||
-      !isAllowedToolCallName(typedBlock.name, allowedToolNames) ||
+      !isAllowedToolCallName(typedBlock.name, isCompleted(typedBlock) ? null : allowedToolNames) ||
       toolCallNeedsReplayMutation(typedBlock)
     ) {
       return false;
@@ -143,16 +124,16 @@ function collectReplaySafeThinkingToolIds(
 ): { reservedIds: Set<string>; preservedIndexes: Set<number> } {
   const reserved = new Set<string>();
   const preservedIndexes = new Set<number>();
+  const isCompleted = createCompletedToolCallPredicate(messages);
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || typeof message !== "object" || message.role !== "assistant") {
       continue;
     }
-    const assistant = message;
-    if (!isReplaySafeThinkingAssistantMessage(assistant, allowedToolNames)) {
+    if (!isReplaySafeThinkingAssistantMessage(message, allowedToolNames, isCompleted)) {
       continue;
     }
-    const toolCalls = extractToolCallsFromAssistant(assistant);
+    const toolCalls = extractToolCallsFromAssistant(message);
     if (toolCalls.some((toolCall) => reserved.has(toolCall.id))) {
       continue;
     }
@@ -164,34 +145,21 @@ function collectReplaySafeThinkingToolIds(
   return { reservedIds: reserved, preservedIndexes };
 }
 
-function shortHash(text: string, length = 8): string {
-  return sha256HexPrefixCore(text, length);
-}
-
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
-function isNativeKimiToolCallId(id: string): boolean {
-  return NATIVE_KIMI_TOOL_CALL_ID_RE.test(id);
-}
-
 function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {
   if (params.mode === "strict9") {
-    const base = sanitizeToolCallId(params.id, params.mode);
-    const candidate = base.length >= STRICT9_LEN ? base.slice(0, STRICT9_LEN) : "";
-    if (candidate && !params.used.has(candidate)) {
+    const candidate = sanitizeToolCallId(params.id, params.mode);
+    if (!params.used.has(candidate)) {
       return candidate;
     }
 
     for (let i = 0; i < 1000; i += 1) {
-      const hashed = shortHash(`${params.id}:${i}`, STRICT9_LEN);
+      const hashed = sha256HexPrefixCore(`${params.id}:${i}`, STRICT9_LEN);
       if (!params.used.has(hashed)) {
         return hashed;
       }
     }
 
-    return shortHash(`${params.id}:${Date.now()}`, STRICT9_LEN);
+    return sha256HexPrefixCore(`${params.id}:${Date.now()}`, STRICT9_LEN);
   }
 
   const MAX_LEN = 40;
@@ -201,25 +169,21 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
     return base;
   }
 
-  const hash = shortHash(params.id);
-  // Use separator based on mode: none for strict, underscore for non-strict variants
-  const separator = params.mode === "strict" ? "" : "_";
-  const maxBaseLen = MAX_LEN - separator.length - hash.length;
-  const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
-  const candidate = `${clippedBase}${separator}${hash}`;
+  const hash = sha256HexPrefixCore(params.id, 8);
+  const candidate = `${base.slice(0, MAX_LEN - hash.length)}${hash}`;
   if (!params.used.has(candidate)) {
     return candidate;
   }
 
   for (let i = 2; i < 1000; i += 1) {
-    const suffix = params.mode === "strict" ? `x${i}` : `_${i}`;
+    const suffix = `x${i}`;
     const next = `${candidate.slice(0, MAX_LEN - suffix.length)}${suffix}`;
     if (!params.used.has(next)) {
       return next;
     }
   }
 
-  const ts = params.mode === "strict" ? `t${Date.now()}` : `_${Date.now()}`;
+  const ts = `t${Date.now()}`;
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
@@ -238,7 +202,7 @@ function createOccurrenceAwareResolver(
   const used = new Set<string>(options?.reservedIds ?? []);
   const assistantOccurrences = new Map<string, number>();
   const orphanToolResultOccurrences = new Map<string, number>();
-  const pendingByRawId = new Map<string, string[]>();
+  const pendingByRawId = createToolCallOccurrenceQueue<string>();
   const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
   const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
 
@@ -250,7 +214,7 @@ function createOccurrenceAwareResolver(
 
   const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
     for (let attempt = 0; ; attempt += 1) {
-      const candidate = `call_${shortHash(`${id}:${occurrence}:${attempt}`, 24)}`;
+      const candidate = `call_${sha256HexPrefixCore(`${id}:${occurrence}:${attempt}`, 24)}`;
       if (!used.has(candidate)) {
         used.add(candidate);
         return candidate;
@@ -260,19 +224,10 @@ function createOccurrenceAwareResolver(
 
   const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
     if (
-      duplicateToolCallIdStyle === "openai" &&
       occurrence === 1 &&
-      OPENAI_TOOL_CALL_ID_RE.test(id) &&
-      !used.has(id)
-    ) {
-      used.add(id);
-      return id;
-    }
-    if (
-      preserveNativeAnthropicToolUseIds &&
-      isNativeAnthropicToolUseId(id) &&
-      occurrence === 1 &&
-      !used.has(id)
+      !used.has(id) &&
+      ((duplicateToolCallIdStyle === "openai" && OPENAI_TOOL_CALL_ID_RE.test(id)) ||
+        (preserveNativeAnthropicToolUseIds && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)))
     ) {
       used.add(id);
       return id;
@@ -287,22 +242,13 @@ function createOccurrenceAwareResolver(
       duplicateToolCallIdStyle === "openai" && occurrence > 1
         ? allocateOpenAIStyleId(id, occurrence)
         : allocatePreservingNativeAnthropicId(id, occurrence);
-    const pending = pendingByRawId.get(id);
-    if (pending) {
-      pending.push(next);
-    } else {
-      pendingByRawId.set(id, [next]);
-    }
+    pendingByRawId.add(id, next);
     return next;
   };
 
   const resolveToolResultId = (id: string): string => {
-    const pending = pendingByRawId.get(id);
-    if (pending && pending.length > 0) {
-      const next = pending.shift()!;
-      if (pending.length === 0) {
-        pendingByRawId.delete(id);
-      }
+    const next = pendingByRawId.claim(id);
+    if (next !== undefined) {
       return next;
     }
 
@@ -310,7 +256,7 @@ function createOccurrenceAwareResolver(
     orphanToolResultOccurrences.set(id, occurrence);
     if (
       preserveNativeAnthropicToolUseIds &&
-      isNativeAnthropicToolUseId(id) &&
+      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
       occurrence === 1 &&
       !used.has(id)
     ) {
@@ -322,12 +268,7 @@ function createOccurrenceAwareResolver(
 
   const preserveAssistantId = (id: string): string => {
     used.add(id);
-    const pending = pendingByRawId.get(id);
-    if (pending) {
-      pending.push(id);
-    } else {
-      pendingByRawId.set(id, [id]);
-    }
+    pendingByRawId.add(id, id);
     return id;
   };
 
@@ -447,8 +388,6 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     allowedToolNames?: Iterable<string>;
   },
 ): AgentMessage[] {
-  // Strict mode: only [a-zA-Z0-9]
-  // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
   // Sanitization can introduce collisions, and some providers also reject raw
   // duplicate tool-call IDs. Track assistant occurrences in-order so repeated
   // raw IDs receive distinct rewritten IDs, while matching tool results consume

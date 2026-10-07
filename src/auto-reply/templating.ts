@@ -2,6 +2,7 @@
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { DmScope, ReplyToMode } from "../config/types.base.js";
 import type { GroupToolPolicyConfig } from "../config/types.tools.js";
+import type { GatewayUiCommandTarget } from "../gateway/ui-command-target.types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -11,6 +12,7 @@ import type { PluginHookChannelContext } from "../plugins/hook-channel-context.t
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { GroupThreadMentionFacts } from "./group-thread.types.js";
 import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
@@ -44,6 +46,8 @@ export type ChannelStructuredContextEntry = {
   source?: string;
   type?: string;
   payload: unknown;
+  /** Keeps this provider-owned window independent of bounded canonical transcript enrichment. */
+  sessionTranscriptMode?: "preserve";
   /** Internal exact-id hints for canonical transcript/live-cache deduplication. */
   sessionTranscriptDedupeMessageIds?: string[];
   /** Internal visible-text hints for legacy assistant rows without transcript ids. */
@@ -53,6 +57,8 @@ export type ChannelStructuredContextEntry = {
 export type SessionTranscriptContext = {
   chatWindow?: boolean;
   historyLimit: number;
+  /** A platform-selected recent window keeps its configured bound and does not merge transcript rows. */
+  historyKind?: "pending" | "recent";
   beforeTimestampMs?: number;
   minTimestampMs?: number;
   senderLabels?: { assistant: string; user: string };
@@ -147,6 +153,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
    * id, such as selected-agent global sessions.
    */
   AgentId?: string;
+  /** Participant mention facts prepared once from the physical inbound message. */
+  GroupThread?: GroupThreadMentionFacts;
   /** Effective routed DM scope, including binding overrides. */
   DmScope?: DmScope;
   /**
@@ -305,7 +313,7 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Internal wake cause, independent of transport, transcript provenance, and execution authority. */
-  InternalTurnSource?: "heartbeat" | "cron" | "exec";
+  InternalTurnSource?: "heartbeat" | "cron" | "exec" | "progress-card-refresh";
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
   OwnerAllowFrom?: Array<string | number>;
   SenderName?: string;
@@ -374,6 +382,8 @@ export type MsgContext = Partial<CanonicalInboundText> & {
   GatewayClientScopes?: string[];
   /** Gateway client capabilities when the message originates from the gateway. */
   GatewayClientCaps?: string[];
+  /** Server-bound requesting browser; never sourced from message text or rendered into prompts. */
+  GatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Run-scoped plugin tool bindings; never rendered into prompt text. */
   GatewayRunToolBindings?: Readonly<Record<string, unknown>>;
   /** Gateway device id allowed to review approvals initiated by this turn. */
@@ -506,39 +516,26 @@ export type TemplateContext = Omit<RuntimeMsgContext, NonTemplateContextKey> & {
 export type FinalizedTemplateContext = Omit<TemplateContext, keyof CanonicalInboundText> &
   CanonicalInboundText;
 
+function formatTemplateScalar(value: unknown): string | undefined {
+  return typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+    ? String(value)
+    : undefined;
+}
+
 function formatTemplateValue(value: unknown): string {
-  if (value == null) {
-    return "";
-  }
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(formatTemplateScalar)
+      .filter((entry) => entry !== undefined)
+      .join(",");
   }
   if (typeof value === "symbol" || typeof value === "function") {
     return value.toString();
   }
-  if (Array.isArray(value)) {
-    return value
-      .flatMap((entry) => {
-        if (entry == null) {
-          return [];
-        }
-        if (typeof entry === "string") {
-          return [entry];
-        }
-        if (typeof entry === "number" || typeof entry === "boolean" || typeof entry === "bigint") {
-          return [String(entry)];
-        }
-        return [];
-      })
-      .join(",");
-  }
-  if (typeof value === "object") {
-    return "";
-  }
-  return "";
+  return formatTemplateScalar(value) ?? "";
 }
 
 // Simple {{Placeholder}} interpolation using inbound message context.

@@ -1,10 +1,14 @@
-/** Lightweight reply-stage profiler for slow-turn diagnostics. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
+import {
+  createStageTimingTracker,
+  formatStageTimings,
+  type StageTiming,
+} from "../../shared/stage-timing.js";
 
 type ReplyTimingSummary = {
   totalMs: number;
-  spans: Array<{ name: string; durationMs: number; elapsedMs: number }>;
+  spans: StageTiming[];
 };
 
 type ReplyTimingLogParams = {
@@ -21,7 +25,6 @@ type ReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams> = {
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 };
 
-/** Checks config/env diagnostic flags for reply profiling. */
 export function isReplyProfilerEnabled(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -37,11 +40,7 @@ export function isReplyProfilerEnabled(params?: {
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  enabled?: boolean;
-  totalWarnMs?: number;
-  stageWarnMs?: number;
+  enabled: boolean;
   formatMessage?: (
     params: TLogParams,
     summary: ReplyTimingSummary,
@@ -49,45 +48,19 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): ReplyTimingTracker<TLogParams> {
-  const profilerEnabled =
-    params.enabled ?? isReplyProfilerEnabled({ config: params.config, env: params.env });
-  const startedAt = Date.now();
-  const spans: ReplyTimingSummary["spans"] = [];
+  const timing = createStageTimingTracker();
   let didLog = false;
-  const totalWarnMs = params.totalWarnMs ?? (profilerEnabled ? 1_000 : 10_000);
-  const stageWarnMs = params.stageWarnMs ?? (profilerEnabled ? 500 : 5_000);
-  const toMs = (value: number) => Math.max(0, Math.round(value));
-  const record = (name: string, spanStartedAt: number) => {
-    const currentAt = Date.now();
-    spans.push({
-      name,
-      durationMs: toMs(currentAt - spanStartedAt),
-      elapsedMs: toMs(currentAt - startedAt),
-    });
-  };
-
+  const totalWarnMs = params.enabled ? 1_000 : 10_000;
+  const stageWarnMs = params.enabled ? 500 : 5_000;
   return {
-    async measure(name, run) {
-      const spanStartedAt = Date.now();
-      try {
-        return await run();
-      } finally {
-        record(name, spanStartedAt);
-      }
-    },
-    measureSync(name, run) {
-      const spanStartedAt = Date.now();
-      try {
-        return run();
-      } finally {
-        record(name, spanStartedAt);
-      }
-    },
+    measure: timing.measure,
+    measureSync: timing.measureSync,
     logIfSlow(logParams, options) {
       if (didLog && !options?.repeat) {
         return;
       }
-      const summary = { totalMs: toMs(Date.now() - startedAt), spans: spans.slice() };
+      const { totalMs, stages: spans } = timing.snapshot();
+      const summary = { totalMs, spans };
       if (
         summary.totalMs < totalWarnMs &&
         !summary.spans.some((span) => span.durationMs >= stageWarnMs)
@@ -97,12 +70,7 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
       if (!options?.repeat) {
         didLog = true;
       }
-      const formattedSpans =
-        summary.spans.length > 0
-          ? summary.spans
-              .map((span) => `${span.name}:${span.durationMs}ms@${span.elapsedMs}ms`)
-              .join(",")
-          : "none";
+      const formattedSpans = formatStageTimings(summary.spans);
       if (params.formatMessage) {
         const detailParams = logParams as Record<string, unknown>;
         const details = Object.fromEntries(

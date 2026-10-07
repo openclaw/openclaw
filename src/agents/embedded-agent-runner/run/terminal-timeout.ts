@@ -85,6 +85,7 @@ export function resolveEmbeddedRunTerminalTimeout(input: {
       { text: timeoutText, isError: true },
     ],
     meta: {
+      modelFallbackStopReason: "agent_run_terminal_timeout",
       durationMs: Date.now() - input.startedAtMs,
       agentMeta: input.terminalPrepared.agentMeta,
       aborted: terminalAborted,

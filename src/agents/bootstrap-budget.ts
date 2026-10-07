@@ -1,14 +1,8 @@
-/**
- * Analyzes injected workspace bootstrap files and builds warnings when context
- * was truncated before an agent sees it.
- */
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  buildBootstrapPromptWarning,
-  normalizeBootstrapWarningSignatures,
-} from "./bootstrap-budget-warning.js";
+import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import type {
   BootstrapBudgetAnalysis,
   BootstrapInjectionStat,
@@ -16,13 +10,15 @@ import type {
   BootstrapPromptWarningMode,
   BootstrapTruncationCause,
 } from "./bootstrap-budget.types.js";
-import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
   USER_BOOTSTRAP_MAX_CHARS,
 } from "./embedded-agent-helpers/bootstrap.js";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
+
+export { buildBootstrapPromptWarningNotice } from "./bootstrap-budget-warning.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
 
@@ -49,6 +45,18 @@ function effectiveBootstrapFileLimit(name: string, bootstrapMaxChars: number): n
     : bootstrapMaxChars;
 }
 
+/**
+ * USER.md carries a deliberate fixed cap: tuning bootstrapMaxChars can only
+ * lower it, so per-file remediation must never suggest raising that setting
+ * for it. The effective limit equals the fixed cap exactly when the cap (not
+ * the configured limit) is the binding constraint.
+ */
+export function isFixedUserCapFile(file: { name: string; effectiveFileLimit: number }): boolean {
+  return (
+    file.name.toLowerCase() === "user.md" && file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS
+  );
+}
+
 /** Restores prompt-warning dedupe state from a previous bootstrap report. */
 export function resolveBootstrapWarningSignaturesSeen(report?: {
   bootstrapTruncation?: {
@@ -58,7 +66,7 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   };
 }): string[] {
   const truncation = report?.bootstrapTruncation;
-  const seenFromReport = normalizeBootstrapWarningSignatures(truncation?.warningSignaturesSeen);
+  const seenFromReport = normalizeUniqueTrimmedStringList(truncation?.warningSignaturesSeen);
   if (seenFromReport.length > 0) {
     return seenFromReport;
   }
@@ -66,32 +74,24 @@ export function resolveBootstrapWarningSignaturesSeen(report?: {
   if (truncation?.warningMode === "off") {
     return [];
   }
-  const single =
-    typeof truncation?.promptWarningSignature === "string"
-      ? (normalizeOptionalString(truncation.promptWarningSignature) ?? "")
-      : "";
+  const single = normalizeOptionalString(truncation?.promptWarningSignature);
   return single ? [single] : [];
 }
 
-/** Compares raw bootstrap files with the injected context files the agent received. */
+/**
+ * Matches injected content by source path, because basenames can repeat even
+ * when the total budget drops one of those files. Account before remapping
+ * source paths into the prompt workspace.
+ */
 export function buildBootstrapInjectionStats(params: {
   bootstrapFiles: WorkspaceBootstrapFile[];
   injectedFiles: EmbeddedContextFile[];
 }): BootstrapInjectionStat[] {
   const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
   for (const file of params.injectedFiles) {
     const pathValue = normalizeOptionalString(file.path) ?? "";
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
+    if (pathValue && !injectedByPath.has(pathValue)) {
       injectedByPath.set(pathValue, file.content);
-    }
-    const normalizedPath = pathValue.replace(/\\/g, "/");
-    const baseName = path.posix.basename(normalizedPath);
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
     }
   }
   return params.bootstrapFiles.map((file) => {
@@ -104,11 +104,8 @@ export function buildBootstrapInjectionStats(params: {
       normalizeOptionalString(file.name) ??
       (normalizedPath ? path.posix.basename(normalizedPath) : "bootstrap");
     const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      (pathValue ? injectedByPath.get(pathValue) : undefined) ??
-      injectedByPath.get(name) ??
-      injectedByBaseName.get(name);
-    const injectedChars = injected ? injected.length : 0;
+    const injected = pathValue ? injectedByPath.get(pathValue) : undefined;
+    const injectedChars = injected?.length ?? 0;
     const truncated = !file.missing && injectedChars < rawChars;
     return {
       name,
@@ -137,10 +134,8 @@ export function analyzeBootstrapBudget(params: {
     params.nearLimitRatio < 1
       ? params.nearLimitRatio
       : DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO;
-  const nonMissing = params.files.filter((file) => !file.missing);
-  const rawChars = nonMissing.reduce((sum, file) => sum + file.rawChars, 0);
-  const injectedChars = nonMissing.reduce((sum, file) => sum + file.injectedChars, 0);
-  const totalNearLimit = injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio);
+  let rawChars = 0;
+  let injectedChars = 0;
   let remainingTotalChars = bootstrapTotalMaxChars;
   const files = params.files.map((file) => {
     const effectiveFileLimit = effectiveBootstrapFileLimit(file.name, bootstrapMaxChars);
@@ -149,6 +144,9 @@ export function analyzeBootstrapBudget(params: {
     if (file.missing) {
       return { ...file, effectiveFileLimit, nearLimit: false, causes: [] };
     }
+    // Missing-file markers consume budget above but do not enter reported file totals.
+    rawChars += file.rawChars;
+    injectedChars += file.injectedChars;
     const perFileOverLimit = file.rawChars > effectiveFileLimit;
     const nearLimit = file.rawChars >= Math.ceil(effectiveFileLimit * nearLimitRatio);
     const causes: BootstrapTruncationCause[] = [];
@@ -170,7 +168,7 @@ export function analyzeBootstrapBudget(params: {
     files,
     truncatedFiles,
     nearLimitFiles,
-    totalNearLimit,
+    totalNearLimit: injectedChars >= Math.ceil(bootstrapTotalMaxChars * nearLimitRatio),
     hasTruncation: truncatedFiles.length > 0,
     totals: {
       rawChars,
@@ -212,19 +210,6 @@ export function buildBootstrapBudgetState(params: {
     bootstrapPromptWarningMode,
     bootstrapTotalMaxChars,
   };
-}
-
-/** Builds the compact truncation notice mirrored into run metadata. */
-export function buildBootstrapPromptWarningNotice(warningLines?: string[]): string | undefined {
-  const hasWarning = (warningLines ?? []).some((line) => line.trim().length > 0);
-  if (!hasWarning) {
-    return undefined;
-  }
-  return [
-    "[Bootstrap truncation warning]",
-    "Some workspace bootstrap files were truncated before Project Context injection.",
-    "Treat Project Context as partial and read the relevant files directly if details seem missing.",
-  ].join("\n");
 }
 
 /** Serializes truncation warning state for run reports and future dedupe. */

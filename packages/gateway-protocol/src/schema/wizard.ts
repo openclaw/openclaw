@@ -1,10 +1,9 @@
-// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
 
-/** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
@@ -12,7 +11,6 @@ const WizardRunStatusSchema = Type.Union([
   Type.Literal("error"),
 ]);
 
-/** Starts a setup wizard, optionally scoped to a local or remote workspace. */
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
@@ -24,7 +22,11 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
-/** Client answer payload for the current wizard step. */
+export const McpAuthLoginParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  serverName: NonEmptyString,
+});
+
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
@@ -36,18 +38,16 @@ export const WizardNextParamsSchema = closedObject({
   answer: Type.Optional(WizardAnswerSchema),
 });
 
-/** Shared session-id-only params for cancel and status requests. */
-const WizardSessionIdParamsSchema = closedObject({
+/** Cancels a wizard or closes input when its client view is discarded. */
+export const WizardCancelParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  closeInput: Type.Optional(Type.Boolean()),
+});
+
+export const WizardStatusParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Cancels an active wizard session. */
-export const WizardCancelParamsSchema = WizardSessionIdParamsSchema;
-
-/** Reads status for an active or recently completed wizard session. */
-export const WizardStatusParamsSchema = WizardSessionIdParamsSchema;
-
-/** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({
   value: Type.Unknown(),
   label: NonEmptyString,
@@ -60,7 +60,6 @@ const WizardDeviceCodeSchema = closedObject({
   message: Type.Optional(Type.String()),
 });
 
-/** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = closedObject({
   id: NonEmptyString,
   type: Type.Union([
@@ -90,7 +89,6 @@ const WizardConfiguredAccountSchema = closedObject({
   accountId: NonEmptyString,
 });
 
-/** Common response fields for start and next calls. */
 const WizardResultFields = {
   done: Type.Boolean(),
   step: Type.Optional(WizardStepSchema),
@@ -110,15 +108,17 @@ const WizardResultFields = {
   modelActivation: Type.Optional(
     closedObject({
       modelRef: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       gatewayRestartRequired: Type.Optional(Type.Literal(true)),
     }),
   ),
+  // Only a finalized activation rejection may release recovery. Generic terminal
+  // errors can follow committed writes; the top-level error retains their detail.
+  activationRejection: Type.Optional(SetupInferenceActivationRejectionSchema),
 };
 
-/** Result after advancing a wizard session. */
 export const WizardNextResultSchema = closedObject(WizardResultFields);
 
-/** Result returned when a wizard session is created. */
 export const WizardStartResultSchema = closedObject({
   sessionId: NonEmptyString,
   ...WizardResultFields,
@@ -133,6 +133,7 @@ export const WizardStatusResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { coerceErrorMessage, stableStringify } from "@openclaw/normalization-core";
+import { coerceErrorMessage } from "@openclaw/normalization-core";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   CLAW_CRON_REF_SCHEMA_VERSION,
@@ -12,6 +11,7 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
+import { digestClawValue as digest } from "./digest.js";
 import type { ClawCronJob, ClawManifest } from "./types.js";
 import type { ClawUpdatePlan } from "./update-plan.js";
 import { collectClawRollbackFailures } from "./update-rollback.js";
@@ -31,14 +31,9 @@ export class ClawCronUpdateError extends Error {
   }
 }
 
-function digest(value: unknown): string {
-  return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
-}
-
 function targetRef(params: {
   agentId: string;
   job: ClawCronJob;
-  schedulerJobId?: string;
   previous?: PersistedClawCronRef;
   nowMs: number;
 }): PersistedClawCronRef {
@@ -47,7 +42,6 @@ function targetRef(params: {
     agentId: params.agentId,
     manifestId: params.job.id,
     declarationKey: `claw:${params.agentId}:${params.job.id}`,
-    ...(params.schedulerJobId ? { schedulerJobId: params.schedulerJobId } : {}),
     status: "pending",
     job: params.job,
     createdAtMs: params.previous?.createdAtMs ?? params.nowMs,
@@ -89,8 +83,16 @@ export async function applyClawCronUpdate(
   const undo: Array<() => Promise<void>> = [];
   const appliedIds: string[] = [];
   const nowMs = options.nowMs ?? Date.now();
+  let agentAvailable = false;
 
+  const waitForAgent = async () => {
+    if (!agentAvailable) {
+      await gateway.waitUntilAgentAvailable?.(updatePlan.agentId);
+      agentAvailable = true;
+    }
+  };
   const add = async (ref: PersistedClawCronRef): Promise<string> => {
+    await waitForAgent();
     let raw: unknown;
     try {
       raw = await gateway.add(clawCronGatewayInput(updatePlan.agentId, ref));
@@ -153,6 +155,8 @@ export async function applyClawCronUpdate(
           `Target cron declaration ${JSON.stringify(action.id)} is missing.`,
         );
       }
+      // A readiness failure must leave this declaration's ownership untouched.
+      await waitForAgent();
       const pending = targetRef({ agentId: updatePlan.agentId, job, previous, nowMs });
       upsertRef(pending, options);
       const schedulerJobId = await add(pending);

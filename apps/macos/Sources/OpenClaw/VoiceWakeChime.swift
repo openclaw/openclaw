@@ -19,21 +19,10 @@ enum VoiceWakeChime: Codable, Equatable {
         case .none:
             "No Sound"
         case let .system(name):
-            VoiceWakeChimeCatalog.displayName(for: name)
+            name
         case let .custom(displayName, _):
             displayName
         }
-    }
-}
-
-enum VoiceWakeChimeCatalog {
-    /// Options shown in the picker.
-    static var systemOptions: [String] {
-        SoundEffectCatalog.systemOptions
-    }
-
-    static func displayName(for raw: String) -> String {
-        SoundEffectCatalog.displayName(for: raw)
     }
 }
 
@@ -41,31 +30,19 @@ enum VoiceWakeChimeCatalog {
 enum VoiceWakeChimePlayer {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "voicewake.chime")
 
-    static func play(_ chime: VoiceWakeChime, reason: String? = nil) {
-        guard let sound = self.sound(for: chime) else { return }
-        if let reason {
-            self.logger.log(level: .info, "chime play reason=\(reason, privacy: .public)")
-        } else {
-            self.logger.log(level: .info, "chime play")
+    static func play(_ chime: VoiceWakeChime, reason: String) {
+        let sound: NSSound? = switch chime {
+        case .none: nil
+        case let .system(name): SoundEffectPlayer.sound(named: name)
+        case let .custom(_, bookmark): SoundEffectPlayer.sound(from: bookmark)
         }
+        guard let sound else { return }
+        self.logger.log(level: .info, "chime play reason=\(reason, privacy: .public)")
         DiagnosticsFileLog.shared.log(category: "voicewake.chime", event: "play", fields: [
-            "reason": reason ?? "",
+            "reason": reason,
             "chime": chime.displayLabel,
             "systemName": chime.systemName ?? "",
         ])
         SoundEffectPlayer.play(sound)
-    }
-
-    private static func sound(for chime: VoiceWakeChime) -> NSSound? {
-        switch chime {
-        case .none:
-            nil
-
-        case let .system(name):
-            SoundEffectPlayer.sound(named: name)
-
-        case let .custom(_, bookmark):
-            SoundEffectPlayer.sound(from: bookmark)
-        }
     }
 }

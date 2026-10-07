@@ -7,59 +7,106 @@ import {
   renderProviderBrandIcon,
 } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
-import type { ModelSetupVerifyState } from "./state.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+import {
+  activationTargetId,
+  type ModelSetupActivationState,
+  type ModelSetupVerifyState,
+} from "./state.ts";
+
+registerModelSetupEnglish();
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 
-function failureLabel(status: string): string {
-  const labels: Record<string, string> = {
-    auth: t("modelSetup.failure.auth"),
-    rate_limit: t("modelSetup.failure.rateLimit"),
-    billing: t("modelSetup.failure.billing"),
-    timeout: t("modelSetup.failure.timeout"),
-    format: t("modelSetup.failure.format"),
-    unavailable: t("modelSetup.failure.unavailable"),
-    unknown: t("modelSetup.failure.unknown"),
-  };
-  return labels[status] ?? labels.unknown!;
+export function renderConfiguredUtilityModel(props: {
+  result: SystemAgentSetupDetectResult;
+  activation: ModelSetupActivationState;
+  canRepair: boolean;
+  actionsDisabled: boolean;
+  onOpenAssistant: () => void;
+  onActivateCandidate: (candidate: Candidate) => void;
+}) {
+  const modelRef = props.result.utilityModel ?? props.result.setupModel;
+  if (!modelRef) {
+    return nothing;
+  }
+  const repairCandidate = props.canRepair
+    ? props.result.candidates.find(
+        (candidate) =>
+          candidate.modelTarget === "utility" &&
+          candidate.modelRef === modelRef &&
+          candidate.kind.startsWith("provider-auto:"),
+      )
+    : undefined;
+  const repairing =
+    repairCandidate &&
+    props.activation.phase === "testing" &&
+    props.activation.targetId ===
+      activationTargetId(repairCandidate.kind, repairCandidate.modelRef);
+  return html`<section class="settings-section model-setup__utility">
+    <div class="settings-section__header"><h2>${t("modelSetup.utility.configured")}</h2></div>
+    <div class="model-setup__row">
+      <div class="model-setup__row-main">
+        <strong>${modelRef}</strong>
+        <div class="muted">
+          ${t(
+            props.result.configuredModel
+              ? "modelSetup.utility.primaryReady"
+              : "modelSetup.utility.choosePrimary",
+          )}
+        </div>
+      </div>
+      <div class="model-setup__row-actions">
+        ${
+          repairCandidate
+            ? html`<button
+                type="button"
+                class="btn"
+                ?disabled=${props.actionsDisabled}
+                @click=${() => props.onActivateCandidate(repairCandidate)}
+              >
+                ${t(repairing ? "modelSetup.candidates.testingButton" : "modelSetup.utility.repair")}
+              </button>`
+            : nothing
+        }
+        <button
+          type="button"
+          class="btn primary"
+          ?disabled=${props.actionsDisabled}
+          @click=${props.onOpenAssistant}
+        >
+          ${t("modelSetup.utility.openAssistant")}
+        </button>
+      </div>
+    </div>
+  </section>`;
 }
 
-function failureGuidance(status: string): string | typeof nothing {
-  const guidance: Record<string, string | typeof nothing> = {
-    auth: t("modelSetup.failureGuidance.auth"),
-    rate_limit: t("modelSetup.failureGuidance.rateLimit"),
-    billing: t("modelSetup.failureGuidance.billing"),
-    timeout: t("modelSetup.failureGuidance.timeout"),
-    format: t("modelSetup.failureGuidance.format"),
-    unavailable: nothing,
-    unknown: t("modelSetup.failureGuidance.unknown"),
-  };
-  return guidance[status] ?? guidance.unknown!;
-}
+const FAILURE_KEYS: Record<string, string> = {
+  auth: "auth",
+  rate_limit: "rateLimit",
+  billing: "billing",
+  timeout: "timeout",
+  format: "format",
+  unavailable: "unavailable",
+  unknown: "unknown",
+};
 
-export function renderModelSetupFailure(status: string, error: string): TemplateResult {
+function renderModelSetupFailure(status: string, error: string): TemplateResult {
+  const key = FAILURE_KEYS[status] ?? "unknown";
   return html`
     <div class="model-setup__failure" role="alert">
       <span class="model-setup__failure-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span><strong>${failureLabel(status)}.</strong> ${error} ${failureGuidance(status)}</span>
+      <span
+        ><strong>${t(`modelSetup.failure.${key}`)}.</strong> ${error}
+        ${key === "unavailable" ? nothing : t(`modelSetup.failureGuidance.${key}`)}</span
+      >
     </div>
   `;
 }
 
-function modelName(modelRef: string): string {
-  const separator = modelRef.indexOf("/");
-  return separator < 0 ? modelRef : modelRef.slice(separator + 1);
-}
-
-function findConfiguredCandidate(
-  result: SystemAgentSetupDetectResult,
-  modelRef: string,
-): Candidate | undefined {
-  return result.candidates.find((candidate) => candidate.modelRef === modelRef);
-}
-
 function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
-  const name = modelName(modelRef);
+  const name = modelRef.slice(modelRef.indexOf("/") + 1);
   const detail = candidate?.detail.trim();
   if (!detail || candidate?.kind === "existing-model") {
     return name;
@@ -94,7 +141,12 @@ export function renderConfiguredModel(props: {
   const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : configuredRef;
   const providerId = providerIdFromModelRef(displayRef);
   const configuredCandidate =
-    displayRef === configuredRef ? findConfiguredCandidate(props.result, configuredRef) : undefined;
+    displayRef === configuredRef
+      ? props.result.candidates.find(
+          (candidate) =>
+            candidate.modelRef === configuredRef && !candidate.kind.startsWith("saved-auth:"),
+        )
+      : undefined;
   const providerLabel = providerId ? providerDisplayLabel(providerId) : displayRef;
   const detail = configuredModelDetail(configuredCandidate, displayRef);
 
@@ -158,4 +210,14 @@ export function renderConfiguredModel(props: {
       </div>
     </section>
   `;
+}
+
+export function renderActivationFeedback(activation: ModelSetupActivationState) {
+  // Feedback follows the activation attempt, including prepared models absent from discovery.
+  if (activation.phase === "testing") {
+    return html`<div class="model-setup__testing" role="status">${t("modelSetup.testing")}</div>`;
+  }
+  return activation.phase === "failure"
+    ? renderModelSetupFailure(activation.status, activation.error)
+    : nothing;
 }

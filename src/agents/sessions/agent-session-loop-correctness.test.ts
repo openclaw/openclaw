@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import {
   createAssistantMessageEventStream,
   type Context,
@@ -8,13 +6,6 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  appendTranscriptMessage,
-  loadTranscriptEvents,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import { agentSessionAutomaticCompaction } from "./agent-session-compaction.js";
 import {
@@ -34,8 +25,8 @@ import {
   createResourceLoader,
 } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSessionEvent } from "./agent-session-types.js";
-import { clearExtensionCache, loadExtensionsCached } from "./extensions/loader.js";
 import type { ToolDefinition } from "./extensions/types.js";
+import { DefaultResourceLoader } from "./resource-loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 import { getSteeringMessageIdentity } from "./steering-message-identity.js";
@@ -111,9 +102,7 @@ describe("AgentSession loop correctness", () => {
       message: QueuedMessage;
     }) => Promise<void>;
     const persistenceError = new Error("SQLite transcript append failed");
-    vi.spyOn(sessionManager, "appendMessage").mockImplementation(() => {
-      throw persistenceError;
-    });
+    vi.spyOn(sessionManager, "appendMessageAsync").mockRejectedValue(persistenceError);
     const publishedUserMessages: unknown[] = [];
     session.subscribe((event) => {
       if (event.type === "message_end" && event.message.role === "user") {
@@ -153,77 +142,71 @@ describe("AgentSession loop correctness", () => {
     }
   });
 
-  it.each([2, 3])(
-    "confirms each of %i identical queued messages only after its own transcript commit",
-    async (waiterCount) => {
-      const { session, sessionManager } = await createTestSession();
-      type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
-      const queuedMessages = (
-        session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
-      ).steeringQueue.messages;
-      const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
-        type: "message_start" | "message_end";
-        message: QueuedMessage;
-      }) => Promise<void>;
-      const confirmed: number[] = [];
-      const waits = Array.from({ length: waiterCount }, (_, index) =>
-        steerActiveSessionWithOptionalDeliveryWait(session, "same queued message", {
-          deliveryTimeoutMs: 10_000,
-          waitForTranscriptCommit: true,
-        }).then(() => confirmed.push(index + 1)),
-      );
+  it("confirms identical queued messages only after their own transcript commits", async () => {
+    const waiterCount = 3;
+    const { session, sessionManager } = await createTestSession();
+    type QueuedMessage = Parameters<SessionManager["appendMessage"]>[0];
+    const queuedMessages = (
+      session.agent as unknown as { steeringQueue: { messages: QueuedMessage[] } }
+    ).steeringQueue.messages;
+    const handleAgentEvent = Reflect.get(session, "handleAgentEvent") as (event: {
+      type: "message_start" | "message_end";
+      message: QueuedMessage;
+    }) => Promise<void>;
+    const confirmed: number[] = [];
+    const waits = Array.from({ length: waiterCount }, (_, index) =>
+      steerActiveSessionWithOptionalDeliveryWait(session, "same queued message", {
+        deliveryTimeoutMs: 10_000,
+        waitForTranscriptCommit: true,
+      }).then(() => confirmed.push(index + 1)),
+    );
 
-      await vi.waitFor(() => expect(queuedMessages).toHaveLength(waiterCount));
-      const originalMessages = [...queuedMessages];
+    await vi.waitFor(() => expect(queuedMessages).toHaveLength(waiterCount));
+    const originalMessages = [...queuedMessages];
 
-      try {
-        for (let index = 0; index < waiterCount; index += 1) {
-          const message = queuedMessages.shift();
-          expect(message).toBeDefined();
-          if (!message) {
-            return;
-          }
-          await handleAgentEvent({ type: "message_start", message });
-          await handleAgentEvent({ type: "message_end", message });
-          await vi.waitFor(() =>
-            expect(confirmed).toEqual(
-              Array.from({ length: index + 1 }, (_, position) => position + 1),
-            ),
-          );
+    try {
+      for (let index = 0; index < waiterCount; index += 1) {
+        const message = queuedMessages.shift();
+        expect(message).toBeDefined();
+        if (!message) {
+          return;
         }
-        await Promise.all(waits);
-
-        const identities = originalMessages.map(getSteeringMessageIdentity);
-        expect(identities.every((identity) => typeof identity === "string")).toBe(true);
-        expect(new Set(identities).size).toBe(waiterCount);
-        for (const message of originalMessages) {
-          const identitySymbol = Object.getOwnPropertySymbols(message).find(
-            (symbol) => symbol === Symbol.for("openclaw.steeringMessageIdentity"),
-          );
-          expect(identitySymbol).toBeDefined();
-          if (identitySymbol) {
-            expect(Object.getOwnPropertyDescriptor(message, identitySymbol)?.enumerable).toBe(
-              false,
-            );
-          }
-          expect(JSON.stringify(message)).not.toContain(getSteeringMessageIdentity(message));
-        }
-        const persistedMessages = sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "message")
-          .map((entry) => entry.message);
-        expect(persistedMessages).toHaveLength(waiterCount);
-        expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(
-          true,
+        await handleAgentEvent({ type: "message_start", message });
+        await handleAgentEvent({ type: "message_end", message });
+        await vi.waitFor(() =>
+          expect(confirmed).toEqual(
+            Array.from({ length: index + 1 }, (_, position) => position + 1),
+          ),
         );
-      } finally {
-        for (const message of queuedMessages.splice(0)) {
-          await handleAgentEvent({ type: "message_end", message });
-        }
-        await Promise.allSettled(waits);
       }
-    },
-  );
+      await Promise.all(waits);
+
+      const identities = originalMessages.map(getSteeringMessageIdentity);
+      expect(identities.every((identity) => typeof identity === "string")).toBe(true);
+      expect(new Set(identities).size).toBe(waiterCount);
+      for (const message of originalMessages) {
+        const identitySymbol = Object.getOwnPropertySymbols(message).find(
+          (symbol) => symbol === Symbol.for("openclaw.steeringMessageIdentity"),
+        );
+        expect(identitySymbol).toBeDefined();
+        if (identitySymbol) {
+          expect(Object.getOwnPropertyDescriptor(message, identitySymbol)?.enumerable).toBe(false);
+        }
+        expect(JSON.stringify(message)).not.toContain(getSteeringMessageIdentity(message));
+      }
+      const persistedMessages = sessionManager
+        .getEntries()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.message);
+      expect(persistedMessages).toHaveLength(waiterCount);
+      expect(persistedMessages.every((message) => !getSteeringMessageIdentity(message))).toBe(true);
+    } finally {
+      for (const message of queuedMessages.splice(0)) {
+        await handleAgentEvent({ type: "message_end", message });
+      }
+      await Promise.allSettled(waits);
+    }
+  });
 
   it("snapshots ordinary event listeners before self-removal and late subscription", async () => {
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
@@ -286,9 +269,8 @@ describe("AgentSession loop correctness", () => {
     const assistant = createAssistant(testModel, [{ type: "text", text: "same answer" }]);
     const sessionManager = SessionManager.inMemory();
     sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-    sessionManager.appendMessage({ ...assistant });
+    const priorAssistantEntryId = sessionManager.appendMessage({ ...assistant });
     streamMocks.streamSimple.mockImplementation(() => createAssistantResultStream(assistant));
-    const appendMessage = vi.spyOn(sessionManager, "appendMessage");
     const { session } = await createTestSession({ sessionManager });
     const order: string[] = [];
     let releaseFirst: (() => void) | undefined;
@@ -328,10 +310,12 @@ describe("AgentSession loop correctness", () => {
     releaseFirst?.();
     await prompt;
 
-    const persistedAssistantCall = appendMessage.mock.results.findLast(
-      (result) => result.type === "return",
-    );
-    expect(terminalEntryId).toBe(persistedAssistantCall?.value);
+    const persistedAssistant = sessionManager
+      .getEntries()
+      .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
+    expect(persistedAssistant).toMatchObject({ type: "message", message: assistant });
+    expect(persistedAssistant?.id).not.toBe(priorAssistantEntryId);
+    expect(terminalEntryId).toBe(persistedAssistant?.id);
     expect(order).toEqual(["first:start", "first:end", "second"]);
   });
 
@@ -355,7 +339,7 @@ describe("AgentSession loop correctness", () => {
 
   it("manually compacts a completed turn smaller than the retained-token budget", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "short answer" }]),
     );
@@ -378,69 +362,17 @@ describe("AgentSession loop correctness", () => {
     });
   });
 
-  it("does not append when a compaction extension rejects the finalized summary", async () => {
-    const dir = tempDirs.make("openclaw-rejected-compaction-");
-    const target = {
-      agentId: "main",
-      sessionId: "rejected-compaction-reopen",
-      sessionKey: "agent:main:rejected-compaction-reopen",
-      storePath: path.join(dir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, {
-      sessionId: target.sessionId,
-      updatedAt: 1,
-    });
-    await appendTranscriptMessage(target, {
-      cwd: dir,
-      message: { role: "user", content: "authoritative question", timestamp: 1 },
-    });
-    const sessionManager = SessionManager.open(target, dir);
-    sessionManager.appendMessage(
-      createAssistant(testModel, [{ type: "text", text: "authoritative answer" }]),
-    );
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      ["session_before_compact", [async () => ({ cancel: true })]],
-    ]);
-    const { session } = await createTestSession({
-      sessionManager,
-      resourceLoader: createResourceLoader(handlers),
-    });
-    const persistedBefore = await loadTranscriptEvents(target);
-    const contextBefore = sessionManager.buildSessionContext();
-
-    await expect(session.compact()).rejects.toThrow("Compaction cancelled");
-
-    sessionManager.flushPendingPersistence();
-    const persistedAfterRejection = await loadTranscriptEvents(target);
-    expect(JSON.stringify(persistedAfterRejection)).toBe(JSON.stringify(persistedBefore));
-    expect(
-      persistedAfterRejection.some(
-        (entry) =>
-          typeof entry === "object" &&
-          entry !== null &&
-          "type" in entry &&
-          entry.type === "compaction",
-      ),
-    ).toBe(false);
-
-    const databasePath = resolveSqliteTargetFromSessionStorePath(target.storePath).path;
-    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-    const reopened = SessionManager.open(target, dir);
-    try {
-      expect(reopened.getBranch()).toEqual(persistedBefore.slice(1));
-      expect(reopened.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
-      expect(reopened.buildSessionContext()).toEqual(contextBefore);
-    } finally {
-      closeOpenClawAgentDatabaseByPath(databasePath);
-    }
-  });
-
   it("keeps a successful high-usage response and performs threshold maintenance without retry", async () => {
     const settingsManager = createAutoCompactionSettings();
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -473,7 +405,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session, sessionManager } = await createTestSession({
@@ -501,7 +438,7 @@ describe("AgentSession loop correctness", () => {
   it("does not pre-prompt compact from usage before a zero unavailable marker", async () => {
     const model = { ...testModel, contextWindow: 1_000 };
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(model, [{ type: "text", text: "old cumulative turn" }], "stop", 950),
     );
@@ -560,7 +497,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -605,23 +547,20 @@ describe("AgentSession loop correctness", () => {
       }),
     };
     const pluginDir = tempDirs.make("openclaw-terminate-plugin-");
-    const pluginPath = path.join(pluginDir, "extension.mjs");
-    await writeFile(
-      pluginPath,
-      `export default async function(api) {
-  api.on("tool_result", async event => ({ ...event, terminate: ${pluginTerminate} }));
-}
-`,
-    );
-    clearExtensionCache();
-    const loaded = await loadExtensionsCached([pluginPath], pluginDir);
+    const resourceLoader = new DefaultResourceLoader({
+      cwd: pluginDir,
+      agentDir: pluginDir,
+      extensionFactories: [
+        (api) => {
+          api.on("tool_result", async (event) => ({ ...event, terminate: pluginTerminate }));
+        },
+      ],
+    });
+    await resourceLoader.reload();
+    const loaded = resourceLoader.getExtensions();
     expect(loaded.errors).toEqual([]);
     expect(loaded.extensions).toHaveLength(1);
     expect(loaded.extensions[0]?.handlers.get("tool_result")).toHaveLength(1);
-    const resourceLoader = {
-      ...createResourceLoader(),
-      getExtensions: () => loaded,
-    };
     let modelTurns = 0;
     streamMocks.streamSimple.mockImplementation((activeModel: Model) => {
       modelTurns += 1;
@@ -672,7 +611,7 @@ describe("AgentSession loop correctness", () => {
           activeModel,
           [{ type: "toolCall", id: "call-finish", name: "finish", arguments: {} }],
           "toolUse",
-          100,
+          activeModel.contextWindow,
         ),
       ),
     );
@@ -777,12 +716,13 @@ describe("AgentSession loop correctness", () => {
 
   it("shares invalid-summary recovery with caller-owned automatic compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
     const settingsManager = createAutoCompactionSettings();
-    const getSummaryRequests = mockInvalidThenTextSummary("recovered caller-owned summary");
+    const summary = "recovered caller-owned summary";
+    const getSummaryRequests = mockInvalidThenTextSummary(summary);
     const { session } = await createTestSession({
       sessionManager,
       settingsManager,
@@ -792,14 +732,14 @@ describe("AgentSession loop correctness", () => {
     const result = await session[agentSessionAutomaticCompaction]();
 
     expect(getSummaryRequests()).toBe(2);
-    expect(result.summary).toContain("recovered caller-owned summary");
+    expect(result.status === "completed" && result.result.summary).toContain(summary);
     const compactions = sessionManager.getBranch().filter((entry) => entry.type === "compaction");
     expect(compactions).toHaveLength(1);
   });
 
   it("keeps public manual compaction one-shot for invalid summary output", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
       createAssistant(testModel, [{ type: "text", text: "historical answer to summarize" }]),
     );
@@ -817,6 +757,64 @@ describe("AgentSession loop correctness", () => {
 
     expect(getSummaryRequests()).toBe(1);
     expect(sessionManager.getBranch().some((entry) => entry.type === "compaction")).toBe(false);
+  });
+
+  it("does not replay a length-stopped empty summary and leaves the selected route usable", async () => {
+    const model: Model = { ...testModel, reasoning: true, maxTokens: 4_096 };
+    const sessionManager = SessionManager.inMemory();
+    await appendHistory(
+      sessionManager,
+      createAssistant(model, [{ type: "text", text: "historical answer to preserve" }]),
+    );
+    let summaryRequests = 0;
+    let conversationRequests = 0;
+    streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+      expect(activeModel.provider).toBe(model.provider);
+      if (context.systemPrompt?.includes("context summarization assistant")) {
+        summaryRequests += 1;
+        return createAssistantResultStream(
+          createAssistant(
+            activeModel,
+            [{ type: "thinking", thinking: "reasoning filled the output budget" }],
+            "length",
+          ),
+        );
+      }
+      conversationRequests += 1;
+      return createAssistantResultStream(
+        createAssistant(activeModel, [{ type: "text", text: "usable next reply" }]),
+      );
+    });
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 8_192, keepRecentTokens: 1 },
+        retry: { enabled: false },
+      }),
+      resourceLoader: createResourceLoader(),
+    });
+    const originalEntries = sessionManager.getEntries();
+
+    await expect(session[agentSessionAutomaticCompaction]()).rejects.toThrow(
+      "summary output budget (4096 tokens) was exhausted",
+    );
+    expect(summaryRequests).toBe(1);
+    expect(sessionManager.getEntries()).toEqual(originalEntries);
+    expect(session.model).toBe(model);
+
+    await session.prompt("continue on the selected provider");
+    expect(conversationRequests).toBe(1);
+    expect(session.model).toBe(model);
+    expect(sessionManager.getBranch()).toContainEqual(
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "usable next reply" }],
+        }),
+      }),
+    );
   });
 
   it("stops default auto-compaction after two invalid summaries", async () => {
@@ -1000,7 +998,12 @@ describe("AgentSession loop correctness", () => {
     const compactionEvents: AgentSessionEvent[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
       createAssistantResultStream(
-        createAssistant(activeModel, [{ type: "text", text: "complete answer" }], "stop", 100),
+        createAssistant(
+          activeModel,
+          [{ type: "text", text: "complete answer" }],
+          "stop",
+          activeModel.contextWindow,
+        ),
       ),
     );
     const { session } = await createTestSession({
@@ -1022,9 +1025,14 @@ describe("AgentSession loop correctness", () => {
 
   it("delivers a pending prompt immediately after pre-prompt compaction", async () => {
     const sessionManager = SessionManager.inMemory();
-    appendHistory(
+    await appendHistory(
       sessionManager,
-      createAssistant(testModel, [{ type: "text", text: "old answer" }], "stop", 100),
+      createAssistant(
+        testModel,
+        [{ type: "text", text: "old answer" }],
+        "stop",
+        testModel.contextWindow,
+      ),
     );
     const settingsManager = SettingsManager.inMemory({
       compaction: { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },

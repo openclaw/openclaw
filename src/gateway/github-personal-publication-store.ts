@@ -1,13 +1,10 @@
 import { randomUUID, createHash } from "node:crypto";
-import type {
-  SessionGitHubPublicationResult,
-  SessionGitHubStatusResult,
-} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { insertGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.js";
 import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
@@ -16,6 +13,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolvePersonalGitHubOwner } from "../state/user-github-connections.js";
+import { createGitHubPublicationExecutionEffects } from "./github-publication-execution-effects.js";
 import { projectGitHubPublicationResult } from "./github-publication-store.js";
 
 export type PersonalGitHubPublicationRow = DB["github_personal_publication_requests"];
@@ -99,34 +97,9 @@ export function readPersonalGitHubPublication(
   return row;
 }
 
-export function personalGitHubPublicationStatus(
-  row: PersonalGitHubPublicationRow,
-  executing: boolean,
-): SessionGitHubStatusResult {
-  const unfinished = row.status === "requested" || row.status === "publishing";
-  const projected = unfinished && !executing ? { ...row, status: "needs_confirmation" } : row;
-  return {
-    result: projectGitHubPublicationResult(projected),
-    confirmation:
-      projected.status !== "needs_confirmation"
-        ? null
-        : {
-            requestDigest: row.request_digest,
-            generation: row.connection_generation,
-            account: { accountId: row.identity_account_id, login: row.identity_login },
-            pushRepository: row.push_repository,
-            repository: row.repository,
-            branch: row.branch,
-            baseBranch: row.base_branch,
-            sourceHeadCommit: row.source_head_commit,
-            sourceIndexTree: row.source_index_tree,
-            workspaceTree: row.workspace_tree,
-          },
-  };
-}
-
 export function insertPersonalGitHubPublication(
   row: PersonalGitHubPublicationRow,
+  lifecycleRevision: string | null,
   assertCurrent: () => void,
 ): PersonalGitHubPublicationRow {
   return runOpenClawStateWriteTransaction(
@@ -135,6 +108,11 @@ export function insertPersonalGitHubPublication(
       assertOwner(row.owner_profile_id);
       ensurePersonalGitHubPublicationSchema(db);
       executeSqliteQuerySync(db, query(db).insertInto(table).values(row));
+      insertGitHubPublicationSessionLifecycle(db, {
+        publicationKind: "personal",
+        requestId: row.request_id,
+        lifecycleRevision,
+      });
       return row;
     },
     undefined,
@@ -240,49 +218,7 @@ export function claimPersonalGitHubPublication(
   return {
     row: claimed,
     ownsExecution,
-    updateHead(headCommit: string): PersonalGitHubPublicationRow {
-      return write({ head_commit: headCommit }, true);
-    },
-    complete(result: SessionGitHubPublicationResult): PersonalGitHubPublicationRow {
-      if (result.status === "published") {
-        return write(
-          {
-            status: "published",
-            head_commit: result.headCommit,
-            pull_request_url: result.url,
-            error_code: null,
-            next_action: null,
-          },
-          true,
-        );
-      }
-      if (result.status !== "failed") {
-        throw new Error("My GitHub publication result is not terminal.");
-      }
-      return write(
-        { status: "failed", error_code: result.code, next_action: result.nextAction },
-        true,
-      );
-    },
-    recordEffect(
-      effect: "push" | "pull_request",
-      observed?: { headCommit?: string; url?: string },
-    ): void {
-      // Observation preserves already-dispatched effects after revocation; it grants no further action.
-      write(
-        {
-          last_effect: effect,
-          effect_state: observed?.headCommit || observed?.url ? "observed" : "dispatched",
-          ...(observed?.headCommit ? { head_commit: observed.headCommit } : {}),
-          ...(observed?.url ? { pull_request_url: observed.url } : {}),
-        },
-        !observed,
-      );
-    },
-    interrupt(): PersonalGitHubPublicationRow {
-      // This is the execution owner's monotonic stop record, not a new authenticated action.
-      return write({ status: "needs_confirmation", error_code: null, next_action: null }, false);
-    },
+    ...createGitHubPublicationExecutionEffects({ write, interruptedStatus: "needs_confirmation" }),
   };
 }
 
@@ -338,25 +274,4 @@ export function listUnreportedPersonalGitHubPublications() {
       result: projectGitHubPublicationResult(row),
     };
   });
-}
-
-export function markPersonalGitHubPublicationReported(requestId: string): void {
-  const database = openOpenClawStateDatabase();
-  if (!tableExists(database.db, table)) {
-    return;
-  }
-  runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      executeSqliteQuerySync(
-        db,
-        query(db)
-          .updateTable(table)
-          .set({ reported_at_ms: Date.now() })
-          .where("request_id", "=", requestId)
-          .where("status", "in", ["published", "failed"]),
-      );
-    },
-    undefined,
-    { operationLabel: "github-personal-publication.report" },
-  );
 }

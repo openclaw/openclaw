@@ -1,4 +1,3 @@
-/** Commands for viewing and editing per-agent provider auth profile order. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   type AuthProfileStore,
@@ -60,7 +59,6 @@ async function resolveAuthOrderContext(
   return { cfg, agentId, agentDir, provider };
 }
 
-/** Shows the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderGetCommand(
   opts: { provider: string; agent?: string; json?: boolean },
   runtime: RuntimeEnv,
@@ -92,7 +90,6 @@ export async function modelsAuthOrderGetCommand(
   );
 }
 
-/** Clears the configured auth profile priority order for a provider. */
 export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
@@ -113,10 +110,9 @@ export async function modelsAuthOrderClearCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, "update", runtime);
 }
 
-/** Sets the provider auth profile priority order after validating each profile id. */
 export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
@@ -142,7 +138,10 @@ export async function modelsAuthOrderSetCommand(
         `Auth profile "${profileId}" not found in ${shortenHomePath(agentDir)}. Run ${formatCliCommand("openclaw models auth list --provider " + provider)} to see saved profiles.`,
       );
     }
-    if (resolveProviderIdForAuth(cred.provider, { config: cfg }) !== providerKey) {
+    if (
+      resolveProviderIdForAuth(cred.provider, { config: cfg, storedCredential: true }) !==
+      providerKey
+    ) {
       throw new Error(`Auth profile "${profileId}" is for ${cred.provider}, not ${provider}.`);
     }
   }
@@ -161,5 +160,5 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, "update", runtime);
 }

@@ -19,6 +19,8 @@ import {
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
+import { prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
@@ -62,6 +64,10 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
   return (evt: AgentSessionEvent) => {
     // Model facts advance before persistence, independently of queued reply delivery.
     ctx.captureModelEvent(evt);
+    // Capture tool facts before reply delivery can delay their lifecycle handlers.
+    const readResult =
+      evt.type === "tool_execution_end" ? prepareToolResult(evt.result) : undefined;
+    recordEmbeddedToolTrajectoryEvent(ctx, evt, readResult);
     switch (evt.type) {
       case "message_start":
         void scheduleEvent(evt, () => handleMessageStart(ctx, evt));
@@ -72,6 +78,15 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
       case "message_end":
         void scheduleEvent(evt, () => handleMessageEnd(ctx, evt));
         return;
+      case "turn_start":
+        // Async tool fragments share one provider turn; only a new model call starts a batch.
+        void scheduleEvent(evt, () => {
+          ctx.state.turnToolsOnlySourceProgress = undefined;
+        });
+        return;
+      case "turn_end":
+        void scheduleEvent(evt, () => ctx.noteLastAssistant(evt.message));
+        return;
       case "tool_execution_start":
         void scheduleEvent(evt, () => handleToolExecutionStart(ctx, evt));
         return;
@@ -79,7 +94,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         void scheduleEvent(evt, () => handleToolExecutionUpdate(ctx, evt));
         return;
       case "tool_execution_end":
-        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt));
+        void scheduleEvent(evt, () => handleToolExecutionEnd(ctx, evt, readResult!));
         return;
       case "agent_start":
         void scheduleEvent(evt, () => handleAgentStart(ctx));

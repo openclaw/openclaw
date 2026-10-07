@@ -62,7 +62,15 @@ export async function proveHotReloadTerminalDeferredRestart({
       const body = Buffer.concat(chunks);
       const upstream = await fetch(`${mock.baseUrl}${req.url}`, {
         method: req.method,
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(typeof req.headers.session_id === "string"
+            ? { session_id: req.headers.session_id }
+            : {}),
+          ...(typeof req.headers["x-session-affinity"] === "string"
+            ? { "x-session-affinity": req.headers["x-session-affinity"] }
+            : {}),
+        },
         ...(body.length ? { body } : {}),
       });
       const response = Buffer.from(await upstream.arrayBuffer());
@@ -107,6 +115,7 @@ export async function proveHotReloadTerminalDeferredRestart({
           providerMode: "mock-openai",
           forcedRuntime: "openclaw",
           providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+          mockSessionObserverUrl: mock.sessionObserverUrl,
           primaryModel: MODEL,
           transportBaseUrl: "http://127.0.0.1:1",
           controlUiEnabled: true,
@@ -153,7 +162,7 @@ export async function proveHotReloadTerminalDeferredRestart({
         );
         assert.equal(preflight.safe, false);
         assert(preflight.counts.embeddedRuns > 0, "The held response must own an active agent run");
-        const restart = await patch({ gateway: { controlUi: { enabled: false } } });
+        const restart = await patch({ gateway: { controlUi: { basePath: "/deferred-reload" } } });
         assert.equal(restart.sentinel.payload.stats.requiresRestart, true);
         await waitForHotReloadFact("startup-only change deferred for active work", () =>
           gateway
@@ -161,7 +170,7 @@ export async function proveHotReloadTerminalDeferredRestart({
             .split("\n")
             .some(
               (line) =>
-                line.includes("gateway.controlUi.enabled") && line.includes("deferring until"),
+                line.includes("gateway.controlUi.basePath") && line.includes("deferring until"),
             )
             ? true
             : undefined,
@@ -237,8 +246,9 @@ export async function proveHotReloadTerminalDeferredRestart({
           ),
         );
         assert.equal((await fetch(`${gateway.baseUrl}/chat/qa`)).status, 404);
+        assert.equal((await fetch(`${gateway.baseUrl}/deferred-reload/chat/qa`)).status, 200);
         startupOnlyControl = {
-          prefix: "gateway.controlUi.enabled (deferred)",
+          prefix: "gateway.controlUi.basePath (deferred)",
           originalBootId: bootId,
           replacementBootId: connection.bootId,
         };

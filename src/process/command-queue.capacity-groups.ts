@@ -3,9 +3,14 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 // lanes, with per-member reservations. Split out of command-queue.ts to keep
 // that file within its size budget; the queue supplies its own `drainLane` so
 // this module never has to import the queue runtime.
-import { getQueueState, normalizeLane, peekLaneQueue } from "./command-queue.state.js";
+import {
+  getQueueState,
+  normalizeLane,
+  peekLaneQueue,
+  type LaneGroupState,
+} from "./command-queue.state.js";
 import type { CommandLaneBlockReason, CommandLaneSnapshot } from "./command-queue.types.js";
-import { CommandLane } from "./lanes.js";
+import { CommandLane, SUBAGENT_LANE_PREFIX } from "./lanes.js";
 
 /** Internal bounded drain contract used by the group arbiter. */
 type BoundedDrainLaneFn = (lane: string, maxStarts?: number) => number | void;
@@ -27,13 +32,6 @@ export type CommandLaneGroupSpec = {
   reservations?: Readonly<Record<string, number>>;
 };
 
-export type LaneGroupState = {
-  group: string;
-  budget: number;
-  members: Set<string>;
-  reservations: Map<string, number>;
-};
-
 /** Shared across fresh module instances so one group cannot re-enter its arbiter. */
 const DRAINING_GROUPS = resolveGlobalSingleton(
   Symbol.for("openclaw.commandQueueDrainingGroups"),
@@ -47,16 +45,24 @@ const DRAINING_GROUPS = resolveGlobalSingleton(
  *
  * Known wait edges at this base: outer `cron` -> `cron-nested`
  * (`server-cron.ts` passes lane "cron"; `agents/lanes.ts` remaps inner work),
- * and `session:<key>` -> global lane (embedded-agent-runner run + compaction).
+ * `main` -> `system-agent` -> `session:<key>` -> `system-agent-inference`
+ * (delegated expert inference), and `session:<key>` -> global lane
+ * (embedded-agent-runner run + compaction).
  */
 const GROUP_INELIGIBLE_LANES: ReadonlySet<string> = new Set<string>([
   CommandLane.Cron,
   CommandLane.Main,
+  CommandLane.SystemAgent,
   CommandLane.Subagent,
   CommandLane.Nested,
 ]);
 
-const GROUP_INELIGIBLE_PREFIXES = ["session:", "nested:", "context-engine-turn-maintenance:"];
+const GROUP_INELIGIBLE_PREFIXES = [
+  "session:",
+  "nested:",
+  SUBAGENT_LANE_PREFIX,
+  "context-engine-turn-maintenance:",
+];
 
 function assertGroupEligibleLane(lane: string): void {
   if (GROUP_INELIGIBLE_LANES.has(lane)) {
@@ -73,29 +79,8 @@ function assertGroupEligibleLane(lane: string): void {
   }
 }
 
-/** Group registry, keyed by group id and by member lane name. */
-export function getGroupRegistry(): {
-  groups: Map<string, LaneGroupState>;
-  groupByLane: Map<string, string>;
-} {
-  const state: ReturnType<typeof getQueueState> & {
-    laneGroups?: Map<string, LaneGroupState>;
-    laneGroupByLane?: Map<string, string>;
-  } = getQueueState();
-  // Migration: an older singleton (pre-upgrade, inherited via globalThis after
-  // a SIGUSR1 in-process restart) has neither field. Active counts are derived,
-  // so a late-initialized registry cannot desynchronize from lane state.
-  if (!state.laneGroups) {
-    state.laneGroups = new Map<string, LaneGroupState>();
-  }
-  if (!state.laneGroupByLane) {
-    state.laneGroupByLane = new Map<string, string>();
-  }
-  return { groups: state.laneGroups, groupByLane: state.laneGroupByLane };
-}
-
 export function getLaneGroup(lane: string): LaneGroupState | undefined {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const groupId = groupByLane.get(lane);
   return groupId ? groups.get(groupId) : undefined;
 }
@@ -174,7 +159,7 @@ export function validateCommandLaneGroupSpec(
   group: string,
   spec: CommandLaneGroupSpec,
 ): LaneGroupState {
-  const members = spec.members.map((member) => normalizeLane(member));
+  const members = new Set(spec.members.map((member) => normalizeLane(member)));
   for (const member of members) {
     assertGroupEligibleLane(member);
   }
@@ -182,7 +167,7 @@ export function validateCommandLaneGroupSpec(
   let reservedTotal = 0;
   for (const [rawLane, count] of Object.entries(spec.reservations ?? {})) {
     const member = normalizeLane(rawLane);
-    if (!members.includes(member)) {
+    if (!members.has(member)) {
       throw new Error(`command lane group "${group}" reserves for non-member lane "${member}"`);
     }
     const reserved = Math.max(0, Math.floor(count));
@@ -197,12 +182,12 @@ export function validateCommandLaneGroupSpec(
       `command lane group "${group}" reserves ${reservedTotal} slots but its budget is ${budget}`,
     );
   }
-  return { group, budget, members: new Set(members), reservations };
+  return { group, budget, members, reservations };
 }
 
 /** Install a validated group, detaching its members from any previous owner. */
 export function installCommandLaneGroup(next: LaneGroupState): void {
-  const { groups, groupByLane } = getGroupRegistry();
+  const { laneGroups: groups, laneGroupByLane: groupByLane } = getQueueState();
   const previous = groups.get(next.group);
   if (previous) {
     for (const member of previous.members) {
@@ -275,7 +260,7 @@ export function drainCommandLaneGroup(lane: string, drainLane: BoundedDrainLaneF
   }
   DRAINING_GROUPS.add(group);
   try {
-    while (getGroupRegistry().groups.get(group.group) === group) {
+    while (getQueueState().laneGroups.get(group.group) === group) {
       const selectedLane = resolveNextGroupLane(group);
       if (!selectedLane || drainLane(selectedLane, 1) === 0) {
         return;

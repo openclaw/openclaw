@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { html, nothing, type TemplateResult } from "lit";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
+import { brandIcons } from "../../components/brand-icons.ts";
 import { icons } from "../../components/icons.ts";
 import {
   canonicalLobsterLook,
@@ -8,19 +9,19 @@ import {
   renderLobsterSvg,
 } from "../../components/lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
+import { currentThemeBranding } from "../../components/neutral-mark.ts";
+import "../../components/tooltip.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
-import "../../components/tooltip.ts";
-import { i18n, t } from "../../i18n/index.ts";
+import { t } from "../../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { formatDateMs, formatDateTimeMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import "../../styles/about.css";
-import { brandIcons } from "./brand-icons.ts";
+import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
 
 export type AboutCommitCopyState = "idle" | "copying" | "copied" | "error";
 
@@ -62,44 +63,6 @@ const ABOUT_LINKS: ReadonlyArray<{ href: string; icon: TemplateResult; label: ()
   },
 ];
 
-function formatControlUiBuildDate(
-  value: string | null,
-  locales?: Intl.LocalesArgument,
-): string | null {
-  if (!value) {
-    return null;
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return null;
-  }
-  return new Intl.DateTimeFormat(locales, {
-    dateStyle: "medium",
-    timeZone: "UTC",
-  }).format(date);
-}
-
-function copyButtonLabel(state: AboutCommitCopyState): string {
-  if (state === "copying") {
-    return t("aboutPage.copyingCommit");
-  }
-  if (state === "copied") {
-    return t("aboutPage.copiedCommit");
-  }
-  if (state === "error") {
-    return t("aboutPage.copyCommitFailed");
-  }
-  return t("aboutPage.copyCommit");
-}
-
-function copyStatus(state: AboutCommitCopyState): string {
-  return state === "copied"
-    ? t("aboutPage.copiedCommit")
-    : state === "error"
-      ? t("aboutPage.copyCommitFailed")
-      : "";
-}
-
 function renderUnavailable() {
   return html`<span class="muted">${t("aboutPage.unavailable")}</span>`;
 }
@@ -114,10 +77,7 @@ function renderCommitAge(commitAt: string | null) {
   if (!Number.isFinite(timestamp)) {
     return nothing;
   }
-  const exact = new Intl.DateTimeFormat(i18n.getLocale(), {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(new Date(timestamp));
+  const exact = formatDateTimeMs(timestamp, { dateStyle: "medium", timeStyle: "short" });
   return html`
     <time class="about-commit__age" dir="auto" datetime=${commitAt} title=${exact}
       >${formatRelativeTimestamp(timestamp, { fallback: "" })}</time
@@ -130,7 +90,14 @@ function renderCommit(props: AboutProps) {
   if (!commit) {
     return renderUnavailable();
   }
-  const label = copyButtonLabel(props.copyState);
+  const label = t(
+    {
+      idle: "aboutPage.copyCommit",
+      copying: "aboutPage.copyingCommit",
+      copied: "aboutPage.copiedCommit",
+      error: "aboutPage.copyCommitFailed",
+    }[props.copyState],
+  );
   return html`
     <span class="about-commit">
       <code dir="ltr" title=${commit}>${commit.slice(0, SHORT_COMMIT_LENGTH)}</code>
@@ -147,7 +114,9 @@ function renderCommit(props: AboutProps) {
           <span aria-hidden="true">${props.copyState === "copied" ? icons.check : icons.copy}</span>
         </button>
       </openclaw-tooltip>
-      <span class="sr-only" role="status" aria-live="polite">${copyStatus(props.copyState)}</span>
+      <span class="sr-only" role="status" aria-live="polite"
+        >${props.copyState === "copied" || props.copyState === "error" ? label : ""}</span
+      >
     </span>
   `;
 }
@@ -161,15 +130,19 @@ function renderHero(props: AboutProps) {
   const look = canonicalLobsterLook(palette);
   return html`
     <section class="about-hero">
-      <button
-        type="button"
-        class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
-        style=${lobsterLookStyle(look)}
-        aria-label=${t("aboutPage.waveHello")}
-        @click=${props.onPokeClawd}
-      >
-        ${renderLobsterSvg(look)}
-      </button>
+      ${
+        currentThemeBranding().mascot === "none"
+          ? html`<span class="about-hero__mark--neutral" aria-hidden="true">${icons.mark}</span>`
+          : html`<button
+              type="button"
+              class="about-hero__clawd ${props.clawdWaving ? "about-hero__clawd--wave" : ""}"
+              style=${lobsterLookStyle(look)}
+              aria-label=${t("aboutPage.waveHello")}
+              @click=${props.onPokeClawd}
+            >
+              ${renderLobsterSvg(look)}
+            </button>`
+      }
       <h2 class="about-hero__name">${t("aboutPage.productName")}</h2>
       <p class="about-hero__tagline">${t("aboutPage.tagline")}</p>
       ${
@@ -197,13 +170,13 @@ function renderHero(props: AboutProps) {
 }
 
 export function renderAbout(props: AboutProps) {
-  const buildDate = formatControlUiBuildDate(props.buildInfo.builtAt, i18n.getLocale());
+  const buildDate = formatDateMs(
+    Date.parse(props.buildInfo.builtAt ?? ""),
+    { dateStyle: "medium", timeZone: "UTC" },
+    "",
+  );
   const buildFacts = html`
-    <dl
-      class="settings-kv about-build-grid"
-      role="group"
-      aria-label=${t("aboutPage.artifactDetails")}
-    >
+    <dl class="settings-kv about-build-grid" aria-label=${t("aboutPage.artifactDetails")}>
       <dt>${t("aboutPage.version")}</dt>
       <dd>
         ${

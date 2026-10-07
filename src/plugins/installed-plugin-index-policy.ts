@@ -1,4 +1,3 @@
-// Applies policy checks to installed plugin index records.
 import type { OpenClawConfig } from "../config/types.js";
 import { readBundledDiscoveryModeMemoized } from "./bundled-discovery-state.js";
 import { listPluginCompatRecords } from "./compat/registry.js";
@@ -26,6 +25,7 @@ export function resolveInstalledPluginIndexPolicyHash(
   // Callers scoped to an explicit env hash that env's state-root mode so
   // persisted indexes cannot leak activation decisions across roots.
   env?: NodeJS.ProcessEnv,
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
 ): string {
   const normalized = normalizePluginsConfig(config?.plugins);
   const channelPolicy: Record<string, boolean> = {};
@@ -48,7 +48,7 @@ export function resolveInstalledPluginIndexPolicyHash(
       // Machine-state discovery mode changes activation for bundled plugins;
       // omitting it left persisted indexes stale across doctor's compat
       // migration (allow-listed installs stayed mass-disabled after --fix).
-      bundledDiscovery: readBundledDiscoveryModeMemoized(env) ?? null,
+      bundledDiscovery: readBundledDiscoveryModeMemoized(env, behavior) ?? null,
       slots: normalized.slots,
       entries: Object.fromEntries(
         Object.entries(normalized.entries)

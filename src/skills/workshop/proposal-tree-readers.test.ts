@@ -25,9 +25,9 @@ describe.each(readers)("Skill Workshop $name tree", ({ read, marker, depth }) =>
     await fs.writeFile(path.join(dir, marker), "# Proposal\n");
     await fs.writeFile(path.join(blocked, "needed.md"), "Required evidence.\n");
     const denied = Object.assign(new Error(`Cannot read ${blocked}`), { code: "EACCES" });
-    const readdir = fs.readdir;
-    vi.spyOn(fs, "readdir").mockImplementation((...args) =>
-      args[0] === blocked ? Promise.reject(denied) : readdir(...args),
+    const opendir = fs.opendir;
+    vi.spyOn(fs, "opendir").mockImplementation((...args) =>
+      args[0] === blocked ? Promise.reject(denied) : opendir(...args),
     );
 
     await expect(read(dir)).rejects.toBe(denied);
@@ -62,9 +62,9 @@ describe("Skill Workshop target tree exclusions", () => {
       emptyHash,
     );
     const denied = Object.assign(new Error(`Cannot read ${dir}`), { code: "EACCES" });
-    const readdir = fs.readdir;
-    vi.spyOn(fs, "readdir").mockImplementation((...args) =>
-      args[0] === dir ? Promise.reject(denied) : readdir(...args),
+    const opendir = fs.opendir;
+    vi.spyOn(fs, "opendir").mockImplementation((...args) =>
+      args[0] === dir ? Promise.reject(denied) : opendir(...args),
     );
     await expect(readSkillProposalTargetTreeSha256(dir)).rejects.toBe(denied);
   });
@@ -79,6 +79,9 @@ describe("Skill Workshop target tree exclusions", () => {
       Array.from({ length: 513 }, (_, index) => fs.mkdir(path.join(metadata, `entry-${index}`))),
     );
     await expect(readSkillProposalTargetTreeSha256(dir)).resolves.toBe(initialHash);
+    await expect(
+      readSkillProposalTargetTreeSha256(dir, { includeRootMetadata: true }),
+    ).rejects.toThrow("exceeds traversal limits");
     const nested = path.join(dir, "references", ".openclaw");
     await fs.mkdir(nested, { recursive: true });
     await fs.writeFile(path.join(nested, "content.md"), "Ordinary nested skill content.\n");

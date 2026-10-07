@@ -1,4 +1,3 @@
-// Discord plugin module implements setup core behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -75,7 +74,7 @@ function setDiscordGuildChannelAllowlist(
       : (cfg.channels?.discord?.accounts?.[accountId]?.guilds ?? {});
   const guilds: Record<string, DiscordGuildEntry> = { ...baseGuilds };
   for (const entry of entries) {
-    const guildKey = entry.guildKey || "*";
+    const guildKey = entry.guildKey;
     const existing = guilds[guildKey] ?? {};
     if (entry.channelKey) {
       const channels = { ...existing.channels };

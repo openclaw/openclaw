@@ -7,23 +7,18 @@ import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coer
 type ResolvedTimeFormat = "12" | "24";
 
 let cachedTimeFormat: ResolvedTimeFormat | undefined;
-
-function buildNormalizedTimestamp(
-  timestampMs: number,
-): { timestampMs: number; timestampUtc: string } | undefined {
-  if (!Number.isSafeInteger(timestampMs)) {
-    return undefined;
-  }
-  const timestampUtc = new Date(timestampMs).toISOString();
-  return { timestampMs, timestampUtc };
-}
+// Retain only the latest timezone formatter for each prompt format.
+let dateStampFormatter: { timeZone: string; formatter: Intl.DateTimeFormat } | undefined;
+let userTimeFormatter:
+  | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
+  | undefined;
 
 /** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
     try {
-      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(new Date());
+      getDateStampFormatter(trimmed);
       return trimmed;
     } catch {
       // ignore invalid timezone
@@ -45,16 +40,25 @@ export function resolveUserTimeFormat(preference?: "auto" | "12" | "24"): Resolv
   return cachedTimeFormat;
 }
 
-/** Format a stable YYYY-MM-DD stamp in the requested timezone. */
-export function formatDateStamp(nowMs: number, timeZone: string): string {
-  const timestampMs = resolveDateTimestampMs(nowMs);
-  const date = new Date(timestampMs);
-  const parts = new Intl.DateTimeFormat("en-US", {
+function getDateStampFormatter(timeZone: string): Intl.DateTimeFormat {
+  if (dateStampFormatter?.timeZone === timeZone) {
+    return dateStampFormatter.formatter;
+  }
+  const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
-  }).formatToParts(date);
+  });
+  dateStampFormatter = { timeZone, formatter };
+  return formatter;
+}
+
+/** Format a stable YYYY-MM-DD stamp in the requested timezone. */
+export function formatDateStamp(nowMs: number, timeZone: string): string {
+  const timestampMs = resolveDateTimestampMs(nowMs);
+  const date = new Date(timestampMs);
+  const parts = getDateStampFormatter(timeZone).formatToParts(date);
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
   const day = parts.find((part) => part.type === "day")?.value;
@@ -119,13 +123,7 @@ function normalizeTimestamp(
     if (/^\d+(\.\d+)?$/.test(trimmed)) {
       const num = Number(trimmed);
       if (Number.isFinite(num)) {
-        if (trimmed.includes(".")) {
-          timestampMs = Math.round(num * 1000);
-        } else if (trimmed.length >= 13) {
-          timestampMs = Math.round(num);
-        } else {
-          timestampMs = Math.round(num * 1000);
-        }
+        timestampMs = Math.round(num * (trimmed.includes(".") || trimmed.length < 13 ? 1000 : 1));
       }
     } else {
       const parsed = Date.parse(trimmed);
@@ -135,11 +133,11 @@ function normalizeTimestamp(
     }
   }
 
-  if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
+  if (timestampMs === undefined || !Number.isSafeInteger(timestampMs)) {
     return undefined;
   }
   try {
-    return buildNormalizedTimestamp(timestampMs);
+    return { timestampMs, timestampUtc: new Date(timestampMs).toISOString() };
   } catch {
     return undefined;
   }
@@ -205,9 +203,9 @@ function detectSystemTimeFormat(): boolean {
   }
 
   try {
-    const sample = new Date(2000, 0, 1, 13, 0);
-    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
-    return formatted.includes("13");
+    // Read the declared cycle; localized hour digits need not contain ASCII "13".
+    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+    return formatter.resolvedOptions().hour12 === false;
   } catch {
     return false;
   }
@@ -217,16 +215,7 @@ function ordinalSuffix(day: number): string {
   if (day >= 11 && day <= 13) {
     return "th";
   }
-  switch (day % 10) {
-    case 1:
-      return "st";
-    case 2:
-      return "nd";
-    case 3:
-      return "rd";
-    default:
-      return "th";
-  }
+  return ["th", "st", "nd", "rd"][day % 10] ?? "th";
 }
 
 /** Format the prompt-facing localized time string with weekday and date. */
@@ -237,16 +226,24 @@ export function formatUserTime(
 ): string | undefined {
   const use24Hour = format === "24";
   try {
-    const parts = new Intl.DateTimeFormat("en-US", {
-      timeZone,
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: use24Hour ? "2-digit" : "numeric",
-      minute: "2-digit",
-      hourCycle: use24Hour ? "h23" : "h12",
-    }).formatToParts(date);
+    let formatter =
+      userTimeFormatter?.timeZone === timeZone && userTimeFormatter.format === format
+        ? userTimeFormatter.formatter
+        : undefined;
+    if (!formatter) {
+      formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        weekday: "long",
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+        hour: use24Hour ? "2-digit" : "numeric",
+        minute: "2-digit",
+        hourCycle: use24Hour ? "h23" : "h12",
+      });
+      userTimeFormatter = { timeZone, format, formatter };
+    }
+    const parts = formatter.formatToParts(date);
     const map: Record<string, string> = {};
     for (const part of parts) {
       if (part.type !== "literal") {

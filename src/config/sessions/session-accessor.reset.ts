@@ -1,39 +1,44 @@
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+  readDatabasePathIdentitySync,
+  type DatabasePathIdentity,
+} from "../../infra/sqlite-worker-identity.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
   cloneSessionEntries,
-  mergeConcurrentReplySessionMetadata,
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
-import { loadSessionEntry, resolveSessionEntryFromStore } from "./session-accessor.entry.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionEntryLifecycleUpsert,
+import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
+import type {
+  SessionEntryLifecycleUpsert,
+  SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
+import {
+  captureLifecycleDatabaseScope,
+  resolveSqliteScope,
+  toDatabaseOptions,
+} from "./session-accessor.sqlite-scope.js";
 import type {
-  SessionLifecycleTranscriptInfo,
   ReplySessionInitializationSnapshot,
   ReplySessionInitializationCommitContext,
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SessionMaintenancePreservationConflictError,
+} from "./session-mutation-conflict-error.js";
+import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
+import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
-import type {
-  ResolvedSessionMaintenanceConfig,
-  SessionMaintenanceWarning,
-} from "./store-maintenance.js";
+import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionEntryRetirement = {
@@ -61,39 +66,6 @@ function assertSessionInitializationAgentScope(agentId: string, sessionKey: stri
   if (sessionKeyAgentId && normalizeAgentId(sessionKeyAgentId) !== normalizedAgentId) {
     throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
   }
-}
-
-const loadSessionArchiveRuntime = createLazyRuntimeModule(
-  () => import("../../gateway/session-archive.runtime.js"),
-);
-
-/**
- * Persists runner reset metadata after the caller appends the in-log boundary.
- */
-export async function persistSessionResetLifecycle(params: {
-  agentId?: string;
-  cleanupPreviousTranscript?: boolean;
-  nextEntry: SessionEntry;
-  nextSessionFile: string;
-  previousEntry: SessionEntry;
-  previousSessionId?: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<{ replayedMessages: number }> {
-  await applySessionEntryLifecycleMutation({
-    agentId: params.agentId,
-    activeSessionKey: params.sessionKey,
-    storePath: params.storePath,
-    upserts: [
-      {
-        sessionKey: params.sessionKey,
-        entry: params.nextEntry,
-        resetBoundary: { context: "preserve-tail", reason: "reset" },
-      },
-    ],
-    skipMaintenance: true,
-  });
-  return { replayedMessages: 0 };
 }
 
 type ReplySessionInitializationSelection = {
@@ -136,12 +108,81 @@ function loadReplySessionInitializationEntries(
   return result.found ? result.value : {};
 }
 
-/** Loads the declared reply-session rows without exposing a mutable store. */
-export function loadReplySessionInitializationSnapshot(
+async function loadReplySessionInitializationEntriesAsync(
   params: ReplySessionInitializationSelection,
-): ReplySessionInitializationSnapshot {
+  database: ReturnType<typeof toDatabaseOptions>,
+  source?: DatabasePathIdentity,
+): Promise<Record<string, SessionEntry>> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  if (!supportsOpenClawAgentDatabaseExecution(database)) {
+    return loadReplySessionInitializationEntries(params);
+  }
+  return withSessionHistoryWorkerDatabase(database, async (reader) => {
+    const currentKey = normalizeStoreSessionKey(params.sessionKey);
+    const snapshot = await reader.readExactEntries({
+      projection: "full",
+      includeAuthorization: true,
+      sessionKeys: [
+        ...new Set([
+          currentKey,
+          ...(params.relatedSessionKeys ?? []).map(normalizeStoreSessionKey),
+        ]),
+      ],
+      replyInitializationSessionKey: currentKey,
+      env: { ...(database.env ?? process.env) },
+    });
+    reader.assertCurrent();
+    if (
+      source &&
+      (snapshot.databaseIdentity
+        ? `file:${snapshot.databaseIdentity.identity}` !== source.key ||
+          snapshot.databaseIdentity.birthtime !== source.birthtime
+        : source.key.startsWith("file:"))
+    ) {
+      throw new Error("Reply initialization database changed after its snapshot");
+    }
+    return Object.fromEntries(snapshot.entries.map(({ sessionKey, entry }) => [sessionKey, entry]));
+  });
+}
+
+function captureReplySessionInitializationSource(params: ReplySessionInitializationSelection) {
+  const captured = captureLifecycleDatabaseScope(resolveSqliteScope(params));
+  const source = supportsOpenClawAgentDatabaseExecution(toDatabaseOptions(captured))
+    ? readDatabasePathIdentitySync(captured.path)
+    : undefined;
+  const database = { ...toDatabaseOptions(captured), path: source?.canonicalPath ?? captured.path };
+  const assertSourceCurrent = (creating = false) => {
+    if (!source) {
+      return;
+    }
+    const current = readDatabasePathIdentitySync(captured.path);
+    if (
+      current.canonicalPath !== source.canonicalPath ||
+      ((!creating || source.key.startsWith("file:")) &&
+        (current.key !== source.key || current.birthtime !== source.birthtime))
+    ) {
+      throw new Error("Reply initialization database changed after its snapshot");
+    }
+  };
+  return { captured, database, source, assertSourceCurrent };
+}
+
+/** Prepares the declared reply rows and stored model parent through their existing reader. */
+export async function loadReplySessionInitializationSnapshot(
+  params: ReplySessionInitializationSelection,
+): Promise<ReplySessionInitializationSnapshot> {
+  assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
   const storePath = resolveSessionStorePathForScope(params);
-  const store = loadReplySessionInitializationEntries({ ...params, storePath });
+  const { database, source, assertSourceCurrent } = captureReplySessionInitializationSource({
+    ...params,
+    storePath,
+  });
+  const store = await loadReplySessionInitializationEntriesAsync(
+    { ...params, storePath },
+    database,
+    source,
+  );
+  assertSourceCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   return {
@@ -165,29 +206,23 @@ function createStaleReplySessionInitializationResult(
   };
 }
 
-/**
- * Persists one reply-session initialization result and archives the previous
- * transcript after metadata commits, keeping archive failure warning-only.
- */
+/** Persists one reply-session initialization result with its in-place reset boundary. */
 export async function commitReplySessionInitialization(params: {
   commitGuard?: () => void;
   activeSessionKey: string;
   agentId: string;
-  archivePreviousTranscript?: boolean;
   beforeEntryMutation?: (context: {
     currentEntry?: SessionEntry;
     sessionEntry: SessionEntry;
   }) => Promise<void> | void;
   expectedRevision: string;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  onMaintenanceWarning?: (warning: SessionMaintenanceWarning) => void | Promise<void>;
   prepareSessionEntry?: (
     context: ReplySessionInitializationCommitContext,
   ) => Promise<SessionEntry> | SessionEntry;
   /** Authoritative contextual route facts observed by the admitted inbound turn. */
   routeContext?: ConversationRouteContext | null;
-  resetBoundary?: SessionResetBoundaryRequest;
+  resetBoundary?: SessionResetBoundaryWrite;
   previousEntry?: SessionEntry;
   retiredEntry?: SessionEntryRetirement;
   sessionEntry: SessionEntry;
@@ -201,7 +236,17 @@ export async function commitReplySessionInitialization(params: {
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });
-  const store = loadReplySessionInitializationEntries({ ...params, storePath });
+  const { captured, database, source, assertSourceCurrent } =
+    captureReplySessionInitializationSource({
+      ...params,
+      storePath,
+    });
+  const store = await loadReplySessionInitializationEntriesAsync(
+    { ...params, storePath },
+    database,
+    source,
+  );
+  assertSourceCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   const revision = createReplySessionInitializationRevision(currentEntry);
@@ -223,28 +268,26 @@ export async function commitReplySessionInitialization(params: {
   let staleCommit: SessionEntry | null | undefined;
   let committedSessionEntry = sessionEntry;
   let beforeEntryMutationDone = false;
+  const descriptor: ReplySessionInitializationUpsertDescriptor = {
+    kind: "reply-initialization",
+    expectedRevision: params.expectedRevision,
+    entry: sessionEntry,
+    snapshotEntry: params.snapshotEntry ?? params.previousEntry,
+    retiredEntry: params.retiredEntry,
+  };
+  let preparedUpserts: ReturnType<typeof resolveReplySessionInitializationUpserts> | undefined;
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
       ...(params.routeContext !== undefined ? { routeContext: params.routeContext } : {}),
       ...(params.resetBoundary ? { resetBoundary: params.resetBoundary } : {}),
       buildEntry: async ({ currentEntry: commitEntry }) => {
-        const commitRevision = createReplySessionInitializationRevision(commitEntry);
-        if (commitRevision !== params.expectedRevision) {
-          staleCommit = commitEntry ? { ...commitEntry } : null;
+        preparedUpserts = resolveReplySessionInitializationUpserts(descriptor, commitEntry);
+        if (preparedUpserts.kind === "stale") {
+          staleCommit = preparedUpserts.currentEntry ? { ...preparedUpserts.currentEntry } : null;
           return null;
         }
-        // The identity-only guard allows commits when background activity
-        // touched non-identity metadata after the snapshot. Merge only fields
-        // that changed since the snapshot so delivery/context metadata is not
-        // rolled back, while reset-cleared fields stay cleared.
-        committedSessionEntry = commitEntry
-          ? mergeConcurrentReplySessionMetadata({
-              currentEntry: commitEntry,
-              preparedEntry: sessionEntry,
-              snapshotEntry: params.snapshotEntry ?? params.previousEntry,
-            })
-          : sessionEntry;
+        committedSessionEntry = preparedUpserts.entry;
         if (!beforeEntryMutationDone) {
           await params.beforeEntryMutation?.({
             ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
@@ -260,33 +303,43 @@ export async function commitReplySessionInitialization(params: {
     const retiredEntry = params.retiredEntry;
     upserts.push({
       sessionKey: retiredEntry.key,
-      buildEntry: () => (staleCommit === undefined ? retiredEntry.entry : null),
+      buildEntry: () =>
+        preparedUpserts?.kind === "ready" ? (preparedUpserts.retiredEntry?.entry ?? null) : null,
     });
   }
   try {
-    await applySessionEntryLifecycleMutation({
+    assertSourceCurrent();
+    const mutation = {
       activeSessionKey: params.activeSessionKey,
       agentId: params.agentId,
       maintenanceOverride: params.maintenanceConfig,
       storePath,
       upserts,
-      beforeCommitInTransaction: params.commitGuard,
-    });
+      commitGuard: () => {
+        assertSourceCurrent(true);
+        params.commitGuard?.();
+      },
+    };
+    await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
   } catch (error) {
     if (
-      !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
-      error.sessionKey !== resolved.normalizedKey
+      !(error instanceof SessionMaintenancePreservationConflictError) &&
+      (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
+        error.sessionKey !== resolved.normalizedKey)
     ) {
       throw error;
     }
-    return createStaleReplySessionInitializationResult(
-      loadSessionEntry({
+    const current = await loadReplySessionInitializationEntriesAsync(
+      {
         agentId: params.agentId,
-        readConsistency: "latest",
-        sessionKey: error.sessionKey,
+        sessionKey: resolved.normalizedKey,
         storePath,
-      }),
+      },
+      database,
+      source?.key.startsWith("file:") ? source : undefined,
     );
+    assertSourceCurrent(true);
+    return createStaleReplySessionInitializationResult(current[resolved.normalizedKey]);
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);
@@ -295,52 +348,9 @@ export async function commitReplySessionInitialization(params: {
   if (params.retiredEntry) {
     store[params.retiredEntry.key] = params.retiredEntry.entry;
   }
-  const committed: ReplySessionInitializationCommitResult = {
+  return {
     ok: true,
-    previousSessionTranscript: {},
     sessionEntry: { ...committedSessionEntry },
     sessionStoreView: cloneSessionEntries(store),
   };
-
-  const previousSessionTranscript =
-    isIncognitoSessionKey(params.sessionKey) || params.previousEntry?.incognito === true
-      ? {}
-      : params.archivePreviousTranscript === false
-        ? {}
-        : await archivePreviousSessionTranscript({
-            agentId: params.agentId,
-            onArchiveError: params.onArchiveError,
-            previousEntry: params.previousEntry,
-            storePath: params.storePath,
-          });
-  return {
-    ...committed,
-    previousSessionTranscript,
-  };
-}
-
-async function archivePreviousSessionTranscript(params: {
-  agentId: string;
-  onArchiveError?: (error: unknown, sourcePath: string) => void;
-  previousEntry?: SessionEntry;
-  storePath: string;
-}): Promise<SessionLifecycleTranscriptInfo> {
-  if (!params.previousEntry?.sessionId) {
-    return {};
-  }
-  const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-    await loadSessionArchiveRuntime();
-  const archivedTranscripts = archiveSessionTranscriptsDetailed({
-    sessionId: params.previousEntry.sessionId,
-    storePath: params.storePath,
-    agentId: params.agentId,
-    reason: "reset",
-    onArchiveError: params.onArchiveError,
-  });
-  return resolveStableSessionEndTranscript({
-    sessionId: params.previousEntry.sessionId,
-    storePath: params.storePath,
-    agentId: params.agentId,
-    archivedTranscripts,
-  });
 }

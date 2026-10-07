@@ -36,7 +36,7 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
-export const supervisorSpawnMock: UnknownMock = vi.fn();
+export const supervisorSpawnMock = vi.fn<SupervisorSpawnFn>();
 export const enqueueSystemEventMock: UnknownMock = vi.fn();
 export const requestHeartbeatMock: UnknownMock = vi.fn();
 
@@ -44,6 +44,9 @@ setCliRunnerExecuteTestDeps({
   getProcessSupervisor: () => {
     const activeRuns = new Map<string, Awaited<ReturnType<SupervisorSpawnFn>>>();
     return {
+      acquireScopeCleanup: vi.fn(() => {
+        throw new Error("CLI execution fixture does not own a cleanup scope");
+      }),
       spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
         let stdoutDelivered = false;
         let stderrDelivered = false;
@@ -51,6 +54,9 @@ setCliRunnerExecuteTestDeps({
         // was requested; replay it through callbacks once to match production.
         const wrappedParams = {
           ...params,
+          ...(params.mode === "child" && params.resolveArgs
+            ? { argv: [...params.argv, ...params.resolveArgs()] }
+            : {}),
           onStdout: params.onStdout
             ? (chunk: string) => {
                 stdoutDelivered = true;
@@ -64,9 +70,7 @@ setCliRunnerExecuteTestDeps({
               }
             : undefined,
         };
-        const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
-          ReturnType<SupervisorSpawnFn>
-        >;
+        const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
           // A defeated or reset once-mock returns undefined; fail loudly instead
           // of letting the run wedge into an opaque test timeout.
@@ -98,7 +102,6 @@ setCliRunnerExecuteTestDeps({
         activeRuns.get(runId)?.cancel(reason);
       }),
       cancelScope: vi.fn(),
-      getRecord: vi.fn(),
     };
   },
   enqueueSystemEvent: (
@@ -141,11 +144,25 @@ export function createManagedRun(
   pid = 1234,
 ): ManagedRunMock & Awaited<ReturnType<SupervisorSpawnFn>> {
   return {
+    activity: { resultSettled: true, lastOutputAtMs: Date.now() },
     runId: "run-supervisor",
     pid,
     startedAtMs: Date.now(),
     stdin: undefined,
     wait: vi.fn().mockResolvedValue(exit),
     cancel: vi.fn(),
+  };
+}
+
+export function createSuccessfulProcessExit(): MockRunExit {
+  return {
+    reason: "exit",
+    exitCode: 0,
+    exitSignal: null,
+    durationMs: 50,
+    stdout: "",
+    stderr: "",
+    timedOut: false,
+    noOutputTimedOut: false,
   };
 }

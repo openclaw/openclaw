@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareHostedGatewayStop, type HostedGatewayStop } from "../../daemon/hosted-stop.js";
+import { getGatewayProcessInstanceId } from "../../gateway/process-instance.js";
+import {
+  armGatewaySuspendHandoff,
+  consumeGatewaySuspendHandoff,
+  prepareGatewaySuspend,
+  resumeGatewaySuspend,
+} from "../../infra/gateway-suspend-coordinator.js";
 import { scheduleSafeGatewayRestart } from "../../infra/restart-coordinator.js";
 import { createGatewayHostLifecycle } from "./host-lifecycle.js";
 
@@ -13,11 +20,12 @@ describe("Gateway host lifecycle authority", () => {
   const execute = vi.fn<HostedGatewayStop["execute"]>();
   const dispose = vi.fn<HostedGatewayStop["dispose"]>();
   const owners: ReturnType<typeof createGatewayHostLifecycle>[] = [];
-  const owner = () => {
+  const owner = (commitExternalStop?: () => void) => {
     const host = createGatewayHostLifecycle({
       isCurrent: () => current,
       isServing: () => serving,
       acceptStop,
+      commitExternalStop,
       processOwner: { ownsProcessLifecycle: true, supervisor: null },
     });
     owners.push(host);
@@ -58,6 +66,44 @@ describe("Gateway host lifecycle authority", () => {
     });
     expect(guard).toHaveBeenCalledTimes(2);
   });
+
+  it("exposes committed external stop only when its live process host supplies it", () => {
+    const legacy = owner();
+    expect(legacy.capability.externalRestart?.commitStop).toBeUndefined();
+    const commit = vi.fn(() => {
+      serving = false;
+    });
+    const host = owner(commit);
+    const capability = host.capability.externalRestart;
+    if (!capability?.commitStop) {
+      throw new Error("Missing committed stop capability");
+    }
+    capability.commitStop();
+    expect(commit).toHaveBeenCalledOnce();
+    expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
+    expect(() => capability.commitStop!()).toThrow("retired or non-serving");
+  });
+
+  it.each(["retired", "replaced", "closed"])(
+    "refuses committed stop from a %s host",
+    async (change) => {
+      const commit = vi.fn();
+      const host = owner(commit);
+      if (change === "retired") {
+        await host.retire();
+      }
+      if (change === "replaced") {
+        current = false;
+      }
+      if (change === "closed") {
+        serving = false;
+      }
+      expect(() => host.capability.externalRestart!.commitStop!()).toThrow(
+        "retired or non-serving",
+      );
+      expect(commit).not.toHaveBeenCalled();
+    },
+  );
 
   it("transfers only the accepted stop across teardown, without awaiting native completion", async () => {
     const host = owner();
@@ -134,6 +180,44 @@ describe("Gateway host lifecycle authority", () => {
     await host.retire();
     await expect(host.finishStop()).resolves.toEqual({ outcome: "retired" });
     expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("does not carry an armed lease into another host iteration in the same process", async () => {
+    const first = owner();
+    const processInstanceId = getGatewayProcessInstanceId();
+    const lease = prepareGatewaySuspend({
+      requestId: "host-iteration-handoff",
+      drain: true,
+      pauseScheduling: () => {},
+      resumeScheduling: () => {},
+      inspect: { getRootRequests: () => 1, getTerminalPersistence: () => 0 },
+    });
+    if (lease.status !== "draining" || !first.capability.externalRestart) {
+      throw new Error("missing owned lease");
+    }
+    try {
+      expect(
+        armGatewaySuspendHandoff({
+          suspensionId: lease.suspensionId,
+          owner: first.capability.externalRestart,
+        }).ok,
+      ).toBe(true);
+      await first.retire();
+      const next = owner();
+      expect(getGatewayProcessInstanceId()).toBe(processInstanceId);
+      expect(first.capability.externalRestart.isCurrent()).toBe(false);
+      expect(next.capability.externalRestart?.isCurrent()).toBe(true);
+      expect(consumeGatewaySuspendHandoff(first.capability.externalRestart)).toEqual({
+        ok: true,
+        value: false,
+      });
+      expect(consumeGatewaySuspendHandoff(next.capability.externalRestart)).toEqual({
+        ok: true,
+        value: false,
+      });
+    } finally {
+      resumeGatewaySuspend(lease.suspensionId);
+    }
   });
 
   it.each(["preparing", "accepted"])(

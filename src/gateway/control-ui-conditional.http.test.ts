@@ -1,21 +1,68 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createServer, request, type IncomingMessage, type Server } from "node:http";
 import path from "node:path";
-import { gzipSync } from "node:zlib";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
+import type { ControlUiRootState } from "./server-control-ui-root.js";
 
 const assetBody = Buffer.from('console.log("conditional fixture");\n');
 const modifiedAt = new Date("2024-01-01T00:00:00.000Z");
 const lastModified = modifiedAt.toUTCString();
 const laterModifiedSince = new Date("2024-01-02T00:00:00.000Z").toUTCString();
 const earlierModifiedSince = new Date("2023-12-31T00:00:00.000Z").toUTCString();
+const beforeLeapSecondAsset = {
+  filename: "leap-before.js",
+  modifiedAt: new Date("2016-12-31T23:59:59.000Z"),
+  body: Buffer.from('console.log("before leap second");\n'),
+};
+const afterLeapSecondAsset = {
+  filename: "leap-after.js",
+  modifiedAt: new Date("2017-01-01T00:00:00.000Z"),
+  body: Buffer.from('console.log("after leap second");\n'),
+};
+const leapSecondDates = [
+  { name: "IMF-fixdate", value: "Sat, 31 Dec 2016 23:59:60 GMT" },
+  { name: "RFC 850", value: "Saturday, 31-Dec-16 23:59:60 GMT" },
+  { name: "asctime", value: "Sat Dec 31 23:59:60 2016" },
+];
 const conditionalCases: {
   name: string;
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
   status: 200 | 304;
 }[] = [
+  {
+    name: "HTTP-date RFC850 matching instant",
+    headers: { "If-Modified-Since": "Monday, 01-Jan-24 00:00:00 GMT" },
+    status: 304,
+  },
+  {
+    name: "HTTP-date asctime older UTC instant",
+    headers: { "If-Modified-Since": "Sun Dec 31 20:00:00 2023" },
+    status: 200,
+  },
+  {
+    name: "HTTP-date asctime matching UTC instant",
+    headers: { "If-Modified-Since": "Mon Jan  1 00:00:00 2024" },
+    status: 304,
+  },
+  {
+    name: "HTTP-date rejects ISO timestamp",
+    headers: { "If-Modified-Since": "2024-01-02T00:00:00.000Z" },
+    status: 200,
+  },
+  {
+    name: "HTTP-date rejects duplicate fields with later date first",
+    headers: { "If-Modified-Since": [laterModifiedSince, earlierModifiedSince] },
+    status: 200,
+  },
+  {
+    name: "HTTP-date rejects duplicate fields with earlier date first",
+    headers: { "If-Modified-Since": [earlierModifiedSince, laterModifiedSince] },
+    status: 200,
+  },
   { name: "unconditional request", headers: {}, status: 200 },
   {
     name: "equal If-Modified-Since",
@@ -33,6 +80,11 @@ const conditionalCases: {
     status: 200,
   },
   { name: "stale If-None-Match alone", headers: { "If-None-Match": '"stale"' }, status: 200 },
+  {
+    name: "quoted comma/star is not a wildcard and supersedes the date",
+    headers: { "If-None-Match": '"client,*,tag"', "If-Modified-Since": lastModified },
+    status: 200,
+  },
   {
     name: "stale If-None-Match overrides equal If-Modified-Since",
     headers: { "If-None-Match": '"stale"', "If-Modified-Since": lastModified },
@@ -69,7 +121,7 @@ const conditionalCases: {
 function requestAsset(
   url: string,
   method: "GET" | "HEAD",
-  headers: Record<string, string>,
+  headers: Record<string, string | string[]>,
 ): Promise<{ response: IncomingMessage; body: Buffer }> {
   // Node HTTP preserves an explicitly empty If-None-Match on the wire.
   return new Promise((resolve, reject) => {
@@ -100,12 +152,20 @@ describe.each([
     await fs.mkdir(path.dirname(assetPath));
     await fs.writeFile(assetPath, assetBody);
     await fs.writeFile(`${assetPath}.gz`, gzipSync(assetBody));
+    await fs.writeFile(`${assetPath}.br`, brotliCompressSync(assetBody));
+    await fs.writeFile(path.join(root, "assets", "cold.js"), assetBody);
     await fs.utimes(assetPath, modifiedAt, modifiedAt);
+    for (const asset of [beforeLeapSecondAsset, afterLeapSecondAsset]) {
+      const target = path.join(root, "assets", asset.filename);
+      await fs.writeFile(target, asset.body);
+      await fs.utimes(target, asset.modifiedAt, asset.modifiedAt);
+    }
     for (const publicAsset of [
       "themes/absolutely.css",
       "fonts/test.css",
       "fonts/test.woff2",
       "provider-icons/ProviderIcon-test.svg",
+      "cloud-provider-icons/aws.svg",
       "file-icons/compact/dark/pdf.svg",
       "file-icons/large/shell-dark.svg",
       "file-icons/overlays/pdf.svg",
@@ -120,18 +180,23 @@ describe.each([
     }
     await fs.writeFile(
       path.join(root, "index.html"),
-      `<html data-openclaw-control-ui-build-id="source-build"><head><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
+      `<html data-openclaw-control-ui-build-id="source-build"><head><script>const fragment = 'href="unfinished';</script><script src="./assets/app-fixture.js"></script><link href="./assets/app.css"><link rel="icon" href="./favicon.svg"><link rel="icon" href="${basePath}/favicon-32.png"></head></html>`,
     );
+    const rootState: ControlUiRootState = {
+      kind,
+      path: root,
+      realPath: root,
+      ...(kind === "bundled" ? { publicAssetBuildId: "fixture-build" } : {}),
+    };
     server = createServer((req, res) => {
+      res.setHeader(
+        "X-Test-If-Modified-Since-Count",
+        String(req.headersDistinct["if-modified-since"]?.length ?? 0),
+      );
       void handleControlUiHttpRequest(req, res, {
         basePath,
         config: {},
-        root: {
-          kind,
-          path: root,
-          realPath: root,
-          ...(kind === "bundled" ? { publicAssetBuildId: "fixture-build" } : {}),
-        },
+        root: rootState,
       }).catch((error: unknown) => {
         res.statusCode = 500;
         res.end(error instanceof Error ? error.message : String(error));
@@ -149,6 +214,49 @@ describe.each([
     baseUrl = `http://127.0.0.1:${address.port}${basePath}`;
     assetUrl = `${baseUrl}/assets/app-fixture.js`;
   });
+
+  if (kind === "bundled" && basePath === "") {
+    it("serves warm representations and admits cold files without main-thread filesystem work", async () => {
+      await requestAsset(assetUrl, "GET", {});
+      const operations = [
+        "openSync",
+        "readSync",
+        "readFileSync",
+        "lstatSync",
+        "statSync",
+        "fstatSync",
+        "realpathSync",
+      ] as const;
+      const spies = operations.map((operation) => vi.spyOn(fsSync, operation));
+      try {
+        for (const encoding of ["br", "gzip"] as const) {
+          const response = await requestAsset(assetUrl, "GET", { "Accept-Encoding": encoding });
+          expect(response.response.headers["content-encoding"]).toBe(encoding);
+          expect((encoding === "br" ? brotliDecompressSync : gunzipSync)(response.body)).toEqual(
+            assetBody,
+          );
+          const head = await requestAsset(assetUrl, "HEAD", { "Accept-Encoding": encoding });
+          expect(head.body.byteLength).toBe(0);
+          expect(head.response.headers["content-length"]).toBe(String(response.body.byteLength));
+          const unchanged = await requestAsset(assetUrl, "GET", {
+            "Accept-Encoding": encoding,
+            "If-Modified-Since": lastModified,
+          });
+          expect(unchanged.response.statusCode).toBe(304);
+        }
+        expect((await requestAsset(`${baseUrl}/assets/cold.js`, "GET", {})).body).toEqual(
+          assetBody,
+        );
+        for (const spy of spies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+      } finally {
+        for (const spy of spies) {
+          spy.mockRestore();
+        }
+      }
+    });
+  }
 
   afterAll(async () => {
     try {
@@ -169,6 +277,7 @@ describe.each([
       "fonts/test.css",
       "fonts/test.woff2",
       "provider-icons/ProviderIcon-test.svg",
+      "cloud-provider-icons/aws.svg",
       "file-icons/compact/dark/pdf.svg",
       "file-icons/large/shell-dark.svg",
       "file-icons/overlays/pdf.svg",
@@ -200,6 +309,9 @@ describe.each([
       expect(document.response.headers["cache-control"]).toBe("no-cache");
       if (method === "GET") {
         const html = document.body.toString();
+        expect(html).toContain(`<script>const fragment = 'href="unfinished';</script>`);
+        expect(html).toContain(`src="${basePath}/assets/app-fixture.js"`);
+        expect(html).toContain(`href="${basePath}/assets/app.css"`);
         expect(html).not.toContain("source-build");
         expect(html.includes('data-openclaw-control-ui-build-id="fixture-build"')).toBe(
           kind === "bundled",
@@ -223,7 +335,10 @@ describe.each([
     it.each(conditionalCases)("$name", async ({ headers, status }) => {
       const { response, body } = await requestAsset(assetUrl, method, headers);
 
-      expect(response.statusCode).toBe(status);
+      if (Array.isArray(headers["If-Modified-Since"])) {
+        expect(response.headers["x-test-if-modified-since-count"]).toBe("2");
+      }
+      expect(response.statusCode, `TZ=${process.env.TZ ?? "system"}`).toBe(status);
       expect(response.headers["last-modified"]).toBe(lastModified);
       expect(response.headers["cache-control"]).toBe(cacheControl);
       expect(response.headers.vary).toBe("Accept-Encoding");
@@ -232,6 +347,36 @@ describe.each([
         status === 304 ? undefined : String(assetBody.length),
       );
       expect(body).toEqual(status === 200 && method === "GET" ? assetBody : Buffer.alloc(0));
+    });
+
+    it.each([
+      ...leapSecondDates.flatMap(({ name, value }) => [
+        { name: `${name} before midnight`, value, asset: afterLeapSecondAsset, status: 200 },
+        {
+          name: `${name} after the prior second`,
+          value,
+          asset: beforeLeapSecondAsset,
+          status: 304,
+        },
+      ]),
+      {
+        name: "the following midnight equality",
+        value: "Sun, 01 Jan 2017 00:00:00 GMT",
+        asset: afterLeapSecondAsset,
+        status: 304,
+      },
+    ])("preserves leap second ordering for $name", async ({ value, asset, status }) => {
+      const { response, body } = await requestAsset(`${baseUrl}/assets/${asset.filename}`, method, {
+        "If-Modified-Since": value,
+      });
+
+      expect(response.statusCode).toBe(status);
+      expect(response.headers["last-modified"]).toBe(asset.modifiedAt.toUTCString());
+      expect(response.headers["cache-control"]).toBe(cacheControl);
+      expect(response.headers["content-length"]).toBe(
+        status === 304 ? undefined : String(asset.body.length),
+      );
+      expect(body).toEqual(status === 200 && method === "GET" ? asset.body : Buffer.alloc(0));
     });
 
     it.each<Record<string, string>>([

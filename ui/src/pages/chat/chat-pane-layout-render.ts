@@ -3,36 +3,36 @@ import { html, nothing } from "lit";
 import "./chat-outbox-recovery.ts";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { icons } from "../../components/icons.ts";
+import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
+import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
+import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import "../../plugins/control-ui-contributions.ts";
+import { livePresentation, presentedContent } from "../../lit/presentation-binding.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
-import {
-  availableSidebarSlots,
-  sidebarPanelActions,
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "./chat-pane-embedded-panels.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { resolveChatPaneDesktopTarget } from "./chat-pane-placement.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR, type ResolvedBoardView } from "./chat-pane-shared.ts";
+import type { createChatPaneRails } from "./chat-pane-rails.ts";
+import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion, sidebarRegionCallbacks } from "./chat-pane-sidebar-layout.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { ChatToolIconController } from "./chat-tool-icon-controller.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
-import { renderBackgroundTasksRail } from "./components/chat-background-tasks-render.ts";
-import type { BackgroundTasksProps } from "./components/chat-background-tasks.types.ts";
+import { hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { renderChatDetailSlot } from "./components/chat-detail-slot.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
-import {
-  renderSessionWorkspaceRail,
-  type SessionWorkspaceProps,
-} from "./components/chat-session-workspace.ts";
-import { appendChatDraftText } from "./input-history.ts";
+import { renderSessionWorkspaceRail } from "./components/chat-session-workspace.ts";
+import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
+import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import {
   SIDEBAR_NARROW_BREAKPOINT_PX,
+  sidebarMainPanel,
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
@@ -44,8 +44,7 @@ type ChatPaneLayoutRenderParams = {
   currentAgentId: string;
   board: ResolvedBoardView;
   sidebarLayout: SidebarLayout;
-  sessionWorkspace: SessionWorkspaceProps;
-  backgroundTasks: BackgroundTasksProps;
+  sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   chatProps: ChatProps;
   observerDigest: SessionObserverDigest | null;
   observerRunId: string | null;
@@ -57,6 +56,17 @@ type ChatPaneLayoutRenderParams = {
 };
 
 export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRender {
+  private readonly refreshProcesses = () => {
+    void this.querySelector("openclaw-chat-processes-panel")?.refresh();
+  };
+  private readonly refreshSubagents = () => {
+    void this.querySelector("openclaw-chat-subagents-panel")?.refresh();
+  };
+  private readonly toolIcons = new ChatToolIconController(
+    this,
+    () => this.context,
+    () => (this.state && !this.catalogHost ? this.resolveChatReadTarget() : undefined),
+  );
   private desktopFocus: {
     key: string;
     client: ChatPageHost["client"];
@@ -69,9 +79,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       selectedSession,
       currentAgentId,
       board,
-      sidebarLayout,
+      sidebarLayout: savedLayout,
       sessionWorkspace,
-      backgroundTasks,
       chatProps,
       observerDigest,
       observerRunId,
@@ -81,10 +90,15 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       openPanelSlot,
       closePanelSlot,
     } = params;
+    // What the pane shows. Its controls keep working on the layout as it is saved.
+    const sidebarLayout = this.presentSidebarLayout(savedLayout);
     if (this.inputRegion === "page") {
+      const preview = state.sessionWorkspaceState?.previews.find(
+        (entry) => entry.id === state.sessionWorkspaceState?.activePreviewId,
+      )?.content;
       const file =
-        state.sidebarContent?.kind === "file" && isSidebarSlotVisible(sidebarLayout, "detail")
-          ? state.sidebarContent
+        preview?.kind === "file" && isSidebarSlotVisible(sidebarLayout, "workspace")
+          ? preview
           : undefined;
       const workspace = resolveSessionWorkspace({
         session: selectedSession,
@@ -107,61 +121,117 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           : undefined,
       );
     }
-    // Accessories belong to the shared header and remain presented in visible,
-    // unfocused panes; docked chat must not mount another copy.
-    const header = this.compact
-      ? nothing
-      : html`${this.renderPaneHeader(
-            sessionWorkspace,
-            backgroundTasks,
-            selectedSession,
-            catalog,
-            agentWorkspace,
-            workspaceGit,
-            chatProps.placementStartup,
-            sidebarLayout,
-          )}<openclaw-plugin-contributions
-            .kind=${"session-header"}
-            .sessionKey=${state.sessionKey}
-            .agentId=${currentAgentId}
-            .presented=${this.visuallyPresented}
-          ></openclaw-plugin-contributions>`;
-    const recovery = html`<openclaw-chat-outbox-recovery
-      .host=${state}
-      .identity=${JSON.stringify([
-        state.settings.gatewayUrl,
-        state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
-        storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
-      ])}
-      @outbox-restored=${() => {
-        this.chatState.restoreComposer();
-        state.requestUpdate?.();
-      }}
-    ></openclaw-chat-outbox-recovery>`;
+    // Recovery mutates the composer, so do not mount it in a view-only conversation.
+    const recovery =
+      chatProps.disabledBanner?.kind === "composer-replacement"
+        ? nothing
+        : html`<openclaw-chat-outbox-recovery
+            .host=${state}
+            .messages=${state.chatMessages}
+            .identity=${JSON.stringify([
+              state.settings.gatewayUrl,
+              state.connected && state.client?.recoveryScopeReady
+                ? state.client.recoveryScope
+                : null,
+              storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+              state.currentSessionId,
+            ])}
+            @outbox-restored=${() => {
+              this.chatState.composerPersistence.restore();
+              state.requestUpdate?.();
+            }}
+          ></openclaw-chat-outbox-recovery>`;
+    const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
+    const panePresentation = { owner: this, isPresented: () => this.presented };
+    const slotPresentation = (slot: SidebarSlotId) => ({
+      owner: this,
+      isPresented: () =>
+        this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, slot),
+    });
+    // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
+    // name still opens its session and their count stays text.
+    const ownsSubagentsPanel = !catalog && !this.compact;
     const chat = renderChat({
       ...chatProps,
-      presented: this.active && this.presented,
-      browserTabPreviewsActive: this.active && this.presented,
+      onOpenSubagent: ownsSubagentsPanel ? (key) => this.showSubagents(key) : undefined,
+      onOpenSubagents: ownsSubagentsPanel ? () => this.showSubagents(null) : undefined,
+      composerRecovery: recovery,
+      pluginToolIcons: this.toolIcons.icons,
+      presented: {
+        owner: this,
+        isPresented: () => (this.active || Boolean(this.onBackToSubagents)) && this.presented,
+      },
+      progressCardVisibility: panePresentation,
+      transcriptVisible: slotPresentation("conversation"),
+      latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
-      header: nothing,
     });
     const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
+    const subagentStop =
+      chatProps.disabledBanner?.presentation &&
+      chatProps.canAbort &&
+      chatProps.onAbort &&
+      !hasTerminalRunStatus(chatProps.runStatus)
+        ? html`<button
+            class="chat-subagent-detail__stop"
+            type="button"
+            aria-label=${t("chat.runControls.stopGenerating")}
+            @click=${chatProps.onAbort}
+          >
+            ${icons.stop}<span>${t("chat.runControls.stop")}</span>
+          </button>`
+        : nothing;
+    const subagentHeader = this.onBackToSubagents
+      ? html`<header class="chat-subagent-detail__header">
+          <button class="chat-subagent-detail__back" type="button" @click=${this.onBackToSubagents}>
+            ${icons.arrowLeft}${t("chat.subagentsPanel.back")}
+          </button>
+          <div class="chat-subagent-detail__heading">
+            <strong class="chat-subagent-detail__title"
+              >${this.resolveHeaderSessionTitle(selectedSession)}</strong
+            >
+            ${subagentStop}
+          </div>
+        </header>`
+      : nothing;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
-    const companionThread = this.sessionCompanionThreads.view(state.sessionKey, currentAgentId);
-    const browserPresented =
-      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser");
-    const desktopPresented =
-      this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const companionSessionKey = state.sessionKey;
+    const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
+    const companionPresented = slotPresentation("companion");
+    // Capture the opening before the lazy rail can yield to newer input intent.
+    this.syncSessionCompanionPresentation(companionPresented.isPresented());
+    const browserPresented = {
+      owner: this,
+      isPresented: () =>
+        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, "browser"),
+    };
+    const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
+    const terminalTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "terminal";
+    // Another pane can own keyboard focus while this desktop remains visible.
+    const desktopPresented = slotPresentation("desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
-    const desktopSource = resolveChatPaneDesktopTarget(selectedSession);
+    const discoveredDesktopSource = this.activeSessionResources.desktopSource(
+      state.client,
+      state.sessionKey,
+      scopedAgentParamsForSession(state, state.sessionKey).agentId,
+      state.connectionEpoch,
+      this.resourceSessionObservation()?.row ?? undefined,
+    );
+    const desktopSource =
+      sidebarLayout.columns
+        .flatMap((column) => column.panels)
+        .find((panel) => panel.slot === "desktop")?.environmentId ??
+      (discoveredDesktopSource !== undefined
+        ? discoveredDesktopSource
+        : resolveChatPaneDesktopTarget(selectedSession));
     const desktopFocusKey = JSON.stringify([
       state.sessionKey,
       this.connectionGeneration,
       desktopAvailable,
-      desktopPresented,
+      desktopPresented.isPresented(),
       state.basePath,
     ]);
     if (this.desktopFocus?.key !== desktopFocusKey || this.desktopFocus.client !== state.client) {
@@ -176,18 +246,37 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
+      paneId: this.paneId,
+      panePresentationId: this.presentationId,
+      subagentsInputRegion: this.inputRegion,
+      subagentsPresented: slotPresentation("subagents"),
+      processesPresented: slotPresentation("processes"),
+      onRefreshProcesses: this.refreshProcesses,
+      subagentsAvailable: !catalog,
+      subagentsShowRequest: this.subagentsShowRequest,
+      onRefreshSubagents: this.refreshSubagents,
+      onSubagentSessionSelect: (sessionKey, options) =>
+        this.onPaneSessionChange?.(this.paneId, sessionKey, options),
+      panePresentation,
       state,
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
+      browserTabsInHeader,
+      linkReaders: availableLinkReaders(this.context.gateway.snapshot),
+      linkReaderPresented: slotPresentation("link-reader"),
+      linkReaderTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "link-reader",
+      onCloseLinkReader: () => closePanelSlot("link-reader"),
+      terminalTabsInHeader,
+      onCloseTerminal: () => closePanelSlot("terminal"),
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
-      preferredBrowserTab: [
-        ...latestBrowserTabCards(chatProps.messages, chatProps.toolMessages).values(),
-      ].at(-1),
+      preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
+      sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
       desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource,
+      portalPresented: slotPresentation("portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
@@ -197,81 +286,105 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
           this.requestUpdate();
         }
       },
-      dashboard:
-        !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
-      workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
-      tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
+      dashboard: !this.compact ? this.renderBoardPanel(board, sidebarLayout) : nothing,
+      workspace: renderSessionWorkspaceRail(sessionWorkspace),
       renderDetail: (content) =>
         renderChatDetailSlot({
-          backgroundTasks,
           chat: chatProps,
           content,
           host: state,
-          layout: sidebarLayout,
-          transcript: this.taskSidebarTranscript,
+          requestUpdate: state.requestUpdate!,
         }),
       digest: observerDigest,
       activeRunId: observerRunId,
-      startedAt: selectedSession?.startedAt ?? state.chatStreamStartedAt ?? undefined,
-      lastReadAt: selectedSession?.lastReadAt,
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
+      companionFocusRequest: this.sessionCompanionFocusRequest,
+      companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
-      onCompanionVisibilityChange: this.setSessionObserverVisibility,
+      onCompanionAttachmentsChange: (attachments) =>
+        this.sessionCompanionThreads.setAttachments(
+          companionSessionKey,
+          attachments,
+          currentAgentId,
+        ),
       connected: state.connected,
-      pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
-      onRefreshTasks: backgroundTasks.onRefresh,
-      tasksLoading: backgroundTasks.loading,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,
       discussionSourceGeneration: this.connectionGeneration,
       pluginPanels: this.context.plugins.registrations("panels"),
-      isPluginPanelPresented: (slot) =>
-        this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
+      isPluginPanelPresented: (slot) => ({
+        owner: this,
+        isPresented: () =>
+          this.active && this.presented && isSidebarSlotVisible(sidebarLayout, slot),
+      }),
     });
-    const availableSlots = availableSidebarSlots(panelDefinitions);
-    const panelTemplates = sidebarPanelTemplates(panelDefinitions);
-    const panelActions = sidebarPanelActions(panelDefinitions);
+    const connectionGeneration = this.connectionGeneration;
+    // Main panel actions share the task toolbar. Content roots stay in the
+    // sidebar region so changing their presentation never reconnects them.
+    const header =
+      subagentHeader !== nothing
+        ? subagentHeader
+        : this.compact
+          ? nothing
+          : html`${this.renderPaneHeader(
+                sessionWorkspace,
+                selectedSession,
+                catalog,
+                agentWorkspace,
+                workspaceGit,
+                chatProps.placementStartup,
+                savedLayout,
+                panelDefinitions,
+                subagentStop,
+              )}
+              <openclaw-plugin-contributions
+                .kind=${"session-header"}
+                .sessionKey=${state.sessionKey}
+                .agentId=${currentAgentId}
+                .presented=${livePresentation({
+                  owner: this,
+                  isPresented: () => this.visuallyPresented,
+                  preview: () =>
+                    !this.presented && this.connectionGeneration === connectionGeneration,
+                })}
+              ></openclaw-plugin-contributions>`;
     const content = renderSidebarRegion({
+      presentationId: this.presentationId,
+      conversationTab: {
+        label: chatProps.assistantName,
+        icon: renderAgentIdentityAvatar(resolveAssistantDisplayAvatar(chatProps)),
+      },
       availableWidth: this.paneWidth,
-      availableSlots,
+      fetchFavicon: resolveChatLinkFaviconFetcher(state),
       callbacks: sidebarRegionCallbacks({
         state,
-        layout: sidebarLayout,
+        layout: savedLayout,
         closePanelSlot,
         openPanelSlot,
-        appendComposerText: (text) => {
-          const nextDraft = appendChatDraftText(state, text);
-          state.requestUpdate?.();
-          queueMicrotask(() => {
-            const textarea = this.querySelector<HTMLTextAreaElement>(
-              CHAT_COMPOSER_TEXTAREA_SELECTOR,
-            );
-            textarea?.focus({ preventScroll: true });
-            textarea?.setSelectionRange(nextDraft.length, nextDraft.length);
-          });
-        },
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
-        resizePanel: (columnId, size) =>
-          this.commitSidebarPanelResize(sidebarLayout, columnId, size),
-        setPanelOpen: (open) => this.setChatSidePanelOpen(open, sidebarLayout),
+        resizePanel: (columnId, size) => this.commitSidebarPanelResize(savedLayout, columnId, size),
+        setPanelOpen: (open) => this.setChatSidePanelOpen(open, savedLayout),
       }),
       layout: sidebarLayout,
+      sideFocusLocked: sidebarLayout !== savedLayout,
+      sideFocusOrigin: this.sideFocusOrigin,
       panelDefinitions,
-      panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
-      panelTemplates,
+      header,
       primary,
       requestUpdate: state.requestUpdate!,
     });
-    return html`<div class="chat-pane-layout">${header}${recovery}${content}</div>
-      ${renderChatImageLightbox(
-        state.imageLightbox,
-        state.handleCloseImage,
-      )}${this.renderResetConfirmation()}`;
+    const overlays = presentedContent(
+      panePresentation,
+      html`${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}${this.renderResetConfirmation()}`,
+    );
+    return this.onBackToSubagents
+      ? html`<section class="chat-subagent-detail">${content}${overlays}</section>`
+      : html`${content}${overlays}`;
   }
 }

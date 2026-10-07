@@ -1,6 +1,7 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
+import { isGatewayAvailable } from "../lib/gateway-availability.ts";
 import {
   createGatewayConnectionLifecycle,
   type GatewayConnectionScope,
@@ -15,6 +16,7 @@ export type GatewayPageChange = {
   readonly connectionChanged: boolean;
   readonly identityChanged: boolean;
   readonly becameConnected: boolean;
+  readonly becameAvailable: boolean;
 };
 
 type GatewayPageControllerOptions = {
@@ -43,6 +45,7 @@ export class GatewayPageController implements ReactiveController {
   private readonly subscriptions: SubscriptionsController;
   private currentGateway: ApplicationContext["gateway"] | null = null;
   private currentSnapshot: ApplicationGatewaySnapshot | null = null;
+  // Snapshots can be mutated in place; retain the previous transport facts.
   private currentClient: GatewayBrowserClient | null = null;
   private currentConnected = false;
   private hasBoundGateway = false;
@@ -61,12 +64,11 @@ export class GatewayPageController implements ReactiveController {
       this.hasBoundGateway = true;
       this.currentGateway = gateway;
       this.applySnapshot(gateway.snapshot, { initial, sourceChanged });
-      const unsubscribe = gateway.subscribe((snapshot) => {
+      return gateway.subscribe((snapshot) => {
         if (this.currentGateway === gateway && this.options.getGateway() === gateway) {
           this.applySnapshot(snapshot, { initial: false, sourceChanged: false });
         }
       });
-      return () => unsubscribe();
     });
     // Register after subscriptions so source cleanup happens before the
     // synthetic stopped transition on disconnect.
@@ -157,6 +159,7 @@ export class GatewayPageController implements ReactiveController {
           connectionChanged,
           identityChanged: false,
           becameConnected: false,
+          becameAvailable: false,
         });
       }
     } else {
@@ -171,6 +174,8 @@ export class GatewayPageController implements ReactiveController {
   ): void {
     const previousClient = this.currentClient;
     const previousConnected = this.currentConnected;
+    const previousAvailable =
+      this.currentSnapshot !== null && isGatewayAvailable(this.currentSnapshot);
     const nextConnected = snapshot.phase === "connected";
     const clientChanged = previousClient !== snapshot.client;
     const connectionChanged = previousConnected !== nextConnected;
@@ -190,6 +195,7 @@ export class GatewayPageController implements ReactiveController {
       connectionChanged,
       identityChanged: !binding.initial && (binding.sourceChanged || clientChanged),
       becameConnected: nextConnected && !previousConnected,
+      becameAvailable: isGatewayAvailable(snapshot) && !previousAvailable,
     };
     if (change.identityChanged) {
       this.options.onIdentityChange?.(change);

@@ -1,24 +1,26 @@
-// Gateway plugin runtime adapter.
-// Loads plugin registries and builds fallback request context for non-WS paths.
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { allowsProcessHomeSessionScan } from "../config/paths.js";
-import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
-import { activatePluginRegistry } from "../plugins/loader-shared.js";
-import type { ChannelPluginLoadIntent } from "../plugins/loader-types.js";
-import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
+import type {
+  ChannelPluginLoadIntent,
+  PluginLoadOptions,
+  PluginRuntimeRecovery,
+} from "../plugins/loader-types.js";
+import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import {
   bindGatewayContextResolver,
+  getGatewayContextLifetime,
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
@@ -28,33 +30,42 @@ import {
   setPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
+import { subscribeRuntimeSessionChanges } from "../plugins/runtime/session-changes.js";
 import type {
   CreatePluginRuntimeOptions,
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
-import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
+import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
+import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type { GatewayContextResolver, GatewayRequestHandler } from "./server-methods/types.js";
+import { resolveTrustedPluginGitHubAccount } from "./server-plugin-github-account.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
 import {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
+} from "./server-plugin-session-facts.js";
+import {
   canTrustedOfficialPluginRequestScopes,
   createGatewaySubagentRuntime,
   resolvePluginSubagentOverridePolicies,
   type PluginSubagentOverridePolicies,
 } from "./server-plugin-subagent-runtime.js";
+import { withTrustedPluginUserProfileIdentity } from "./server-plugin-user-profile.js";
 import {
-  createGatewayHooksRuntime,
   hasInProcessGatewayContext,
   openGatewayNodeDuplex,
   projectGatewayRuntimeNodes,
 } from "./server-plugins-node-runtime.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import { requireSessionRowProjection } from "./session-row-projection-access.js";
 
 export {
   dispatchGatewayMethodInProcess,
@@ -64,19 +75,13 @@ export {
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
 export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
+export {
+  readTrustedPluginSessionFacts,
+  withTrustedPluginSessionFacts,
+  withTrustedPluginUserProfileIdentity,
+  resolveTrustedPluginGitHubAccount,
+};
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
-
-// ── Internal gateway dispatch for plugin runtime ────────────────────
-
-function resolveRuntimeNodeInvokeSyntheticScopes(params: {
-  pluginId?: string;
-  pluginOrigin?: PluginOrigin;
-  pluginTrustedOfficialInstall?: boolean;
-  requestedScopes?: OperatorScope[];
-}): OperatorScope[] | undefined {
-  // Requested scopes may replace caller scopes, so only bundled or trusted official plugins qualify.
-  return canTrustedOfficialPluginRequestScopes(params) ? params.requestedScopes : undefined;
-}
 
 export async function dispatchTrustedPluginGatewayMethod<T>(
   method: string,
@@ -87,10 +92,59 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   const scope = getPluginRuntimeGatewayRequestScope();
   const pluginId = scope?.pluginId?.trim();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
-    throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
+    throw new Error(
+      `Gateway requests are only available to bundled or trusted official plugins. ${
+        pluginId ? `Plugin "${pluginId}" is neither.` : "This call carries no plugin identity."
+      } See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-gateway`,
+    );
   }
   const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
-  return await dispatchGatewayMethodInProcess<T>(method, params, {
+  let requestParams = params;
+  const expectedSession = options?.sessionDeliveryGeneration;
+  if (expectedSession) {
+    if (method !== "send") {
+      throw new Error("Session delivery generation is only valid for Gateway send requests");
+    }
+    const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+    if (!context) {
+      throw new Error("Session delivery generation requires an active Gateway");
+    }
+    const projection = requireSessionRowProjection(context);
+    const generation = await withReadySessionRows(
+      projection,
+      (cfg) => {
+        const requested = resolveRequestedSessionAgentId(cfg, expectedSession.sessionKey);
+        return requested.ok
+          ? [{ key: expectedSession.sessionKey, agentId: requested.agentId }]
+          : [];
+      },
+      (read) => {
+        const requested = resolveRequestedSessionAgentId(
+          read.state.cfg,
+          expectedSession.sessionKey,
+        );
+        const record = requested.ok
+          ? read.describe({ key: expectedSession.sessionKey, agentId: requested.agentId })
+          : undefined;
+        if (
+          !record?.entry.sessionId ||
+          record.entry.sessionId !== expectedSession.sessionId ||
+          (record.entry.lifecycleRevision ?? undefined) !== expectedSession.lifecycleRevision
+        ) {
+          throw new Error("Requester session changed during delivery");
+        }
+        return {
+          agentId: record.agentId,
+          storePath: record.storeTarget.storePath,
+          sessionKey: record.key,
+          sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision ?? null,
+        };
+      },
+    );
+    requestParams = bindInProcessSessionDeliveryGeneration(params, generation);
+  }
+  return await dispatchGatewayMethodInProcess<T>(method, requestParams, {
     forceSyntheticClient: true,
     pluginRuntimeOwnerId: pluginId,
     resolveGatewayContext,
@@ -98,6 +152,47 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
+}
+
+/** Narrow requester-only presentation capability; unlike arbitrary RPC it grants no plugin scopes. */
+export async function openPluginPanelForRequester(
+  params: Parameters<PluginRuntime["gateway"]["openPluginPanel"]>[0],
+  resolveGatewayContext?: GatewayContextResolver,
+): Promise<{ ok: true }> {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const registry = scope?.pluginRegistry;
+  const record = registry?.plugins.find((candidate) => candidate.id === scope?.pluginId);
+  if (!registry || !record) {
+    throw new Error("Opening a plugin panel requires a current plugin runtime.");
+  }
+  const live = capturePluginLifecycleAuthority(registry, record, { admittedRuntime: true });
+  const assertCurrent = () => {
+    scope?.signal?.throwIfAborted();
+    if (!live?.()) {
+      throw new Error("Opening a plugin panel requires a current plugin runtime.");
+    }
+  };
+  assertCurrent();
+  return await dispatchGatewayMethodInProcess<{ ok: true }>(
+    "ui.command",
+    {
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      command: {
+        kind: "panel",
+        panel: "plugin",
+        pluginId: record.id,
+        panelId: params.panelId,
+        open: true,
+      },
+    },
+    {
+      pluginRuntimeOwnerId: record.id,
+      resolveGatewayContext,
+      syntheticScopeMode: "minimum",
+      sessionMutationCommitGuard: assertCurrent,
+    },
+  );
 }
 
 type GatewayRuntimeNodes = Awaited<ReturnType<PluginRuntime["nodes"]["list"]>>["nodes"];
@@ -113,12 +208,11 @@ export function createGatewayNodesRuntime(
   ) => {
     const scope = getPluginRuntimeGatewayRequestScope();
     const pluginId = scope?.pluginId?.trim() || undefined;
-    const requestedScopes = resolveRuntimeNodeInvokeSyntheticScopes({
-      pluginId,
-      pluginOrigin: scope?.pluginOrigin,
-      pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
-      requestedScopes: normalizeOperatorScopeList(params.scopes),
-    });
+    const normalizedScopes = normalizeOperatorScopeList(params.scopes);
+    // Requested scopes may replace caller scopes, so only trusted plugins qualify.
+    const requestedScopes = canTrustedOfficialPluginRequestScopes({ ...scope, pluginId })
+      ? normalizedScopes
+      : undefined;
     const callerScopes =
       stream && scope?.client
         ? (normalizeOperatorScopeList(scope.client.connect.scopes) ?? [])
@@ -191,10 +285,12 @@ function createGatewayPluginRuntimeBindings(
     Pick<CreatePluginRuntimeOptions, "dispatchReplyFromConfig">;
   retire: () => void;
 } {
-  let active = true;
   const lifetime = new AbortController();
+  const signal = resolveGatewayContext
+    ? AbortSignal.any([lifetime.signal, getGatewayContextLifetime(resolveGatewayContext).signal])
+    : lifetime.signal;
   const resolveBoundGatewayContext = resolveGatewayContext
-    ? () => (active ? resolveGatewayContext() : undefined)
+    ? () => (signal.aborted ? undefined : resolveGatewayContext())
     : undefined;
   if (resolveBoundGatewayContext) {
     bindGatewayContextResolver(resolveBoundGatewayContext, resolveGatewayContext);
@@ -202,7 +298,6 @@ function createGatewayPluginRuntimeBindings(
   return {
     retire: () => {
       lifetime.abort(new Error("Plugin Gateway runtime retired; duplex invocation cancelled."));
-      active = false;
     },
     runtime: {
       dispatchReplyFromConfig: async (params) => {
@@ -224,44 +319,45 @@ function createGatewayPluginRuntimeBindings(
         isAvailable: async () => hasInProcessGatewayContext(resolveBoundGatewayContext),
         request: (method, params, options) =>
           dispatchTrustedPluginGatewayMethod(method, params, options, resolveBoundGatewayContext),
+        openPluginPanel: (params) =>
+          openPluginPanelForRequester(params, resolveBoundGatewayContext),
+        readSessionFacts: (params) =>
+          readTrustedPluginSessionFacts(params, resolveBoundGatewayContext),
+        withSessionFacts: (select, run) =>
+          withTrustedPluginSessionFacts(select, run, resolveBoundGatewayContext),
+        subscribeSessionChanges: subscribeRuntimeSessionChanges,
+        withUserProfileIdentity: (params, run) =>
+          withTrustedPluginUserProfileIdentity(params, run, resolveBoundGatewayContext),
+        resolveGitHubAccount: (params) =>
+          resolveTrustedPluginGitHubAccount(
+            {
+              ...params,
+              signal: params.signal ? AbortSignal.any([params.signal, signal]) : signal,
+            },
+            resolveBoundGatewayContext,
+          ),
       },
-      hooks: createGatewayHooksRuntime(resolveBoundGatewayContext),
-      nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, lifetime.signal),
-      subagent: createGatewaySubagentRuntime(
-        resolveBoundGatewayContext,
-        overridePolicies,
-        lifetime.signal,
-      ),
+      hooks: {
+        dispatchHookAgentTurn: async (params) => {
+          const pluginId = getPluginRuntimeGatewayRequestScope()?.pluginId;
+          const gatewayContext = resolveBoundGatewayContext?.();
+          if (!pluginId || !gatewayContext?.dispatchHookAgentTurn) {
+            throw new Error("Plugin hook runtime requires an active Gateway and plugin identity.");
+          }
+          return await gatewayContext.dispatchHookAgentTurn(pluginId, params);
+        },
+      },
+      nodes: createGatewayNodesRuntime(resolveBoundGatewayContext, signal),
+      subagent: createGatewaySubagentRuntime(resolveBoundGatewayContext, overridePolicies, signal),
     },
-  };
-}
-
-// ── Plugin loading ──────────────────────────────────────────────────
-
-function createGatewayPluginRegistrationLogger(params?: {
-  suppressInfoLogs?: boolean;
-}): PluginLogger {
-  const logger = createPluginRuntimeLoaderLogger();
-  if (params?.suppressInfoLogs !== true) {
-    return logger;
-  }
-  return {
-    ...logger,
-    info: (_message: string) => undefined,
   };
 }
 
 export function loadGatewayPlugins(params: {
   cfg: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
-  autoEnabledReasons?: Readonly<Record<string, string[]>>;
+  autoEnabledReasons: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
-  log: {
-    info: (msg: string) => void;
-    warn: (msg: string) => void;
-    error: (msg: string) => void;
-    debug: (msg: string) => void;
-  };
   coreGatewayHandlers?: Record<string, GatewayRequestHandler>;
   coreGatewayMethodNames?: readonly string[];
   hostServices?: PluginRegistryParams["hostServices"];
@@ -276,38 +372,19 @@ export function loadGatewayPlugins(params: {
   };
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
+  loadIntent: "startup" | "replacement";
+  previousRegistry?: import("../plugins/registry-types.js").PluginRegistry;
+  replacePluginIds?: ReadonlySet<string>;
+  expectedSourceDigests?: Readonly<Record<string, string>>;
+  /** Metadata-only replacement preflight; never executes plugin registration. */
+  loadModules?: boolean;
+  moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
+  prepareRegistrationFailureCleanup?: PluginLoadOptions["prepareRegistrationFailureCleanup"];
+  env?: NodeJS.ProcessEnv;
 }) {
   const started = performance.now();
   const allowProcessHomeSessionCatalogs = allowsProcessHomeSessionScan();
-  const activationAutoEnabled =
-    params.activationSourceConfig !== undefined && params.autoEnabledReasons === undefined
-      ? applyPluginAutoEnable({
-          config: params.activationSourceConfig,
-          env: process.env,
-          ...(params.pluginLookUpTable?.manifestRegistry
-            ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
-            : {}),
-          discovery: params.pluginLookUpTable?.discovery,
-          ambientEnvTriggers: params.ambientEnvTriggers,
-        })
-      : undefined;
-  const autoEnableMs = performance.now() - started;
-  const autoEnabled =
-    params.activationSourceConfig !== undefined || params.autoEnabledReasons !== undefined
-      ? {
-          config: params.cfg,
-          autoEnabledReasons:
-            params.autoEnabledReasons ?? activationAutoEnabled?.autoEnabledReasons ?? {},
-        }
-      : applyPluginAutoEnable({
-          config: params.cfg,
-          env: process.env,
-          manifestRegistry: params.pluginLookUpTable?.manifestRegistry,
-          discovery: params.pluginLookUpTable?.discovery,
-          ambientEnvTriggers: params.ambientEnvTriggers,
-        });
-  const resolvedConfigMs = performance.now() - started;
-  const resolvedConfig = autoEnabled.config;
+  const resolvedConfig = params.cfg;
   const pluginIds = params.pluginIds ?? [
     ...(
       params.pluginLookUpTable ??
@@ -315,7 +392,7 @@ export function loadGatewayPlugins(params: {
         config: resolvedConfig,
         activationSourceConfig: params.activationSourceConfig,
         workspaceDir: params.workspaceDir,
-        env: process.env,
+        env: params.env ?? process.env,
         ambientEnvTriggers: params.ambientEnvTriggers,
       })
     ).startup.pluginIds,
@@ -328,17 +405,20 @@ export function loadGatewayPlugins(params: {
       workspaceDir: params.workspaceDir,
     });
   const loaderMetadata = metadataSnapshot ?? params.pluginLookUpTable;
+  const logger = {
+    ...createPluginRuntimeLoaderLogger(),
+    ...(params.suppressPluginInfoLogs ? { info: () => undefined } : {}),
+  };
   const loadContext: PluginRuntimeLoadContext = {
     rawConfig: params.cfg,
     config: resolvedConfig,
     activationSourceConfig: params.activationSourceConfig ?? params.cfg,
-    autoEnabledReasons: autoEnabled.autoEnabledReasons,
+    autoEnabledReasons: params.autoEnabledReasons,
     workspaceDir: params.workspaceDir,
-    env: process.env,
-    logger: createGatewayPluginRegistrationLogger({
-      suppressInfoLogs: params.suppressPluginInfoLogs,
-    }),
+    env: params.env ?? process.env,
+    logger,
     preferBuiltPluginArtifacts: true,
+    expectedSourceDigests: params.expectedSourceDigests,
     metadataSnapshot,
     ...(loaderMetadata
       ? {
@@ -347,56 +427,54 @@ export function loadGatewayPlugins(params: {
         }
       : {}),
   };
-  if (pluginIds.length === 0) {
-    const pluginRegistry = createEmptyPluginRegistry();
-    // An empty startup registry still owns the artifact policy for later capability loads.
-    setPluginRuntimeLoadContext(pluginRegistry, loadContext);
-    activatePluginRegistry(pluginRegistry, null, "gateway-bindable", params.workspaceDir);
-    params.startupTrace?.detail("plugins.gateway-load", [
-      ["autoEnableMs", autoEnableMs],
-      ["resolvedConfigMs", resolvedConfigMs],
-      ["pluginIdsMs", pluginIdsMs],
-      ["loadMs", 0],
-      ["pluginIds", "0"],
-      ["pluginCount", 0],
-      ["gatewayHandlerCount", 0],
-    ]);
-    return {
-      pluginRegistry,
-      gatewayMethods: [...params.baseMethods],
-      retireGatewayRuntimeBindings: () => {},
-    };
-  }
   const beforeLoad = performance.now();
   const loaderStatsBefore = getPluginModuleLoaderStats();
-  const gatewayRuntimeBindings = createGatewayPluginRuntimeBindings(
-    params.resolveGatewayContext,
-    resolvePluginSubagentOverridePolicies(resolvedConfig),
-  );
-  const pluginRegistry = loadAndActivateRootPluginRegistry({
-    ...buildPluginRuntimeLoadOptions(loadContext),
-    // Startup registration stays scoped; later capability loads use the complete bound generation.
-    manifestRegistry: params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
-    allowProcessHomeSessionCatalogs,
-    onlyPluginIds: pluginIds,
-    coreGatewayHandlers: params.coreGatewayHandlers,
-    coreGatewayMethodNames: params.coreGatewayMethodNames,
-    hostServices: params.hostServices,
-    runtimeOptions: {
-      allowGatewaySubagentBinding: true,
-      ...gatewayRuntimeBindings.runtime,
-    },
-    channelPluginLoadIntent: params.channelPluginLoadIntent,
-    startupTrace: params.startupTrace,
-  });
-  setPluginRuntimeLoadContext(pluginRegistry, loadContext);
+  const gatewayRuntimeBindings = pluginIds.length
+    ? createGatewayPluginRuntimeBindings(
+        params.resolveGatewayContext,
+        resolvePluginSubagentOverridePolicies(resolvedConfig),
+      )
+    : undefined;
+  let pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  try {
+    pluginRegistry = gatewayRuntimeBindings
+      ? loadOpenClawPlugins({
+          ...buildPluginRuntimeLoadOptions(loadContext),
+          activate: false,
+          runtimeSideEffects: true,
+          cache: false,
+          throwOnLoadError: params.loadIntent === "replacement",
+          previousRegistry: params.previousRegistry,
+          replacePluginIds: params.replacePluginIds ? [...params.replacePluginIds] : undefined,
+          loadModules: params.loadModules,
+          moduleRecoveries: params.moduleRecoveries,
+          prepareRegistrationFailureCleanup: params.prepareRegistrationFailureCleanup,
+          // Startup registration stays scoped; later capability loads use the complete bound generation.
+          manifestRegistry:
+            params.pluginLookUpTable?.manifestRegistry ?? loadContext.manifestRegistry,
+          allowProcessHomeSessionCatalogs,
+          onlyPluginIds: pluginIds,
+          coreGatewayHandlers: params.coreGatewayHandlers,
+          coreGatewayMethodNames: params.coreGatewayMethodNames,
+          hostServices: params.hostServices,
+          runtimeOptions: {
+            allowGatewaySubagentBinding: true,
+            ...gatewayRuntimeBindings.runtime,
+          },
+          channelPluginLoadIntent: params.channelPluginLoadIntent,
+          startupTrace: params.startupTrace,
+        })
+      : createEmptyPluginRegistry();
+    setPluginRuntimeLoadContext(pluginRegistry, loadContext);
+  } catch (error) {
+    gatewayRuntimeBindings?.retire();
+    throw error;
+  }
   const loadMs = performance.now() - beforeLoad;
   const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
   const gatewayMethods = uniqueStrings([...params.baseMethods, ...pluginMethods]);
   params.startupTrace?.detail("plugins.gateway-load", [
-    ["autoEnableMs", autoEnableMs],
-    ["resolvedConfigMs", resolvedConfigMs],
     ["pluginIdsMs", pluginIdsMs],
     ["loadMs", loadMs],
     ["pluginIds", String(pluginIds.length)],
@@ -425,6 +503,6 @@ export function loadGatewayPlugins(params: {
   return {
     pluginRegistry,
     gatewayMethods,
-    retireGatewayRuntimeBindings: gatewayRuntimeBindings.retire,
+    retireGatewayRuntimeBindings: gatewayRuntimeBindings?.retire ?? (() => {}),
   };
 }

@@ -1,5 +1,4 @@
 import {
-  css,
   html,
   nothing,
   type ReactiveController,
@@ -17,7 +16,6 @@ type DockLayoutControllerOptions<TDock extends DockPanelPlacement> = {
   isAvailable: () => boolean;
   isFullscreen?: () => boolean;
   maxWidth?: () => number;
-  reserveViewport?: boolean;
   onResize?: () => void;
 };
 
@@ -28,6 +26,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   width: number;
 
   private suppressed = false;
+  private persistedOpen = false;
   private readonly onViewportResize = () => {
     const height = Math.min(this.height, this.options.layout.maxHeight());
     const width = Math.min(this.width, this.maxWidth());
@@ -57,6 +56,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       return;
     }
     const layout = this.options.layout.load();
+    this.persistedOpen = layout.open;
     this.open = layout.open && this.options.isAvailable();
     this.dock = layout.dock;
     this.height = layout.height;
@@ -82,17 +82,9 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     this.setOpen(false, false);
   }
 
-  /**
-   * Full-page route takeovers (settings) own the viewport, so docks hide while
-   * one renders. Hiding never persists — the user's open preference must survive
-   * the visit — and suppression also blocks `restoreOpenState()` so a reconnect
-   * mid-takeover cannot pop the panel back over settings. Returns true when the
-   * caller must resume its surface after the takeover ends.
-   *
-   * Only automatic restores are blocked. An explicit open (Ctrl+`, toolbar,
-   * `ui.command`) still wins and shows the dock over the takeover: swallowing a
-   * requested terminal would be a worse papercut than the one this fixes.
-   */
+  /** Hide during route takeovers without losing the persisted open preference.
+   * Suppression blocks automatic restores, but explicit opens still win.
+   * Returns true when the caller must resume its surface after the takeover. */
   setSuppressed(suppressed: boolean): boolean {
     if (this.suppressed === suppressed) {
       return false;
@@ -110,13 +102,11 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
       this.suppressed ||
       !this.options.isAvailable() ||
       this.open ||
-      (!this.isFullscreen() && !this.options.layout.load().open)
+      (!this.isFullscreen() && !this.persistedOpen)
     ) {
       return false;
     }
-    this.open = true;
-    this.syncReservation();
-    this.host.requestUpdate();
+    this.setOpen(true, false);
     return true;
   }
 
@@ -130,6 +120,7 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   persist(): void {
+    this.persistedOpen = this.open;
     this.options.layout.save({
       open: this.open,
       dock: this.dock,
@@ -139,13 +130,10 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   syncReservation(): void {
-    if (this.options.reserveViewport === false) {
+    if (!this.reservesViewport()) {
       return;
     }
-    // Embedded docks live inside a parent layout that already owns their geometry.
-    // Reserving the viewport here would apply the standalone dock a second time.
-    const embedded = this.host instanceof HTMLElement && this.host.hasAttribute("embedded");
-    const visible = !embedded && !this.isFullscreen() && this.options.isAvailable() && this.open;
+    const visible = this.options.isAvailable() && this.open;
     const root = document.documentElement.style;
     root.setProperty(
       `--oc-${this.options.reservationPrefix}-reserve-bottom`,
@@ -200,12 +188,22 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
   }
 
   private clearReservation(): void {
-    if (this.options.reserveViewport === false) {
+    if (!this.reservesViewport()) {
       return;
     }
     const root = document.documentElement.style;
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-bottom`, "0px");
     root.setProperty(`--oc-${this.options.reservationPrefix}-reserve-right`, "0px");
+  }
+
+  // Only a standalone dock owns its panel's viewport reservation. Embedded, fullscreen,
+  // and inline hosts are laid out by their parent, and the standalone dock of the same
+  // panel can be open at the same time, so they neither reserve nor clear its properties.
+  private reservesViewport(): boolean {
+    return (
+      !this.isFullscreen() &&
+      !(this.host instanceof HTMLElement && this.host.hasAttribute("embedded"))
+    );
   }
 
   private isFullscreen(): boolean {
@@ -222,139 +220,3 @@ export class DockLayoutController<TDock extends DockPanelPlacement> implements R
     );
   }
 }
-
-export const dockPanelStyles = css`
-  :host {
-    position: fixed;
-    z-index: 60;
-    color: var(--text, #d7dae0);
-    font-family: var(--font-body);
-  }
-  :host([embedded]) {
-    position: static;
-    z-index: auto;
-    display: flex;
-    width: 100%;
-    min-width: 0;
-    min-height: 0;
-    flex: 1 1 0;
-  }
-  :is(.bp, .tp) {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg, #0e1015);
-    overflow: hidden;
-  }
-  :is(.bp-resizer, .tp-resizer) {
-    position: absolute;
-    z-index: 2;
-  }
-  :is(.bp-resizer--bottom, .tp-resizer--bottom) {
-    --resize-handle-line-block: 0;
-    top: 0;
-    left: 0;
-    right: 0;
-  }
-  :is(.bp-resizer--right, .tp-resizer--right) {
-    --resize-handle-line-inline: 0;
-    top: 0;
-    bottom: 0;
-    left: 0;
-  }
-  .rail-header {
-    box-sizing: border-box;
-    display: flex;
-    height: var(--rail-header-height, 48px);
-    min-height: var(--rail-header-height, 48px);
-    flex: 0 0 auto;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 var(--rail-header-padding-end, 8px) 0 var(--rail-header-padding-start, 12px);
-    border-bottom: var(--rail-divider-size, 1px) solid
-      var(--rail-divider-color, var(--border, #262b34));
-    background: var(--rail-header-background, var(--bg, #0e1015));
-  }
-  .rail-header__actions {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--rail-header-action-gap, 2px);
-  }
-  .rail-header__copy {
-    display: flex;
-    min-width: 0;
-    flex: 1 1 auto;
-    flex-direction: column;
-    justify-content: center;
-    gap: var(--rail-header-copy-gap, 2px);
-  }
-  .rail-header__eyebrow {
-    overflow: hidden;
-    color: var(--muted, #8a919e);
-    font-size: var(--rail-header-eyebrow-size, 10px);
-    letter-spacing: var(--rail-header-eyebrow-letter-spacing, 0.04em);
-    line-height: 1;
-    text-overflow: ellipsis;
-    text-transform: uppercase;
-    white-space: nowrap;
-  }
-  .rail-header__title {
-    overflow: hidden;
-    color: var(--text, #d7dae0);
-    font-size: var(--rail-header-title-size, 12px);
-    font-weight: var(--rail-header-title-weight, 600);
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .rail-header__action {
-    display: inline-flex;
-    width: var(--rail-header-action-size, 28px);
-    min-width: var(--rail-header-action-size, 28px);
-    height: var(--rail-header-action-size, 28px);
-    min-height: var(--rail-header-action-size, 28px);
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    box-shadow: none;
-    color: var(--rail-header-action-color, var(--muted, #8a919e));
-    font: inherit;
-    opacity: 1;
-  }
-  .rail-header__action:hover,
-  .rail-header__action:focus-visible {
-    border: 0;
-    background: transparent;
-    box-shadow: none;
-    color: var(--rail-header-action-hover-color, var(--text, #d7dae0));
-  }
-  .rail-header__action:focus-visible {
-    outline: 2px solid var(--ring, var(--accent, #ff5c5c));
-    outline-offset: -3px;
-  }
-  .rail-header__action.is-active,
-  .rail-header__action[aria-pressed="true"] {
-    background: transparent;
-    color: var(--rail-header-action-active-color, var(--accent, #ff5c5c));
-  }
-  .rail-header__action:disabled,
-  .rail-header__action[aria-disabled="true"] {
-    opacity: var(--rail-header-action-disabled-opacity, 0.4);
-  }
-  [data-new-tab-action]:not(:disabled):not([disabled]):not([aria-disabled="true"]) {
-    cursor: pointer;
-  }
-  .rail-header__action svg {
-    width: var(--rail-header-action-glyph-size, 16px);
-    height: var(--rail-header-action-glyph-size, 16px);
-    fill: none;
-    stroke: currentColor;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-  }
-`;

@@ -189,6 +189,94 @@ describe("runProviderCatalog", () => {
     ]);
   });
 
+  it("copies only valid ready model order through the catalog boundary", async () => {
+    const outcomes: Array<{ status: string; modelOrder?: readonly string[] }> = [];
+    const provider: ProviderPlugin = {
+      id: "demo",
+      label: "Demo",
+      auth: [],
+      catalog: {
+        run: async () => ({
+          providers: {},
+          outcomes: [
+            {
+              provider: "demo",
+              status: "ready",
+              modelOrder: [" second ", "", "second", "first", 42],
+            },
+            {
+              provider: "demo",
+              profileId: "demo:stale",
+              status: "unavailable",
+              modelOrder: ["stale"],
+            },
+          ] as never,
+        }),
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "demo", status: "ready", modelOrder: ["second", "first"] },
+      { provider: "demo", profileId: "demo:stale", status: "unavailable" },
+    ]);
+  });
+
+  it("preserves provider-owned profile outcomes after multiple auth probes", async () => {
+    const outcomes: Array<{ profileId?: string; status: string }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:profile-b",
+                status: "ready",
+              },
+            ],
+          };
+        },
+      },
+    };
+    let authCall = 0;
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => {
+        authCall += 1;
+        return {
+          apiKey: `selected-key-${authCall}`,
+          mode: "api_key",
+          profileId: `openai:profile-${authCall === 1 ? "a" : "b"}`,
+          source: "profile",
+        };
+      },
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:profile-b", status: "ready" },
+    ]);
+  });
+
   it.each([
     { providerIds: ["OPENAI"], expected: ["openai"] },
     { providerIds: ["azure-openai"], expected: ["azure-openai"] },

@@ -101,11 +101,7 @@ final class DisabledUpdaterController: UpdaterProviding {
 @MainActor
 @Observable
 final class UpdateStatus {
-    var isUpdateReady: Bool
-
-    init(isUpdateReady: Bool = false) {
-        self.isUpdateReady = isUpdateReady
-    }
+    var isUpdateReady = false
 }
 
 #if canImport(Sparkle)
@@ -133,8 +129,9 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding {
             struct UpdateStatusResponse: Decodable {
                 let effectiveChannel: String?
             }
-            guard let data = try? await GatewayConnection.shared.requestRaw(
+            guard let data = try? await GatewayConnection.shared.request(
                 method: "update.status",
+                params: nil,
                 timeoutMs: 5000),
                 let response = try? JSONDecoder().decode(UpdateStatusResponse.self, from: data)
             else { return nil }
@@ -294,6 +291,13 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
 
 @MainActor
 func makeUpdaterController() -> UpdaterProviding {
+    guard AppLaunchRuntimePlan.current.allowsUpdater else {
+        if !AppLaunchRuntimePlan.current.allowsActivation {
+            Logger(subsystem: "ai.openclaw", category: "app").info(
+                "Update dialogs deferred by --no-activate; relaunch without the flag to check for updates.")
+        }
+        return DisabledUpdaterController()
+    }
     guard AppProfile.current.validationError == nil, !AppProfile.current.isActive else {
         return DisabledUpdaterController()
     }

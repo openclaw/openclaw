@@ -12,10 +12,6 @@ export {
   type NonClawHubInstallSourceClass,
 } from "../plugins/install-provenance.js";
 
-function canPromptForNonClawHubInstall(): boolean {
-  return process.stdin.isTTY && process.stdout.isTTY;
-}
-
 export async function confirmNonClawHubInstall(params: {
   acknowledged?: boolean;
   runtime: RuntimeEnv;
@@ -30,7 +26,7 @@ export async function confirmNonClawHubInstall(params: {
     params.runtime.log(theme.warn(warning));
     return true;
   }
-  if (canPromptForNonClawHubInstall()) {
+  if (process.stdin.isTTY && process.stdout.isTTY) {
     params.runtime.log(theme.warn(warning));
     return await promptYesNo("Install this non-ClawHub plugin source?");
   }

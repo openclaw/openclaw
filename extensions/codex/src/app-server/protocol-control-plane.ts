@@ -1,6 +1,16 @@
 import type { JsonObject, JsonValue } from "./protocol-json.js";
 
-/** Current Codex marketplace, app, skill, hook, and config wire contracts. */
+export type CodexExperimentalFeatureListParams = {
+  cursor?: string | null;
+  limit?: number | null;
+  threadId?: string | null;
+};
+
+export type CodexExperimentalFeatureListResponse = {
+  data: Array<{ name: string; enabled: boolean }>;
+  nextCursor?: string | null;
+};
+
 export type CodexPluginSummary = {
   id: string;
   remotePluginId?: string | null;
@@ -12,6 +22,12 @@ export type CodexPluginSummary = {
   mustShowInstallationInterstitial?: boolean | null;
   authPolicy?: string;
   availability?: string;
+  disabledReason?:
+    | "disabled_by_admin"
+    | "plan_not_eligible"
+    | "required_app_unavailable"
+    | "unknown"
+    | null;
   interface?: JsonValue;
 };
 
@@ -55,9 +71,7 @@ export type CodexPluginInstalledResponse = {
   marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
 };
 
-export type CodexPluginListResponse = {
-  marketplaces: CodexPluginMarketplaceEntry[];
-  marketplaceLoadErrors: CodexMarketplaceLoadErrorInfo[];
+export type CodexPluginListResponse = CodexPluginInstalledResponse & {
   featuredPluginIds: string[];
 };
 
@@ -170,11 +184,6 @@ export type CodexAppsReadResponse = {
   missingAppIds: string[];
 };
 
-export type CodexSkillsListParams = {
-  cwds: string[];
-  forceReload?: boolean;
-};
-
 type CodexSkillScope = "user" | "repo" | "system" | "admin";
 
 type CodexSkillMetadata = {
@@ -186,6 +195,7 @@ type CodexSkillMetadata = {
   path: string;
   scope: CodexSkillScope;
   enabled: boolean;
+  pluginId?: string | null;
 };
 
 type CodexSkillErrorInfo = {
@@ -201,10 +211,6 @@ type CodexSkillsListEntry = {
 
 export type CodexSkillsListResponse = {
   data: CodexSkillsListEntry[];
-};
-
-export type CodexHooksListParams = {
-  cwds: string[];
 };
 
 export type CodexHooksListResponse = {

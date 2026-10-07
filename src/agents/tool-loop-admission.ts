@@ -49,25 +49,25 @@ async function evaluateToolLoopCall(
     stateOverride ?? sessionState,
     toolName,
     call.params,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
     return undefined;
   }
+  const diagnostic = {
+    sessionKey: ctx.sessionKey,
+    sessionId: ctx.sessionId,
+    ...(ctx.agentId ? { agentId: ctx.agentId } : {}),
+    toolName,
+    level: result.level,
+    detector: result.detector,
+    count: result.count,
+    message: result.message,
+    pairedToolName: result.pairedToolName,
+  };
   if (result.level === "critical") {
     log.error(`Blocking ${toolName} due to critical loop: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      toolName,
-      level: "critical",
-      action: "block",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    logToolLoopAction({ ...diagnostic, action: "block" });
     return {
       kind: "critical-tool-loop",
       toolCallId: call.toolCallId ?? "",
@@ -82,17 +82,7 @@ async function evaluateToolLoopCall(
   const warningKey = ctx.runId ? `${ctx.runId}:${baseWarningKey}` : baseWarningKey;
   if (shouldEmitLoopWarning(sessionState, warningKey, result.count)) {
     log.warn(`Loop warning for ${toolName}: ${result.message}`);
-    logToolLoopAction({
-      sessionKey: ctx.sessionKey,
-      sessionId: ctx.sessionId,
-      toolName,
-      level: "warning",
-      action: "warn",
-      detector: result.detector,
-      count: result.count,
-      message: result.message,
-      pairedToolName: result.pairedToolName,
-    });
+    logToolLoopAction({ ...diagnostic, action: "warn" });
     return {
       kind: "tool-loop-warning",
       toolCallId: call.toolCallId ?? "",
@@ -112,7 +102,6 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
 }
@@ -130,9 +119,11 @@ export async function admitSingleToolCallLoop(
 }
 
 /**
- * Admit an assistant tool batch atomically. Successful calls reserve exact
- * markers here, then agent-core commits their history in assistant order at
- * the final launch boundary. A later veto still records only denial evidence.
+ * Admit an assistant tool batch atomically. Successful prepared calls reserve
+ * exact markers here; calls rejected by argument validation never reach the
+ * wrapper and reserve none. Agent-core commits both in assistant order at the
+ * final launch boundary, and a released call is dropped. A later veto still
+ * records only denial evidence.
  */
 export async function admitToolCallBatch(
   calls: InternalToolBatchCall[],
@@ -146,6 +137,7 @@ export async function admitToolCallBatch(
     markDiagnosticArgumentChurnObservation,
     reconcileToolCallExecutionParams,
     recordToolCall,
+    recordToolCallOutcome,
     resolveToolLoopWarningThreshold,
   } = await loadBeforeToolCallRuntime();
   const warningThreshold = resolveToolLoopWarningThreshold();
@@ -163,7 +155,6 @@ export async function admitToolCallBatch(
       normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     const projectedCall = state.toolCallHistory?.at(-1);
@@ -220,12 +211,17 @@ export async function admitToolCallBatch(
     projectLoopVeto(call);
   }
   for (const call of calls) {
-    recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
+    if (!call.validationFailure) {
+      recordBatchAdmittedToolCall(call.toolCall.id, ctx.runId);
+    }
   }
   const admittedById = new Map(
     calls.map((call) => [
       call.toolCall.id,
-      { toolName: normalizeToolPolicyName(call.toolCall.name || "tool") },
+      {
+        toolName: normalizeToolPolicyName(call.toolCall.name || "tool"),
+        validationFailure: call.validationFailure,
+      },
     ]),
   );
   const committedIds = new Set<string>();
@@ -239,9 +235,23 @@ export async function admitToolCallBatch(
       admitted.toolName,
       readyCall.args,
       readyCall.toolCallId,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
+    if (admitted.validationFailure) {
+      // The call never executes: its validation error is the whole outcome.
+      committedIds.add(readyCall.toolCallId);
+      const record = recordToolCallOutcome(sessionState, {
+        toolName: admitted.toolName,
+        toolParams: readyCall.args,
+        toolCallId: readyCall.toolCallId,
+        result: admitted.validationFailure,
+        runId: ctx.runId,
+      });
+      if (record) {
+        record.outcomeKind = "argument-validation";
+      }
+      return;
+    }
     const churn = reconcileToolCallExecutionParams(sessionState, {
       toolName: admitted.toolName,
       toolParams: readyCall.args,
@@ -273,7 +283,11 @@ export async function admitToolCallBatch(
       }
     },
     releaseSkippedCalls(toolCallIds) {
-      // Agent-core only supplies admitted prepared calls suppressed at a steering checkpoint.
+      // Agent-core supplies admitted calls that will not launch; skipped rejected
+      // calls are dropped here so they never count as repeats.
+      for (const toolCallId of toolCallIds) {
+        admittedById.delete(toolCallId);
+      }
       releaseBatchAdmittedToolCalls(toolCallIds, ctx.runId);
     },
   };

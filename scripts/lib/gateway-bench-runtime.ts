@@ -6,21 +6,7 @@ import { delay } from "./gateway-bench-child.ts";
 import { requestProbeStatus } from "./gateway-bench-probes.ts";
 import { parseStrictIntegerOption } from "./strict-integer-option.ts";
 
-type GatewayBenchCase = {
-  config: Record<string, unknown>;
-  env?: Record<string, string>;
-  id: string;
-  name: string;
-};
-
-export type SummaryStats = {
-  avg: number;
-  max: number;
-  min: number;
-  p50: number;
-  p95: number;
-};
-
+export type SummaryStats = NonNullable<ReturnType<typeof summarizeNumbers>>;
 export type InitialProbeResult = {
   firstErrorKind: string | null;
   firstRecoveryMs: number | null;
@@ -28,17 +14,14 @@ export type InitialProbeResult = {
   status: number | null;
   transitions: Array<{ errorKind?: string; ms: number; status: number | null }>;
 };
-
-type PluginFixtureResult = {
-  pluginIds: string[];
-  pluginsDir: string;
-};
+type PluginFixtureResult = ReturnType<typeof writePluginFixtures>;
 
 export const STALLED_CATALOG_PROVIDER_ID = "bench-catalog-stall";
 export const STALLED_CATALOG_MODEL_ID = "bench-model";
 
 export const BASE_GATEWAY_BENCH_CONFIG = {
   browser: { enabled: false },
+  update: { checkOnStart: false },
   // Loopback listener binding does not suppress LAN discovery.
   discovery: { mdns: { mode: "off" } },
   gateway: {
@@ -55,69 +38,77 @@ export class CliArgumentError extends Error {
   override name = "CliArgumentError";
 }
 
-function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
-  const value = argv[index + 1];
-  if (!value || value.startsWith("-")) {
-    throw new CliArgumentError(`${flag} requires a value`);
+export type GatewayBenchRuntimeOptions = {
+  gatewayRuntime: string;
+  gatewayCpus?: string;
+};
+
+export function parseGatewayBenchRuntimeOptions(
+  flags: ReadonlyMap<string, readonly string[]>,
+): GatewayBenchRuntimeOptions {
+  const gatewayRuntime = flags.get("--gateway-runtime")?.[0]?.trim() ?? process.execPath;
+  if (!gatewayRuntime || gatewayRuntime.startsWith("-") || gatewayRuntime.includes("\0")) {
+    throw new CliArgumentError("--gateway-runtime must be an executable path or name");
   }
-  return value;
+  const gatewayCpus = flags.get("--gateway-cpus")?.[0];
+  if (gatewayCpus !== undefined && !/^\d+(?:,\d+)*$/u.test(gatewayCpus)) {
+    throw new CliArgumentError("--gateway-cpus requires comma-separated CPU numbers");
+  }
+  return { gatewayRuntime, gatewayCpus };
 }
 
-export function validateCliArgs(
+export function buildGatewayBenchCommand(
+  args: string[],
+  options: GatewayBenchRuntimeOptions,
+  platform: NodeJS.Platform = process.platform,
+): { command: string; args: string[] } {
+  if (options.gatewayCpus) {
+    if (platform !== "linux") {
+      throw new CliArgumentError("--gateway-cpus requires Linux taskset");
+    }
+    return {
+      command: "taskset",
+      args: ["--cpu-list", options.gatewayCpus, options.gatewayRuntime, ...args],
+    };
+  }
+  return { command: options.gatewayRuntime, args };
+}
+
+export function parseCliArgs(
   argv: string[],
   options: {
     booleanFlags: ReadonlySet<string>;
     repeatableValueFlags?: ReadonlySet<string>;
     valueFlags: ReadonlySet<string>;
   },
-): void {
-  const seenSingleValueFlags = new Set<string>();
+): Map<string, string[]> {
+  const flags = new Map<string, string[]>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (options.booleanFlags.has(arg)) {
+      flags.set(arg, []);
       continue;
     }
     if (options.valueFlags.has(arg)) {
-      if (!options.repeatableValueFlags?.has(arg)) {
-        if (seenSingleValueFlags.has(arg)) {
-          throw new CliArgumentError(`${arg} was provided more than once`);
-        }
-        seenSingleValueFlags.add(arg);
+      if (!options.repeatableValueFlags?.has(arg) && flags.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
       }
-      readRequiredFlagValue(argv, index, arg);
-      index += 1;
+      const value = argv[++index];
+      if (!value || value.startsWith("-")) {
+        throw new CliArgumentError(`${arg} requires a value`);
+      }
+      const values = flags.get(arg) ?? [];
+      values.push(value);
+      flags.set(arg, values);
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-}
-
-export function parseFlagValue(argv: string[], flag: string): string | undefined {
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === flag) {
-      return readRequiredFlagValue(argv, index, flag);
-    }
-  }
-  return undefined;
-}
-
-export function hasFlag(argv: string[], flag: string): boolean {
-  return argv.includes(flag);
+  return flags;
 }
 
 export function hasHelpFlag(argv: string[]): boolean {
-  return hasFlag(argv, "--help") || hasFlag(argv, "-h");
-}
-
-export function parseRepeatableFlag(argv: string[], flag: string): string[] {
-  const values: string[] = [];
-  for (let index = 0; index < argv.length; index += 1) {
-    if (argv[index] === flag) {
-      values.push(readRequiredFlagValue(argv, index, flag));
-      index += 1;
-    }
-  }
-  return values;
+  return argv.includes("--help") || argv.includes("-h");
 }
 
 export function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
@@ -154,7 +145,7 @@ export function resolveOutputPath(raw: string | undefined): string | undefined {
   return output;
 }
 
-export function resolveCases<T extends GatewayBenchCase>(
+export function resolveCases<T extends { id: string }>(
   caseIds: string[],
   cases: readonly T[],
   options: { allByDefault: boolean; validateDuplicatesFirst?: boolean },
@@ -188,37 +179,48 @@ export function resolveCases<T extends GatewayBenchCase>(
   });
 }
 
-function median(values: number[]): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[middle - 1], "lower middle gateway benchmark sample") +
-        expectDefined(sorted[middle], "upper middle gateway benchmark sample")) /
-      2
-    );
-  }
-  return sorted[middle] ?? 0;
-}
-
-function percentile(values: number[], p: number): number {
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
-export function summarizeNumbers(values: number[]): SummaryStats | null {
+export function summarizeNumbers(values: number[]) {
   if (values.length === 0) {
     return null;
   }
-  const total = values.reduce((sum, value) => sum + value, 0);
+  const sorted = values.toSorted((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
   return {
-    avg: total / values.length,
+    avg: values.reduce((sum, value) => sum + value, 0) / values.length,
     max: Math.max(...values),
     min: Math.min(...values),
-    p50: median(values),
-    p95: percentile(values, 95),
+    p50:
+      sorted.length % 2 === 0
+        ? (expectDefined(sorted[middle - 1], "lower middle gateway benchmark sample") +
+            expectDefined(sorted[middle], "upper middle gateway benchmark sample")) /
+          2
+        : (sorted[middle] ?? 0),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
   };
+}
+
+export function summarizeTraceStats<T>(
+  samples: readonly T[],
+  readTrace: (sample: T) => Record<string, number>,
+): Record<string, SummaryStats> {
+  const traceKeys = new Set<string>();
+  for (const sample of samples) {
+    for (const key of Object.keys(readTrace(sample))) {
+      traceKeys.add(key);
+    }
+  }
+  const trace: Record<string, SummaryStats> = {};
+  for (const key of [...traceKeys].toSorted()) {
+    const stats = summarizeNumbers(
+      samples
+        .map((sample) => readTrace(sample)[key])
+        .filter((value): value is number => typeof value === "number"),
+    );
+    if (stats) {
+      trace[key] = stats;
+    }
+  }
+  return trace;
 }
 
 export function formatMs(value: number | null): string {
@@ -229,11 +231,14 @@ export function formatMb(value: number | null): string {
   return value == null ? "n/a" : `${value.toFixed(1)}MB`;
 }
 
-export function formatStats(stats: SummaryStats | null | undefined): string {
+export function formatStats(
+  stats: SummaryStats | null | undefined,
+  formatValue: (value: number) => string = formatMs,
+): string {
   if (!stats) {
     return "n/a";
   }
-  return `p50=${formatMs(stats.p50)} avg=${formatMs(stats.avg)} min=${formatMs(stats.min)} max=${formatMs(stats.max)}`;
+  return `p50=${formatValue(stats.p50)} avg=${formatValue(stats.avg)} min=${formatValue(stats.min)} max=${formatValue(stats.max)}`;
 }
 
 export function createGatewayBenchEnv(
@@ -242,6 +247,7 @@ export function createGatewayBenchEnv(
   options: {
     caseEnv?: Record<string, string> | undefined;
     restartTrace?: boolean | undefined;
+    startupTrace?: boolean | undefined;
   },
 ): NodeJS.ProcessEnv {
   return {
@@ -257,11 +263,10 @@ export function createGatewayBenchEnv(
     npm_config_update_notifier: "false",
     OPENCLAW_CONFIG_PATH: configPath,
     ...(options.restartTrace ? { OPENCLAW_GATEWAY_RESTART_TRACE: "1" } : {}),
-    OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+    ...(options.startupTrace !== false ? { OPENCLAW_GATEWAY_STARTUP_TRACE: "1" } : {}),
     OPENCLAW_HOME: root,
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
-    OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
     ...options.caseEnv,
   };
 }
@@ -275,7 +280,7 @@ export function writePluginFixtures(
     providerStaticCatalogModelCount?: number | undefined;
     providerStaticCatalogStallMs?: number | undefined;
   },
-): PluginFixtureResult {
+) {
   const pluginIds: string[] = [];
   const pluginsDir = path.join(root, "plugins");
   mkdirSync(pluginsDir, { recursive: true });
@@ -358,17 +363,27 @@ export function writeGatewayBenchConfig(
   root: string,
   config: Record<string, unknown>,
   options: {
-    agentList?: Array<{ id: string; default?: boolean; workspace: string }> | undefined;
+    agentList?: Array<{ id: string; workspace: string }> | undefined;
     pluginFixtures?: PluginFixtureResult | null | undefined;
   },
 ): string {
+  const agents = config.agents as { defaults?: Record<string, unknown> } | undefined;
   const merged = {
     ...config,
     ...(options.agentList
       ? {
           agents: {
-            ...(config.agents as Record<string, unknown> | undefined),
-            list: options.agentList,
+            ...agents,
+            ownership: "explicit",
+            defaults: {
+              ...agents?.defaults,
+              systemAgent: {
+                agentId: expectDefined(options.agentList[0], "benchmark system agent").id,
+              },
+            },
+            entries: Object.fromEntries(
+              options.agentList.map(({ id, workspace }) => [id, { workspace }]),
+            ),
           },
         }
       : {}),

@@ -1,10 +1,11 @@
-import { isToolExecutionAllowed } from "./tool-policy-shared.js";
+import { createToolExecutionMatcher } from "./tool-policy-shared.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 type ToolDefinition = Pick<AnyAgentTool, "name" | "parameters" | "description">;
 
 export type AgentToolAvailabilityBinding = {
   prepare: (tool: ToolDefinition, callableTools: ReadonlyMap<string, ToolDefinition>) => void;
+  prepareBeforeNormalization?: true;
   executionSchema?: (schema: unknown) => unknown;
 };
 
@@ -50,24 +51,29 @@ export function markAgentToolExecutionUnavailable<T extends object>(tool: T): T 
 /** Finalize owner-controlled affordances after filtering; never rebind or grant tools. */
 export function finalizeAgentToolAvailability<T extends ToolDefinition>(
   tools: readonly T[],
-  options?: { toolExecutionAllow?: readonly string[]; onPrepared?: (tool: T) => void },
+  options?: {
+    toolExecutionAllow?: readonly string[];
+    onPrepared?: (tool: T) => void;
+    beforeNormalization?: true;
+  },
 ): T[] {
   // The caller supplies its winning definitions, including non-native shadows.
   // A missing, quarantined, or execution-denied dependency cannot enable a mode.
   const winners = new Map(tools.map((tool) => [tool.name, tool]));
-  const callableTools = new Map(
-    [...winners.values()]
-      .filter(
-        (tool) =>
-          !availabilityBindings.get(tool)?.executionDenied &&
-          (!options?.toolExecutionAllow ||
-            isToolExecutionAllowed(options.toolExecutionAllow, tool.name)),
-      )
-      .map((tool) => [tool.name, tool]),
-  );
+  const executionAllowed = options?.toolExecutionAllow
+    ? createToolExecutionMatcher(options.toolExecutionAllow)
+    : undefined;
+  const callableTools = new Map<string, T>();
+  for (const callableTool of [...winners.values()].filter(
+    (tool) =>
+      !availabilityBindings.get(tool)?.executionDenied &&
+      (!executionAllowed || executionAllowed(tool.name)),
+  )) {
+    callableTools.set(callableTool.name, callableTool);
+  }
   for (const tool of tools) {
     const binding = availabilityBindings.get(tool)?.binding;
-    if (binding) {
+    if (binding && (!options?.beforeNormalization || binding.prepareBeforeNormalization)) {
       binding.prepare(tool, callableTools);
       options?.onPrepared?.(tool);
     }

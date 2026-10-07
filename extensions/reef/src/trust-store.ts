@@ -19,9 +19,9 @@ import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } fro
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
-export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
 const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
+const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
@@ -138,8 +138,7 @@ export class ReefTrustStore {
   }
 
   snapshot(peer: string): ReefPeerStateSnapshot {
-    const value = this.stores.peers.lookup(this.#key(peer));
-    return value === undefined ? { revision: 0 } : ReefPeerStateSchema.parse(value);
+    return this.#parseState(this.stores.peers.lookup(this.#key(peer)));
   }
 
   get(peer: string): ReefPeerTrust | undefined {
@@ -353,6 +352,7 @@ export class ReefTrustStore {
     olderThanMs: number,
     now: number = Date.now(),
   ): Array<{ peer: string; id: string; sentAt: number }> {
+    const peers = new Map<string, ReefPeerTrust | undefined>();
     return this.stores.deliveries
       .entries()
       .filter((entry) => entry.key.startsWith(this.#prefix))
@@ -372,7 +372,7 @@ export class ReefTrustStore {
         const id = entry.key.slice(separator + 1);
         if (
           !MESSAGE_ID_PATTERN.test(id) ||
-          !matchesReefPeerIdentity(this.get(peer), parsed.data.recipient)
+          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), parsed.data.recipient)
         ) {
           return [];
         }
@@ -466,6 +466,7 @@ export class ReefTrustStore {
   }
 
   pendingOutboundRejections(): ReefDeliveryRejection[] {
+    const peers = new Map<string, ReefPeerTrust | undefined>();
     return this.stores.deliveries
       .entries()
       .filter((entry) => entry.key.startsWith(this.#prefix))
@@ -479,7 +480,7 @@ export class ReefTrustStore {
         const id = entry.key.slice(separator + 1);
         if (
           !MESSAGE_ID_PATTERN.test(id) ||
-          !matchesReefPeerIdentity(this.get(peer), delivery.recipient)
+          !matchesReefPeerIdentity(this.#peerForScan(peer, peers), delivery.recipient)
         ) {
           return [];
         }
@@ -577,6 +578,16 @@ export class ReefTrustStore {
 
   rejectionNoticeState(peer: string): ReefRejectionNoticeState | undefined {
     return this.snapshot(peer).rejectionNotice;
+  }
+
+  #peerForScan(
+    peer: string,
+    peers: Map<string, ReefPeerTrust | undefined>,
+  ): ReefPeerTrust | undefined {
+    if (!peers.has(peer)) {
+      peers.set(peer, this.get(peer));
+    }
+    return peers.get(peer);
   }
 
   #key(peer: string): string {

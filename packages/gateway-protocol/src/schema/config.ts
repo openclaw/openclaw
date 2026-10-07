@@ -3,6 +3,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { UpdateRunRecordSchema } from "./update-runs.js";
 
 /**
  * Gateway config and update protocol schemas.
@@ -42,10 +43,8 @@ const ConfigApplyLikeParamProperties = {
   restartDelayMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;
 
-const ConfigApplyLikeParamsSchema = closedObject(ConfigApplyLikeParamProperties);
-
 /** Raw config apply request that may schedule a restart. */
-export const ConfigApplyParamsSchema = ConfigApplyLikeParamsSchema;
+export const ConfigApplyParamsSchema = closedObject(ConfigApplyLikeParamProperties);
 /** Raw config patch request that may schedule a restart. */
 export const ConfigPatchParamsSchema = closedObject({
   ...ConfigApplyLikeParamProperties,
@@ -78,12 +77,15 @@ export const UpdateAvailableSchema = closedObject({
   currentSha: Type.Optional(NonEmptyString),
   upstreamRef: Type.Optional(NonEmptyString),
   upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitsBehind: Type.Optional(Type.Integer({ minimum: 0 })),
   commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
 });
 
 const GitInstallMetadataProperties = {
   currentSha: Type.Optional(NonEmptyString),
+  upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   installedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 } as const;
@@ -119,14 +121,68 @@ const GitUpdateStatusSchema = Type.Union([
   }),
 ]);
 
+const ImmutableGenerationSha = Type.String({ pattern: "^[a-f0-9]{40}$" });
+const ImmutableOperationId = Type.String({ format: "uuid" });
+
+/** Recorded installation facts; preparation does not authorize activation. */
+const UpdateImmutableInstallSchema = closedObject({
+  root: NonEmptyString,
+  currentSha: ImmutableGenerationSha,
+  currentPath: NonEmptyString,
+  activationEnabled: Type.Optional(Type.Boolean()),
+  activation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      phase: Type.Union([
+        Type.Literal("prepared"),
+        Type.Literal("draining"),
+        Type.Literal("stopping"),
+        Type.Literal("stopped"),
+        Type.Literal("publishing"),
+        Type.Literal("starting"),
+        Type.Literal("verifying"),
+        Type.Literal("rollback-stopping"),
+        Type.Literal("rollback-publishing"),
+        Type.Literal("rollback-starting"),
+        Type.Literal("rolled-back"),
+        Type.Literal("recovery-required"),
+      ]),
+      previousSha: ImmutableGenerationSha,
+      candidateSha: ImmutableGenerationSha,
+    }),
+  ),
+  lastActivation: Type.Optional(
+    closedObject({
+      operationId: ImmutableOperationId,
+      outcome: Type.Union([Type.Literal("succeeded"), Type.Literal("rolled-back")]),
+      selectedSha: ImmutableGenerationSha,
+      verifiedAtMs: Type.Integer({ minimum: 0 }),
+    }),
+  ),
+  prepared: Type.Optional(
+    closedObject({
+      sha: ImmutableGenerationSha,
+      path: NonEmptyString,
+      buildDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+      preparedAtMs: Type.Integer({ minimum: 0 }),
+    }),
+  ),
+});
+
 /** Authoritative automatic-update schedule and in-memory campaign state. */
 export const UpdateScheduleStateSchema = closedObject({
   channel: NonEmptyString,
   autoEnabled: Type.Boolean(),
   install: Type.Optional(
     closedObject({
-      kind: Type.Union([Type.Literal("package"), Type.Literal("git"), Type.Literal("unknown")]),
+      kind: Type.Union([
+        Type.Literal("package"),
+        Type.Literal("git"),
+        Type.Literal("immutable"),
+        Type.Literal("unknown"),
+      ]),
       git: Type.Optional(GitUpdateStatusSchema),
+      immutable: Type.Optional(UpdateImmutableInstallSchema),
     }),
   ),
   target: Type.Optional(
@@ -164,6 +220,8 @@ export const UpdateScheduleStateSchema = closedObject({
 export const UpdateStatusResultSchema = closedObject({
   sentinel: Type.Unknown(),
   updateAvailable: Type.Union([UpdateAvailableSchema, Type.Null()]),
+  activeRun: Type.Optional(UpdateRunRecordSchema),
+  lastRun: Type.Optional(UpdateRunRecordSchema),
   effectiveChannel: Type.Optional(
     Type.Union([
       Type.Literal("stable"),
@@ -211,6 +269,56 @@ export const UpdateRunParamsSchema = closedObject({
   ),
 });
 
+/** Explicit two-step request for previewing or submitting one failed update report. */
+export const UpdateReportParamsSchema = Type.Union([
+  closedObject({
+    action: Type.Literal("preview"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+  }),
+  closedObject({
+    action: Type.Literal("submit"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+    previewDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+  }),
+]);
+
+const UpdateReportUrlSchema = Type.String({ minLength: 1, maxLength: 16_384 });
+
+/** Result of a consent-gated update failure report action. */
+export const UpdateReportResultSchema = Type.Union([
+  closedObject({
+    status: Type.Literal("ready"),
+    attemptId: Type.String({ minLength: 1, maxLength: 256 }),
+    body: Type.String({ maxLength: 16_000 }),
+    previewDigest: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    title: Type.String({ minLength: 1, maxLength: 200 }),
+  }),
+  closedObject({
+    status: Type.Literal("created"),
+    message: Type.Optional(Type.String({ maxLength: 512 })),
+    url: UpdateReportUrlSchema,
+  }),
+  closedObject({
+    status: Type.Literal("fallback"),
+    fallbackUrl: UpdateReportUrlSchema,
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("pending"),
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("retryable"),
+    message: Type.String({ maxLength: 512 }),
+  }),
+  closedObject({
+    status: Type.Literal("duplicate"),
+    fallbackUrl: Type.Optional(UpdateReportUrlSchema),
+    message: Type.String({ maxLength: 512 }),
+    url: Type.Optional(UpdateReportUrlSchema),
+  }),
+]);
+
 /** UI metadata attached to config schema paths. */
 const ConfigUiHintSchema = closedObject({
   label: Type.Optional(Type.String()),
@@ -218,6 +326,16 @@ const ConfigUiHintSchema = closedObject({
   docsUrl: Type.Optional(Type.String()),
   tags: Type.Optional(Type.Array(Type.String())),
   group: Type.Optional(Type.String()),
+  groups: Type.Optional(
+    Type.Array(
+      closedObject({
+        id: NonEmptyString,
+        title: NonEmptyString,
+        order: Type.Optional(Type.Integer()),
+        properties: Type.Array(NonEmptyString),
+      }),
+    ),
+  ),
   order: Type.Optional(Type.Integer()),
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
@@ -252,9 +370,7 @@ const ConfigSchemaLookupChildSchema = closedObject({
 export const ConfigSchemaLookupResultSchema = closedObject({
   path: NonEmptyString,
   schema: Type.Unknown(),
-  reloadKind: Type.Optional(
-    Type.Union([Type.Literal("restart"), Type.Literal("hot"), Type.Literal("none")]),
-  ),
+  reloadKind: ConfigSchemaLookupChildSchema.properties.reloadKind,
   hint: Type.Optional(ConfigUiHintSchema),
   hintPath: Type.Optional(Type.String()),
   children: Type.Array(ConfigSchemaLookupChildSchema),
@@ -272,8 +388,11 @@ export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
 export type ConfigSchemaLookupResult = Static<typeof ConfigSchemaLookupResultSchema>;
 export type UpdateStatusParams = Static<typeof UpdateStatusParamsSchema>;
 export type UpdateAvailable = Static<typeof UpdateAvailableSchema>;
+export type UpdateImmutableInstall = Static<typeof UpdateImmutableInstallSchema>;
 export type UpdateScheduleState = Static<typeof UpdateScheduleStateSchema>;
 export type UpdateStatusResult = Static<typeof UpdateStatusResultSchema>;
 export type UpdateHoldParams = Static<typeof UpdateHoldParamsSchema>;
 export type UpdateHoldResult = Static<typeof UpdateHoldResultSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
+export type UpdateReportParams = Static<typeof UpdateReportParamsSchema>;
+export type UpdateReportResult = Static<typeof UpdateReportResultSchema>;

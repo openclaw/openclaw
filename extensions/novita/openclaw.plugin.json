@@ -1,10 +1,20 @@
 {
   "id": "novita",
+  "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["novita", "novita-ai", "novitaai"],
+  "contracts": {
+    "videoGenerationProviders": ["novita"]
+  },
+  "videoGenerationProviderMetadata": {
+    "novita": {
+      "authSignals": [{ "provider": "novita" }],
+      "referenceAudioInputs": true
+    }
+  },
   "providerAuthAliases": {
     "novita-ai": "novita",
     "novitaai": "novita"
@@ -59,6 +69,9 @@
     "properties": {}
   },
   "modelCatalog": {
+    "modelsDev": {
+      "novita": "novita-ai"
+    },
     "aliases": {
       "novita-ai": {
         "provider": "novita"

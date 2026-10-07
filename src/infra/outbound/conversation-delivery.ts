@@ -1,39 +1,23 @@
 /** Durable external-conversation delivery independent from local model sessions. */
 import crypto from "node:crypto";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
-import type { DurableMessageSendIntent } from "../../channels/message/types.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
-  markConversationDeliveryQueued,
   markConversationDeliverySent,
   markConversationDeliverySuppressed,
   type ConversationDeliveryRecord,
-  type ConversationDeliveryStoreScope,
 } from "../../config/sessions/conversation-delivery-store.js";
-import type { ConversationRecord } from "../../config/sessions/conversation-registry.js";
-import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import type {
+  ConversationRecord,
+  PreparedConversationRegistryScope,
+} from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureConversationDeliveryTarget } from "./delivery-completion.js";
 import type { MessageActionResult } from "./message-action-contracts.js";
 import { runMessageAction } from "./message-action-runner.js";
-
-export type ConversationDeliveryDeps = {
-  beginOperation: typeof beginConversationDeliveryOperation;
-  getOperation: typeof getConversationDeliveryOperation;
-  markQueued: typeof markConversationDeliveryQueued;
-  markSent: typeof markConversationDeliverySent;
-  markSuppressed: typeof markConversationDeliverySuppressed;
-  runMessageAction: typeof runMessageAction;
-};
-
-export const defaultConversationDeliveryDeps: ConversationDeliveryDeps = {
-  beginOperation: beginConversationDeliveryOperation,
-  getOperation: getConversationDeliveryOperation,
-  markQueued: markConversationDeliveryQueued,
-  markSent: markConversationDeliverySent,
-  markSuppressed: markConversationDeliverySuppressed,
-  runMessageAction,
-};
 
 type ConversationDeliveryContext = {
   agentId: string;
@@ -66,23 +50,9 @@ function buildConversationDeliveryIntentId(agentId: string, operationId: string)
   return `convq_${digest}`;
 }
 
-function resolveConversationDeliveryStoreScope(
-  context: ConversationDeliveryContext,
-): ConversationDeliveryStoreScope {
-  return {
-    agentId: context.agentId,
-    // Recovery cannot serialize process.env. Persist the resolved marker path
-    // so it reopens the same per-agent SQLite database after restart.
-    storePath: resolveSessionStorePathCore(context.config.session?.store, {
-      agentId: context.agentId,
-    }),
-  };
-}
-
-function readMessageIdFromActionResult(result: MessageActionResult): string | undefined {
-  if (result.kind !== "send") {
-    return undefined;
-  }
+function readMessageIdFromActionResult(
+  result: Extract<MessageActionResult, { kind: "send" }>,
+): string | undefined {
   const sendResult = result.sendResult?.result;
   if (sendResult && "receipt" in sendResult && sendResult.receipt) {
     const receiptId = resolveMessageReceiptPrimaryId(sendResult.receipt);
@@ -93,12 +63,7 @@ function readMessageIdFromActionResult(result: MessageActionResult): string | un
   if (sendResult && "messageId" in sendResult && typeof sendResult.messageId === "string") {
     return sendResult.messageId.trim() || undefined;
   }
-  const payload = result.payload;
-  if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-    const messageId = (payload as { messageId?: unknown }).messageId;
-    return typeof messageId === "string" && messageId.trim() ? messageId.trim() : undefined;
-  }
-  return undefined;
+  return normalizeOptionalString(asOptionalRecord(result.payload)?.messageId);
 }
 
 export function resultFromExistingOperation(
@@ -139,7 +104,7 @@ export function resultFromExistingOperation(
  * A retry with the same operation id observes prior state instead of re-sending.
  */
 export async function sendGatewayConversationMessage(params: {
-  deps: ConversationDeliveryDeps;
+  scope: PreparedConversationRegistryScope;
   context: ConversationDeliveryContext;
   conversation: ConversationRecord;
   message: string;
@@ -148,35 +113,37 @@ export async function sendGatewayConversationMessage(params: {
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
   routeFingerprint: string;
-  onDeliveryAttempt: () => Promise<void>;
+  assertCurrent: () => void;
   signal?: AbortSignal;
 }): Promise<ConversationMessageDeliveryResult> {
-  const scope = resolveConversationDeliveryStoreScope(params.context);
+  const scope = params.scope;
+  const conversationDeliveryTarget = captureConversationDeliveryTarget(scope);
   const begun = params.operation
     ? { created: false, record: params.operation }
-    : params.deps.beginOperation(scope, {
-        operationId: params.operationId,
-        operationKind: params.operationKind,
-        conversationRef: params.conversation.conversationRef,
-        ...(params.context.sourceSessionKey
-          ? { sourceSessionKey: params.context.sourceSessionKey }
-          : {}),
-        message: params.message,
-        ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
-      });
+    : await beginConversationDeliveryOperation(
+        scope,
+        {
+          operationId: params.operationId,
+          operationKind: params.operationKind,
+          conversationRef: params.conversation.conversationRef,
+          ...(params.context.sourceSessionKey
+            ? { sourceSessionKey: params.context.sourceSessionKey }
+            : {}),
+          message: params.message,
+          ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
+        },
+        params.assertCurrent,
+      );
+  params.assertCurrent();
   const existing = resultFromExistingOperation(begun.record);
   if (existing) {
     return existing;
   }
 
-  let latestOperation = begun.record;
-  const readAuthoritativeOperation = () =>
-    params.deps.getOperation(scope, begun.record.operationId) ?? latestOperation;
-  const onDeliveryIntent = (intent: DurableMessageSendIntent) => {
-    latestOperation = params.deps.markQueued(scope, begun.record.operationId, intent.id);
-  };
+  const readAuthoritativeOperation = async () =>
+    (await getConversationDeliveryOperation(scope, begun.record.operationId)) ?? begun.record;
   try {
-    const action = await params.deps.runMessageAction({
+    const action = await runMessageAction({
       cfg: params.context.config,
       action: "send",
       params: {
@@ -204,11 +171,11 @@ export async function sendGatewayConversationMessage(params: {
         kind: "conversation",
         agentId: scope.agentId,
         operationId: begun.record.operationId,
-        ...(scope.storePath ? { storePath: scope.storePath } : {}),
+        storePath: scope.storePath,
         routeFingerprint: params.routeFingerprint,
       },
-      onDeliveryIntent,
-      onDeliveryAttempt: params.onDeliveryAttempt,
+      conversationDeliveryTarget,
+      onDeliveryAttempt: async () => params.assertCurrent(),
       ...(begun.record.preparedMessageId
         ? { preparedMessageId: begun.record.preparedMessageId }
         : {}),
@@ -225,7 +192,7 @@ export async function sendGatewayConversationMessage(params: {
     }
     const messageId = readMessageIdFromActionResult(action);
     if (action.sendResult.deliveryStatus === "suppressed") {
-      const operation = params.deps.markSuppressed(scope, begun.record.operationId);
+      const operation = await markConversationDeliverySuppressed(scope, begun.record.operationId);
       return { deliveryStatus: "suppressed", operation };
     }
     if (action.sendResult.deliveryStatus !== "sent") {
@@ -233,11 +200,11 @@ export async function sendGatewayConversationMessage(params: {
         `Conversation delivery was not confirmed (${action.sendResult.deliveryStatus ?? "unknown"})`,
       );
     }
-    const authoritativeOperation = readAuthoritativeOperation();
-    const operation =
-      authoritativeOperation.status === "sent" || authoritativeOperation.status === "replied"
-        ? authoritativeOperation
-        : params.deps.markSent(scope, begun.record.operationId, messageId);
+    const operation = await markConversationDeliverySent(
+      scope,
+      begun.record.operationId,
+      messageId,
+    );
     const confirmedMessageId =
       messageId ?? operation.platformMessageId ?? operation.preparedMessageId;
     return {
@@ -246,15 +213,13 @@ export async function sendGatewayConversationMessage(params: {
       ...(confirmedMessageId ? { messageId: confirmedMessageId } : {}),
     };
   } catch (error) {
-    // The serialized queue owner may have completed after the intent callback,
-    // while this stack still holds its older queued snapshot.
-    const persisted = resultFromExistingOperation(readAuthoritativeOperation());
+    // Queue settlement may have committed before the sender observed an error.
+    const persisted = resultFromExistingOperation(await readAuthoritativeOperation());
     if (persisted) {
       return persisted;
     }
-    // Required queue delivery cannot cross platform I/O before the intent
-    // callback. Pre-queue errors remain retryable; a callback failure leaves
-    // the stable queue id in charge of dedupe.
+    // Required queue delivery cannot cross platform I/O before custody commits.
+    // Pre-queue errors remain retryable; recorded custody owns stable-id dedupe.
     throw error;
   }
 }

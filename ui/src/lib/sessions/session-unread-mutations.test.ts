@@ -27,7 +27,18 @@ function unreadHarness(options: {
     if (method === "sessions.list") {
       listTs += 1;
       return sessionsResult(
-        [{ key, kind: "direct", updatedAt: 1, unread: options.serverUnread() }],
+        [
+          {
+            key,
+            sessionId: `${key}:session`,
+            kind: "direct",
+            updatedAt: 1,
+            unread: options.serverUnread(),
+            agentStatus: options.serverUnread()
+              ? { note: "Synthetic attention", expiresAt: Number.MAX_SAFE_INTEGER }
+              : undefined,
+          },
+        ],
         listTs,
       );
     }
@@ -36,7 +47,7 @@ function unreadHarness(options: {
     }
     throw new Error(`Unexpected request: ${method}`);
   });
-  return createGatewayHarness({ request } as unknown as GatewayBrowserClient);
+  return { ...createGatewayHarness({ request } as unknown as GatewayBrowserClient), request };
 }
 
 describe("session unread mutation capability", () => {
@@ -54,7 +65,12 @@ describe("session unread mutation capability", () => {
   ])("sends the current payload for $name", async ({ expected, options }) => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.patch") {
-        return { ok: true, path: "", key, entry: {} };
+        return {
+          ok: true,
+          path: "",
+          key,
+          entry: { sessionId: `${key}:session`, updatedAt: 3, lastReadAt: 3 },
+        };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -91,10 +107,10 @@ describe("session unread mutation capability", () => {
     sessions.dispose();
   });
 
-  it("keeps the pending read through stale events and canonical refreshes", async () => {
+  it("settles a read receipt without reloading and retains it through stale events and reads", async () => {
     const committed = createDeferred<unknown>();
     let serverUnread = true;
-    const { gateway } = unreadHarness({
+    const { gateway, emitEvent, request } = unreadHarness({
       patchResponse: () => committed.promise,
       serverUnread: () => serverUnread,
     });
@@ -104,13 +120,18 @@ describe("session unread mutation capability", () => {
     const operation = sessions.patch(key, { unread: false });
     expect(rowUnread(sessions.state.result)).toBe(false);
 
-    sessions.reconcileChanged({
-      key,
-      kind: "direct",
-      reason: "send",
-      sessionKey: key,
-      unread: true,
-      updatedAt: 2,
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        key,
+        sessionId: `${key}:session`,
+        kind: "direct",
+        reason: "send",
+        sessionKey: key,
+        unread: true,
+        updatedAt: 2,
+      },
     });
     expect(rowUnread(sessions.state.result)).toBe(false);
 
@@ -118,13 +139,33 @@ describe("session unread mutation capability", () => {
     expect(rowUnread(sessions.state.result)).toBe(false);
 
     serverUnread = false;
-    committed.resolve({ ok: true, key, path: "", entry: {} });
+    committed.resolve({
+      ok: true,
+      key,
+      path: "",
+      entry: { sessionId: `${key}:session`, updatedAt: 3, lastReadAt: 3 },
+    });
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(false);
+    expect(sessions.state.result?.sessions[0]?.agentStatus).toBeUndefined();
+    expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2);
     sessions.dispose();
   });
 
-  it("restores the marker-owned unread row when the acknowledgement settles stale", async () => {
+  it.each([
+    {
+      name: "newer manual marker",
+      entry: {
+        markedUnreadAt: 99,
+        updatedAt: 99,
+        agentStatus: { note: "New attention", expiresAt: Number.MAX_SAFE_INTEGER },
+      },
+    },
+    {
+      name: "activity after another reader cleared the marker",
+      entry: { createdAt: 1, lastReadAt: 50, lastActivityAt: 100, updatedAt: 100 },
+    },
+  ])("restores unread after a stale acknowledgement: $name", async ({ entry }) => {
     const committed = createDeferred<unknown>();
     const { gateway } = unreadHarness({
       patchResponse: () => committed.promise,
@@ -133,14 +174,23 @@ describe("session unread mutation capability", () => {
     const sessions = createTestSessionCapability(gateway);
 
     await sessions.refresh({ force: true });
-    const operation = sessions.patch(key, { unread: false }, { expectedMarkedUnreadAt: 41 });
+    const operation = sessions.patch(
+      key,
+      { unread: false },
+      { expectedMarkedUnreadAt: 41, deferListRefresh: true },
+    );
     expect(rowUnread(sessions.state.result)).toBe(false);
 
-    // The Gateway keeps a newer manual marker, answers ok without applying, and
-    // broadcasts nothing; settlement is the only place the row can come back.
-    committed.resolve({ ok: true, key, path: "", entry: { markedUnreadAt: 99 } });
+    // A mismatched marker returns the current entry without applying or broadcasting.
+    committed.resolve({
+      ok: true,
+      key,
+      path: "",
+      entry: { sessionId: `${key}:session`, ...entry },
+    });
     await expect(operation).resolves.toBeTruthy();
     expect(rowUnread(sessions.state.result)).toBe(true);
+    expect(sessions.state.result?.sessions[0]?.agentStatus).toEqual(entry.agentStatus);
     sessions.dispose();
   });
 });

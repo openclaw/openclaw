@@ -23,9 +23,9 @@ openclaw channels status --probe
 Healthy baseline:
 
 - `Runtime: running`
-- `Connectivity probe: ok`
+- A successful connectivity check
 - `Capability: read-only`, `write-capable`, or `admin-capable`
-- Channel probe shows transport connected and, where supported, `works` or `audit ok`
+- Channel check shows transport connected and, where supported, `works` or `audit ok`
 
 ## After an update
 
@@ -55,7 +55,7 @@ clean state.
 | Group messages ignored              | Check `requireMention` + mention patterns in config | Mention the bot or relax mention policy for that group.                                                                          |
 | QR login times out with 408         | Check gateway `HTTPS_PROXY` / `HTTP_PROXY` env      | Set a reachable proxy; use `NO_PROXY` only for bypasses.                                                                         |
 | Random disconnect/relogin loops     | `openclaw channels status --probe` + logs           | Recent reconnects are flagged even when currently connected; watch logs, restart the gateway, then relink if flapping continues. |
-| `status=408 Request Time-out` loop  | Probe, logs, doctor, then gateway status            | Fix host connectivity/timing first; back up auth and re-link the account if the loop persists.                                   |
+| `status=408 Request Time-out` loop  | Check, logs, doctor, then gateway status            | Fix host connectivity/timing first; back up auth and re-link the account if the loop persists.                                   |
 | Replies arrive seconds/minutes late | `openclaw doctor --fix`                             | Doctor stops verified stale local TUI clients when they are degrading the Gateway event loop.                                    |
 
 Full troubleshooting: [WhatsApp troubleshooting](/channels/whatsapp#troubleshooting)
@@ -90,7 +90,7 @@ Full troubleshooting: [Telegram troubleshooting](/channels/telegram#troubleshoot
 | Agent cannot see room history or attachments from other bots | Check the room's `requireMention` and the account's `allowBots`                                                              | `requireMention: true` drops unmentioned messages before they become room events, so there is no backlog. Bot-authored messages and their attachments need `allowBots` (`"mentions"` is the safer setting). See [Ambient room events](/channels/ambient-room-events). |
 | Agent watches an ambient room but never posts                | Check the agent's tool profile for the `message` tool                                                                        | Room events require `message(action=send)`, which the `minimal` and `coding` profiles omit. Grant `tools.alsoAllow: ["message"]` for that agent.                                                                                                                      |
 
-Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshooting)
+Full troubleshooting: [Discord troubleshooting](/channels/discord/troubleshooting#troubleshooting)
 
 ## Slack
 
@@ -102,7 +102,7 @@ Full troubleshooting: [Discord troubleshooting](/channels/discord#troubleshootin
 | DMs blocked                            | `openclaw pairing list slack`             | Approve pairing or relax DM policy.                                                                                                                  |
 | Channel message ignored                | Check `groupPolicy` and channel allowlist | Allow the channel or switch policy to `open`.                                                                                                        |
 
-Full troubleshooting: [Slack troubleshooting](/channels/slack#troubleshooting)
+Full troubleshooting: [Slack troubleshooting](/channels/slack/troubleshooting#troubleshooting)
 
 ## iMessage
 
@@ -132,12 +132,12 @@ Full troubleshooting: [Signal troubleshooting](/channels/signal#troubleshooting)
 
 ### QQ Bot failure signatures
 
-| Symptom                         | Fastest check                               | Fix                                                             |
-| ------------------------------- | ------------------------------------------- | --------------------------------------------------------------- |
-| Bot replies "gone to Mars"      | Verify `appId` and `clientSecret` in config | Set credentials or restart the gateway.                         |
-| No inbound messages             | `openclaw channels status --probe`          | Verify credentials on the QQ Open Platform.                     |
-| Voice not transcribed           | Check STT provider config                   | Configure `channels.qqbot.stt` or `tools.media.audio`.          |
-| Proactive messages not arriving | Check QQ platform interaction requirements  | QQ may block bot-initiated messages without recent interaction. |
+| Symptom                         | Fastest check                               | Fix                                                                                                                       |
+| ------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| Bot replies "gone to Mars"      | Verify `appId` and `clientSecret` in config | Correct credentials, then check `openclaw channels status --probe` after [hot reload](/gateway/configuration/hot-reload). |
+| No inbound messages             | `openclaw channels status --probe`          | Verify credentials on the QQ Open Platform.                                                                               |
+| Voice not transcribed           | Check STT provider config                   | Configure `channels.qqbot.stt` or `tools.media.audio`.                                                                    |
+| Proactive messages not arriving | Check QQ platform interaction requirements  | QQ may block bot-initiated messages without recent interaction.                                                           |
 
 Full troubleshooting: [QQ Bot troubleshooting](/channels/qqbot#troubleshooting)
 

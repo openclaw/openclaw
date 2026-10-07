@@ -1,54 +1,143 @@
-// Flat rows match the web Control UI's tool rendering and avoid card-in-card chrome.
-// Card chrome appears only when a result's detail is expanded.
-
 import Foundation
 import OpenClawKit
 import SwiftUI
 
 struct ChatToolActivityItem: Identifiable, Equatable {
+    enum State: Equatable {
+        case running
+        case finished
+        case failed
+        case blocked
+        case skipped
+        case unavailable
+
+        var title: LocalizedStringResource {
+            switch self {
+            case .running: "Working"
+            case .finished: "Finished"
+            case .failed: "Failed"
+            case .blocked: "Blocked"
+            case .skipped: "Skipped"
+            case .unavailable: "No result"
+            }
+        }
+    }
+
     let id: String
     let name: String?
     let arguments: AnyCodable?
     let details: AnyCodable?
     let resultText: String?
-    let isError: Bool
-    let isPending: Bool
+    let state: State
     let liveDiffStat: ChatToolDiffStat?
+    var activity: OpenClawAgentActivityItem?
+    var activityPrepared = false
+
+    var isVisible: Bool {
+        self.activity?.isVisible ?? !self.activityPrepared
+    }
+
+    var displayState: State {
+        guard let activity = self.activity else { return self.state }
+        switch activity.status {
+        case "running": return .running
+        case "completed": return .finished
+        case "failed": return .failed
+        case "blocked": return .blocked
+        case "skipped": return .skipped
+        default: return .unavailable
+        }
+    }
+
+    var isError: Bool {
+        self.displayState == .failed
+    }
+
+    var isPending: Bool {
+        self.displayState == .running
+    }
+}
+
+extension ChatToolActivityItem {
+    init(live call: OpenClawChatPendingToolCall) {
+        self.init(
+            id: call.id,
+            name: call.name,
+            arguments: call.args,
+            details: nil,
+            resultText: nil,
+            state: call.activity == nil && !call.isComplete || call.activity?.status == "running" ? .running :
+                call.activity?.status == "completed" ? .finished :
+                call.activity?.status == "failed" || call.activity?.status == "blocked" ? .failed : .unavailable,
+            liveDiffStat: call.diffStat,
+            activity: call.activity)
+    }
 }
 
 enum ChatToolActivity {
+    static func resultIsError(_ flag: Bool?, text: String?) -> Bool {
+        if let flag { return flag }
+        guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        if ["tool not found", "tool not found."].contains(text.lowercased()) { return true }
+        guard text.utf16.count <= 20000,
+              text.hasPrefix("{"), text.hasSuffix("}"),
+              let data = text.data(using: .utf8),
+              let result = try? JSONDecoder().decode(AnyCodable.self, from: data).dictionaryValue
+        else { return false }
+        if let flag = result["isError"]?.boolValue ?? result["is_error"]?.boolValue { return flag }
+        if let error = result["error"] {
+            if let text = error.stringValue,
+               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return true }
+            if error.boolValue == true || error.dictionaryValue != nil || error.arrayValue != nil { return true }
+        }
+        return ["error", "failed", "timeout"].contains(
+            result["status"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "")
+    }
+
     static func items(
         calls: [OpenClawChatMessageContent],
-        results: [OpenClawChatMessageContent]) -> [ChatToolActivityItem]
+        results: [OpenClawChatMessageContent],
+        activity: [OpenClawAgentActivityItem]? = nil,
+        liveTools: [OpenClawChatPendingToolCall] = []) -> [ChatToolActivityItem]
     {
         var remainingResults = Array(results.enumerated())
         var items = calls.enumerated().map { index, call in
+            let id = call.id ?? "call-\(index)"
             let resultIndex = call.id.flatMap { callID in
                 remainingResults.firstIndex { _, result in result.id == callID }
             }
             let result = resultIndex.map { remainingResults.remove(at: $0).element }
+            // History owns recorded inputs; live activity supplies status until
+            // the result arrives, never replacing already-recorded arguments.
+            let live = result == nil
+                ? liveTools.first(where: { $0.id == call.id }).map(ChatToolActivityItem.init(live:)) : nil
 
             return ChatToolActivityItem(
-                id: call.id ?? "call-\(index)",
-                name: call.name,
-                arguments: call.arguments,
+                id: id,
+                name: call.name ?? live?.name,
+                arguments: call.arguments ?? live?.arguments,
                 details: result?.details,
                 resultText: result?.text,
-                isError: result?.isError ?? false,
-                isPending: false,
-                liveDiffStat: nil)
+                state: result
+                    .map { Self.resultIsError($0.isError, text: $0.text) ? .failed : .finished } ??
+                    live?.state ?? .unavailable,
+                liveDiffStat: live?.liveDiffStat,
+                activity: live?.activity ?? activity?.first { $0.toolCallId == id },
+                activityPrepared: live == nil && activity != nil)
         }
 
         items.append(contentsOf: remainingResults.map { index, result in
-            ChatToolActivityItem(
-                id: result.id ?? "result-\(index)",
+            let id = result.id ?? "result-\(index)"
+            return ChatToolActivityItem(
+                id: id,
                 name: result.name,
                 arguments: nil,
                 details: result.details,
                 resultText: result.text,
-                isError: result.isError ?? false,
-                isPending: false,
-                liveDiffStat: nil)
+                state: Self.resultIsError(result.isError, text: result.text) ? .failed : .finished,
+                liveDiffStat: nil,
+                activity: activity?.first { $0.toolCallId == id },
+                activityPrepared: activity != nil)
         })
         return items
     }
@@ -65,7 +154,12 @@ struct ChatToolActivityRow: View, Equatable {
 }
 
 private struct ChatToolActivityRowContent: View {
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var colorSchemeContrast
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let item: ChatToolActivityItem
+    private let displayCall: (name: String?, args: AnyCodable?)
     private let resolvedDiff: (lines: [ChatToolDiffLine], stat: ChatToolDiffStat?)?
     @State private var expanded = false
     @State private var showsFullResult = false
@@ -74,7 +168,7 @@ private struct ChatToolActivityRowContent: View {
     private static let expandedLineLimit = 40
 
     private var display: ToolDisplaySummary {
-        ToolDisplayRegistry.resolve(name: self.item.name ?? "tool", args: self.item.arguments)
+        ToolDisplayRegistry.resolve(name: self.displayCall.name, args: self.displayCall.args)
     }
 
     private var detailLine: String? {
@@ -84,7 +178,7 @@ private struct ChatToolActivityRowContent: View {
 
     private var formattedResult: String {
         guard let resultText = self.item.resultText else { return "" }
-        return ToolResultTextFormatter.format(text: resultText, toolName: self.item.name)
+        return ToolResultTextFormatter.format(text: resultText, toolName: self.displayCall.name)
     }
 
     private var expandable: Bool {
@@ -92,9 +186,8 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        guard self.item.isPending else { return self.detailLine ?? "" }
-        let running = String(localized: "Running")
-        return self.detailLine.map { "\(running), \($0)" } ?? running
+        let status = String(localized: self.item.displayState.title)
+        return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
     private var expandedLineCount: Int {
@@ -125,9 +218,11 @@ private struct ChatToolActivityRowContent: View {
 
     init(item: ChatToolActivityItem) {
         self.item = item
+        let displayCall = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+        self.displayCall = displayCall
         self.resolvedDiff = ChatToolDiff.resolveDiff(
-            name: item.name,
-            arguments: item.arguments,
+            name: displayCall.name,
+            arguments: displayCall.args,
             details: item.details,
             isError: item.isError)
     }
@@ -136,7 +231,7 @@ private struct ChatToolActivityRowContent: View {
         VStack(alignment: .leading, spacing: 4) {
             if self.expandable {
                 Button {
-                    withAnimation(.easeOut(duration: 0.15)) {
+                    withAnimation(self.reduceMotion ? nil : .easeOut(duration: 0.15)) {
                         self.expanded.toggle()
                     }
                 } label: {
@@ -145,9 +240,11 @@ private struct ChatToolActivityRowContent: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityElement(children: .ignore)
+                .accessibilityAddTraits(.isButton)
                 .accessibilityLabel(self.display.title)
                 .accessibilityValue(self.accessibilityValue)
                 .accessibilityHint(self.expanded ? "Collapse tool result" : "Expand tool result")
+                .accessibilityIdentifier("chat-tool-activity-\(self.item.id)")
             } else {
                 self.collapsedRow
                     .accessibilityElement(children: .ignore)
@@ -195,12 +292,16 @@ private struct ChatToolActivityRowContent: View {
                 }
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(OpenClawChatTheme.subtleCard))
-                .padding(.leading, 19)
+                .background {
+                    if !self.isDesktopLayout {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(OpenClawChatTheme.subtleCard)
+                    }
+                }
+                .padding(.leading, self.isDesktopLayout ? 0 : 19)
             }
         }
+        .modifier(ChatWorkCardStyle())
     }
 
     private var collapsedRow: some View {
@@ -219,24 +320,20 @@ private struct ChatToolActivityRowContent: View {
                     Color.clear
                 }
             }
-            .frame(width: Self.disclosureWidth)
+            .frame(width: Self.disclosureWidth, height: 12)
 
-            Image(systemName: Self.symbol(forToolName: self.item.name))
+            Image(systemName: ChatToolIcon.symbol(for: self.display.name, icon: self.display.icon))
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : Color.secondary)
 
-            Text(self.display.title)
-                .font(OpenClawChatTypography.footnoteSemiBold)
-                .foregroundStyle(
-                    self.item.isError ? OpenClawChatTheme.danger : OpenClawChatTheme.assistantText)
-                .lineLimit(1)
-
-            if let detailLine = self.detailLine {
-                Text(detailLine)
-                    .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.assistantText.opacity(0.62))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            if self.isDesktopLayout {
+                VStack(alignment: .leading, spacing: 3) {
+                    self.toolTitle
+                    self.toolDetail
+                }
+            } else {
+                self.toolTitle
+                self.toolDetail
             }
 
             if let stat = self.displayedDiffStat {
@@ -244,8 +341,39 @@ private struct ChatToolActivityRowContent: View {
             }
 
             Spacer(minLength: 0)
+
+            if self.isDesktopLayout {
+                Text(self.item.displayState.title)
+                    .font(OpenClawChatTypography.caption)
+                    .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
+                    .fixedSize()
+            }
         }
         .padding(.vertical, 3)
+    }
+
+    private var toolTitle: some View {
+        Text(self.item.activity?.title ?? self.display.title)
+            .font(OpenClawChatTypography.footnoteSemiBold)
+            .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
+            .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var toolDetail: some View {
+        if let detailLine = self.detailLine {
+            Text(detailLine)
+                .font(OpenClawChatTypography.mono(size: 12, relativeTo: .footnote))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+    }
+
+    private var textColor: Color {
+        self.isDesktopLayout
+            ? OpenClawChatTheme.desktopText(in: self.colorScheme, contrast: self.colorSchemeContrast)
+            : OpenClawChatTheme.assistantText
     }
 
     private var diffRows: some View {
@@ -337,74 +465,27 @@ private struct ChatToolActivityRowContent: View {
             .clear
         }
     }
+}
 
-    private static func symbol(forToolName name: String?) -> String {
-        let normalized = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        let exact: [String: String] = [
-            "agent": "rectangle.stack",
-            "bash": "terminal",
-            "browser": "safari",
-            "canvas": "photo",
-            "clock": "clock",
-            "command": "terminal",
-            "cron": "clock",
-            "create_file": "square.and.pencil",
-            "edit": "pencil.line",
-            "edit_file": "pencil.line",
-            "exec": "terminal",
-            "fetch": "globe",
-            "find": "magnifyingglass",
-            "gateway": "server.rack",
-            "glob": "magnifyingglass",
-            "grep": "magnifyingglass",
-            "view_image": "photo",
-            "list": "magnifyingglass",
-            "ls": "magnifyingglass",
-            "memory": "brain",
-            "message": "bubble.left",
-            "multi_edit": "pencil.line",
-            "multiedit": "pencil.line",
-            "notebook_edit": "pencil.line",
-            "notebookedit": "pencil.line",
-            "node": "server.rack",
-            "apply_patch": "pencil.line",
-            "applypatch": "pencil.line",
-            "patch": "pencil.line",
-            "photo": "photo",
-            "read": "doc.text",
-            "reply": "bubble.left",
-            "schedule": "clock",
-            "screenshot": "photo",
-            "search": "magnifyingglass",
-            "send": "bubble.left",
-            "session": "rectangle.stack",
-            "shell": "terminal",
-            "terminal": "terminal",
-            "web": "globe",
-            "write": "square.and.pencil",
-            "write_file": "square.and.pencil",
-            "str_replace_based_edit_tool": "pencil.line",
-            "str_replace_editor": "pencil.line",
-        ]
-        if let symbol = exact[normalized] { return symbol }
+struct ChatWorkCardStyle: ViewModifier {
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.colorScheme) private var colorScheme
 
-        let fallbacks: [([String], String)] = [
-            (["canvas", "image", "screenshot", "photo"], "photo"),
-            (["browser"], "safari"),
-            (["message", "send", "reply"], "bubble.left"),
-            (["node", "gateway"], "server.rack"),
-            (["cron", "schedule", "clock"], "clock"),
-            (["memory"], "brain"),
-            (["session", "agent"], "rectangle.stack"),
-            (["exec", "bash", "shell", "command", "terminal"], "terminal"),
-            (["edit", "patch"], "pencil.line"),
-            (["write"], "square.and.pencil"),
-            (["grep", "glob", "find", "search", "list"], "magnifyingglass"),
-            (["read"], "doc.text"),
-            (["fetch", "web"], "globe"),
-        ]
-        return fallbacks.first { keys, _ in keys.contains(where: normalized.contains) }?.1
-            ?? "wrench.and.screwdriver"
+    func body(content: Content) -> some View {
+        content
+            .padding(self.isDesktopLayout ? 10 : 0)
+            .background {
+                if self.isDesktopLayout {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(.primary.opacity(self.colorScheme == .dark ? 0.035 : 0.025))
+                }
+            }
+            .overlay {
+                if self.isDesktopLayout {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.primary.opacity(0.07), lineWidth: 1)
+                }
+            }
     }
 }
 
@@ -424,14 +505,22 @@ struct ChatDiffStatChips: View {
 }
 
 struct ChatToolActivityList: View {
+    @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
     let items: [ChatToolActivityItem]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
-            ForEach(self.items.indices, id: \.self) { index in
+        VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
+            ForEach(self.items.indices.filter { self.items[$0].isVisible }, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
                     .equatable()
+            }
+            let quiet = self.items.indices.filter { !self.items[$0].isVisible }
+            if !quiet.isEmpty {
+                DisclosureGroup("Tool details") {
+                    ForEach(quiet, id: \.self) { index in
+                        ChatToolActivityRow(item: self.items[index]).equatable()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

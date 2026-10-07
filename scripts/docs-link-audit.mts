@@ -10,7 +10,11 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import MarkdownIt from "markdown-it";
 import type { Nodes } from "mdast";
-import { resolveClawHubRepoPath, syncClawHubDocsTree } from "./docs-sync-publish.mjs";
+import {
+  CLAWHUB_REPO_ENV,
+  resolveClawHubRepoPath,
+  syncClawHubDocsTree,
+} from "./docs-sync-publish.mjs";
 import { parseDocsDocument, resolveDocsFragment } from "./lib/docs-markdown.mjs";
 import {
   addRoute,
@@ -281,10 +285,6 @@ function isLocalizedDocPath(p: string) {
   return /^\/?[a-z]{2}(?:-[A-Za-z]{2,8})+\//.test(p);
 }
 
-function isGeneratedTranslatedDoc(relPath: string) {
-  return isLocalizedDocPath(relPath);
-}
-
 function createRedirectMap(docsConfig: Record<string, unknown>): Map<string, string> {
   const redirects = new Map<string, string>();
   const redirectEntries = Array.isArray(docsConfig.redirects) ? docsConfig.redirects : [];
@@ -319,69 +319,56 @@ function buildAuditIndex(
       return false;
     }
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    return !isGeneratedTranslatedDoc(rel);
+    return !isLocalizedDocPath(rel);
   });
   const routes = new Set<string>();
 
   for (const abs of markdownFiles) {
     const rel = normalizeSlashes(path.relative(docsDir, abs));
-    const text = fs.readFileSync(abs, "utf8");
     const slug = rel.replace(/\.(md|mdx)$/i, "");
     addRoute(routes, slug);
-
-    if (!text.startsWith("---")) {
-      continue;
-    }
-
-    const end = text.indexOf("\n---", 3);
-    if (end === -1) {
-      continue;
-    }
-    const frontMatter = text.slice(3, end);
-    const match = frontMatter.match(/^permalink:\s*(.+)\s*$/m);
-    if (!match) {
-      continue;
-    }
-    const permalink = (match[1] ?? "").trim().replace(/^['"]|['"]$/g, "");
-    routes.add(normalizeRoute(permalink));
   }
 
+  // Without a ClawHub checkout the mirrored tree is absent, so its pages cannot be
+  // parsed. The navigation still declares the published routes, so keep them
+  // resolvable and remember which ones are only backed by that declaration.
+  const mirroredRoutes = new Set<string>();
   if (options.allowExternalClawHubRoutes === true) {
     for (const route of collectMirroredDocsRoutes(docsConfig.navigation)) {
       routes.add(route);
+      mirroredRoutes.add(route);
     }
   }
 
-  return { docsDir, docsConfig, redirects, allFiles, relAllFiles, markdownFiles, routes };
-}
-
-let defaultAuditIndex: ReturnType<typeof buildAuditIndex> | undefined;
-
-function getDefaultAuditIndex() {
-  defaultAuditIndex ??= buildAuditIndex(DOCS_DIR);
-  return defaultAuditIndex;
+  return {
+    docsDir,
+    docsConfig,
+    redirects,
+    relAllFiles,
+    markdownFiles,
+    routes,
+    mirroredRoutes,
+  };
 }
 
 export function resolveRoute(
   route: string,
-  options: { redirects?: Map<string, string>; routes?: Set<string> } = {},
+  { redirects, routes }: Pick<ReturnType<typeof buildAuditIndex>, "redirects" | "routes">,
 ) {
-  const redirectMap = options.redirects ?? getDefaultAuditIndex().redirects;
-  const publishedRoutes = options.routes ?? getDefaultAuditIndex().routes;
   let current = normalizeRoute(route);
   if (current === "/") {
     return { ok: true, terminal: "/" };
   }
 
   const seen = new Set([current]);
-  while (redirectMap.has(current)) {
-    current = normalizeRoute(redirectMap.get(current) ?? "");
+  while (redirects.has(current)) {
+    current = normalizeRoute(redirects.get(current) ?? "");
     if (seen.has(current)) {
       return { ok: false, terminal: current, loop: true };
     }
     seen.add(current);
   }
-  return { ok: publishedRoutes.has(current), terminal: current };
+  return { ok: routes.has(current), terminal: current };
 }
 
 /** Prepares a docs directory, mirroring ClawHub docs when available. */
@@ -429,7 +416,7 @@ export function prepareMirroredDocsDir(
 function parseAuditUrl(
   href: string,
   base = "https://docs.openclaw.ai",
-): Result<{ hostname: string; pathname: string; hash: string }, string> {
+): Result<Pick<URL, "hostname" | "pathname" | "hash">, string> {
   try {
     const url = new URL(href, base);
     return ok({
@@ -444,9 +431,14 @@ function parseAuditUrl(
 }
 
 /**
- * Audits local docs links against route, file, and redirect indexes.
+ * Explains that a fragment into a ClawHub-mirrored route could not be checked
+ * because the upstream source is absent from this checkout.
  */
-function auditDocsLinks(
+function mirroredFragmentReason(terminal: string, hash: string) {
+  return `fragment unverified without the ClawHub source checkout (terminal: ${terminal}${hash}); set ${CLAWHUB_REPO_ENV}`;
+}
+
+export function auditDocsLinks(
   options: { docsDir?: string; allowExternalClawHubRoutes?: boolean; anchors?: boolean } = {},
 ) {
   const docsDir = options.docsDir ?? DOCS_DIR;
@@ -455,6 +447,7 @@ function auditDocsLinks(
   });
   const broken: Array<{ file: string; line: number; link: string; reason: string }> = [];
   let checked = 0;
+  let unverifiedMirroredFragments = 0;
 
   // The publisher writes physical/index routes; frontmatter permalinks do not
   // create pages. Only emitted pages and configured redirects can prove fragments.
@@ -492,7 +485,10 @@ function auditDocsLinks(
   if (options.anchors) {
     const records = resolveRedirects({
       redirects: index.docsConfig.redirects ?? [],
-      pages: [...pages.keys()].map((route) => ({ route, markdownRoute: `${route}.md` })),
+      pages: [...pages.keys(), ...index.mirroredRoutes].map((route) => ({
+        route,
+        markdownRoute: `${route}.md`,
+      })),
       localeCodes: ["en"],
       prefixes: [],
       publicPath: (route: string) => route,
@@ -523,6 +519,22 @@ function auditDocsLinks(
           link: record.source,
           reason: `redirect fragment not found: ${record.destination}`,
         });
+        continue;
+      }
+      // A redirect into a ClawHub-mirrored route now resolves off the navigation
+      // declaration, which proves the route but not the fragment. Say so instead
+      // of letting the destination fragment go silently unchecked.
+      if (!page && destination.hash) {
+        const terminal = normalizeRoute(destination.pathname);
+        if (index.mirroredRoutes.has(terminal)) {
+          unverifiedMirroredFragments++;
+          broken.push({
+            file: "docs.json",
+            line: 0,
+            link: record.source,
+            reason: mirroredFragmentReason(terminal, destination.hash),
+          });
+        }
       }
     }
   }
@@ -560,6 +572,25 @@ function auditDocsLinks(
       const terminal = pageRoute(destination.pathname).replace(/^\/en(?:\/|$)/, "/");
       const page = pages.get(terminal);
       const resolved = resolveRoute(route, { redirects: index.redirects, routes: index.routes });
+      // A route the navigation mirrors from ClawHub is published even though no
+      // Markdown page exists locally. Its existence is proven by the declaration;
+      // only its fragments need the real source checkout.
+      const mirroredOnly = !page && index.mirroredRoutes.has(terminal);
+      if (mirroredOnly) {
+        // Plain mode does not inspect fragments at all, so a declared mirrored
+        // route resolves there whether or not the link carries one. Only anchor
+        // mode reports the fragment it cannot verify without the source.
+        if (options.anchors && destination.hash) {
+          unverifiedMirroredFragments++;
+          broken.push({
+            file: rel,
+            line,
+            link: raw,
+            reason: mirroredFragmentReason(terminal, destination.hash),
+          });
+        }
+        continue;
+      }
       if (
         !page &&
         (options.anchors || !resolved.ok) &&
@@ -591,7 +622,7 @@ function auditDocsLinks(
   }
 
   for (const page of collectNavPageEntries(index.docsConfig.navigation || [])) {
-    if (isGeneratedTranslatedDoc(page)) {
+    if (isLocalizedDocPath(page)) {
       continue;
     }
     checked++;
@@ -612,10 +643,9 @@ function auditDocsLinks(
     });
   }
 
-  return { checked, broken, collisions };
+  return { checked, broken, collisions, unverifiedMirroredFragments };
 }
 
-/** Runs the docs link audit CLI. */
 function runDocsLinkAuditCli() {
   const args = process.argv.slice(2);
   if (args[0] === "--prepare-external-links") {
@@ -631,7 +661,7 @@ function runDocsLinkAuditCli() {
 
   const mirroredDocsDir = prepareMirroredDocsDir(DOCS_DIR);
   try {
-    const { checked, broken, collisions } = auditDocsLinks({
+    const { checked, broken, collisions, unverifiedMirroredFragments } = auditDocsLinks({
       docsDir: mirroredDocsDir.dir,
       allowExternalClawHubRoutes: !mirroredDocsDir.mirroredClawHub,
       anchors: args.includes("--anchors"),
@@ -642,6 +672,15 @@ function runDocsLinkAuditCli() {
       console.log(
         `omitted_compatibility_aliases=${collisions.filter((item) => item.reason === "compatibility alias collision").length}`,
       );
+      console.log(`mirrored_clawhub_docs=${mirroredDocsDir.mirroredClawHub ? "yes" : "no"}`);
+      if (!mirroredDocsDir.mirroredClawHub) {
+        console.error(
+          `docs:check-links: ClawHub docs are authored in openclaw/clawhub and are absent from this checkout. ` +
+            `/clawhub/** routes were accepted from docs.json navigation and their fragments were not checked` +
+            `${unverifiedMirroredFragments > 0 ? ` (${unverifiedMirroredFragments} reported unverified)` : ""}. ` +
+            `Set ${CLAWHUB_REPO_ENV} to a ClawHub checkout to verify them.`,
+        );
+      }
     }
 
     for (const item of broken) {
@@ -654,11 +693,6 @@ function runDocsLinkAuditCli() {
   }
 }
 
-function isCliEntry() {
-  const cliArg = process.argv[1];
-  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
-}
-
-if (isCliEntry()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exit(runDocsLinkAuditCli());
 }

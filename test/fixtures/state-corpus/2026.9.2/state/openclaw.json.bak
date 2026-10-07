@@ -1,0 +1,20 @@
+{
+  "agents": {
+    "entries": {
+      "main": {
+        "name": "main",
+        "workspace": "/home/fixture/workspace",
+        "agentDir": "/home/fixture/.openclaw/agents/main/agent",
+        "identity": {
+          "name": "main"
+        }
+      }
+    }
+  },
+  "meta": {
+    "migrations": {
+      "modelPolicyAllowlist": true
+    },
+    "lastTouchedVersion": "2026.9.2"
+  }
+}

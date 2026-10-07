@@ -12,11 +12,12 @@ const OUTPUT_LOOPBACK_SHORT_CORRELATION_THRESHOLD = 0.98;
 const OUTPUT_LOOPBACK_RMS_THRESHOLD = 8;
 const OUTPUT_LOOPBACK_PEAK_THRESHOLD = 32;
 
-type MeetingOutputLoopbackHealth = {
+export type MeetingOutputLoopbackHealth = {
   lastOutputLoopbackAt?: string;
   lastOutputLoopbackCorrelation?: number;
   lastOutputLoopbackPeak?: number;
   lastOutputLoopbackRms?: number;
+  /** Non-silent sink audio observed again on the meeting microphone capture path. */
   outputLoopbackSignalBytes: number;
   outputGeneration: number;
   verifiedOutputGeneration?: number;
@@ -151,16 +152,20 @@ export function createMeetingOutputLoopbackVerifier(options: {
   let lastOutputLoopbackPeak: number | undefined;
   let lastOutputLoopbackRms: number | undefined;
 
+  const clearCorrelationScratch = () => {
+    inputPcm = Buffer.alloc(0);
+    nextInputStartSample = 0;
+    outputFingerprint = undefined;
+    pendingOutputPcm = Buffer.alloc(0);
+  };
+
   const resetGeneration = (started: boolean) => {
     generationStarted = started;
     generationVerified = false;
     if (started) {
       outputGeneration += 1;
     }
-    inputPcm = Buffer.alloc(0);
-    nextInputStartSample = 0;
-    outputFingerprint = undefined;
-    pendingOutputPcm = Buffer.alloc(0);
+    clearCorrelationScratch();
     outputObservationDeadlineMs = Number.NEGATIVE_INFINITY;
     outputQueuedUntilMs = Number.NEGATIVE_INFINITY;
   };
@@ -172,7 +177,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
     nextInputStartSample = Math.max(0, inputSampleCount - rescanTailSamples);
   };
 
-  const consumePendingOutput = (allowShortReference: boolean) => {
+  const consumePendingOutput = () => {
     const pendingBytes = pendingOutputPcm.byteLength;
     for (let end = pendingBytes; end >= fullReferenceBytes; end -= fullReferenceBytes) {
       const candidate = pendingOutputPcm.subarray(end - fullReferenceBytes, end);
@@ -197,13 +202,6 @@ export function createMeetingOutputLoopbackVerifier(options: {
       pendingBytes > fullReferenceBytes
         ? pendingOutputPcm.subarray(pendingBytes - fullReferenceBytes)
         : pendingOutputPcm;
-    if (!outputFingerprint && allowShortReference && pendingOutputPcm.byteLength > 0) {
-      const fingerprint = createOutputFingerprint(pendingOutputPcm, fullReferenceBytes);
-      if (fingerprint) {
-        pendingOutputPcm = Buffer.alloc(0);
-        refreshFingerprint(fingerprint);
-      }
-    }
   };
 
   return {
@@ -264,6 +262,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
         lastOutputLoopbackCorrelation = matchedCorrelation;
         lastOutputLoopbackPeak = matchedStats.peak;
         lastOutputLoopbackRms = matchedStats.rms;
+        clearCorrelationScratch();
         return;
       }
       nextInputStartSample = Math.max(0, lastStartSample + 1);
@@ -280,19 +279,23 @@ export function createMeetingOutputLoopbackVerifier(options: {
       if (audio.byteLength === 0) {
         return;
       }
-      const decoded = decodeMeetingAudio(audio, options.audioFormat);
-      const durationMs = decoded.byteLength * 0.5 * sampleRate ** -1 * 1_000;
+      const samples =
+        options.audioFormat === "g711-ulaw-8khz" ? audio.byteLength : audio.byteLength * 0.5;
+      const durationMs = samples * sampleRate ** -1 * 1_000;
       outputQueuedUntilMs = Math.max(outputAtMs, outputQueuedUntilMs) + durationMs;
-      pendingOutputPcm = Buffer.concat([pendingOutputPcm, decoded]);
-      if (!outputFingerprint) {
-        consumePendingOutput(true);
-      } else if (pendingOutputPcm.byteLength >= fullReferenceBytes) {
-        consumePendingOutput(false);
-      }
       outputObservationDeadlineMs = Math.max(
         outputObservationDeadlineMs,
         outputQueuedUntilMs + OUTPUT_LOOPBACK_OBSERVATION_WINDOW_MS,
       );
+      // Verified generations still extend their deadline, but no longer need correlation data.
+      if (generationVerified) {
+        return;
+      }
+      const decoded = decodeMeetingAudio(audio, options.audioFormat);
+      pendingOutputPcm = Buffer.concat([pendingOutputPcm, decoded]);
+      if (!outputFingerprint || pendingOutputPcm.byteLength >= fullReferenceBytes) {
+        consumePendingOutput();
+      }
     },
     getHealth(): MeetingOutputLoopbackHealth {
       return {

@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -17,6 +18,8 @@ import type {
 } from "./cli-output-contracts.js";
 import {
   isClaudeSubagentRecord,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
   isGeminiStreamJsonDialect,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
@@ -35,19 +38,14 @@ type PendingToolUse = {
   blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 
@@ -227,27 +225,29 @@ export function projectCliTaggedReasoning(params: {
   return text;
 }
 
-export function isClaudeToolUseBlockType(type: unknown): type is CliToolUseStartDelta["kind"] {
-  return type === "tool_use" || type === "server_tool_use" || type === "mcp_tool_use";
-}
-
 function isClaudeAssistantToolResultBlockType(type: unknown): boolean {
-  return typeof type === "string" && type.endsWith("_tool_result") && type !== "tool_result";
+  return isClaudeToolResultBlockType(type) && type !== "tool_result";
 }
 
 function isClaudeToolResultError(content: unknown): boolean {
   return isRecord(content) && typeof content.type === "string" && content.type.endsWith("_error");
 }
 
-function parseToolInputJson(parts: string[]): Record<string, unknown> {
-  if (parts.length === 0) {
-    return {};
-  }
-  try {
-    const parsed: unknown = JSON.parse(parts.join(""));
-    return isRecord(parsed) ? parsed : {};
-  } catch {
-    return {};
+function emitClaudeToolResultBlock(
+  tracker: ToolUseTracker,
+  block: Record<string, unknown>,
+  onToolResult: ((delta: CliToolResultDelta) => void) | undefined,
+): void {
+  const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
+  if (toolCallId) {
+    emitToolResultOnce(
+      tracker,
+      toolCallId,
+      block.is_error === true ||
+        (block.type !== "tool_result" && isClaudeToolResultError(block.content)),
+      block.content,
+      onToolResult,
+    );
   }
 }
 
@@ -285,16 +285,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
           });
         }
       } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (toolCallId) {
-          emitToolResultOnce(
-            tracker,
-            toolCallId,
-            block.is_error === true || isClaudeToolResultError(block.content),
-            block.content,
-            params.onToolResult,
-          );
-        }
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
       return;
     }
@@ -317,7 +308,7 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
         // start snapshot overwrite it.
         const args =
           pending.inputJsonParts.length > 0
-            ? parseToolInputJson(pending.inputJsonParts)
+            ? (safeParseJsonRecord(pending.inputJsonParts.join("")) ?? {})
             : (pending.blockInput ?? {});
         emitToolStartOnce(
           tracker,
@@ -333,56 +324,26 @@ export function dispatchClaudeCliStreamingToolEvent(params: {
     return;
   }
 
-  if (params.parsed.type === "assistant" && isRecord(params.parsed.message)) {
+  const assistant = params.parsed.type === "assistant";
+  if ((assistant || params.parsed.type === "user") && isRecord(params.parsed.message)) {
     const message = params.parsed.message;
     const content = Array.isArray(message.content) ? message.content : [];
     for (const block of content) {
       if (!isRecord(block)) {
         continue;
       }
-      if (isClaudeToolUseBlockType(block.type)) {
+      if (assistant && isClaudeToolUseBlockType(block.type)) {
         const toolCallId = typeof block.id === "string" ? block.id.trim() : "";
         const name = typeof block.name === "string" ? block.name.trim() : "";
-        if (!toolCallId || !name) {
-          continue;
+        if (toolCallId && name) {
+          const args = isRecord(block.input) ? block.input : {};
+          emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
         }
-        const args: Record<string, unknown> = isRecord(block.input) ? block.input : {};
-        emitToolStartOnce(tracker, toolCallId, name, block.type, args, params.onToolUseStart);
-      } else if (isClaudeAssistantToolResultBlockType(block.type)) {
-        const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-        if (!toolCallId) {
-          continue;
-        }
-        emitToolResultOnce(
-          tracker,
-          toolCallId,
-          block.is_error === true || isClaudeToolResultError(block.content),
-          block.content,
-          params.onToolResult,
-        );
+      } else if (
+        assistant ? isClaudeAssistantToolResultBlockType(block.type) : block.type === "tool_result"
+      ) {
+        emitClaudeToolResultBlock(tracker, block, params.onToolResult);
       }
-    }
-    return;
-  }
-
-  if (params.parsed.type === "user" && isRecord(params.parsed.message)) {
-    const message = params.parsed.message;
-    const content = Array.isArray(message.content) ? message.content : [];
-    for (const block of content) {
-      if (!isRecord(block) || block.type !== "tool_result") {
-        continue;
-      }
-      const toolCallId = typeof block.tool_use_id === "string" ? block.tool_use_id.trim() : "";
-      if (!toolCallId) {
-        continue;
-      }
-      emitToolResultOnce(
-        tracker,
-        toolCallId,
-        block.is_error === true,
-        block.content,
-        params.onToolResult,
-      );
     }
   }
 }
@@ -394,6 +355,7 @@ type ThinkingTracker = {
   // is deduped against its own index; a single global concatenation misfires
   // once a message carries more than one thinking block (re-emits or reorders).
   streamedByIndex: Map<number, string>;
+  highestStreamedIndex: number;
   // Full thinking already emitted for the message in block order. The callback
   // contract exposes this as the running snapshot text for downstream coalescing,
   // so it stays a message-level concatenation, not a per-index value.
@@ -406,6 +368,7 @@ type ThinkingTracker = {
 export function createThinkingTracker(): ThinkingTracker {
   return {
     streamedByIndex: new Map(),
+    highestStreamedIndex: Number.NEGATIVE_INFINITY,
     emittedText: "",
     nextSyntheticBlockIndex: 0,
     progressTokens: 0,
@@ -414,6 +377,7 @@ export function createThinkingTracker(): ThinkingTracker {
 
 function resetThinkingBlockState(tracker: ThinkingTracker): void {
   tracker.streamedByIndex.clear();
+  tracker.highestStreamedIndex = Number.NEGATIVE_INFINITY;
   tracker.emittedText = "";
   tracker.currentSyntheticBlockIndex = undefined;
   tracker.nextSyntheticBlockIndex = 0;
@@ -451,10 +415,6 @@ function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void
   tracker.nextSyntheticBlockIndex += 1;
 }
 
-function stopClaudeContentBlock(tracker: ThinkingTracker): void {
-  tracker.currentSyntheticBlockIndex = undefined;
-}
-
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {
   if (typeof index === "number") {
     tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
@@ -480,8 +440,12 @@ function emitClaudeThinking(
   delta: string,
   onThinkingDelta: (delta: CliThinkingDelta) => void,
 ): void {
+  const appendToAggregate = index >= tracker.highestStreamedIndex;
   tracker.streamedByIndex.set(index, `${streamed}${delta}`);
-  tracker.emittedText = assembleThinkingTextByIndex(tracker.streamedByIndex);
+  tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
+  tracker.emittedText = appendToAggregate
+    ? `${tracker.emittedText}${delta}`
+    : assembleThinkingTextByIndex(tracker.streamedByIndex);
   onThinkingDelta({ text: tracker.emittedText, delta, isReasoningSnapshot: true });
 }
 
@@ -490,15 +454,6 @@ function readThinkingProgressTokens(delta: Record<string, unknown>): number | un
     return undefined;
   }
   return asPositiveFiniteNumber(delta.estimated_tokens);
-}
-
-function emitClaudeThinkingProgress(
-  tracker: ThinkingTracker,
-  progressTokensDelta: number,
-  onThinkingProgress: (progress: CliThinkingProgress) => void,
-): void {
-  tracker.progressTokens += progressTokensDelta;
-  onThinkingProgress({ progressTokens: tracker.progressTokens });
 }
 
 export function dispatchClaudeCliThinking(params: {
@@ -529,7 +484,7 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     if (event.type === "content_block_stop") {
-      stopClaudeContentBlock(tracker);
+      tracker.currentSyntheticBlockIndex = undefined;
       return;
     }
     if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
@@ -542,8 +497,10 @@ export function dispatchClaudeCliThinking(params: {
       return;
     }
     const progressTokensDelta = readThinkingProgressTokens(event.delta);
-    if (progressTokensDelta !== undefined && params.onThinkingProgress) {
-      emitClaudeThinkingProgress(tracker, progressTokensDelta, params.onThinkingProgress);
+    const onThinkingProgress = params.onThinkingProgress;
+    if (progressTokensDelta !== undefined && onThinkingProgress) {
+      tracker.progressTokens += progressTokensDelta;
+      onThinkingProgress({ progressTokens: tracker.progressTokens });
       return;
     }
     // signature_delta carries opaque continuation material; the Claude CLI owns
@@ -551,10 +508,7 @@ export function dispatchClaudeCliThinking(params: {
     if (event.delta.type !== "thinking_delta" || typeof event.delta.thinking !== "string") {
       return;
     }
-    if (!event.delta.thinking) {
-      return;
-    }
-    if (!params.onThinkingDelta) {
+    if (!event.delta.thinking || !params.onThinkingDelta) {
       return;
     }
     const streamed = tracker.streamedByIndex.get(blockIndex) ?? "";
@@ -579,6 +533,7 @@ export function dispatchClaudeCliThinking(params: {
         continue;
       }
       tracker.streamedByIndex.set(index, block.thinking);
+      tracker.highestStreamedIndex = Math.max(tracker.highestStreamedIndex, index);
       const text = assembleThinkingTextByIndex(tracker.streamedByIndex);
       if (text === tracker.emittedText) {
         continue;
@@ -634,10 +589,14 @@ export function dispatchGeminiCliStreamingToolEvent(params: {
 export function partitionLeadingTaggedReasoning(
   text: string,
   final: boolean,
-): { pending: true } | { pending: false; reasoningText: string; visibleText: string } {
+):
+  | { pending: true; openWithoutPendingTag: boolean }
+  | { pending: false; reasoningText: string; visibleText: string } {
   const first = text.search(/\S/u);
   if (first === -1) {
-    return final ? { pending: false, reasoningText: "", visibleText: text } : { pending: true };
+    return final
+      ? { pending: false, reasoningText: "", visibleText: text }
+      : { pending: true, openWithoutPendingTag: false };
   }
   if (text.charAt(first) !== "<") {
     return { pending: false, reasoningText: "", visibleText: text };
@@ -665,11 +624,11 @@ export function partitionLeadingTaggedReasoning(
     const pendingLeadingTag =
       scan.pendingStart !== undefined && !text.slice(first, scan.pendingStart).trim();
     return !final && (depth > 0 || pendingLeadingTag)
-      ? { pending: true }
+      ? { pending: true, openWithoutPendingTag: depth > 0 && scan.pendingStart === undefined }
       : { pending: false, reasoningText: "", visibleText: text };
   }
   if (!final && (depth > 0 || pendingTagAfterBlock || !text.slice(end).trim())) {
-    return { pending: true };
+    return { pending: true, openWithoutPendingTag: depth > 0 && scan.pendingStart === undefined };
   }
 
   const partitioner = createReasoningTagTextPartitioner();
@@ -686,13 +645,19 @@ export function partitionLeadingTaggedReasoning(
 export function createLeadingTaggedReasoningRouter() {
   let pending = "";
   let settled = false;
+  let openWithoutPendingTag = false;
   const consume = (chunk: string, final: boolean): ReasoningTagTextDelta[] => {
     if (settled) {
       return chunk ? [{ kind: "text", text: chunk }] : [];
     }
     pending += chunk;
+    // Without an unfinished tag, only '<' can change the open lexical block.
+    if (!final && openWithoutPendingTag && !chunk.includes("<")) {
+      return [];
+    }
     const result = partitionLeadingTaggedReasoning(pending, final);
     if (result.pending) {
+      openWithoutPendingTag = result.openWithoutPendingTag;
       return [];
     }
     settled = true;
@@ -709,5 +674,3 @@ export function createLeadingTaggedReasoningRouter() {
     finish: () => consume("", true),
   };
 }
-
-/** Creates a stateful parser for streaming JSONL CLI backend output. */

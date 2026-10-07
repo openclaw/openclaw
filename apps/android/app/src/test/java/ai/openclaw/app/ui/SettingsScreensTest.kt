@@ -22,13 +22,12 @@ import java.util.Locale
 
 class SettingsScreensTest {
   @Test
-  fun locationModes_hideAlwaysFromPlayAndMapThirdPartySelection() {
-    assertEquals(listOf("Off", "While Using"), locationModeLabels(backgroundLocationAvailable = false))
+  fun locationModes_hideAlwaysFromPlayAndIncludeItForThirdParty() {
+    assertEquals(listOf(LocationMode.Off, LocationMode.WhileUsing), locationModeOptions(backgroundLocationAvailable = false))
     assertEquals(
-      listOf("Off", "While Using", "Always"),
-      locationModeLabels(backgroundLocationAvailable = true),
+      listOf(LocationMode.Off, LocationMode.WhileUsing, LocationMode.Always),
+      locationModeOptions(backgroundLocationAvailable = true),
     )
-    assertEquals(LocationMode.Always, locationModeForLabel("Always"))
   }
 
   @Test
@@ -101,7 +100,7 @@ class SettingsScreensTest {
   @Test
   fun gatewayStatusLabelReportsWhichAuthRecoveryAppliesInsteadOfGenericLabel() {
     assertEquals(
-      "Setup code expired",
+      "Setup code no longer valid",
       gatewayStatusLabel(
         "Gateway error: unauthorized: bootstrap token invalid or expired",
         isConnected = false,
@@ -364,7 +363,7 @@ class SettingsScreensTest {
     val source = settingsScreensSource()
     val cardStart = source.indexOf("private fun ExecApprovalCard(")
     val reviewCall = source.indexOf("ExecApprovalCommandReview(", cardStart)
-    val actionsCall = source.indexOf("execApprovalActions(approval.allowedDecisions)", reviewCall)
+    val actionsCall = source.indexOf("execApprovalActions(", reviewCall)
     val reviewStart = source.indexOf("private fun ExecApprovalCommandReview(", actionsCall)
     val reviewEnd = source.indexOf("internal data class ExecApprovalAction", reviewStart)
     assertTrue(cardStart >= 0 && reviewCall > cardStart && actionsCall > reviewCall)
@@ -380,31 +379,6 @@ class SettingsScreensTest {
   }
 
   @Test
-  fun terminalNoticeRendersAsStandaloneDismissibleBannerRegardlessOfRemainingCards() {
-    val source = settingsScreensSource()
-    // Terminal outcomes retire their card before the notice publishes, so any
-    // card-scoped or empty-inbox-only rendering hides losing outcomes whenever
-    // another approval card remains visible.
-    assertFalse(source.contains("execApprovalNoticeForCard"))
-    assertFalse(source.contains("execApprovalEmptyInboxNotice"))
-    val screenStart = source.indexOf("private fun ApprovalsSettingsScreen(")
-    val bannerCall = source.indexOf("execApprovalsNotice?.let", screenStart)
-    val listPanelCall = source.indexOf("ExecApprovalsPanel(", screenStart)
-    assertTrue(screenStart >= 0 && bannerCall > screenStart && listPanelCall > bannerCall)
-
-    val noticeStart = source.indexOf("private fun ExecApprovalNotice(")
-    val noticeEnd = source.indexOf("@Composable", noticeStart + 1)
-    val noticeBody = source.substring(noticeStart, noticeEnd)
-    assertTrue(noticeBody.contains("onDismiss: () -> Unit"))
-    assertTrue(noticeBody.contains("notice.approvalId"))
-    assertTrue(
-      noticeBody.contains(
-        "contentDescription = nativeString(\"Dismiss approval notice\")",
-      ),
-    )
-  }
-
-  @Test
   fun gatewayPairingSurfacesStayProminentUntilPaired() {
     assertTrue(gatewayShowsScanHero(pairedGatewayCount = 0))
     assertFalse(gatewayShowsScanHero(pairedGatewayCount = 1))
@@ -417,18 +391,18 @@ class SettingsScreensTest {
   fun gatewayScreenOrdersPairingAheadOfManualSetup() {
     val source = settingsScreensSource()
     val screenStart = source.indexOf("private fun GatewaySettingsScreen(")
-    // Pairing stays reachable without scrolling: nav-bar scanner action plus a
-    // hero CTA while nothing is paired, then Add Gateway before manual plumbing.
+    // Pairing stays reachable without scrolling; management precedes technical details.
     val trailingScan = source.indexOf("trailingAction = {", screenStart)
     val scanHero = source.indexOf("nativeString(\"Scan QR to Pair\")", screenStart)
-    val addPanel = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
+    val addAction = source.indexOf("nativeString(\"Add Gateway\")", screenStart)
     val pairedPanel = source.indexOf("nativeString(\"Gateways\")", screenStart)
     val manualPanel = source.indexOf("nativeString(\"Manual Gateway\")", screenStart)
     assertTrue(screenStart >= 0 && trailingScan > screenStart && scanHero > trailingScan)
-    assertTrue(addPanel > scanHero && pairedPanel > addPanel && manualPanel > pairedPanel)
-    // Discovered gateways surface inside Add Gateway with a per-row connect.
+    assertTrue(pairedPanel > scanHero && addAction > pairedPanel && manualPanel > addAction)
+    // Discovered gateways retain per-row Connect behind their own disclosure.
     val discoveredRows = source.indexOf("discoveredGateways.forEachIndexed", screenStart)
-    assertTrue(discoveredRows > addPanel && discoveredRows < pairedPanel)
+    val discoveryDisclosure = source.indexOf("if (showDiscovery)", screenStart)
+    assertTrue(discoveredRows > discoveryDisclosure && discoveryDisclosure > pairedPanel)
   }
 
   @Test

@@ -3,9 +3,12 @@ import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.
 import { icons } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { DevicesProps } from "./view.types.ts";
+
+registerDevicesEnglish();
 
 export function deviceDesktopEnvironment(props: DevicesProps, environmentId: string) {
   return props.desktopEnvironments?.find(
@@ -25,45 +28,65 @@ export function renderDeviceEntryMenu(
     deviceId?: string;
     desktopEnvironment?: string;
     pendingRequestId?: string;
+    onEditAlias?: () => void;
     onRemove?: () => void;
   },
 ) {
   if (!entry.deviceId && !entry.desktopEnvironment) {
     return nothing;
   }
-  const pairingHint = props.canManagePairing ? nothing : t("devices.readOnly.pairingRequired");
+  const actions = [
+    {
+      value: "desktop",
+      labelKey: "devices.inventory.openDesktop",
+      visible: entry.desktopEnvironment,
+      pairing: false,
+      run: () =>
+        entry.desktopEnvironment && openDesktopFocus(props.basePath, entry.desktopEnvironment),
+    },
+    {
+      value: "approve",
+      labelKey: "devices.inventory.approve",
+      visible: entry.pendingRequestId,
+      pairing: true,
+      run: () => entry.pendingRequestId && props.onNodeApprove(entry.pendingRequestId),
+    },
+    {
+      value: "reject",
+      labelKey: "devices.inventory.reject",
+      visible: entry.pendingRequestId,
+      pairing: true,
+      run: () => entry.pendingRequestId && props.onNodeReject(entry.pendingRequestId),
+    },
+    {
+      value: "copy",
+      labelKey: "devices.inventory.copyDeviceId",
+      visible: entry.deviceId,
+      pairing: false,
+      run: () => entry.deviceId && void copyDeviceId(entry.deviceId),
+    },
+    {
+      value: "editAlias",
+      labelKey: "devices.inventory.editAlias",
+      visible: entry.onEditAlias,
+      pairing: true,
+      run: () => entry.onEditAlias?.(),
+    },
+    {
+      value: "remove",
+      labelKey: "devices.inventory.removeAction",
+      visible: entry.onRemove,
+      pairing: true,
+      run: () => entry.onRemove?.(),
+    },
+  ];
   return html`
     <wa-dropdown
       placement="bottom-end"
       @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-        switch (event.detail.item.value) {
-          case "desktop":
-            if (entry.desktopEnvironment) {
-              openDesktopFocus(props.basePath, entry.desktopEnvironment);
-            }
-            break;
-          case "copy":
-            if (entry.deviceId) {
-              void copyDeviceId(entry.deviceId);
-            }
-            break;
-          case "approve":
-            if (props.canManagePairing && entry.pendingRequestId) {
-              props.onNodeApprove(entry.pendingRequestId);
-            }
-            break;
-          case "reject":
-            if (props.canManagePairing && entry.pendingRequestId) {
-              props.onNodeReject(entry.pendingRequestId);
-            }
-            break;
-          case "remove":
-            if (props.canManagePairing) {
-              entry.onRemove?.();
-            }
-            break;
-          default:
-            break;
+        const action = actions.find((item) => item.value === event.detail.item.value);
+        if (action && (!action.pairing || props.canManagePairing)) {
+          action.run();
         }
       }}
     >
@@ -76,49 +99,19 @@ export function renderDeviceEntryMenu(
       >
         ${icons.moreHorizontal}
       </button>
-      ${
-        entry.desktopEnvironment
-          ? html`<wa-dropdown-item value="desktop"
-              >${t("devices.inventory.openDesktop")}</wa-dropdown-item
-            >`
-          : nothing
-      }
-      ${
-        entry.pendingRequestId
+      ${actions.map((action) =>
+        action.visible
           ? html`
               <wa-dropdown-item
-                value="approve"
-                ?disabled=${!props.canManagePairing}
-                title=${pairingHint}
-                >${t("devices.inventory.approve")}</wa-dropdown-item
-              >
-              <wa-dropdown-item
-                value="reject"
-                ?disabled=${!props.canManagePairing}
-                title=${pairingHint}
-                >${t("devices.inventory.reject")}</wa-dropdown-item
+                value=${action.value}
+                ?disabled=${action.pairing && !props.canManagePairing}
+                title=${action.pairing && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : nothing}
+                variant=${action.value === "remove" ? "danger" : nothing}
+                >${t(action.labelKey)}</wa-dropdown-item
               >
             `
-          : nothing
-      }
-      ${
-        entry.deviceId
-          ? html`<wa-dropdown-item value="copy"
-              >${t("devices.inventory.copyDeviceId")}</wa-dropdown-item
-            >`
-          : nothing
-      }
-      ${
-        entry.onRemove
-          ? html`<wa-dropdown-item
-              value="remove"
-              variant="danger"
-              ?disabled=${!props.canManagePairing}
-              title=${pairingHint}
-              >${t("devices.inventory.removeAction")}</wa-dropdown-item
-            >`
-          : nothing
-      }
+          : nothing,
+      )}
     </wa-dropdown>
   `;
 }

@@ -39,6 +39,12 @@ If the request includes an OpenResponses `user` string, the Gateway derives a st
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
+Continuation mappings survive Gateway restarts in the shared state database's core keyed store (`core:openresponses`, namespace `response-sessions`) for up to 30 days, capped at the newest 5,000 responses across the Gateway. This matches the default session maintenance age and count; it does not extend the lifetime of the underlying session or transcript. Mappings contain only response/session identifiers, the auth subject (an installation-keyed bearer HMAC or verified proxy identity), agent and requested-session scope, and store-managed timestamps. No response content is copied, and no separate table or schema migration is required. The keyed store rejects expired mappings immediately on lookup and removes expired rows on subsequent writes and through the shared plugin-state maintenance sweep, which runs once per minute in bounded batches. If continuity persistence fails after an otherwise successful run, the endpoint returns HTTP `500` or a streaming `response.failed`, rather than reporting a success whose response ID cannot be continued.
+
+An unknown, expired, evicted, or out-of-scope `previous_response_id` returns the same HTTP `400` with `invalid_request_error`, including when `stream: true`. To recover, resend the full input history and omit `previous_response_id`; the Gateway never silently starts a new conversation for an unresolved continuation. Responses issued before this storage change cannot be recovered after the old Gateway exits.
+
+Incognito responses never create continuation mappings. Continue them explicitly with the same `x-openclaw-session-key` while the Incognito session is alive; using their response ID returns the same `400` as an unknown ID.
+
 ### Explicit incognito session continuation
 
 Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
@@ -102,6 +108,8 @@ Provide tools with `tools: [{ type: "function", name, description?, parameters? 
 
 If the agent calls a tool, the response returns a `function_call` output item. Send a follow-up request with `function_call_output` to continue the turn.
 
+If a tool produces no text, return `output: ""` with its `call_id`. The empty result still completes that tool call and can be the only new input item in a continuation.
+
 Clients that manage their own history can append `response.output` to `input`, then append new user messages or `function_call_output` items. Keep returned assistant metadata and function-call IDs, names, and arguments unchanged. Alternatively, supply `previous_response_id` and only the new input items.
 
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.
@@ -141,8 +149,9 @@ Current behavior:
 
 - Text inferred from otherwise untyped bytes retains its detected encoding, including UTF-16 and Windows-1252. Declared text charsets remain supported.
 - File content is decoded and added to the **system prompt**, not the user message, so it stays ephemeral (not persisted in session history).
-- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the long `SECURITY NOTICE:` banner to preserve prompt budget; the boundary markers and metadata still apply.
+- Decoded file text is wrapped as **untrusted external content** before it is added, so file bytes are treated as data, not trusted instructions. The injected block uses explicit boundary markers (`<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>`) and a `Source: External` metadata line. It intentionally omits the one-line data-boundary note to preserve prompt budget; the boundary markers and metadata still apply.
 - PDFs are parsed for text first. If little text is found, the first pages are rasterized into images and passed to the model, and the injected file block uses the placeholder `[PDF content rendered to images]`.
+- When page, text, or image limits make extraction partial, the injected file block starts with a bounded `[Partial document: ...]` marker outside the untrusted file-content boundary.
 
 PDF parsing is provided by the bundled `document-extract` plugin, which uses `clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and page rendering.
 
@@ -233,15 +242,21 @@ Security note: URL allowlists are enforced before fetch and on redirect hops. Al
 
 ## Streaming (SSE)
 
+Streaming preserves repeated content from separate assistant messages. If a correction cannot be represented by appending to text already sent, the stream emits `response.failed` rather than completing with inconsistent content.
+
 Set `stream: true` to receive Server-Sent Events:
 
 - `Content-Type: text/event-stream`
 - Each event line is `event: <type>` and `data: <json>`
 - Stream ends with `data: [DONE]`
 
-Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.failed` (on error).
+Event types currently emitted: `response.created`, `response.in_progress`, `response.output_item.added`, `response.content_part.added`, `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`, `response.output_item.done`, `response.completed`, `response.incomplete` (on output-budget truncation), `response.failed` (on error).
 
 Failed agent runs, including whole-agent timeouts, return a failed response. Streaming failures emit `response.failed` followed by `[DONE]`; partial content may already have reached the client. Timeout settings follow the [agent loop](/concepts/agent-loop#timeouts).
+
+A reply that ends because the agent reached its output-token budget is returned with `status: "incomplete"` and `incomplete_details: { "reason": "max_output_tokens" }`, and its final message item carries `status: "incomplete"`. Streaming emits these fields on the terminal `response.incomplete` event, so clients dispatching by event type also observe the truncation. This mirrors the `finish_reason: "length"` projection on `/v1/chat/completions`.
+
+Disconnecting the HTTP client cancels active source-URL downloads and the agent run. If cancellation happens while preparing input, the Gateway releases that download and does not start another input download or the agent run. This applies to both streaming and non-streaming requests.
 
 ## Usage
 

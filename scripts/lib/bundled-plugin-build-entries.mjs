@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   bundledDistPluginFile,
@@ -16,8 +17,6 @@ import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-
 export { collectRootPackageExcludedExtensionDirs };
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
-/** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
-export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 /** @internal Shared repository-script contract. */
 export const DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS";
@@ -30,7 +29,7 @@ export const BUNDLED_PLUGIN_BUILD_ENV_NAMES = [
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]*$/u;
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
-const toPosixPath = (value) => value.replaceAll("\\", "/");
+const toPosixPath = (value) => value.replaceAll(path.sep, "/");
 
 function parseBundledPluginBuildIdFilter(env = process.env) {
   const raw = env[BUNDLED_PLUGIN_BUILD_IDS_ENV];
@@ -116,8 +115,35 @@ function isExcludedTopLevelPublicSurfaceFile(fileName) {
   );
 }
 
-/** Collect plugin source entry files declared by package export metadata. */
-export function collectPluginSourceEntries(packageJson) {
+function isTopLevelPublicSurfaceFile(fileName) {
+  return (
+    !fileName.includes("/") &&
+    TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(path.extname(fileName)) &&
+    !isExcludedTopLevelPublicSurfaceFile(fileName)
+  );
+}
+
+const CATALOG_ENTRY_FIELDS = ["providerCatalogEntry", "capabilityCatalogEntry"];
+
+function collectPluginCatalogSourceEntries(manifest) {
+  return CATALOG_ENTRY_FIELDS.map((field) => manifest[field]).filter(
+    (entry) => typeof entry === "string" && entry.trim().length > 0,
+  );
+}
+
+/** Keep catalog declarations aligned with the artifact owner that emits their modules. */
+export function mapPluginCatalogEntries(manifest, mapEntry) {
+  const result = { ...manifest };
+  for (const field of CATALOG_ENTRY_FIELDS) {
+    if (typeof manifest[field] === "string") {
+      result[field] = mapEntry(manifest[field]);
+    }
+  }
+  return result;
+}
+
+/** Collect plugin source entry files declared by package and manifest metadata. */
+export function collectPluginSourceEntries(packageJson, manifest = {}) {
   let packageEntries = Array.isArray(packageJson?.openclaw?.extensions)
     ? packageJson.openclaw.extensions.filter(
         (entry) => typeof entry === "string" && entry.trim().length > 0,
@@ -131,7 +157,17 @@ export function collectPluginSourceEntries(packageJson) {
   if (setupEntry) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
-  return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
+  return [
+    ...new Set([
+      ...(packageEntries.length > 0 ? packageEntries : ["./index.ts"]),
+      ...collectPluginCatalogSourceEntries(manifest),
+      ...(Array.isArray(packageJson?.openclaw?.build?.workerEntries)
+        ? packageJson.openclaw.build.workerEntries.filter(
+            (entry) => typeof entry === "string" && entry.trim().length > 0,
+          )
+        : []),
+    ]),
+  ];
 }
 
 /** Select typed plugin contracts, not runtime loader sidecars or implementation helpers. */
@@ -159,50 +195,23 @@ export function collectTopLevelPublicSurfaceEntries(pluginDir) {
     return [];
   }
 
-  return fs
-    .readdirSync(pluginDir, { withFileTypes: true })
-    .flatMap((dirent) => {
-      if (!dirent.isFile()) {
-        return [];
-      }
-
-      const ext = path.extname(dirent.name);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(dirent.name)) {
-        return [];
-      }
-
-      return [`./${dirent.name}`];
-    })
-    .toSorted((left, right) => left.localeCompare(right));
+  return collectTopLevelPublicSurfaceEntriesFromFiles(
+    fs
+      .readdirSync(pluginDir, { withFileTypes: true })
+      .filter((dirent) => dirent.isFile())
+      .map((dirent) => dirent.name),
+  );
 }
 
 function collectTopLevelPublicSurfaceEntriesFromFiles(relativeFiles) {
   return relativeFiles
-    .flatMap((relativeFile) => {
-      if (relativeFile.includes("/")) {
-        return [];
-      }
-
-      const ext = path.extname(relativeFile);
-      if (!TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS.has(ext)) {
-        return [];
-      }
-
-      if (isExcludedTopLevelPublicSurfaceFile(relativeFile)) {
-        return [];
-      }
-
-      return [`./${relativeFile}`];
-    })
+    .filter(isTopLevelPublicSurfaceFile)
+    .map((relativeFile) => `./${relativeFile}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectTrackedBundledPluginFiles(cwd) {
-  const result = spawnSync("git", ["ls-files", "--", BUNDLED_PLUGIN_ROOT_DIR], {
+  const result = spawnSync("git", ["ls-files", "-z", "--", BUNDLED_PLUGIN_ROOT_DIR], {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
@@ -211,18 +220,30 @@ function collectTrackedBundledPluginFiles(cwd) {
     return null;
   }
   const filesByPlugin = new Map();
-  for (const rawLine of result.stdout.split("\n")) {
-    const line = toPosixPath(rawLine.trim());
-    if (!fs.existsSync(path.join(cwd, line))) {
+  const prefix = `${BUNDLED_PLUGIN_ROOT_DIR}/`;
+  for (const file of result.stdout.split("\0")) {
+    if (!file.startsWith(prefix)) {
       continue;
     }
-    const match = new RegExp(`^${BUNDLED_PLUGIN_ROOT_DIR}/([^/]+)/(.+)$`).exec(line);
-    if (!match) {
+    const separator = file.indexOf("/", prefix.length);
+    if (separator === -1) {
       continue;
     }
-    const [, dirName, relativeFile] = match;
+    const dirName = file.slice(prefix.length, separator);
+    const relativeFile = file.slice(separator + 1);
+    const relevant =
+      relativeFile === "package.json" ||
+      relativeFile === "openclaw.plugin.json" ||
+      isTopLevelPublicSurfaceFile(relativeFile);
+    // Any existing tracked file establishes a known plugin directory. Once known,
+    // only metadata and top-level entry files affect its build inventory.
+    if ((!relevant && filesByPlugin.has(dirName)) || !fs.existsSync(path.join(cwd, file))) {
+      continue;
+    }
     const files = filesByPlugin.get(dirName) ?? [];
-    files.push(relativeFile);
+    if (relevant) {
+      files.push(relativeFile);
+    }
     filesByPlugin.set(dirName, files);
   }
 
@@ -257,13 +278,24 @@ function collectBundledPluginCandidates(cwd, extensionsRoot) {
     .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
 
+/** Share raw source discovery within one config evaluation; policy reads stay independent. */
+export function createBundledPluginBuildInventory(cwd = process.cwd()) {
+  let candidates;
+  return {
+    cwd,
+    getCandidates: () =>
+      (candidates ??= collectBundledPluginCandidates(cwd, path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR))),
+  };
+}
+
 /** Collect all bundled plugin build entries for the current checkout. */
 export function collectBundledPluginBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const env = params.env ?? process.env;
   const extensionsRoot = path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR);
   const dockerSelectedBuildIds = parseDockerSelectedPluginBuildIdFilter(env);
-  const candidates = collectBundledPluginCandidates(cwd, extensionsRoot);
+  const candidates =
+    params.getCandidates?.() ?? collectBundledPluginCandidates(cwd, extensionsRoot);
   const entries = [];
 
   for (const candidate of candidates) {
@@ -300,14 +332,16 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
 
+    const manifest = hasManifest ? JSON.parse(fs.readFileSync(manifestPath, "utf8")) : {};
     entries.push({
       id: dirName,
       hasManifest,
       hasPackageJson: packageJson !== null,
       packageJson,
+      catalogSourceEntries: collectPluginCatalogSourceEntries(manifest),
       sourceEntries: Array.from(
         new Set([
-          ...(hasManifest ? collectPluginSourceEntries(packageJson) : []),
+          ...(hasManifest ? collectPluginSourceEntries(packageJson, manifest) : []),
           ...topLevelPublicSurfaceEntries,
         ]),
       ),
@@ -371,31 +405,45 @@ export function collectSourceCheckoutPluginBuildEntries(params = {}) {
     });
 }
 
-/** Retain channel config migrations with core schemas, independently of plugin installation. */
-export function collectChannelConfigDoctorBuildEntries(params = {}) {
+/** Retain plugin-owned Doctor checks independently of runtime installation. */
+export function collectRetainedDoctorBuildEntries(params = {}) {
   const cwd = params.cwd ?? process.cwd();
   const entries = {};
-  for (const { pluginDir } of collectBundledPluginCandidates(
-    cwd,
-    path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR),
-  )) {
+  const candidates =
+    params.getCandidates?.() ??
+    collectBundledPluginCandidates(cwd, path.join(cwd, BUNDLED_PLUGIN_ROOT_DIR));
+  for (const { pluginDir } of candidates) {
     const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
     if (!fs.existsSync(manifestPath)) {
       continue;
     }
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    if (manifest.doctorContract?.configRepair !== true || !manifest.channels?.length) {
+    const stateRetention = params.surface === "state-retention";
+    const ids = stateRetention
+      ? Array.isArray(manifest.doctorContract?.stateMigrations)
+        ? [manifest.id]
+        : []
+      : manifest.doctorContract?.configRepair === true
+        ? (manifest.channels ?? [])
+        : [];
+    if (!ids.length) {
       continue;
     }
-    const source = path.join(pluginDir, "config-doctor-api.ts");
+    const source = path.join(
+      pluginDir,
+      `${stateRetention ? "state-retention" : "config-doctor"}-api.ts`,
+    );
     if (!fs.existsSync(source)) {
+      if (stateRetention) {
+        continue;
+      }
       throw new Error(`Missing config-only doctor entrypoint: ${source}`);
     }
-    for (const channelId of manifest.channels) {
-      if (!PLUGIN_ID_RE.test(channelId) || entries[channelId]) {
-        throw new Error(`Invalid or duplicate config doctor channel: ${channelId}`);
+    for (const id of ids) {
+      if (!PLUGIN_ID_RE.test(id) || entries[id]) {
+        throw new Error(`Invalid or duplicate retained Doctor owner: ${id}`);
       }
-      entries[channelId] = toPosixPath(path.relative(cwd, source));
+      entries[id] = toPosixPath(path.relative(cwd, source));
     }
   }
   return entries;

@@ -1,4 +1,4 @@
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveGlobalMap, resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { BrowserTabOwnership } from "./client.types.js";
 import { clearVolatileTabAliases } from "./session-tab-ephemeral-aliases.js";
 import { browserSessionTabRouteKey, type BrowserSessionTabRoute } from "./session-tab-route.js";
@@ -18,10 +18,6 @@ export type VolatileSessionTab = SessionTabInteractionIdentity & {
   trackedAt: number;
   lastUsedAt: number;
 };
-
-export function normalizeBrowserSessionKey(value: string | undefined): string | undefined {
-  return normalizeOptionalLowercaseString(value);
-}
 
 export function volatileSessionTabTargetKey(
   identity: Pick<SessionTabInteractionIdentity, "targetId" | "route" | "profile">,
@@ -49,19 +45,11 @@ const coldNativeActivityStateSymbol = Symbol.for(
 );
 
 export function activeDurableStorageKeys(): Set<string> {
-  const state = globalThis as typeof globalThis & {
-    [activeDurableStateSymbol]?: Set<string>;
-  };
-  state[activeDurableStateSymbol] ??= new Set();
-  return state[activeDurableStateSymbol];
+  return resolveGlobalSingleton(activeDurableStateSymbol, () => new Set<string>());
 }
 
 export function volatileTabsBySession(): Map<string, Map<string, VolatileSessionTab>> {
-  const state = globalThis as typeof globalThis & {
-    [volatileStateSymbol]?: Map<string, Map<string, VolatileSessionTab>>;
-  };
-  state[volatileStateSymbol] ??= new Map();
-  return state[volatileStateSymbol];
+  return resolveGlobalMap(volatileStateSymbol);
 }
 
 type VolatileTabCleanup = {
@@ -71,11 +59,7 @@ type VolatileTabCleanup = {
 
 /** Keeps one in-flight volatile target close shared across Browser plugin bundles. */
 export function volatileTabCleanupByTarget(): Map<string, VolatileTabCleanup> {
-  const state = globalThis as typeof globalThis & {
-    [volatileCleanupStateSymbol]?: Map<string, VolatileTabCleanup>;
-  };
-  state[volatileCleanupStateSymbol] ??= new Map();
-  return state[volatileCleanupStateSymbol];
+  return resolveGlobalMap(volatileCleanupStateSymbol);
 }
 
 export function volatileRegistrationsForTarget(targetKey: string): VolatileSessionTab[] {
@@ -111,11 +95,7 @@ export function deleteVolatileSessionTab(sessionKey: string, tabKey: string): vo
 }
 
 function coldNativeActivity(): Map<string, number> {
-  const state = globalThis as typeof globalThis & {
-    [coldNativeActivityStateSymbol]?: Map<string, number>;
-  };
-  state[coldNativeActivityStateSymbol] ??= new Map();
-  return state[coldNativeActivityStateSymbol];
+  return resolveGlobalMap(coldNativeActivityStateSymbol);
 }
 
 export function rememberColdNativeActivity(identity: string, now: number): void {

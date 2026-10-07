@@ -14,6 +14,7 @@ import type { SessionMcpRequesterScope } from "./agent-bundle-mcp-types.js";
 import { resolveMcpAuthProfileId, withMcpAuthProfileBearer } from "./mcp-auth-profile.js";
 import {
   buildMcpHttpFetch,
+  buildMcpOAuthHttpFetch,
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
@@ -136,6 +137,13 @@ export function resolveMcpTransport(
   if (!resolved) {
     return null;
   }
+  const metadata = {
+    description: resolved.description,
+    transportType: resolved.transportType,
+    connectionTimeoutMs: resolved.connectionTimeoutMs,
+    requestTimeoutMs: resolved.requestTimeoutMs,
+    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+  };
   if (resolved.kind === "stdio") {
     const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
@@ -147,11 +155,7 @@ export function resolveMcpTransport(
     });
     return {
       transport,
-      description: resolved.description,
-      transportType: "stdio",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -197,8 +201,17 @@ export function resolveMcpTransport(
       ? withMcpOAuthBearer({
           fetchFn: resourceFetch,
           // Protected-resource discovery lives at the resource origin and may
-          // require the same routing headers. Cross-origin auth calls stay scrubbed.
-          authFetchFn: resourceFetch,
+          // require the same routing headers. Resource requests intentionally retain
+          // redirect-body replay for MCP compatibility, while credential-bearing
+          // auth redirects use the stricter fail-closed policy.
+          authFetchFn: buildMcpOAuthHttpFetch({
+            sslVerify: resolved.sslVerify,
+            clientCert: resolved.clientCert,
+            clientKey: resolved.clientKey,
+            resourceUrl: resolved.url,
+            timeoutMs: resolved.requestTimeoutMs,
+            headers,
+          }),
           identity: oauthIdentity,
           config: resolved.oauth,
         })
@@ -209,11 +222,7 @@ export function resolveMcpTransport(
         requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
         fetch: httpFetch,
       }),
-      description: resolved.description,
-      transportType: "streamable-http",
-      connectionTimeoutMs: resolved.connectionTimeoutMs,
-      requestTimeoutMs: resolved.requestTimeoutMs,
-      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      ...metadata,
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
@@ -226,10 +235,6 @@ export function resolveMcpTransport(
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),
       },
     }),
-    description: resolved.description,
-    transportType: "sse",
-    connectionTimeoutMs: resolved.connectionTimeoutMs,
-    requestTimeoutMs: resolved.requestTimeoutMs,
-    supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    ...metadata,
   };
 }

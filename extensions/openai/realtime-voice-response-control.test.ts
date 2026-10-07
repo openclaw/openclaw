@@ -321,7 +321,7 @@ describe("OpenAI realtime voice response control", () => {
         },
       });
       expect(onResponseDone).toHaveBeenCalledOnce();
-      bridge.close();
+      await bridge.close();
     },
   );
 

@@ -1,9 +1,93 @@
 // Native Node callers load this source closure without a TypeScript import resolver.
 import childProcess from "node:child_process";
 import fsSync from "node:fs";
+import { createRequire } from "node:module";
+import { resolveDiagnosticProcessEnv } from "../infra/process-env.ts";
 import { readWindowsProcessStartTimeSync } from "../infra/windows-process-start.ts";
+import { readFreeBsdProcessStartTime } from "./freebsd-process-identity.ts";
 
 const PROCESS_START_TIMEOUT_MS = 1000;
+declare const SEALED_RUNTIME_BUILD: boolean;
+let darwinNative:
+  | {
+      library: import("koffi").LibraryHandle;
+      query: ReturnType<import("koffi").LibraryHandle["func"]>;
+    }
+  | undefined;
+
+function readDarwinNativeIdentity(
+  pid: number,
+): { parentPid: number; startedAt: number; microseconds: number } | null {
+  if (
+    process.platform !== "darwin" ||
+    // Koffi calls segfault the x86_64 worker under Rosetta, where release packaging
+    // proves it; Intel keeps the bounded ps path it used before this native query.
+    process.arch !== "arm64" ||
+    pid > 0x7fffffff ||
+    (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD)
+  ) {
+    return null;
+  }
+  try {
+    if (!darwinNative) {
+      const koffi: typeof import("koffi").default = createRequire(import.meta.url)("koffi");
+      const library = koffi.load("/usr/lib/libproc.dylib");
+      const query = library.func(
+        "int proc_pidinfo(int pid, int flavor, uint64_t arg, _Out_ void *buffer, int buffersize)",
+      );
+      darwinNative = { library, query };
+    }
+    // Darwin's public PROC_PIDTBSDINFO ABI is 136 bytes on arm64.
+    // Query every foreign PID afresh; only the callable and its library are retained.
+    const bytes = Buffer.alloc(136);
+    if (darwinNative.query(pid, 3, 0, bytes, bytes.length) !== bytes.length) {
+      return null;
+    }
+    const parentPid = bytes.readUInt32LE(16);
+    const seconds = bytes.readBigUInt64LE(120);
+    const microseconds = bytes.readBigUInt64LE(128);
+    if (
+      bytes.readUInt32LE(12) !== pid ||
+      parentPid > 0x7fffffff ||
+      seconds === 0n ||
+      seconds > BigInt(Number.MAX_SAFE_INTEGER) ||
+      microseconds >= 1_000_000n
+    ) {
+      return null;
+    }
+    // Published Darwin leases use ps lstart's epoch seconds, not microseconds.
+    return { parentPid, startedAt: Number(seconds), microseconds: Number(microseconds) };
+  } catch {
+    // Missing native packages and denied queries retain the existing bounded ps path.
+    return null;
+  }
+}
+// Bound corrupted/cyclic ancestry while allowing nested service supervisors.
+export const MAX_ANCESTOR_WALK_DEPTH = 32;
+
+/** Project a best-effort ancestor chain without deciding liveness or authority. */
+export function collectProcessAncestorPids(
+  immediateParent: number,
+  readParentPid: (pid: number) => number | null,
+  throughPid?: number,
+): Set<number> {
+  const pids = new Set<number>([process.pid]);
+  if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
+    return pids;
+  }
+  pids.add(immediateParent);
+  let current = immediateParent;
+  for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH && current !== throughPid; depth++) {
+    const parent = readParentPid(current);
+    if (parent == null || parent <= 0 || pids.has(parent)) {
+      break;
+    }
+    pids.add(parent);
+    current = parent;
+  }
+  return pids;
+}
+
 // Cache only a successful self read: this identity lasts for the process.
 // Failed reads must retry, and foreign PIDs must stay fresh to detect PID reuse.
 let selfStartTime: number | null = null;
@@ -13,23 +97,37 @@ function isValidPid(pid: number): boolean {
 }
 
 /**
- * Check if a process is a zombie on Linux by reading /proc/<pid>/status.
- * Returns false on non-Linux platforms or if the proc file can't be read.
+ * Check whether a Linux task is terminal and has no live sibling threads.
+ * Missing or reaped procfs snapshots require a fresh existence probe.
  */
-function isZombieProcess(pid: number): boolean {
+function isExitedLinuxProcess(pid: number): boolean {
   if (process.platform !== "linux") {
     return false;
   }
   try {
     const status = fsSync.readFileSync(`/proc/${pid}/status`, "utf8");
-    const stateMatch = status.match(/^State:\s+(\S)/m);
-    return stateMatch?.[1] === "Z";
+    const state = status.match(/^State:\s+(\S)/m)?.[1];
+    const threads = status.match(/^Threads:[ \t]+(\d+)[ \t]*$/m)?.[1];
+    if (threads !== "0") {
+      // pthread_exit can leave a terminal leader with live workers. Reaping also
+      // moves the last retained task from Z to X before removing its PID.
+      return (state === "Z" || state === "X") && threads === "1";
+    }
   } catch {
-    return false;
+    // Reaping can remove procfs after the caller's existence probe.
   }
+  // A successful read can outlive the task's signal metadata and report zero
+  // threads. PID reuse or a nonleader exec can still leave a live current owner.
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    // SAFETY: Node's process.kill reports syscall failures as ErrnoException.
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
+  return false;
 }
 
-/** Returns true only when a positive PID exists and is not a Linux zombie process. */
+/** Returns true only when a positive PID exists and is not a known terminal Linux task. */
 export function isPidAlive(pid: number): boolean {
   if (!isValidPid(pid)) {
     return false;
@@ -44,10 +142,10 @@ export function isPidAlive(pid: number): boolean {
       return false;
     }
   }
-  return !isZombieProcess(pid);
+  return !isExitedLinuxProcess(pid);
 }
 
-/** Returns true only when the PID is invalid, missing, or known to be a Linux zombie. */
+/** Returns true only when the PID is invalid, missing, or a known terminal Linux task. */
 export function isPidDefinitelyDead(pid: number): boolean {
   if (!isValidPid(pid)) {
     return true;
@@ -57,17 +155,34 @@ export function isPidDefinitelyDead(pid: number): boolean {
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "ESRCH";
   }
-  return isZombieProcess(pid);
+  return isExitedLinuxProcess(pid);
 }
 
-function getDarwinProcessStartTime(pid: number): number | null {
+function getDarwinProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv,
+  timeoutMs?: number,
+): number | null {
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return native.startedAt;
+  }
+  // The default bounds ps itself; explicit deadlines also pay for native loading.
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
   try {
     const startedAt = childProcess
       .execFileSync("/bin/ps", ["-o", "lstart=", "-p", String(pid)], {
         encoding: "utf8",
-        env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
         stdio: ["ignore", "pipe", "ignore"],
-        timeout: PROCESS_START_TIMEOUT_MS,
+        timeout: remainingMs,
         killSignal: "SIGKILL",
       })
       .trim();
@@ -75,6 +190,68 @@ function getDarwinProcessStartTime(pid: number): number | null {
     // a system timezone change cannot make a live lock owner look like PID reuse.
     const startedAtMs = Date.parse(`${startedAt} UTC`);
     return Number.isFinite(startedAtMs) ? Math.floor(startedAtMs / 1000) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read one Darwin PID's parent and birth together, without enumerating unrelated processes. */
+export function readDarwinProcessIdentity(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs?: number,
+): { parentPid: number; startedAt: number } | null {
+  if (process.platform !== "darwin" || !isValidPid(pid)) {
+    return null;
+  }
+  const started = performance.now();
+  const native = readDarwinNativeIdentity(pid);
+  if (native) {
+    return { parentPid: native.parentPid, startedAt: native.startedAt };
+  }
+  const remainingMs =
+    timeoutMs === undefined
+      ? PROCESS_START_TIMEOUT_MS
+      : Math.ceil(timeoutMs - (performance.now() - started));
+  if (remainingMs <= 0) {
+    return null;
+  }
+  try {
+    const stdout = childProcess.execFileSync(
+      "/bin/ps",
+      ["-o", "pid=,ppid=,lstart=", "-p", String(pid)],
+      {
+        encoding: "utf8",
+        env: { ...resolveDiagnosticProcessEnv(env), LC_ALL: "C", TZ: "UTC" },
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: remainingMs,
+        killSignal: "SIGKILL",
+        maxBuffer: 4096,
+      },
+    );
+    // A complete single-PID record is required; truncated or extra rows are unknown.
+    if (!stdout.endsWith("\n") || /[\r\n]/.test(stdout.slice(0, -1))) {
+      return null;
+    }
+    const match =
+      /^[ \t]*(\d+)[ \t]+(\d+)[ \t]+(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) +(\d{1,2}) (\d{2}:\d{2}:\d{2}) (\d{4})[ \t]*$/.exec(
+        stdout.slice(0, -1),
+      );
+    if (!match || Number(match[1]) !== pid || match[5] === undefined) {
+      return null;
+    }
+    const parentPid = Number(match[2]);
+    const date = `${match[3]}, ${match[5].padStart(2, "0")} ${match[4]} ${match[7]} ${match[6]} GMT`;
+    const startedAtMs = Date.parse(date);
+    if (
+      !Number.isSafeInteger(parentPid) ||
+      parentPid < 0 ||
+      !Number.isFinite(startedAtMs) ||
+      new Date(startedAtMs).toUTCString() !== date
+    ) {
+      return null;
+    }
+    return { parentPid, startedAt: Math.floor(startedAtMs / 1000) };
   } catch {
     return null;
   }
@@ -103,8 +280,29 @@ export function getProcessStartTime(pid: number): number | null {
   }
 }
 
+/** Custody recovery needs native birth precision rather than the shipped lease timestamp format. */
+export function getProcessInstanceStartTime(pid: number): number | null {
+  if (!isValidPid(pid)) {
+    return null;
+  }
+  if (process.platform === "linux") {
+    const startedAt = getProcessStartTime(pid);
+    return Number.isSafeInteger(startedAt) ? startedAt : null;
+  }
+  const native = readDarwinNativeIdentity(pid);
+  if (!native) {
+    return null;
+  }
+  const startedAt = native.startedAt * 1_000_000 + native.microseconds;
+  return Number.isSafeInteger(startedAt) ? startedAt : null;
+}
+
 /** Read a cross-platform process identity for filesystem lock ownership. */
-export function getFileLockProcessStartTime(pid: number): number | null {
+export function getFileLockProcessStartTime(
+  pid: number,
+  env: NodeJS.ProcessEnv = process.env,
+  timeoutMs?: number,
+): number | null {
   if (!isValidPid(pid)) {
     return null;
   }
@@ -114,10 +312,12 @@ export function getFileLockProcessStartTime(pid: number): number | null {
   }
   const startTime =
     process.platform === "darwin"
-      ? getDarwinProcessStartTime(pid)
+      ? getDarwinProcessStartTime(pid, env, timeoutMs)
       : process.platform === "win32"
-        ? readWindowsProcessStartTimeSync(pid)
-        : getProcessStartTime(pid);
+        ? readWindowsProcessStartTimeSync(pid, timeoutMs, env)
+        : process.platform === "freebsd"
+          ? readFreeBsdProcessStartTime(pid)
+          : getProcessStartTime(pid);
   if (isSelf && startTime !== null) {
     selfStartTime = startTime;
   }

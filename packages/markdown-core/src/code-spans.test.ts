@@ -1,5 +1,30 @@
 import { describe, expect, it } from "vitest";
-import { findMarkdownCodeSpans } from "./reasoning-tags.js";
+import { buildCodeSpanIndex } from "./code-spans.js";
+import { findMarkdownCodeRegions, findMarkdownCodeSpans } from "./reasoning-tags.js";
+
+describe("buildCodeSpanIndex", () => {
+  it("supports backward queries over inline code that encloses a fence", () => {
+    const text = "`open\n~~~\ninside\n~~~\nafter` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.length, text.indexOf("after"), text.indexOf("~~~"), 0, text.indexOf("tail")].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, true, false]);
+  });
+
+  it("includes opening delimiters and excludes ends in either query direction", () => {
+    const text = "~~~\nfenced\n~~~\n`inline` tail";
+    const index = buildCodeSpanIndex(text);
+
+    expect(
+      [text.lastIndexOf("`") + 1, 0, text.indexOf("`"), text.lastIndexOf("~~~") + 3, 0].map(
+        index.isInside,
+      ),
+    ).toEqual([false, true, true, false, true]);
+  });
+});
 
 describe("markdown-core code spans", () => {
   function expectCodeRegionSlices(text: string, expectedSlices: readonly string[]) {
@@ -108,6 +133,45 @@ describe("markdown-core code spans", () => {
     },
   ] as const)("follows CommonMark block ownership: $name", ({ text, expectedSlices }) => {
     expectCodeRegionSlices(text, expectedSlices);
+  });
+
+  it.each([
+    { text: "    A\n\n    B", value: "A\n\nB", nested: false },
+    { text: "\t  A\n\n\tB", value: "  A\n\nB", nested: false },
+    { text: ">     A\n>\n>     B", value: "A\n\nB", nested: true },
+    { text: "- item\n\n      A\n\n      B", value: "A\n\nB", nested: true },
+  ])(
+    "maps authored indented content without container syntax: $text",
+    ({ text, value, nested }) => {
+      const ordinary = findMarkdownCodeRegions(text);
+      const regions = findMarkdownCodeRegions(text, { includeIndentedSource: true });
+      expect(regions.map(({ start, end, block }) => ({ start, end, block }))).toEqual(ordinary);
+      expect(regions).toHaveLength(1);
+      const region = regions[0];
+      if (!region?.indentedSource) {
+        throw new Error("Expected parser-owned indented source metadata");
+      }
+      const source = region.indentedSource;
+      expect(source.value).toBe(value);
+      expect(source.nested).toBe(nested);
+      for (const character of ["A", "B"]) {
+        const at = text.indexOf(character) - region.start;
+        expect(source.value.slice(source.offsets[at], source.offsets[at + 1])).toBe(character);
+      }
+    },
+  );
+
+  it("retains inline source ownership when indented source mapping is also requested", () => {
+    const text = "Use `A\nB` here.\n\n    C";
+    const inline = findMarkdownCodeRegions(text, { includeSource: true }).filter(
+      (region) => !region.block,
+    );
+    expect(
+      findMarkdownCodeRegions(text, {
+        includeSource: true,
+        includeIndentedSource: true,
+      }).filter((region) => !region.block),
+    ).toEqual(inline);
   });
 
   it("walks deeply nested Markdown without exhausting the JavaScript stack", () => {

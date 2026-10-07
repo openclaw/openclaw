@@ -38,15 +38,6 @@ struct DashboardNotificationsSnapshot: Encodable, Equatable {
     let test: TestNotificationOutcome?
 }
 
-@MainActor
-final class DashboardNotificationsMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var owner: DashboardWindowController?
-
-    func userContentController(_: WKUserContentController, didReceive message: WKScriptMessage) {
-        self.owner?.receiveNotificationsMessage(message)
-    }
-}
-
 extension DashboardWindowController {
     static let notificationsMessageHandlerName = "openclawNotifications"
 
@@ -79,7 +70,7 @@ extension DashboardWindowController {
         guard message.name == Self.notificationsMessageHandlerName,
               message.webView === self.webView,
               message.frameInfo.isMainFrame,
-              Self.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
+              ControlUIDocumentHost.isTrustedLinkSource(message.frameInfo.request.url, dashboardURL: self.currentURL)
         else {
             return
         }
@@ -122,13 +113,6 @@ extension DashboardWindowController {
         }
     }
 
-    static func notificationsSnapshot(
-        permission: String,
-        testOutcome: TestNotificationOutcome?) -> DashboardNotificationsSnapshot
-    {
-        DashboardNotificationsSnapshot(permission: permission, test: testOutcome)
-    }
-
     private func refreshNotificationsPermission() async {
         guard PermissionManager.notificationCenterAvailable else { return }
         let settings = await UNUserNotificationCenter.current().notificationSettings()
@@ -139,14 +123,13 @@ extension DashboardWindowController {
     private func publishNotificationsStatus() async {
         // Honest absence beats a fabricated status when the process is unbundled.
         guard PermissionManager.notificationCenterAvailable else { return }
-        let snapshot = Self.notificationsSnapshot(
+        let snapshot = DashboardNotificationsSnapshot(
             permission: self.notificationPermission,
-            testOutcome: self.notificationTestOutcome)
-        guard let data = try? JSONEncoder().encode(snapshot),
-              let json = String(data: data, encoding: .utf8)
-        else { return }
+            test: self.notificationTestOutcome)
+        guard let data = try? JSONEncoder().encode(snapshot) else { return }
+        let json = String(bytes: data, encoding: .utf8)!
         // Keep a global snapshot so late subscribers can read status without a bridge round-trip.
-        _ = try? await self.webView.evaluateJavaScript(Self.scopedDashboardScript(
+        _ = try? await self.webView.evaluateJavaScript(ControlUIDocumentHost.scopedDashboardScript(
             """
             window.__OPENCLAW_NATIVE_NOTIFICATIONS__ = \(json);
             window.dispatchEvent(new CustomEvent('openclaw:native-notifications-status', \

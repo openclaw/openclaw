@@ -1,6 +1,7 @@
 // Tests execution approval policy matching and persistence.
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
@@ -17,11 +18,8 @@ let collectExecPolicyScopeSnapshots: typeof import("./exec-approvals-effective.j
 let resolveExecPolicyScopeSnapshot: typeof import("./exec-approvals-effective.js").resolveExecPolicyScopeSnapshot;
 let evaluateExecAllowlist: typeof import("./exec-approvals.js").evaluateExecAllowlist;
 let hasDurableExecApproval: typeof import("./exec-approvals.js").hasDurableExecApproval;
-let maxAsk: typeof import("./exec-approvals.js").maxAsk;
-let minSecurity: typeof import("./exec-approvals.js").minSecurity;
 let requireValidExecTarget: typeof import("./exec-approvals.js").requireValidExecTarget;
 let normalizeExecAsk: typeof import("./exec-approvals.js").normalizeExecAsk;
-let normalizeExecHost: typeof import("./exec-approvals.js").normalizeExecHost;
 let normalizeExecMode: typeof import("./exec-approvals.js").normalizeExecMode;
 let normalizeExecTarget: typeof import("./exec-approvals.js").normalizeExecTarget;
 let normalizeExecSecurity: typeof import("./exec-approvals.js").normalizeExecSecurity;
@@ -30,6 +28,7 @@ let normalizeExecApprovalUnavailableDecisions: typeof import("./exec-approvals.j
 let resolveExecApprovalUnavailableDecisions: typeof import("./exec-approvals.js").resolveExecApprovalUnavailableDecisions;
 let resolveExecApprovalRequestAllowedDecisions: typeof import("./exec-approvals.js").resolveExecApprovalRequestAllowedDecisions;
 let resolveExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExecModeFromPolicy;
+let resolveExactExecModeFromPolicy: typeof import("./exec-approvals.js").resolveExactExecModeFromPolicy;
 let resolveExecModePolicy: typeof import("./exec-approvals.js").resolveExecModePolicy;
 let resolveExecPolicyForMode: typeof import("./exec-approvals.js").resolveExecPolicyForMode;
 
@@ -44,11 +43,8 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecPolicyScopeSnapshot = effective.resolveExecPolicyScopeSnapshot;
   evaluateExecAllowlist = execApprovals.evaluateExecAllowlist;
   hasDurableExecApproval = execApprovals.hasDurableExecApproval;
-  maxAsk = execApprovals.maxAsk;
-  minSecurity = execApprovals.minSecurity;
   requireValidExecTarget = execApprovals.requireValidExecTarget;
   normalizeExecAsk = execApprovals.normalizeExecAsk;
-  normalizeExecHost = execApprovals.normalizeExecHost;
   normalizeExecMode = execApprovals.normalizeExecMode;
   normalizeExecTarget = execApprovals.normalizeExecTarget;
   normalizeExecSecurity = execApprovals.normalizeExecSecurity;
@@ -59,6 +55,7 @@ async function loadActualExecApprovalModules(): Promise<void> {
   resolveExecApprovalRequestAllowedDecisions =
     execApprovals.resolveExecApprovalRequestAllowedDecisions;
   resolveExecModeFromPolicy = execApprovals.resolveExecModeFromPolicy;
+  resolveExactExecModeFromPolicy = execApprovals.resolveExactExecModeFromPolicy;
   resolveExecModePolicy = execApprovals.resolveExecModePolicy;
   resolveExecPolicyForMode = execApprovals.resolveExecPolicyForMode;
 }
@@ -72,13 +69,7 @@ function summarizeExecPolicyScopeSnapshot(
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected fields object");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
+  expect(value).toEqual(expect.objectContaining(expected));
 }
 
 function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
@@ -98,7 +89,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
     globalExecConfig: {
       ask: "off",
     },
-    configPath: "agents.list.runner.tools.exec",
+    configPath: "agents.entries.runner.tools.exec",
     scopeLabel: "agent:runner",
     agentId: "runner",
   });
@@ -116,15 +107,6 @@ describe("exec approvals policy helpers", () => {
   beforeAll(async () => {
     // Reload once to isolate this suite from facade mocks left by other test files.
     await loadActualExecApprovalModules();
-  });
-
-  it.each([
-    { raw: " gateway ", expected: "gateway" },
-    { raw: "NODE", expected: "node" },
-    { raw: "", expected: null },
-    { raw: "ssh", expected: null },
-  ])("normalizes exec host value %j", ({ raw, expected }) => {
-    expect(normalizeExecHost(raw)).toBe(expected);
   });
 
   it.each([
@@ -191,6 +173,21 @@ describe("exec approvals policy helpers", () => {
     { security: "full" as const, ask: "always" as const, expected: "ask" as const },
   ])("derives normalized exec mode from legacy policy %j", ({ security, ask, expected }) => {
     expect(resolveExecModeFromPolicy({ security, ask })).toBe(expected);
+  });
+
+  it.each([
+    { security: "deny" as const, ask: "off" as const, expected: "deny" as const },
+    { security: "deny" as const, ask: "on-miss" as const, expected: "deny" as const },
+    { security: "allowlist" as const, ask: "off" as const, expected: "allowlist" as const },
+    { security: "allowlist" as const, ask: "on-miss" as const, expected: "ask" as const },
+    { security: "full" as const, ask: "off" as const, expected: "full" as const },
+    // Only the retired pair can express these postures; migration and hints must not widen them.
+    { security: "full" as const, ask: "on-miss" as const, expected: null },
+    { security: "deny" as const, ask: "always" as const, expected: null },
+    { security: "allowlist" as const, ask: "always" as const, expected: null },
+    { security: "full" as const, ask: "always" as const, expected: null },
+  ])("resolves the exact exec mode for legacy policy %j", ({ security, ask, expected }) => {
+    expect(resolveExactExecModeFromPolicy({ security, ask })).toBe(expected);
   });
 
   it.each([
@@ -265,30 +262,6 @@ describe("exec approvals policy helpers", () => {
         allowAlwaysPersistence: { kind: "one-shot", reasons: ["no-reusable-pattern"] },
       }),
     ).toEqual(["allow-always"]);
-  });
-
-  it.each([
-    { left: "deny" as const, right: "full" as const, expected: "deny" as const },
-    {
-      left: "allowlist" as const,
-      right: "full" as const,
-      expected: "allowlist" as const,
-    },
-    {
-      left: "full" as const,
-      right: "allowlist" as const,
-      expected: "allowlist" as const,
-    },
-  ])("minSecurity picks the more restrictive value for %j", ({ left, right, expected }) => {
-    expect(minSecurity(left, right)).toBe(expected);
-  });
-
-  it.each([
-    { left: "off" as const, right: "always" as const, expected: "always" as const },
-    { left: "on-miss" as const, right: "off" as const, expected: "on-miss" as const },
-    { left: "always" as const, right: "on-miss" as const, expected: "always" as const },
-  ])("maxAsk picks the more aggressive ask mode for %j", ({ left, right, expected }) => {
-    expect(maxAsk(left, right)).toBe(expected);
   });
 
   it.each([
@@ -506,7 +479,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -514,12 +487,12 @@ describe("exec approvals policy helpers", () => {
     expectFields(summary.mode, {
       requested: "full",
       requestedSource:
-        "derived from agents.list.runner.tools.exec.security and agents.list.runner.tools.exec.ask",
+        "derived from agents.entries.runner.tools.exec.security and agents.entries.runner.tools.exec.ask",
       effective: "full",
     });
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.entries.runner.tools.exec.security",
       effective: "full",
     });
   });
@@ -535,7 +508,7 @@ describe("exec approvals policy helpers", () => {
       scopeExecConfig: {
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -546,7 +519,7 @@ describe("exec approvals policy helpers", () => {
     });
     expectFields(summary.ask, {
       requested: "off",
-      requestedSource: "agents.list.runner.tools.exec.ask",
+      requestedSource: "agents.entries.runner.tools.exec.ask",
     });
     expectFields(summary.mode, {
       requested: "allowlist",
@@ -565,14 +538,14 @@ describe("exec approvals policy helpers", () => {
       scopeExecConfig: {
         security: "full",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
 
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.entries.runner.tools.exec.security",
     });
     expectFields(summary.ask, {
       requested: "on-miss",
@@ -722,7 +695,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -756,7 +729,7 @@ describe("exec approvals policy helpers", () => {
         security: "full",
         ask: "off",
       },
-      configPath: "agents.list.runner.tools.exec",
+      configPath: "agents.entries.runner.tools.exec",
       scopeLabel: "agent:runner",
       agentId: "runner",
     });
@@ -830,7 +803,7 @@ describe("exec approvals policy helpers", () => {
           },
         },
         agents: {
-          entries: { runner: { default: true } },
+          entries: { runner: {} },
         },
       } satisfies OpenClawConfig,
       approvals: {
@@ -870,7 +843,7 @@ describe("exec approvals policy helpers", () => {
             ask: "off",
           },
         },
-        agents: { entries: { [DEFAULT_AGENT_ID]: { default: true } } },
+        agents: { entries: { [DEFAULT_AGENT_ID]: {} } },
       } satisfies OpenClawConfig,
       approvals: {
         version: 1,
@@ -906,7 +879,6 @@ describe("exec approvals policy helpers", () => {
         agents: {
           entries: {
             [DEFAULT_AGENT_ID]: {
-              default: true,
               tools: {
                 exec: {
                   ask: "always",
@@ -932,8 +904,10 @@ describe("exec approvals policy helpers", () => {
     const snapshots = collectExecPolicyScopeSnapshots({
       cfg: {
         agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
           entries: {
-            main: { default: true },
+            main: {},
             runner: { tools: { exec: { ask: "always" } } },
           },
         },

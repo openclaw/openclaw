@@ -4,8 +4,8 @@ import Foundation
 import Network
 @testable import OpenClawKit
 
-@MainActor
-final class NativeGatewayWebSocketFixture {
+/// Mutable state is confined to queue; test-facing access synchronizes with that queue.
+final class NativeGatewayWebSocketFixture: @unchecked Sendable {
     struct ConnectAuth: Equatable, Sendable {
         let token: String?
         let bootstrapToken: String?
@@ -37,36 +37,39 @@ final class NativeGatewayWebSocketFixture {
 
     private static let websocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     private let listener: NWListener
+    private let queue: DispatchQueue
     private let issuedDeviceTokens: [String?]
     private let connectFailures: [Int: ConnectFailure]
     private var clients: [Int: Client] = [:]
     private var connectAuth: [ConnectAuth] = []
     private var nextConnectionIndex = 0
     private var stopped = false
-    nonisolated let port: UInt16
+    let port: UInt16
 
     private init(
         listener: NWListener,
+        queue: DispatchQueue,
         port: UInt16,
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure])
     {
         self.listener = listener
+        self.queue = queue
         self.port = port
         self.issuedDeviceTokens = issuedDeviceTokens
         self.connectFailures = connectFailures
         self.listener.newConnectionHandler = { [weak self] connection in
-            MainActor.assumeIsolated {
-                guard let self else {
-                    connection.cancel()
-                    return
-                }
-                self.accept(connection)
+            guard let self else {
+                connection.cancel()
+                return
             }
+            self.accept(connection)
         }
     }
 
-    static func start(
+    /// Listener readiness must progress while other tests occupy MainActor.
+    @concurrent
+    nonisolated static func start(
         issuedDeviceTokens: [String?],
         connectFailures: [Int: ConnectFailure] = [:]) async throws -> NativeGatewayWebSocketFixture
     {
@@ -74,30 +77,38 @@ final class NativeGatewayWebSocketFixture {
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let listener = try NWListener(using: parameters, on: .any)
         listener.newConnectionHandler = { $0.cancel() }
-        listener.start(queue: .main)
+        let queue = DispatchQueue(label: "native-gateway-fixture")
+        listener.start(queue: queue)
         do {
             let deadline = ContinuousClock.now + .seconds(5)
-            while ContinuousClock.now < deadline {
+            while true {
                 try Task.checkCancellation()
                 switch listener.state {
                 case .ready:
                     guard let port = listener.port, port.rawValue != 0 else {
                         throw URLError(.cannotFindHost)
                     }
-                    return NativeGatewayWebSocketFixture(
+                    let fixture = NativeGatewayWebSocketFixture(
                         listener: listener,
+                        queue: queue,
                         port: port.rawValue,
                         issuedDeviceTokens: issuedDeviceTokens,
                         connectFailures: connectFailures)
+                    try Task.checkCancellation()
+                    return fixture
                 case let .failed(error):
                     throw error
                 case .cancelled:
                     throw CancellationError()
                 default:
+                    guard ContinuousClock.now < deadline else {
+                        throw URLError(.timedOut, userInfo: [
+                            NSLocalizedDescriptionKey: "Native gateway WebSocket fixture listener timed out: \(listener.state)",
+                        ])
+                    }
                     try await Task.sleep(for: .milliseconds(10))
                 }
             }
-            throw URLError(.timedOut)
         } catch {
             listener.cancel()
             throw error
@@ -109,24 +120,28 @@ final class NativeGatewayWebSocketFixture {
     }
 
     var activeConnectionCount: Int {
-        self.clients.count
+        self.queue.sync { self.clients.count }
     }
 
     func capturedAuth(at index: Int) -> ConnectAuth? {
-        guard self.connectAuth.indices.contains(index) else { return nil }
-        return self.connectAuth[index]
+        self.queue.sync {
+            guard self.connectAuth.indices.contains(index) else { return nil }
+            return self.connectAuth[index]
+        }
     }
 
     func closeConnection(at index: Int) {
-        self.close(index)
+        self.queue.sync { self.close(index) }
     }
 
     func stop() {
-        guard !self.stopped else { return }
-        self.stopped = true
-        self.listener.cancel()
-        for index in Array(self.clients.keys) {
-            self.close(index)
+        self.queue.sync {
+            guard !self.stopped else { return }
+            self.stopped = true
+            self.listener.cancel()
+            for index in Array(self.clients.keys) {
+                self.close(index)
+            }
         }
     }
 
@@ -139,22 +154,20 @@ final class NativeGatewayWebSocketFixture {
         self.nextConnectionIndex += 1
         self.clients[index] = Client(connection: connection)
         connection.stateUpdateHandler = { [weak self] state in
-            MainActor.assumeIsolated {
-                guard let self else {
-                    connection.cancel()
-                    return
-                }
-                switch state {
-                case .ready:
-                    self.receive(index)
-                case .cancelled, .failed:
-                    self.clients[index] = nil
-                default:
-                    break
-                }
+            guard let self else {
+                connection.cancel()
+                return
+            }
+            switch state {
+            case .ready:
+                self.receive(index)
+            case .cancelled, .failed:
+                self.clients[index] = nil
+            default:
+                break
             }
         }
-        connection.start(queue: .main)
+        connection.start(queue: self.queue)
     }
 
     private func receive(_ index: Int) {
@@ -163,18 +176,16 @@ final class NativeGatewayWebSocketFixture {
             minimumIncompleteLength: 1,
             maximumLength: 65536)
         { [weak self] data, _, complete, error in
-            MainActor.assumeIsolated {
-                guard let self, var client = self.clients[index] else { return }
-                if let data {
-                    client.buffer.append(data)
-                    self.clients[index] = client
-                    self.process(index)
-                }
-                if error != nil || complete {
-                    self.close(index)
-                } else if self.clients[index] != nil {
-                    self.receive(index)
-                }
+            guard let self, var client = self.clients[index] else { return }
+            if let data {
+                client.buffer.append(data)
+                self.clients[index] = client
+                self.process(index)
+            }
+            if error != nil || complete {
+                self.close(index)
+            } else if self.clients[index] != nil {
+                self.receive(index)
             }
         }
     }
@@ -221,15 +232,13 @@ final class NativeGatewayWebSocketFixture {
         client.phase = .connect
         self.clients[index] = client
         client.connection.send(content: Data(response.utf8), completion: .contentProcessed { [weak self] error in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                guard error == nil else {
-                    self.close(index)
-                    return
-                }
-                self.sendChallenge(index)
-                self.processFrames(index)
+            guard let self else { return }
+            guard error == nil else {
+                self.close(index)
+                return
             }
+            self.sendChallenge(index)
+            self.processFrames(index)
         })
     }
 
@@ -375,9 +384,7 @@ final class NativeGatewayWebSocketFixture {
         frame.append(payload)
         client.connection.send(content: frame, completion: .contentProcessed { [weak self] error in
             guard error != nil else { return }
-            MainActor.assumeIsolated {
-                self?.close(index)
-            }
+            self?.close(index)
         })
     }
 

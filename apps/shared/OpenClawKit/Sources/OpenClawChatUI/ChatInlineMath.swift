@@ -3,12 +3,8 @@ import SwiftMath
 import SwiftUI
 #if os(macOS)
 import AppKit
-
-typealias ChatInlineMathPlatformImage = NSImage
 #else
 import UIKit
-
-typealias ChatInlineMathPlatformImage = UIImage
 #endif
 
 struct ChatInlineMathSpan {
@@ -33,7 +29,7 @@ enum ChatInlineMathScanner {
         var textStart = markdown.startIndex
         var cursor = markdown.startIndex
         var spanCount = 0
-        let codeSpans = self.confirmedCodeSpans(in: markdown)
+        let codeSpans = ChatMarkdownBlockSyntax.codeSpans(in: markdown, honoringEscapes: true)
         var codeSpanIndex = 0
 
         while cursor < markdown.endIndex {
@@ -46,7 +42,7 @@ enum ChatInlineMathScanner {
             }
 
             guard markdown[cursor...].hasPrefix(#"\("#),
-                  !self.isEscaped(at: cursor, in: markdown)
+                  !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)
             else {
                 cursor = markdown.index(after: cursor)
                 continue
@@ -114,7 +110,7 @@ enum ChatInlineMathScanner {
                 containsNewline = true
             }
             if markdown[cursor...].hasPrefix(#"\)"#),
-               !self.isEscaped(at: cursor, in: markdown)
+               !ChatMarkdownBlockSyntax.isEscaped(at: cursor, in: markdown)
             {
                 return Candidate(
                     closeStart: cursor,
@@ -124,52 +120,6 @@ enum ChatInlineMathScanner {
             cursor = markdown.index(after: cursor)
         }
         return nil
-    }
-
-    private struct BacktickRun {
-        let start: String.Index
-        let end: String.Index
-        let length: Int
-        let canOpen: Bool
-    }
-
-    private static func confirmedCodeSpans(in markdown: String) -> [Range<String.Index>] {
-        var runs: [BacktickRun] = []
-        var cursor = markdown.startIndex
-        while cursor < markdown.endIndex {
-            guard markdown[cursor] == "`" else {
-                cursor = markdown.index(after: cursor)
-                continue
-            }
-            let end = self.endOfBacktickRun(at: cursor, in: markdown)
-            runs.append(BacktickRun(
-                start: cursor,
-                end: end,
-                length: markdown.distance(from: cursor, to: end),
-                canOpen: !self.isEscaped(at: cursor, in: markdown)))
-            cursor = end
-        }
-
-        var nextMatchingRun = [Int?](repeating: nil, count: runs.count)
-        var nextIndexByLength: [Int: Int] = [:]
-        for index in runs.indices.reversed() {
-            nextMatchingRun[index] = nextIndexByLength[runs[index].length]
-            nextIndexByLength[runs[index].length] = index
-        }
-
-        var spans: [Range<String.Index>] = []
-        var index = 0
-        while index < runs.count {
-            guard runs[index].canOpen,
-                  let closeIndex = nextMatchingRun[index]
-            else {
-                index += 1
-                continue
-            }
-            spans.append(runs[index].start..<runs[closeIndex].end)
-            index = closeIndex + 1
-        }
-        return spans
     }
 
     private static func firstCodeSpan(
@@ -187,26 +137,6 @@ enum ChatInlineMathScanner {
             }
         }
         return lower
-    }
-
-    private static func endOfBacktickRun(at start: String.Index, in markdown: String) -> String.Index {
-        var end = start
-        while end < markdown.endIndex, markdown[end] == "`" {
-            end = markdown.index(after: end)
-        }
-        return end
-    }
-
-    private static func isEscaped(at index: String.Index, in markdown: String) -> Bool {
-        var cursor = index
-        var slashCount = 0
-        while cursor > markdown.startIndex {
-            let previous = markdown.index(before: cursor)
-            guard markdown[previous] == "\\" else { break }
-            slashCount += 1
-            cursor = previous
-        }
-        return slashCount.isMultiple(of: 2) == false
     }
 }
 
@@ -286,7 +216,7 @@ enum ChatMathParseCache {
 @MainActor
 enum ChatInlineMathImageCache {
     struct RenderedImage {
-        let image: ChatInlineMathPlatformImage
+        let image: OpenClawPlatformImage
         let baselineOffset: CGFloat
     }
 

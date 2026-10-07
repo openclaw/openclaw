@@ -1,13 +1,48 @@
 import { once } from "node:events";
-import type { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it } from "vitest";
+import type { Worker, WorkerOptions } from "node:worker_threads";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+
+const heartbeatWorkers = vi.hoisted(() => ({
+  beforeCreate: undefined as (() => void) | undefined,
+  onCreate: undefined as ((worker: Worker) => void) | undefined,
+}));
+
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  const [{ runtimeProcessEntrypoints }, { resolveRuntimeWorkerUrl }] = await Promise.all([
+    import("../infra/runtime-process-entrypoints.js"),
+    import("../infra/runtime-worker-url.js"),
+  ]);
+  const heartbeatUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, workerOptions: WorkerOptions = {}) {
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.beforeCreate?.();
+        }
+        super(filename, workerOptions);
+        if (String(filename) === heartbeatUrl.href) {
+          heartbeatWorkers.onCreate?.(this);
+        }
+      }
+    },
+  };
+});
+
+function nextHeartbeatWorker(): Promise<Worker> {
+  return new Promise((resolve) => {
+    heartbeatWorkers.onCreate = resolve;
+  });
+}
 
 function block(ms: number) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -34,10 +69,72 @@ function readLease(env: NodeJS.ProcessEnv) {
 }
 
 afterEach(() => {
+  heartbeatWorkers.beforeCreate = undefined;
+  heartbeatWorkers.onCreate = undefined;
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("maintenance lease heartbeat", () => {
+  it("preserves a native renewal error through the real worker and lease rejection", async () => {
+    await withOpenClawTestState({ label: "maintenance-renewal-error" }, async (state) => {
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      // Inject only after schema validation/acquisition, and remove before release.
+      heartbeatWorkers.beforeCreate = () => {
+        db.exec(`CREATE TRIGGER fail_renewal BEFORE UPDATE ON state_leases
+          WHEN OLD.scope = 'core:test-maintenance'
+          BEGIN SELECT RAISE(ABORT, 'synthetic renewal failure'); END`);
+      };
+      heartbeatWorkers.onCreate = (worker) => {
+        worker.once("exit", () => db.exec("DROP TRIGGER fail_renewal"));
+      };
+      await expect(
+        withOpenClawStateLease({ ...options(state.env), leaseMs: 60_000 }, async () => {
+          throw new Error("must not enter maintenance");
+        }),
+      ).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_LOST",
+        cause: {
+          message: expect.stringContaining("synthetic renewal failure"),
+          cause: {
+            name: "Error",
+            message: "synthetic renewal failure",
+            code: "ERR_SQLITE_ERROR",
+            errcode: 1811,
+            attempt: 1,
+          },
+        },
+      });
+      expect(readLease(state.env)).toBeUndefined();
+    });
+  });
+
+  it("does not enter maintenance after its lease expires while parent callbacks are blocked", async () => {
+    await withOpenClawTestState({ label: "maintenance-child-open-expired" }, async (state) => {
+      const { db } = openOpenClawStateDatabase({ env: state.env });
+      const onWorker = () => {
+        db.exec("BEGIN IMMEDIATE");
+        try {
+          block(1_200);
+        } finally {
+          db.exec("ROLLBACK");
+        }
+      };
+      heartbeatWorkers.onCreate = onWorker;
+      let entered = false;
+      try {
+        await expect(
+          withOpenClawStateLease(options(state.env), async () => {
+            entered = true;
+          }),
+        ).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_LOST" });
+        expect(entered).toBe(false);
+        expect(readLease(state.env)).toBeUndefined();
+      } finally {
+        heartbeatWorkers.onCreate = undefined;
+      }
+    });
+  });
+
   it("retains ownership while synchronous maintenance exceeds the lease duration", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-blocked" }, async (state) => {
       await withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
@@ -49,13 +146,32 @@ describe("maintenance lease heartbeat", () => {
     });
   });
 
+  it("renews through transient state contention before the maintenance lease expires", async () => {
+    await withOpenClawTestState({ label: "maintenance-lease-contention" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
+        const holder = holdStateDatabaseWriteTransaction(database.path, 1_200);
+        try {
+          await holder.ready;
+          await holder.joined;
+          block(400);
+          expect(() => lease.assertOwned()).not.toThrow();
+          expect(lease.signal.aborted).toBe(false);
+        } finally {
+          holder.release();
+          await holder.joined;
+        }
+      });
+    });
+  });
+
   it("acknowledges ownership checks while the parent holds a state write transaction", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-transaction" }, async (state) => {
-      await withOpenClawStateLease(options(state.env), async (lease) => {
+      await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
         runOpenClawStateWriteTransaction(
           ({ db }) => {
             lease.assertOwnedInTransaction(db);
-            block(450);
+            block(600);
             lease.assertOwnedInTransaction(db);
           },
           { env: state.env },
@@ -66,10 +182,10 @@ describe("maintenance lease heartbeat", () => {
 
   it("rejects a terminated worker before its queued exit event reaches the parent", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-worker-loss" }, async (state) => {
-      const spawned = once(process, "worker") as Promise<[Worker]>;
+      const spawned = nextHeartbeatWorker();
       await expect(
         withOpenClawStateLease({ ...options(state.env), leaseMs: 10_000 }, async (lease) => {
-          const [worker] = await spawned;
+          const worker = await spawned;
           void worker.terminate();
           block(100);
           expect(Number(readLease(state.env)?.expires_at)).toBeGreaterThan(Date.now());
@@ -90,7 +206,7 @@ describe("maintenance lease heartbeat", () => {
       const terminate = (worker: Worker) => {
         void worker.terminate();
       };
-      process.once("worker", terminate);
+      heartbeatWorkers.onCreate = terminate;
       let entered = false;
       try {
         await expect(
@@ -101,16 +217,14 @@ describe("maintenance lease heartbeat", () => {
         expect(entered).toBe(false);
         expect(readLease(state.env)).toBeUndefined();
       } finally {
-        process.removeListener("worker", terminate);
+        heartbeatWorkers.onCreate = undefined;
       }
     });
   });
 
   it("accepts published readiness when the parent notification is withheld", async () => {
     await withOpenClawTestState({ label: "maintenance-lease-delayed-ready" }, async (state) => {
-      const spawned = new Promise<Worker>((resolve) => {
-        process.once("worker", resolve);
-      });
+      const spawned = nextHeartbeatWorker();
       const operation = withOpenClawStateLease(
         { ...options(state.env), leaseMs: 10_000 },
         async (lease) => {
@@ -173,14 +287,14 @@ describe("maintenance lease heartbeat", () => {
     async (ending) => {
       await withOpenClawTestState({ label: `maintenance-lease-${ending}` }, async (state) => {
         const controller = new AbortController();
-        const spawned = once(process, "worker") as Promise<[Worker]>;
+        const spawned = nextHeartbeatWorker();
         let retained: OpenClawStateLeaseContext | undefined;
         const operation = withOpenClawStateLease(
           { ...options(state.env, controller.signal), leaseMs: 10_000 },
           async (lease) => {
             retained = lease;
             if (ending === "abort") {
-              const [worker] = await spawned;
+              const worker = await spawned;
               controller.abort();
               await once(worker, "exit");
               const stopped = readLease(state.env);
@@ -201,7 +315,7 @@ describe("maintenance lease heartbeat", () => {
             ending === "throw" ? "operation failed" : "was aborted",
           );
         }
-        const [worker] = await spawned;
+        const worker = await spawned;
         expect(worker.threadId).toBe(-1);
         expect(readLease(state.env)).toBeUndefined();
         expect(retained).toBeDefined();

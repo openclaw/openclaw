@@ -1,32 +1,47 @@
+import type { StatementSync as NativeStatement } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { BoundWebPushSubscription } from "../infra/push-web.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { HumanMentionWebPush } from "./event-web-push.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 
 const {
   listDevicePairingMock,
+  prepareDevicePairingMock,
+  authorityCompletedMock,
+  prepareUserProfileCatalogMock,
+  prepareSessionMutationFactsMock,
   listBoundWebPushSubscriptionsMock,
+  hasBoundWebPushSubscriptionsMock,
   prepareWebPushNotificationSenderMock,
   preparedWebPushSendMock,
-  resolveUserProfileIdMock,
-  getUserPreferencesMock,
-  resolveOperatorRolePolicyForProfileMock,
+  readCurrentProfileIdentityMock,
+  getUserPreferenceValuesMock,
+  resolveOperatorRolePolicyForAssignmentMock,
   canReceiveSessionEventMock,
   mentionCurrentMock,
   webPushWarnMock,
 } = vi.hoisted(() => ({
   listDevicePairingMock: vi.fn(),
+  prepareDevicePairingMock: vi.fn(),
+  authorityCompletedMock: vi.fn(),
+  prepareUserProfileCatalogMock: vi.fn(),
+  prepareSessionMutationFactsMock: vi.fn(),
   listBoundWebPushSubscriptionsMock: vi.fn(),
+  hasBoundWebPushSubscriptionsMock: vi.fn(),
   prepareWebPushNotificationSenderMock: vi.fn(),
   preparedWebPushSendMock: vi.fn(),
-  resolveUserProfileIdMock: vi.fn(),
-  getUserPreferencesMock: vi.fn(),
-  resolveOperatorRolePolicyForProfileMock: vi.fn(),
+  readCurrentProfileIdentityMock: vi.fn(),
+  getUserPreferenceValuesMock: vi.fn(),
+  resolveOperatorRolePolicyForAssignmentMock: vi.fn(),
   canReceiveSessionEventMock: vi.fn(),
   mentionCurrentMock: vi.fn(),
   webPushWarnMock: vi.fn(),
@@ -50,31 +65,65 @@ vi.mock("../infra/device-pairing.js", async () => {
   return actual;
 });
 
-vi.mock("../infra/device-pairing-store-readonly.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/device-pairing-store-readonly.js")>(
-    "../infra/device-pairing-store-readonly.js",
-  );
-  return { ...actual, listPairedDevicesReadOnly: () => listDevicePairingMock().paired };
-});
+vi.mock("../infra/device-pairing-worker.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-pairing-worker.js")>()),
+  withCurrentDevicePairingSnapshot: async <T>(
+    _stateDir: string | undefined,
+    prepare: (
+      paired: import("../infra/device-pairing.types.js").PairedDevice[],
+    ) => { start: () => T } | undefined,
+    preparePublication?: () => Promise<void>,
+  ) => {
+    await prepareDevicePairingMock();
+    const paired = listDevicePairingMock().paired;
+    if (preparePublication) {
+      await preparePublication();
+    }
+    return prepare(paired)?.start();
+  },
+}));
 
 vi.mock("../infra/push-web.js", () => ({
-  listBoundWebPushSubscriptions: listBoundWebPushSubscriptionsMock,
+  withBoundWebPushSubscriptions: async <T>(
+    stateDir: string | undefined,
+    prepare: (
+      subscriptions: BoundWebPushSubscription[],
+      assertCurrent: () => void,
+    ) =>
+      | { start: () => T | Promise<T> }
+      | undefined
+      | Promise<{ start: () => T | Promise<T> } | undefined>,
+  ) => {
+    try {
+      return await (
+        await prepare(await listBoundWebPushSubscriptionsMock(stateDir), () => {})
+      )?.start();
+    } finally {
+      authorityCompletedMock();
+    }
+  },
+  hasBoundWebPushSubscriptions: hasBoundWebPushSubscriptionsMock,
   prepareWebPushNotificationSender: prepareWebPushNotificationSenderMock,
 }));
 
-vi.mock("../state/user-profiles.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/user-profiles.js")>()),
-  resolveUserProfileId: resolveUserProfileIdMock,
+vi.mock("../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/user-profile-list.js")>()),
+  prepareUserProfileCatalog: prepareUserProfileCatalogMock,
+}));
+
+vi.mock("./session-sharing-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-sharing-preparation.js")>()),
+  prepareSessionMutationFacts: prepareSessionMutationFactsMock,
 }));
 
 vi.mock("../state/user-preferences.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/user-preferences.js")>()),
-  getUserPreferences: getUserPreferencesMock,
+  getUserPreferenceValues: getUserPreferenceValuesMock,
 }));
 
 vi.mock("./operator-role-policy.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./operator-role-policy.js")>()),
-  resolveOperatorRolePolicyForProfile: resolveOperatorRolePolicyForProfileMock,
+  resolveOperatorRolePolicyForAssignment: resolveOperatorRolePolicyForAssignmentMock,
 }));
 
 vi.mock("./session-sharing.js", async (importOriginal) => ({
@@ -83,6 +132,7 @@ vi.mock("./session-sharing.js", async (importOriginal) => ({
 }));
 
 const { createEventWebPushDelivery } = await import("./event-web-push.js");
+let authorityCompleted = createDeferred();
 
 function boundSubscription(
   deviceId: string,
@@ -105,7 +155,6 @@ function boundSubscription(
         agentQuestion: true,
         humanMentioned: true,
         scheduledTaskFailed: true,
-        backgroundTaskFailed: true,
       },
     },
   };
@@ -119,6 +168,7 @@ function humanMention(overrides: Partial<HumanMentionWebPush> = {}): HumanMentio
     agentId: "research",
     senderLabel: "Alice",
     sessionTitle: "Review",
+    prepare: async () => {},
     isCurrent: mentionCurrentMock,
     ...overrides,
   };
@@ -140,24 +190,45 @@ function pairedOperator(deviceId: string, scopes = ["operator.read"]) {
 describe("event Web Push classification", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listBoundWebPushSubscriptionsMock.mockReturnValue([boundSubscription("browser-device")]);
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([boundSubscription("browser-device")]);
+    hasBoundWebPushSubscriptionsMock.mockResolvedValue(true);
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [pairedOperator("browser-device")],
     });
     prepareWebPushNotificationSenderMock.mockResolvedValue(preparedWebPushSendMock);
     preparedWebPushSendMock.mockResolvedValue([]);
-    resolveUserProfileIdMock.mockImplementation((profileId: string) => profileId);
-    getUserPreferencesMock.mockReturnValue({});
-    resolveOperatorRolePolicyForProfileMock.mockReturnValue(undefined);
+    prepareDevicePairingMock.mockResolvedValue(undefined);
+    authorityCompleted = createDeferred();
+    authorityCompletedMock.mockImplementation(() => authorityCompleted.resolve());
+    prepareUserProfileCatalogMock.mockResolvedValue({
+      readCurrentIdentity: readCurrentProfileIdentityMock,
+      release: () => {},
+    });
+    prepareSessionMutationFactsMock.mockResolvedValue({
+      readCurrent: () => ({ target: null, membership: new Set<string>() }),
+      release: () => {},
+    });
+    readCurrentProfileIdentityMock.mockImplementation((profileId: string) => ({
+      profileId,
+      role: null,
+      aliases: new Set([profileId]),
+    }));
+    getUserPreferenceValuesMock.mockResolvedValue({ values: new Map(), isCurrent: () => true });
+    resolveOperatorRolePolicyForAssignmentMock.mockReturnValue(undefined);
     canReceiveSessionEventMock.mockReturnValue(true);
     mentionCurrentMock.mockReturnValue(true);
   });
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("sends only final chat events as agent completion", async () => {
+  it("waits for final completion after a parent yields to its children", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("chat", { state: "delta", runId: "run-1" });
+    delivery.handleEvent("chat", { state: "final", runId: "run-1", yielded: true });
+    await Promise.resolve();
+    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+
     delivery.handleEvent("chat", { state: "final", runId: "run-1" });
     await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
     expect(preparedWebPushSendMock).toHaveBeenCalledWith(
@@ -165,10 +236,67 @@ describe("event Web Push classification", () => {
         payload: expect.objectContaining({ tag: "openclaw-agent-finished-run-1" }),
       }),
     );
+  });
 
-    preparedWebPushSendMock.mockClear();
-    delivery.handleEvent("chat", { state: "delta", runId: "run-1" });
-    expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      event: "question.requested",
+      payload: { id: "question:1" },
+      path: "ask/question%3A1",
+    },
+    {
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "agent:research:thread.1" },
+      path: "chat/research/thread%2E1",
+    },
+    {
+      event: "cron",
+      payload: { action: "finished", jobId: "nightly", status: "error", runAtMs: 1234 },
+      path: "automations?job=nightly&run=cron%3Anightly%3A1234",
+    },
+  ])(
+    "opens the $event attention target on its originating Gateway",
+    async ({ event, payload, path }) => {
+      listDevicePairingMock.mockReturnValue({
+        paired: [pairedOperator("browser-device", ["operator.read", "operator.questions"])],
+      });
+      const delivery = createEventWebPushDelivery({
+        getRuntimeConfig: () => ({
+          gateway: {
+            publicOrigin: "https://gateway.example.test",
+            controlUi: { basePath: "/operator" },
+          },
+        }),
+      });
+
+      delivery.handleEvent(event, payload, {
+        sessionKeys: ["agent:research:thread.1"],
+        agentId: "research",
+      });
+
+      await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+      expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            url: `${path}#gatewayUrl=wss%3A%2F%2Fgateway.example.test%2Foperator`,
+          }),
+        }),
+      );
+    },
+  );
+
+  it("uses the session hub when the event has no prepared session scope", async () => {
+    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+    delivery.handleEvent("chat", {
+      state: "final",
+      runId: "run-1",
+      sessionKey: "agent:research:thread.1",
+    });
+
+    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ url: "sessions" }) }),
+    );
   });
 
   it("does not treat injected transcript updates as agent completion", async () => {
@@ -209,7 +337,7 @@ describe("event Web Push classification", () => {
   it("honors implied question scopes without notifying read-only devices", async () => {
     const admin = boundSubscription("admin");
     const reviewer = boundSubscription("reviewer");
-    listBoundWebPushSubscriptionsMock.mockReturnValue([
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([
       admin,
       reviewer,
       boundSubscription("reader"),
@@ -239,7 +367,7 @@ describe("event Web Push classification", () => {
     "bounds event display labels while preserving the raw agent filter: $agentId",
     async ({ agentId, label }) => {
       const subscription = boundSubscription("browser-device");
-      listBoundWebPushSubscriptionsMock.mockReturnValue([
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([
         {
           ...subscription,
           devicePreferences: { ...subscription.devicePreferences, agentIds: [agentId] },
@@ -261,20 +389,8 @@ describe("event Web Push classification", () => {
     },
   );
 
-  it("sends only failed task and cron terminal events", async () => {
+  it("sends only failed cron terminal events", async () => {
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
-    delivery.handleEvent("task", {
-      action: "upserted",
-      task: { id: "task-1", title: "Build\u202E", status: "failed" },
-    });
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
-    expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ body: "Build\\u{202E} needs attention." }),
-      }),
-    );
-
-    preparedWebPushSendMock.mockClear();
     delivery.handleEvent("cron", { action: "finished", jobId: "cron-1", status: "ok" });
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
 
@@ -292,11 +408,41 @@ describe("event Web Push classification", () => {
     );
   });
 
+  it.each([false, true])(
+    "honors the scheduled failure preference (enabled: %s)",
+    async (scheduledTaskFailed) => {
+      const subscription = boundSubscription("browser-device");
+      subscription.devicePreferences.categories = {
+        scheduledTaskFailed,
+      };
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
+      const getRuntimeConfig = vi.fn(() => ({}));
+      const delivery = createEventWebPushDelivery({ getRuntimeConfig });
+
+      delivery.handleEvent("cron", {
+        action: "finished",
+        jobId: "nightly",
+        status: "error",
+      });
+      if (scheduledTaskFailed) {
+        await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
+        expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({ title: "OpenClaw scheduled task failed" }),
+          }),
+        );
+      } else {
+        await authorityCompleted.promise;
+        expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("rereads subscriptions after transport preparation before sending", async () => {
     const stale = boundSubscription("stale-device");
     const preparation = createDeferred<typeof preparedWebPushSendMock>();
     prepareWebPushNotificationSenderMock.mockReturnValue(preparation.promise);
-    listBoundWebPushSubscriptionsMock.mockReturnValue([stale]);
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([stale]);
     listDevicePairingMock.mockReturnValue({
       pending: [],
       paired: [pairedOperator("stale-device")],
@@ -308,50 +454,123 @@ describe("event Web Push classification", () => {
 
     await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
     expect(getRuntimeConfig).not.toHaveBeenCalled();
-    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce();
-    listBoundWebPushSubscriptionsMock.mockReturnValue([]);
+    expect(listBoundWebPushSubscriptionsMock).not.toHaveBeenCalled();
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([]);
     preparation.resolve(preparedWebPushSendMock);
-    await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledTimes(2));
-    expect(getRuntimeConfig).toHaveBeenCalledOnce();
+    await authorityCompleted.promise;
+    expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
   it("skips transport preparation when no subscriptions exist", async () => {
-    listBoundWebPushSubscriptionsMock.mockReturnValue([]);
+    listBoundWebPushSubscriptionsMock.mockResolvedValue([]);
+    hasBoundWebPushSubscriptionsMock.mockResolvedValue(false);
     const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
     delivery.handleEvent("chat", { state: "final", runId: "run-1" });
 
-    await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(hasBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
     expect(prepareWebPushNotificationSenderMock).not.toHaveBeenCalled();
     expect(preparedWebPushSendMock).not.toHaveBeenCalled();
   });
 
-  it("invokes the sender in the same turn as the final authority read", async () => {
-    const order: string[] = [];
-    listDevicePairingMock.mockImplementation(() => {
-      order.push("authority");
-      queueMicrotask(() => order.push("next-microtask"));
-      return {
-        pending: [],
-        paired: [pairedOperator("browser-device")],
-      };
-    });
-    preparedWebPushSendMock.mockImplementation(async () => {
-      order.push("send");
-      return [];
-    });
-    const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
+  it.each([false, true])(
+    "rechecks device authority after awaited subscription reads (revoked: %s)",
+    async (revoked) => {
+      const subscriptions = createDeferred<BoundWebPushSubscription[]>();
+      listBoundWebPushSubscriptionsMock.mockReturnValueOnce(subscriptions.promise);
+      const order: string[] = [];
+      let currentDevices = [pairedOperator("browser-device")];
+      listDevicePairingMock.mockImplementation(() => {
+        order.push("authority");
+        queueMicrotask(() => order.push("next-microtask"));
+        return {
+          pending: [],
+          paired: currentDevices,
+        };
+      });
+      preparedWebPushSendMock.mockImplementation(async () => {
+        order.push("send");
+        return [];
+      });
+      const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
-    delivery.handleEvent("chat", { state: "final", runId: "run-1" });
+      delivery.handleEvent("chat", { state: "final", runId: "run-1" });
 
-    await vi.waitFor(() => expect(preparedWebPushSendMock).toHaveBeenCalledOnce());
-    expect(order).toEqual(["authority", "send", "next-microtask"]);
-  });
+      await vi.waitFor(() => expect(listBoundWebPushSubscriptionsMock).toHaveBeenCalledOnce());
+      expect(listDevicePairingMock).not.toHaveBeenCalled();
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      if (revoked) {
+        currentDevices = [];
+      }
+      subscriptions.resolve([boundSubscription("browser-device")]);
+      await vi.waitFor(() => expect(listDevicePairingMock).toHaveBeenCalledOnce());
+      if (revoked) {
+        expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+        expect(order).toEqual(["authority", "next-microtask"]);
+      } else {
+        expect(preparedWebPushSendMock).toHaveBeenCalledOnce();
+        expect(order).toEqual(["authority", "send", "next-microtask"]);
+      }
+    },
+  );
+
+  it.each(["unchanged", "preferences changed", "profile merged"] as const)(
+    "honors recipient preferences after pairing preparation: %s",
+    async (change) => {
+      const pairingStarted = createDeferred();
+      const pairingReady = createDeferred();
+      let profileId = "bob";
+      let revision = 0;
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([
+        boundSubscription("browser-device", "bob"),
+      ]);
+      readCurrentProfileIdentityMock.mockImplementation(() => ({
+        profileId,
+        role: null,
+        aliases: new Set(["bob", profileId]),
+      }));
+      getUserPreferenceValuesMock.mockImplementation(async (profileIds: string[]) => {
+        const preparedRevision = revision;
+        return {
+          values: new Map(profileIds.map((id) => [id, revision ? { agentIds: ["other"] } : {}])),
+          isCurrent: () => change === "profile merged" || preparedRevision === revision,
+        };
+      });
+      prepareDevicePairingMock.mockImplementationOnce(async () => {
+        pairingStarted.resolve();
+        await pairingReady.promise;
+      });
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).handleEvent(
+        "chat",
+        { state: "final", runId: "preference-race" },
+        { agentId: "research" },
+      );
+
+      await pairingStarted.promise;
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+      if (change === "profile merged") {
+        profileId = "alice";
+      }
+      if (change !== "unchanged") {
+        revision += 1;
+      }
+      pairingReady.resolve();
+      await authorityCompleted.promise;
+
+      expect(preparedWebPushSendMock).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+      expect(getUserPreferenceValuesMock).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 2);
+      expect(getUserPreferenceValuesMock).toHaveBeenLastCalledWith(
+        [profileId],
+        "notifications.web.v1",
+        expect.anything(),
+      );
+    },
+  );
 
   describe("human mention delivery", () => {
     beforeEach(() => {
-      listBoundWebPushSubscriptionsMock.mockReturnValue([
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([
         boundSubscription("browser-device", "bob"),
       ]);
     });
@@ -366,11 +585,15 @@ describe("event Web Push classification", () => {
         boundSubscription("carol-browser", "carol"),
         boundSubscription("anonymous-browser"),
       ];
-      listBoundWebPushSubscriptionsMock.mockReturnValue(subscriptions);
+      listBoundWebPushSubscriptionsMock.mockResolvedValue(subscriptions);
       listDevicePairingMock.mockReturnValue({
         paired: subscriptions.map((subscription) => pairedOperator(subscription.deviceId)),
       });
-      resolveUserProfileIdMock.mockImplementation((id: string) => (id === "bob-old" ? "bob" : id));
+      readCurrentProfileIdentityMock.mockImplementation((id: string) => ({
+        profileId: id === "bob-old" ? "bob" : id,
+        role: null,
+        aliases: new Set([id]),
+      }));
       const delivery = createEventWebPushDelivery({ getRuntimeConfig: () => ({}) });
 
       delivery.handleEvent("mentions.changed", humanMention());
@@ -390,7 +613,7 @@ describe("event Web Push classification", () => {
       const browser = boundSubscription("bob-browser", "bob");
       const phone = boundSubscription("bob-phone", "bob");
       phone.devicePreferences.detailLevel = "private";
-      listBoundWebPushSubscriptionsMock.mockReturnValue([browser, phone]);
+      listBoundWebPushSubscriptionsMock.mockResolvedValue([browser, phone]);
       listDevicePairingMock.mockReturnValue({
         paired: [pairedOperator("bob-browser"), pairedOperator("bob-phone")],
       });
@@ -443,16 +666,26 @@ describe("event Web Push classification", () => {
       "missing role policy",
       "generic event",
     ] as const)(
-      "applies real draft-session visibility after sender preparation: %s",
+      "applies real draft-session visibility without main-thread SQLite after sender preparation: %s",
       async (scenario) => {
-        const [profiles, roles, sharing] = await Promise.all([
-          vi.importActual<typeof import("../state/user-profiles.js")>("../state/user-profiles.js"),
+        const [profiles, preferences, sessions, roles, sharing] = await Promise.all([
+          vi.importActual<typeof import("../state/user-profile-list.js")>(
+            "../state/user-profile-list.js",
+          ),
+          vi.importActual<typeof import("../state/user-preferences.js")>(
+            "../state/user-preferences.js",
+          ),
+          vi.importActual<typeof import("./session-sharing-preparation.js")>(
+            "./session-sharing-preparation.js",
+          ),
           vi.importActual<typeof import("./operator-role-policy.js")>("./operator-role-policy.js"),
           vi.importActual<typeof import("./session-sharing.js")>("./session-sharing.js"),
         ]);
-        resolveUserProfileIdMock.mockImplementation(profiles.resolveUserProfileId);
-        resolveOperatorRolePolicyForProfileMock.mockImplementation(
-          roles.resolveOperatorRolePolicyForProfile,
+        prepareUserProfileCatalogMock.mockImplementation(profiles.prepareUserProfileCatalog);
+        getUserPreferenceValuesMock.mockImplementation(preferences.getUserPreferenceValues);
+        prepareSessionMutationFactsMock.mockImplementation(sessions.prepareSessionMutationFacts);
+        resolveOperatorRolePolicyForAssignmentMock.mockImplementation(
+          roles.resolveOperatorRolePolicyForAssignment,
         );
         canReceiveSessionEventMock.mockImplementation(sharing.canReceiveSessionEvent);
         await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -480,8 +713,13 @@ describe("event Web Push classification", () => {
               createdActor: { type: "human", source: "profile", id: owner.id },
             },
           );
+          if (scenario === "eligible admin") {
+            // Cold-store preparation must use the persisted rows after native and worker handles close.
+            await closeOpenClawAgentDatabasesAsync();
+            await closeOpenClawStateDatabaseAsync();
+          }
           const subscription = boundSubscription("admin-browser", recipient.id);
-          listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+          listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
           listDevicePairingMock.mockReturnValue({
             paired: [pairedOperator("admin-browser", ["operator.admin"])],
           });
@@ -509,14 +747,43 @@ describe("event Web Push classification", () => {
           } else if (scenario === "missing role policy") {
             cfg = {};
           }
-          preparation.resolve(preparedWebPushSendMock);
-          await vi.waitFor(() => expect(canReceiveSessionEventMock).toHaveBeenCalledOnce());
-          if (scenario === "eligible admin") {
-            expect(preparedWebPushSendMock).toHaveBeenCalledWith(
-              expect.objectContaining({ subscriptions: [subscription] }),
-            );
-          } else {
-            expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+          const { StatementSync } = requireNodeSqlite();
+          const reads: Array<{ sql: string; stack: string | undefined }> = [];
+          // oxlint-disable-next-line typescript/unbound-method -- apply preserves the original statement receiver.
+          const originalGet = StatementSync.prototype.get;
+          const statements = {
+            get: vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
+              this: NativeStatement,
+              ...args
+            ) {
+              reads.push({ sql: this.sourceSQL, stack: new Error("Unexpected caller SQL").stack });
+              return originalGet.apply(this, args);
+            }),
+            all: vi.spyOn(StatementSync.prototype, "all"),
+            run: vi.spyOn(StatementSync.prototype, "run"),
+            iterate: vi.spyOn(StatementSync.prototype, "iterate"),
+          };
+          try {
+            preparation.resolve(preparedWebPushSendMock);
+            await authorityCompleted.promise;
+            expect(
+              Object.fromEntries(
+                Object.entries(statements).map(([method, spy]) => [method, spy.mock.calls.length]),
+              ),
+              JSON.stringify(reads, null, 2),
+            ).toEqual({ get: 0, all: 0, run: 0, iterate: 0 });
+            expect(canReceiveSessionEventMock).toHaveBeenCalledOnce();
+            if (scenario === "eligible admin") {
+              expect(preparedWebPushSendMock).toHaveBeenCalledWith(
+                expect.objectContaining({ subscriptions: [subscription] }),
+              );
+            } else {
+              expect(preparedWebPushSendMock).not.toHaveBeenCalled();
+            }
+          } finally {
+            for (const spy of Object.values(statements)) {
+              spy.mockRestore();
+            }
           }
         });
       },
@@ -527,7 +794,7 @@ describe("event Web Push classification", () => {
       async (detailLevel) => {
         const subscription = boundSubscription("browser-device", "bob");
         subscription.devicePreferences.detailLevel = detailLevel;
-        listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+        listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
         createEventWebPushDelivery({
           getRuntimeConfig: () => ({
             gateway: {
@@ -558,7 +825,7 @@ describe("event Web Push classification", () => {
     it.each([
       {
         name: "subscription removal",
-        revoke: () => listBoundWebPushSubscriptionsMock.mockReturnValue([]),
+        revoke: () => listBoundWebPushSubscriptionsMock.mockResolvedValue([]),
       },
       {
         name: "device unpairing",
@@ -577,16 +844,16 @@ describe("event Web Push classification", () => {
       },
       {
         name: "profile role downgrade",
-        revoke: () => resolveOperatorRolePolicyForProfileMock.mockReturnValue({ scopes: [] }),
+        revoke: () => resolveOperatorRolePolicyForAssignmentMock.mockReturnValue({ scopes: [] }),
       },
       {
         name: "profile removal",
-        revoke: () => resolveUserProfileIdMock.mockReturnValue(undefined),
+        revoke: () => readCurrentProfileIdentityMock.mockReturnValue(undefined),
       },
       {
         name: "browser account switch",
         revoke: () =>
-          listBoundWebPushSubscriptionsMock.mockReturnValue([
+          listBoundWebPushSubscriptionsMock.mockResolvedValue([
             boundSubscription("browser-device", "carol"),
           ]),
       },
@@ -603,13 +870,13 @@ describe("event Web Push classification", () => {
       prepareWebPushNotificationSenderMock.mockReturnValue(preparation.promise);
       const getRuntimeConfig = vi.fn(() => ({}));
       createEventWebPushDelivery({ getRuntimeConfig }).deliverMention(humanMention());
-      expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(prepareWebPushNotificationSenderMock).toHaveBeenCalledOnce());
       expect(getRuntimeConfig).not.toHaveBeenCalled();
 
       revoke();
       preparation.resolve(preparedWebPushSendMock);
 
-      await vi.waitFor(() => expect(getRuntimeConfig).toHaveBeenCalledOnce());
+      await authorityCompleted.promise;
       expect(preparedWebPushSendMock).not.toHaveBeenCalled();
     });
 
@@ -634,10 +901,10 @@ describe("event Web Push classification", () => {
         createEventWebPushDelivery({ getRuntimeConfig }).deliverMention(humanMention());
         const subscription = boundSubscription("browser-device", "bob");
         subscription.devicePreferences = { ...subscription.devicePreferences, ...preferences };
-        listBoundWebPushSubscriptionsMock.mockReturnValue([subscription]);
+        listBoundWebPushSubscriptionsMock.mockResolvedValue([subscription]);
         preparation.resolve(preparedWebPushSendMock);
 
-        await vi.waitFor(() => expect(getRuntimeConfig).toHaveBeenCalledOnce());
+        await authorityCompleted.promise;
         expect(preparedWebPushSendMock).not.toHaveBeenCalled();
         expect(mentionCurrentMock).toHaveReturnedWith(true);
       },
@@ -656,6 +923,25 @@ describe("event Web Push classification", () => {
       }));
       expect(identities[0]).toEqual(identities[1]);
       expect(identities[0]).not.toEqual(identities[2]);
+    });
+
+    it("refreshes the mention after awaited pairing preparation before its final send fence", async () => {
+      let durable = true;
+      let prepared = true;
+      prepareDevicePairingMock.mockImplementationOnce(async () => {
+        durable = false;
+      });
+      const prepare = vi.fn(async () => {
+        prepared = durable;
+      });
+      mentionCurrentMock.mockImplementation(() => prepared);
+      createEventWebPushDelivery({ getRuntimeConfig: () => ({}) }).deliverMention(
+        humanMention({ prepare }),
+      );
+      await authorityCompleted.promise;
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(mentionCurrentMock).toHaveBeenCalledOnce();
+      expect(preparedWebPushSendMock).not.toHaveBeenCalled();
     });
 
     it("runs the mention's final owner fence without yielding before network I/O", async () => {

@@ -1,5 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
+import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import {
   channelTargetSchema,
@@ -9,22 +10,38 @@ import {
   stringEnum,
 } from "../schema/typebox.js";
 import { gatewayCallOptionSchemaProperties } from "./gateway-schema.js";
-import {
-  buildMessageToolQuerySchemaProperties,
-  buildMessageToolSchemaFromActions,
-  MESSAGE_TOOL_SEND_TEXT_DESCRIPTION,
-  type MessageToolSchemaBuilders,
-} from "./message-tool-schema-scoping.js";
+type MessageToolSchemaOptions = {
+  includeClawHub?: boolean;
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
+  includeBestEffort: boolean;
+  scopeToActions?: boolean;
+  extraProperties?: Record<string, TSchema>;
+};
 
-const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
-function buildRoutingSchema() {
-  return {
+const MESSAGE_TOOL_SEND_TEXT_DESCRIPTION =
+  'Text for action="send". A send needs message or another send payload such as media, attachments, or presentation.';
+
+function buildMessageToolQuerySchemaProperties() {
+  return { query: Type.Optional(Type.String()) };
+}
+
+function buildRoutingSchema(options: { includeTeamId?: boolean }) {
+  const props: Record<string, TSchema> = {
     channel: Type.Optional(Type.String()),
     target: Type.Optional(channelTargetSchema()),
     targets: Type.Optional(channelTargetsSchema()),
     accountId: Type.Optional(Type.String()),
     dryRun: Type.Optional(Type.Boolean()),
   };
+  if (options.includeTeamId) {
+    props.teamId = Type.Optional(
+      Type.String({
+        description: "Team or workspace ID for channel-info, channel-list, or conversation-open.",
+      }),
+    );
+  }
+  return props;
 }
 
 const presentationCommandActionSchema = Type.Object({
@@ -129,6 +146,7 @@ const presentationMessageSchema = Type.Object(
 );
 
 function buildSendSchema(options: {
+  includeClawHub?: boolean;
   includePresentation: boolean;
   includeDeliveryPin: boolean;
   includeBestEffort: boolean;
@@ -194,6 +212,21 @@ function buildSendSchema(options: {
       }),
     ),
   };
+  if (options.includeClawHub) {
+    props.clawhub = Type.Optional(
+      Type.Object(
+        {
+          query: Type.String({ minLength: 1, maxLength: 160 }),
+          kind: Type.Optional(stringEnum(["plugin", "skill"])),
+        },
+        {
+          additionalProperties: false,
+          description:
+            "Official plugin/skill cards in current chat; user chooses install. Omit kind: plugins, then skills.",
+        },
+      ),
+    );
+  }
   if (options.includePresentation) {
     props.presentation = Type.Optional(presentationMessageSchema);
   }
@@ -396,10 +429,6 @@ function buildModerationSchema() {
   };
 }
 
-function buildGatewaySchema() {
-  return gatewayCallOptionSchemaProperties();
-}
-
 function buildPresenceSchema() {
   return {
     activityType: Type.Optional(
@@ -451,59 +480,163 @@ function buildChannelManagementSchema() {
   };
 }
 
-function buildMessageToolSchemaProps(options: {
-  includePresentation: boolean;
-  includeDeliveryPin: boolean;
-  includeBestEffort: boolean;
-  extraProperties?: Record<string, TSchema>;
-}) {
-  return {
-    ...buildRoutingSchema(),
-    ...buildSendSchema(options),
-    ...buildReactionSchema(),
-    ...buildFetchSchema(),
-    ...buildMessageToolQuerySchemaProperties(),
-    ...buildPollSchema(),
-    ...buildChannelTargetSchema(),
-    ...buildStickerSchema(),
-    ...buildThreadSchema(),
-    ...buildEventSchema(),
-    ...buildModerationSchema(),
-    ...buildGatewaySchema(),
-    ...buildChannelManagementSchema(),
-    ...buildPresenceSchema(),
-    ...options.extraProperties,
+const MESSAGE_SCHEMA_GROUPS: ReadonlyArray<{
+  build: () => Record<string, TSchema>;
+  actions: readonly ChannelMessageActionName[];
+}> = [
+  {
+    build: buildReactionSchema,
+    actions: [
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "unsend",
+      "pin",
+      "unpin",
+      "reply",
+      "thread-create",
+    ],
+  },
+  {
+    build: buildFetchSchema,
+    actions: [
+      "read",
+      "reactions",
+      "search",
+      "thread-list",
+      "channel-list",
+      "channel-info",
+      "list-pins",
+      "event-list",
+      "sticker-search",
+      "emoji-list",
+    ],
+  },
+  {
+    // Include only actions whose handlers read query. Discord event-list historically
+    // advertised query through the event schema but ignores it at dispatch.
+    build: buildMessageToolQuerySchemaProperties,
+    actions: ["search", "sticker-search", "channel-list"],
+  },
+  { build: buildPollSchema, actions: ["poll", "poll-vote"] },
+  {
+    build: buildChannelTargetSchema,
+    actions: [
+      "search",
+      "thread-list",
+      "thread-create",
+      "thread-reply",
+      "channel-info",
+      "channel-list",
+      "channel-create",
+      "channel-edit",
+      "channel-delete",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "topic-create",
+      "topic-edit",
+      "permissions",
+      "member-info",
+      "role-info",
+      "role-add",
+      "role-remove",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+      "setGroupIcon",
+      "leaveGroup",
+      "event-create",
+      "event-list",
+      "timeout",
+      "kick",
+      "ban",
+      "emoji-list",
+      "emoji-upload",
+      "sticker-upload",
+      "voice-status",
+      "download-file",
+    ],
+  },
+  {
+    build: buildStickerSchema,
+    actions: [
+      "sticker",
+      "sticker-search",
+      "sticker-upload",
+      "emoji-list",
+      "emoji-upload",
+      "download-file",
+      "upload-file",
+    ],
+  },
+  { build: buildThreadSchema, actions: ["thread-create", "thread-list", "thread-reply"] },
+  { build: buildEventSchema, actions: ["event-create", "event-list"] },
+  { build: buildModerationSchema, actions: ["timeout", "kick", "ban", "delete", "unsend"] },
+  { build: gatewayCallOptionSchemaProperties, actions: [] },
+  {
+    // Keep every action that reads channel-management fields here; omission hides valid params.
+    build: buildChannelManagementSchema,
+    actions: [
+      "channel-create",
+      "channel-edit",
+      "channel-move",
+      "category-create",
+      "category-edit",
+      "category-delete",
+      "topic-create",
+      "topic-edit",
+      "renameGroup",
+      "setGroupIcon",
+    ],
+  },
+  { build: buildPresenceSchema, actions: ["set-presence", "set-profile", "voice-status"] },
+];
+
+export function buildMessageToolSchemaFromActions(
+  actions: readonly string[],
+  options: MessageToolSchemaOptions,
+) {
+  const schemaOptions = {
+    ...options,
+    includeTeamId: actions.some(
+      (action) =>
+        action === "channel-info" || action === "channel-list" || action === "conversation-open",
+    ),
   };
+  const sendOnly =
+    actions.length > 0 && actions.every((action) => action === "send" || action === "broadcast");
+  // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.
+  // Groups prune unavailable fields; runtime still validates each action payload.
+  const scoped = sendOnly || (schemaOptions.scopeToActions && actions.length > 0);
+  const properties: Record<string, TSchema> = {
+    ...buildRoutingSchema(schemaOptions),
+    ...buildSendSchema(schemaOptions),
+    ...(scoped ? gatewayCallOptionSchemaProperties() : {}),
+  };
+  const activeActions = new Set(actions);
+  for (const group of MESSAGE_SCHEMA_GROUPS) {
+    if (!scoped || (!sendOnly && group.actions.some((action) => activeActions.has(action)))) {
+      Object.assign(properties, group.build());
+    }
+  }
+  const schemaProperties = scoped
+    ? Object.assign(properties, schemaOptions.extraProperties)
+    : { ...properties, ...schemaOptions.extraProperties };
+  return Type.Object({
+    action: stringEnum(actions, {
+      description:
+        'Select one action. For action="send", provide message or another send payload; fields for other actions do not count as send content.',
+    }),
+    ...schemaProperties,
+  });
 }
 
-export const MESSAGE_TOOL_SCHEMA_BUILDERS = {
-  full: buildMessageToolSchemaProps,
-  base: (options) => ({
-    ...buildRoutingSchema(),
-    ...buildSendSchema(options),
-    ...buildGatewaySchema(),
-  }),
-  groups: {
-    reaction: buildReactionSchema,
-    fetch: buildFetchSchema,
-    query: buildMessageToolQuerySchemaProperties,
-    poll: buildPollSchema,
-    channelTarget: buildChannelTargetSchema,
-    sticker: buildStickerSchema,
-    thread: buildThreadSchema,
-    event: buildEventSchema,
-    moderation: buildModerationSchema,
-    channelManagement: buildChannelManagementSchema,
-    presence: buildPresenceSchema,
-  },
-} satisfies MessageToolSchemaBuilders;
-
-export const MessageToolSchema = buildMessageToolSchemaFromActions(
-  AllMessageActions,
-  {
-    includePresentation: true,
-    includeDeliveryPin: true,
-    includeBestEffort: false,
-  },
-  MESSAGE_TOOL_SCHEMA_BUILDERS,
-);
+export const MessageToolSchema = buildMessageToolSchemaFromActions(CHANNEL_MESSAGE_ACTION_NAMES, {
+  includePresentation: true,
+  includeDeliveryPin: true,
+  includeBestEffort: false,
+});

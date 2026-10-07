@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import { sleep } from "../../lib/sleep.mjs";
 import { run } from "./host-command.ts";
+import { runMacosHostCommand } from "./macos-exec.ts";
 import type { PhaseRunner } from "./phase-runner.ts";
 import { encodePowerShell, psSingleQuote } from "./powershell.ts";
 import type { CommandResult } from "./types.ts";
@@ -114,13 +115,16 @@ function appendCommandResult(phases: PhaseRunner, result: CommandResult): void {
   phases.append(result.stderr);
 }
 
-function cleanupPosixGuestScript(phases: PhaseRunner, transportArgs: string[]): void {
+function cleanupPosixGuestScript(
+  phases: PhaseRunner,
+  transportArgs: string[],
+  runCommand: typeof run = run,
+): void {
   try {
     appendCommandResult(
       phases,
-      run("prlctl", transportArgs, {
+      runCommand("prlctl", transportArgs, {
         check: false,
-        quiet: true,
         timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
       }),
     );
@@ -150,7 +154,6 @@ export async function runPosixBackgroundShell(options: PosixBackgroundShellOptio
     const result = runCommand("prlctl", transport(args), {
       check: false,
       input,
-      quiet: true,
       timeoutMs: timeoutBefore(deadline, timeoutMs),
     });
     appendOutput(append, result);
@@ -303,7 +306,6 @@ fi
       if (!doneSeen && launchAttempted) {
         const result = runCommand("prlctl", transport(["/bin/bash", cleanupPath]), {
           check: false,
-          quiet: true,
           timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
         });
         appendOutput(append, result);
@@ -312,7 +314,6 @@ fi
       if (cleanupSucceeded) {
         const remove = runCommand("prlctl", transport(["/bin/rm", "-rf", runDir]), {
           check: false,
-          quiet: true,
           timeoutMs: POSIX_GUEST_SCRIPT_CLEANUP_TIMEOUT_MS,
         });
         appendOutput(append, remove);
@@ -480,7 +481,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
         // A busy Windows guest can leave one Parallels Tools session wedged.
         // Keep polls short so a single transport cancellation cannot consume
         // the entire install timeout while the detached process continues.
-        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 8_000) },
+        { check: false, timeoutMs: timeoutBefore(deadline, 8_000) },
       );
       appendOutput(append, launch);
       throwIfParallelsVmStopped(options.label, launch);
@@ -539,7 +540,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
           "/c",
           `if exist "${windowsDonePath}" (echo done) else (echo wait)`,
         ],
-        { check: false, quiet: true, timeoutMs: timeoutBefore(deadline, 5_000) },
+        { check: false, timeoutMs: timeoutBefore(deadline, 5_000) },
       );
       appendOutput(append, doneProbe);
       throwIfParallelsVmStopped(options.label, doneProbe);
@@ -571,7 +572,7 @@ cmd.exe /d /s /c start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -
           "/c",
           `if exist "${windowsDonePath}" (type "%WINDIR%\\Temp\\${guestRunDir}\\run.log" & for /f "usebackq delims=" %A in ("%WINDIR%\\Temp\\${guestRunDir}\\exit") do @echo ${backgroundExitPrefix}%A & echo ${backgroundDoneMarker}) else (echo wait)`,
         ],
-        { check: false, quiet: true, timeoutMs: timeoutBefore(activeDeadline(), 30_000) },
+        { check: false, timeoutMs: timeoutBefore(activeDeadline(), 30_000) },
       );
       appendOutput(append, poll);
       throwIfParallelsVmStopped(options.label, poll);
@@ -634,7 +635,7 @@ if ((Test-Path $pidPath) -or (Test-Path $donePath)) {
   'materialized'
 }`),
       ],
-      { check: false, quiet: true, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
+      { check: false, timeoutMs: timeoutBefore(materializeDeadline, 15_000) },
     );
     appendOutput(params.append, result);
     throwIfParallelsVmStopped("Windows background launch", result);
@@ -685,7 +686,7 @@ if (Test-Path $pidPath) {
       encodePowerShell(`${pathsScript}
 ${stopProcessTree}`),
     ],
-    { check: false, quiet: true, timeoutMs: 30_000 },
+    { check: false, timeoutMs: 30_000 },
   );
   if (options.captureLog) {
     const log = runCommand(
@@ -699,7 +700,7 @@ ${stopProcessTree}`),
         "/c",
         `if exist "${windowsLogPath}" type "${windowsLogPath}"`,
       ],
-      { check: false, quiet: true, timeoutMs: 30_000 },
+      { check: false, timeoutMs: 30_000 },
     );
     appendOutput(options.append, log);
   }
@@ -717,7 +718,7 @@ ${stopProcessTree}`),
 Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath, $pidPath -Force -ErrorAction SilentlyContinue
 Remove-Item -Path $runDir -Recurse -Force -ErrorAction SilentlyContinue`),
     ],
-    { check: false, quiet: true, timeoutMs: 30_000 },
+    { check: false, timeoutMs: 30_000 },
   );
 }
 
@@ -740,7 +741,6 @@ export class LinuxGuest {
     const result = run("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
     });
     this.phases.append(result.stdout);
@@ -765,7 +765,6 @@ export class LinuxGuest {
       const write = run("prlctl", this.transportArgs(["dd", `of=${scriptPath}`, "bs=1048576"]), {
         check: false,
         input: `umask 022\n${script}`,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(),
       });
       appendCommandResult(this.phases, write);
@@ -823,10 +822,9 @@ export class MacosGuest {
   }
 
   run(args: string[], options: PosixGuestOptions = {}): CommandResult {
-    const result = run("prlctl", this.transportArgs(args, options.env), {
+    const result = runMacosHostCommand("prlctl", this.transportArgs(args, options.env), {
       check: false,
       input: options.input,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
     });
     this.phases.append(result.stdout);
@@ -844,7 +842,11 @@ export class MacosGuest {
       });
       return this.exec(["/bin/bash", scriptPath], { env });
     } finally {
-      cleanupPosixGuestScript(this.phases, this.transportArgs(["/bin/rm", "-f", scriptPath]));
+      cleanupPosixGuestScript(
+        this.phases,
+        this.transportArgs(["/bin/rm", "-f", scriptPath]),
+        runMacosHostCommand,
+      );
     }
   }
 
@@ -861,6 +863,7 @@ export class MacosGuest {
       label,
       script,
       timeoutMs: remainingTimeoutMs ?? timeoutMs ?? 30 * 60_000,
+      runCommand: runMacosHostCommand,
       transportArgs: (args) => this.transportArgs(args, env),
     });
   }
@@ -885,7 +888,6 @@ export class WindowsGuest {
     const result = run("prlctl", ["exec", this.vmName, "--current-user", ...args], {
       check: false,
       input: options.input,
-      quiet: true,
       timeoutMs: this.phases.remainingTimeoutMs(options.timeoutMs),
     });
     this.phases.append(result.stdout);
@@ -913,7 +915,6 @@ export class WindowsGuest {
       ],
       {
         input: `${windowsProcessEnvScript(this.getEnv())}\n${script}`,
-        quiet: true,
         timeoutMs: this.phases.remainingTimeoutMs(120_000),
       },
     );

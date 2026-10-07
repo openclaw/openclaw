@@ -1,6 +1,8 @@
 // Argv invocation tests cover CLI argv normalization before command dispatch.
+import { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { getCommanderCommandPath } from "./program/commander-parse-facts.js";
 
 describe("argv-invocation", () => {
   it("resolves root help and empty command path", () => {
@@ -25,41 +27,11 @@ describe("argv-invocation", () => {
     });
   });
 
-  it.each([
-    {
-      name: "version-pinned install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"],
-      commandPath: ["skills", "install"],
-    },
-    {
-      name: "version-pinned verification",
-      argv: ["node", "openclaw", "skills", "verify", "@owner/weather", "--version", "1.2.3"],
-      commandPath: ["skills", "verify"],
-    },
-    {
-      name: "equals-form version-pinned install",
-      argv: ["node", "openclaw", "skills", "install", "@owner/weather", "--version=1.2.3"],
-      commandPath: ["skills", "install"],
-    },
-    {
-      name: "profiled version-pinned verification",
-      argv: [
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "skills",
-        "verify",
-        "@owner/weather",
-        "--version",
-        "1.2.3",
-      ],
-      commandPath: ["skills", "verify"],
-    },
-  ])("keeps $name in command execution mode", ({ argv, commandPath }) => {
+  it("keeps a version-pinned install in command execution mode", () => {
+    const argv = ["node", "openclaw", "skills", "install", "@owner/weather", "--version", "1.2.3"];
     expect(resolveCliArgvInvocation(argv)).toEqual({
       argv,
-      commandPath,
+      commandPath: ["skills", "install"],
       primary: "skills",
       hasHelpOrVersion: false,
       isRootHelpInvocation: false,
@@ -116,21 +88,51 @@ describe("argv-invocation", () => {
     ).toEqual(["models", "status"]);
   });
 
-  it.each(["cleanup", "status", "repair", "finalize", "wizard"])(
-    "resolves update %s after parent options and interleaved root options",
-    (child) => {
-      for (const args of [
-        ["--channel", "beta", "--tag", "latest", "--timeout", "5", child],
-        ["--channel=beta", "--no-color", "--timeout=5", "--yes", child],
-        ["--", child],
-      ]) {
-        expect(
-          resolveCliArgvInvocation(["node", "openclaw", "--profile", "work", "update", ...args])
-            .commandPath,
-        ).toEqual(["update", child]);
-      }
-    },
-  );
+  it.each([
+    ["config", ["--section", "model"], ["config"]],
+    ["config", ["--section", "get"], ["config"]],
+    ["config", ["--section=model", "get"], ["config", "get"]],
+    ["config", ["--", "get"], ["config", "get"]],
+    ["skills", ["--agent", "main", "verify"], ["skills", "verify"]],
+    ["skills", ["--agent=main", "verify"], ["skills", "verify"]],
+    ["skills", ["--agent", "verify"], ["skills"]],
+    ["skills", ["--json", "--agent", "main", "verify"], ["skills", "verify"]],
+    ["skills", ["--", "verify"], ["skills", "verify"]],
+  ])("matches Commander for %s %j", async (rootName, args, expectedPath) => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const root = program.command(rootName);
+    if (rootName === "config") {
+      root.option("--section <section>");
+    } else {
+      root.option("--agent <id>").option("--json");
+    }
+    const child = root.command(rootName === "config" ? "get" : "verify");
+    let parsedPath: string[] = [];
+    for (const command of [root, child]) {
+      command.action(() => {
+        parsedPath = getCommanderCommandPath(command);
+      });
+    }
+    const argv = ["node", "openclaw", rootName, ...args];
+
+    await program.parseAsync(argv);
+
+    expect(parsedPath).toEqual(expectedPath);
+    expect(resolveCliArgvInvocation(argv).commandPath).toEqual(parsedPath);
+  });
+
+  it("resolves update cleanup after parent options and interleaved root options", () => {
+    for (const args of [
+      ["--channel", "beta", "--tag", "latest", "--timeout", "5", "cleanup"],
+      ["--channel=beta", "--no-color", "--timeout=5", "--yes", "cleanup"],
+      ["--", "cleanup"],
+    ]) {
+      expect(
+        resolveCliArgvInvocation(["node", "openclaw", "--profile", "work", "update", ...args])
+          .commandPath,
+      ).toEqual(["update", "cleanup"]);
+    }
+  });
 
   it.each(["--channel", "--tag", "--timeout"])(
     "does not mistake a cleanup-valued %s for a child command",

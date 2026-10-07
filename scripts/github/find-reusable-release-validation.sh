@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
+# Bash 5.3+ can deadlock writing heredoc pipes on macOS before the reader starts.
+if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
+  exec /bin/bash "$0" "$@"
+fi
 set -euo pipefail
 
 # Finds a prior green Full Release Validation run for the exact target SHA or
 # for its immediate product-equivalent predecessor. Cross-SHA reuse is limited
-# to a descendant whose complete tree delta is CHANGELOG.md; package/install
+# to a descendant whose complete tree delta is the selected release changelog; package/install
 # proof still runs against the release SHA after that changelog is committed.
 # Always exits 0 with reuse=true/false; callers fail open to a full validation.
 
@@ -42,7 +46,7 @@ validation manifest whose recorded lane-selection inputs match --inputs-json
 and whose normalized strict-v4 phased evidence is accepted by the current trusted-main
 verifier identified by --workflow-sha. The historical producer workflow SHA
 remains independent. A descendant target may reuse product validation only
-when GitHub proves the entire delta is CHANGELOG.md. Writes reuse=true plus
+when GitHub proves the entire delta is the selected release changelog. Writes reuse=true plus
 evidence_* outputs when found; reuse=false otherwise.
 EOF
 }
@@ -403,20 +407,22 @@ for ((index = 0; index < run_count; index += 1)); do
       echo "[evidence-reuse] run ${run_id}: could not compare ${prior_sha}...${TARGET_SHA}; skipping" >&2
       continue
     fi
-    if ! jq -e \
-      --arg prior_sha "$prior_sha" '
-        .status == "ahead"
-        and .merge_base_commit.sha == $prior_sha
-        and (.files | type == "array" and length == 1)
-        and .files[0].filename == "CHANGELOG.md"
-        and .files[0].status == "modified"
-        and ((.files[0].previous_filename // "") == "")
-      ' <<< "$compare_json" >/dev/null; then
+    selected_version="$(jq -r '.manifest.candidateBinding.package.version // .validationInputs.targetVersion // ""' <<< "$validation_record")"
+    if ! delta_json="$(RELEASE_COMPARISON_JSON="$compare_json" RELEASE_BASE_SHA="$prior_sha" \
+      RELEASE_SELECTED_VERSION="$selected_version" node --input-type=module - "$REPO_ROOT/scripts/full-release-validation-policy.mjs" <<'NODE'
+import { pathToFileURL } from "node:url";
+const { classifyReleaseChangelogEvidenceComparison } = await import(pathToFileURL(process.argv[2]));
+const result = classifyReleaseChangelogEvidenceComparison(JSON.parse(process.env.RELEASE_COMPARISON_JSON), {
+  baseSha: process.env.RELEASE_BASE_SHA, version: process.env.RELEASE_SELECTED_VERSION,
+});
+process.stdout.write(JSON.stringify(result));
+NODE
+    )"; then
       echo "[evidence-reuse] run ${run_id}: target ${TARGET_SHA} is not a CHANGELOG.md-only descendant of ${prior_sha}; skipping" >&2
       continue
     fi
-    evidence_policy="changelog-only-release-v1"
-    changed_paths='["CHANGELOG.md"]'
+    evidence_policy="$(jq -r '.policy' <<< "$delta_json")"
+    changed_paths="$(jq -c '.changedPaths' <<< "$delta_json")"
   fi
 
   run_url="$(jq -r '.root.url' <<< "$validation_record")"

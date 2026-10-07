@@ -5,8 +5,9 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
-import type { Context, ImageContent } from "../../../llm/types.js";
+import type { Context, ImageContent, Model } from "../../../llm/types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { readBtwTranscriptMessages } from "../../btw-transcript.js";
@@ -19,12 +20,17 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
+  testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
   createCompactionHandlers,
   createResourceLoader,
 } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
-import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
+import {
+  createCompactionRequestBudget,
+  estimateCompactedRequestTokens,
+  withCompactionQueuedContext,
+} from "../../sessions/compaction/request-budget.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
@@ -36,13 +42,11 @@ import {
   getActiveEmbeddedRunSnapshot,
   setActiveEmbeddedRun,
 } from "../runs.js";
-import {
-  clearEmbeddedSessionPromptStates,
-  getEmbeddedSessionPromptState,
-} from "../session-prompt-state.js";
+import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
+import { createBaseInput, createSession, sessionId } from "./attempt-prompt-submit.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
 import {
   buildRuntimeContextCustomMessage,
@@ -51,64 +55,211 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
-const sessionId = "attempt-prompt-submit-test";
 type PromptActiveSession = Parameters<typeof submitEmbeddedAttemptPrompt>[0]["promptActiveSession"];
 type PromptOptions = Parameters<PromptActiveSession>[1];
-
-function createSession() {
-  const state = {
-    messages: [{ role: "user", content: "transcript prompt", timestamp: 1 }] as AgentMessage[],
-  };
-  const baseStreamFn: StreamFn = () => {
-    throw new Error("stream function should not be called directly");
-  };
-  const originalTransformContext = async (messages: AgentMessage[]) => messages;
-  const agent = {
-    state,
-    streamFn: baseStreamFn,
-    transformContext: originalTransformContext,
-    reset: () => {
-      state.messages = [];
-    },
-  };
-  const activeSession = {
-    [agentSessionQueuePromptContext]: vi.fn(() => () => undefined),
-    get messages() {
-      return state.messages;
-    },
-    agent,
-  };
-  return { activeSession, baseStreamFn, originalTransformContext };
-}
-
-function createBaseInput() {
-  const sessionPromptState = getEmbeddedSessionPromptState(sessionId);
-  return {
-    attempt: { sessionId },
-    appendContext: "append context",
-    contextTokenBudget: 8_000,
-    images: [] as ImageContent[],
-    modelPrompt: "model prompt",
-    onFinalPromptText: vi.fn(),
-    onSteeringAcknowledged: vi.fn(),
-    prependContext: "prepend context",
-    runtimeOnly: false,
-    sessionPromptState,
-    systemPrompt: "system prompt",
-    toolResultAggregateMaxChars: 8_000,
-    toolResultMaxChars: 4_000,
-    toolResultPromptProjectionState: sessionPromptState.toolResults,
-    trajectoryRecorder: null,
-    transcriptLeafId: null,
-    transcriptPrompt: "transcript prompt",
-  };
-}
 
 afterEach(() => {
   clearEmbeddedSessionPromptStates([sessionId]);
 });
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it("replaces queued context without charging it twice or changing user overlap credit", () => {
+    const user = {
+      role: "user" as const,
+      content: "Recorded user material. ".repeat(100),
+      timestamp: 1,
+      idempotencyKey: "current:user",
+    };
+    const transient = buildRuntimeContextCustomMessage("Live transient context. ".repeat(100));
+    const queued = {
+      role: "custom" as const,
+      customType: "test.queued",
+      content: "Queued context. ".repeat(100),
+      display: false,
+      timestamp: 1,
+    };
+    if (!transient) {
+      throw new Error("Expected transient context");
+    }
+    const inputs = {
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      systemPrompt: "Prepared system",
+      pendingPrompt: "Additional instructions.\n\nhello",
+      pendingAdditivePrompt: "Additional instructions.",
+      pendingImageCount: 1,
+      pendingUserIdempotencyKey: user.idempotencyKey,
+      pendingContextMessages: [transient],
+    };
+    const prepared = createCompactionRequestBudget({
+      ...inputs,
+      pendingQueuedContextMessages: [queued],
+    });
+    const unchanged = withCompactionQueuedContext(prepared, [queued]);
+    expect(estimateCompactedRequestTokens([user], unchanged)).toBe(
+      estimateCompactedRequestTokens([user], prepared),
+    );
+    const extra = { ...queued, content: "Additional queued facts." };
+    const expanded = withCompactionQueuedContext(prepared, [queued, extra]);
+    const rebuilt = createCompactionRequestBudget({
+      ...inputs,
+      pendingQueuedContextMessages: [queued, extra],
+    });
+    expect(estimateCompactedRequestTokens([user], expanded)).toBe(
+      estimateCompactedRequestTokens([user], rebuilt),
+    );
+    const removed = withCompactionQueuedContext(prepared, []);
+    const withoutQueue = createCompactionRequestBudget(inputs);
+    expect(estimateCompactedRequestTokens([user], removed)).toBe(
+      estimateCompactedRequestTokens([user], withoutQueue),
+    );
+    expect(removed.pendingUserTokens).toBe(prepared.pendingUserTokens);
+    const userOnly = createCompactionRequestBudget({
+      contextWindow: 32_768,
+      reserveTokens: 8_192,
+      pendingPrompt: "hello",
+      pendingUserIdempotencyKey: user.idempotencyKey,
+    });
+    const added = withCompactionQueuedContext(userOnly, [queued]);
+    expect(added.pendingUserTokens).toBe(userOnly.pendingTokens);
+    expect(added.pendingTokens).toBeGreaterThan(userOnly.pendingTokens);
+  });
+
+  it.each([false, true])(
+    "fits pre-prompt compaction around prepared model context (runtimeOnly=%s)",
+    async (runtimeOnly) => {
+      const model = { ...testModel, contextWindow: 4_096, maxTokens: 1_024 };
+      const settingsManager = SettingsManager.inMemory({
+        compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 20_000 },
+        retry: { enabled: false },
+      });
+      const systemPrompt = "Preserve the project requirements.";
+      const sessionManager = SessionManager.inMemory();
+      sessionManager.appendMessage({
+        role: "user",
+        content: "Earlier archive decision: blue buttons. ".repeat(270),
+        timestamp: 1,
+      });
+      sessionManager.appendMessage(
+        createAssistant(model, [{ type: "text", text: "Archived the decision." }]),
+      );
+      sessionManager.appendMessage({
+        role: "user",
+        content: "Current project detail. ".repeat(140),
+        timestamp: 3,
+      });
+      const priorInputTokens = Math.ceil(
+        JSON.stringify({
+          system: systemPrompt,
+          messages: sessionManager.buildSessionContext().messages,
+        }).length / 4,
+      );
+      expect(priorInputTokens).toBeGreaterThan(3_072);
+      expect(priorInputTokens).toBeLessThan(model.contextWindow);
+      sessionManager.appendMessage(
+        createAssistant(
+          model,
+          [{ type: "text", text: "Details recorded." }],
+          "stop",
+          priorInputTokens,
+        ),
+      );
+      const { session } = await createTestSession({
+        model,
+        settingsManager,
+        sessionManager,
+        systemPrompt,
+        resourceLoader: createResourceLoader(),
+      });
+      const transcriptPrompt = "Answer the new request with ACK.";
+      const prependContext = "Prepared hook context. ".repeat(210);
+      const appendContext = "End of prepared hook context.";
+      const runtimeContextMessage = runtimeOnly
+        ? undefined
+        : buildRuntimeContextCustomMessage("Prepared runtime context.");
+      const pendingPrompt = [prependContext, transcriptPrompt, appendContext].join("\n\n");
+      const compactionRequestBudget = createCompactionRequestBudget({
+        contextWindow: model.contextWindow,
+        reserveTokens: settingsManager.getCompactionReserveTokens(),
+        systemPrompt,
+        tools: session.state.tools,
+        pendingPrompt,
+        pendingAdditivePrompt: [prependContext, appendContext].join("\n\n"),
+        pendingQueuedContextMessages: runtimeContextMessage ? [runtimeContextMessage] : [],
+      });
+      const requests: Array<{ text: string; tokens: number; committedBefore: number }> = [];
+      streamMocks.streamSimple.mockImplementation((activeModel: Model, context: Context) => {
+        const text =
+          context.messages
+            .filter((message) => message.role === "user")
+            .map((message) =>
+              typeof message.content === "string"
+                ? message.content
+                : message.content
+                    .map((block) => (block.type === "text" ? block.text : ""))
+                    .join(""),
+            )
+            .find((content) => content.includes(transcriptPrompt)) ?? "";
+        const tokens = Math.ceil(
+          JSON.stringify({
+            system: context.systemPrompt,
+            tools: context.tools,
+            messages: context.messages.map(({ role, content }) => ({ role, content })),
+          }).length / 4,
+        );
+        const foreground = !session.isCompacting;
+        if (foreground) {
+          requests.push({
+            text,
+            tokens,
+            committedBefore: sessionManager
+              .getEntries()
+              .filter((entry) => entry.type === "compaction").length,
+          });
+        }
+        return createAssistantResultStream(
+          createAssistant(
+            activeModel,
+            [
+              {
+                type: "text",
+                text: foreground
+                  ? "ACK"
+                  : "The project retains accessible blue buttons. ".repeat(220),
+              },
+            ],
+            "stop",
+            tokens,
+          ),
+        );
+      });
+      const submission = {
+        ...createBaseInput(),
+        activeSession: session,
+        contextTokenBudget: model.contextWindow,
+        compactionRequestBudget,
+        appendOnlyRuntimeContext: true,
+        runtimeOnly,
+        runtimeContextMessage,
+        systemPrompt,
+        transcriptPrompt,
+        modelPrompt: pendingPrompt,
+        prependContext,
+        appendContext,
+        promptActiveSession: (prompt: string, options: PromptOptions) =>
+          session.prompt(prompt, options),
+      };
+
+      await submitEmbeddedAttemptPrompt(submission);
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.text).toBe(pendingPrompt);
+      expect(requests[0]?.committedBefore).toBeGreaterThan(0);
+      expect(requests[0]?.tokens).toBeLessThanOrEqual(3_072);
+      expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "ACK" }] });
+    },
+  );
+
   it.each(["handled", "rejected"] as const)(
     "retires queued context when prompt preflight is %s",
     async (outcome) => {
@@ -143,6 +294,12 @@ describe("submitEmbeddedAttemptPrompt", () => {
           appendOnlyRuntimeContext: true,
           transcriptPrompt: text,
           modelPrompt: text,
+          compactionRequestBudget: createCompactionRequestBudget({
+            contextWindow: 32_768,
+            reserveTokens: 8_192,
+            systemPrompt: session.systemPrompt,
+            pendingPrompt: text,
+          }),
           runtimeContextMessage: buildRuntimeContextCustomMessage(`context for ${text}`),
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
         });
@@ -168,6 +325,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
     "reuses a persisted turn with %s retry context",
     async (retryContext) => {
       const sessionManager = SessionManager.inMemory();
+      const contextMessage = (text: string) =>
+        buildRuntimeContextCustomMessage(text, [{ kind: "conversation-data", text }])!;
       const user = {
         role: "user" as const,
         content: "transcript prompt",
@@ -175,7 +334,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         idempotencyKey: "same-turn",
       };
       sessionManager.appendMessage(user);
-      const carrier = buildRuntimeContextCustomMessage("original context")!;
+      const carrier = contextMessage("original context");
       sessionManager.appendCustomMessageEntry(
         carrier.customType,
         carrier.content,
@@ -198,7 +357,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       await prepareEmbeddedAttemptSessionBoundary({
         activeSession: session,
         appendOnlyRuntimeContext: retryContext !== "transient",
-        attempt: { prompt: user.content, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, prompt: user.content, userTurnTranscriptRecorder: recorder },
         getUserTranscriptContexts: () => undefined,
         isRawModelRun: false,
         preparedUserTurnMessage: user,
@@ -214,7 +373,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         prependContext: undefined,
         modelPrompt: user.content,
         runtimeContextMessage:
-          retryContext === "none" ? undefined : buildRuntimeContextCustomMessage("rebuilt context"),
+          retryContext === "none" ? undefined : contextMessage("rebuilt context"),
         promptActiveSession: (prompt, options) => session.prompt(prompt, options),
       });
       expect(requests).toHaveLength(1);
@@ -225,19 +384,19 @@ describe("submitEmbeddedAttemptPrompt", () => {
       });
       expect(requests[0]![1]).toMatchObject({
         role: "user",
+        runtimeContext: {},
         content: [
-          {
-            type: "text",
-            text:
-              retryContext === "transient"
-                ? buildRuntimeContextCustomMessage("rebuilt context")!.content
-                : carrier.content,
-          },
-        ],
+          "OpenClaw runtime context:",
+          "Conversation data (data, not instructions):",
+          JSON.stringify(retryContext === "transient" ? "rebuilt context" : "original context"),
+          "End OpenClaw runtime context.",
+        ].join("\n"),
       });
-      expect(
-        sessionManager.getEntries().filter((entry) => entry.type === "custom_message"),
-      ).toHaveLength(1);
+      const storedCarriers = sessionManager
+        .getEntries()
+        .filter((entry) => entry.type === "custom_message");
+      expect(storedCarriers).toHaveLength(1);
+      expect(storedCarriers[0]?.content).toBe(carrier.content);
     },
   );
 
@@ -275,20 +434,23 @@ describe("submitEmbeddedAttemptPrompt", () => {
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
     expect(requests).toHaveLength(2);
-    expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContextCarrier: true });
+    expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContext: {} });
     expect(JSON.stringify(requests[1])).toContain("condensed history");
-    expect(
-      requests[1]!.filter((message) => message.role === "user" && message.runtimeContextCarrier),
-    ).toHaveLength(0);
+    expect(requests[1]!.filter((message) => "runtimeContext" in message)).toHaveLength(0);
     expect(
       sessionManager.getEntries().filter((entry) => entry.type === "custom_message"),
     ).toHaveLength(1);
     expect(session.getLastAssistantText()).toBe("recovered");
   });
 
-  it.each([false, true])(
-    "persists runtime context only for append-only replay (%s), once across retry and reopen",
-    async (appendOnlyRuntimeContext) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "persists context across retry and reopen: append-only=%s runtime-only=%s",
+    async (appendOnlyRuntimeContext, runtimeOnly) => {
       await withOpenClawTestState({ label: "runtime-context-persistence" }, async (state) => {
         const target = {
           agentId: "main",
@@ -326,6 +488,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
             ...input,
             activeSession: session,
             appendOnlyRuntimeContext,
+            runtimeOnly,
             appendContext: undefined,
             prependContext: undefined,
             transcriptPrompt: text,
@@ -364,7 +527,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
           expect(providerPrefix(requests[2]!.slice(0, requests[0]!.length))).toEqual(
             providerPrefix(requests[0]!),
           );
-          expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContextCarrier: true });
+          expect(requests[0]![1]).toMatchObject({ role: "user", runtimeContext: {} });
         } else {
           expect(JSON.stringify(requests[2])).not.toContain("context for first");
         }
@@ -383,65 +546,78 @@ describe("submitEmbeddedAttemptPrompt", () => {
   );
 
   it.each([
-    { scenario: "first-turn", excludeCurrentUser: true },
-    { scenario: "after-reset", excludeCurrentUser: true },
-    { scenario: "after-reset-metadata", excludeCurrentUser: true },
-    { scenario: "skipped-prepared", excludeCurrentUser: false },
-    { scenario: "raw-probe", excludeCurrentUser: false },
-    { scenario: "settled-finalization", excludeCurrentUser: false },
-  ])(
-    "preserves the pre-turn BTW snapshot boundary: $scenario",
-    async ({ scenario, excludeCurrentUser }) => {
-      await withOpenClawTestState({ label: "btw-current-user" }, async (state) => {
-        const target = {
-          agentId: "main",
-          sessionId,
-          sessionKey: `agent:main:btw-current-user-${scenario}`,
-          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-        };
-        await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
-        const sessionManager = SessionManager.open(target, state.workspaceDir);
-        if (scenario !== "first-turn") {
-          sessionManager.appendMessage({ role: "user", content: "old conversation", timestamp: 1 });
-          sessionManager.appendResetBoundary("reset");
-        }
-        const beforeCurrentUserLeaf = sessionManager.getLeafId();
-        const currentUser = {
-          role: "user" as const,
-          content: "Current main task, not prior conversation",
-          idempotencyKey: "btw-current-user:user",
-          timestamp: 2,
-        };
-        const appended = sessionManager.appendMessageWithTranscriptAnchor(currentUser);
-        if (!appended.anchor) {
-          throw new Error("Expected a persisted current-user admission");
-        }
-        const recorder = createUserTurnTranscriptRecorder({
-          message: currentUser,
-          target: () => undefined,
-        });
-        recorder.markRuntimePersisted(currentUser, appended.anchor);
-        const { activeSession } = createSession();
-        activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
-        const input = createBaseInput();
-        const isRawModelRun = scenario === "raw-probe";
-        const isFinalization = scenario === "settled-finalization";
+    ["first-turn", true],
+    ["after-reset", true],
+    ["after-reset-metadata", true],
+    ["skipped-prepared", false],
+    ["raw-probe", false],
+    ["settled-finalization", false],
+  ])("preserves the pre-turn BTW snapshot boundary: %s", async (scenario, excludeCurrentUser) => {
+    await withOpenClawTestState({ label: "btw-current-user" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: `agent:main:btw-current-user-${scenario}`,
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      const sessionManager = SessionManager.open(target, state.workspaceDir);
+      if (scenario !== "first-turn") {
+        sessionManager.appendMessage({ role: "user", content: "old conversation", timestamp: 1 });
+        sessionManager.appendResetBoundary("reset");
+      }
+      const beforeCurrentUserLeaf = sessionManager.getLeafId();
+      const currentUser = {
+        role: "user" as const,
+        content: "Current main task, not prior conversation",
+        idempotencyKey: "btw-current-user:user",
+        timestamp: 2,
+      };
+      const appended = sessionManager.appendMessageWithTranscriptAnchor(currentUser);
+      if (!appended.anchor) {
+        throw new Error("Expected a persisted current-user admission");
+      }
+      const recorder = createUserTurnTranscriptRecorder({
+        message: currentUser,
+        target: () => undefined,
+      });
+      recorder.markRuntimePersisted(currentUser, appended.anchor);
+      const { activeSession } = createSession();
+      activeSession.agent.state.messages = sessionManager.buildSessionContext().messages;
+      const input = createBaseInput();
+      const isRawModelRun = scenario === "raw-probe";
+      const isFinalization = scenario === "settled-finalization";
+      const runId = "btw-current-user";
+      const handle = {
+        runId,
+        queueMessage: async () => undefined,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: () => undefined,
+      };
+      const admission = prepareSystemAgentRunAdmission(
+        {},
+        runId,
+        target.agentId,
+        "btw-snapshot-test",
+      );
+      try {
         const attempt = {
+          admittedRunContext: await admission.admit("embedded"),
           config: {},
           operation: isFinalization ? "settled-tool-finalization" : "attempt",
           skipPreparedUserTurnMessage: isFinalization || scenario === "skipped-prepared",
-          model: { id: "test-model", provider: "test-provider", api: "openai-responses" },
-          modelId: "test-model",
+          model: testModel,
           provider: "test-provider",
           prompt: currentUser.content,
-          runId: "btw-current-user",
+          runId,
           sessionId,
           sessionKey: target.sessionKey,
           sessionTarget: target,
           trigger: "user",
           userTurnTranscriptRecorder: recorder,
           workspaceDir: state.workspaceDir,
-        } as Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"];
+        } satisfies Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["attempt"];
         await prepareEmbeddedAttemptSessionBoundary({
           activeSession: activeSession as unknown as Parameters<
             typeof prepareEmbeddedAttemptSessionBoundary
@@ -457,83 +633,57 @@ describe("submitEmbeddedAttemptPrompt", () => {
         expect(activeSession.messages).toEqual(expectedSnapshotMessages);
         expect(sessionManager.getLeafId()).toBe(appended.entryId);
         if (scenario === "after-reset-metadata") {
-          sessionManager.appendThinkingLevelChange("low");
+          await sessionManager.appendThinkingLevelChange("low");
         }
         const persistedBefore = loadTranscriptEventsSync(target);
-        const handle = {
-          runId: attempt.runId,
-          queueMessage: async () => undefined,
-          isStreaming: () => true,
-          isCompacting: () => false,
-          abort: () => undefined,
-        };
-        const admission = prepareSystemAgentRunAdmission(
-          {},
-          attempt.runId,
-          target.agentId,
-          "btw-snapshot-test",
-        );
         setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
-        try {
-          attempt.admittedRunContext = await admission.admit("embedded");
-          const assembly = await prepareEmbeddedAttemptPromptAssembly({
-            attempt,
-            activeSession: activeSession as unknown as Parameters<
-              typeof prepareEmbeddedAttemptPromptAssembly
-            >[0]["activeSession"],
-            sessionManager,
-            hookRunner: null,
-            hookAgentId: "main",
-            diagnosticTrace: { traceId: "11111111111111111111111111111111" },
-            isRawModelRun,
-            sessionAgentId: "main",
-            runtimeModel: "test-model",
-            systemPromptText: input.systemPrompt,
-            applyPromptBuildToolsAllow: () => [],
-            setActiveSessionSystemPrompt: vi.fn(),
-            setLeasedSteering: vi.fn(),
-            cache: {
-              observabilityEnabled: false,
-              retention: "none",
-              streamStrategy: "default",
-              transport: "sse",
-              tools: [],
-              trace: null,
-            },
-          });
-          await submitEmbeddedAttemptPrompt({
-            ...input,
-            attempt,
-            activeSession,
-            transcriptLeafId: assembly.transcriptLeafId,
-            transcriptPrompt: currentUser.content,
-            modelPrompt: currentUser.content,
-            promptActiveSession: async () => undefined,
-          });
-          const snapshot = getActiveEmbeddedRunSnapshot(sessionId);
-          if (!snapshot) {
-            throw new Error("Expected the submitted main-run snapshot");
-          }
-          expect(snapshot.messages).toEqual(expectedSnapshotMessages);
-          expect(snapshot.inFlightPrompt).toBe(currentUser.content);
-          const messages = await readBtwTranscriptMessages({
-            ...target,
-            sessionFile: target.sessionKey,
-            snapshotLeafId: snapshot.transcriptLeafId,
-          });
-          expect(messages).toEqual(excludeCurrentUser ? [] : [currentUser]);
-          expect(snapshot.transcriptLeafId).toBe(
-            excludeCurrentUser ? beforeCurrentUserLeaf : sessionManager.getLeafId(),
-          );
-          expect(loadTranscriptEventsSync(target)).toEqual(persistedBefore);
-        } finally {
-          admission.close();
-          clearActiveEmbeddedRun(sessionId, handle, target.sessionKey);
-          forgetPromptBuildDrainCacheForRun(attempt.runId);
+        const assembly = await prepareEmbeddedAttemptPromptAssembly({
+          attempt,
+          activeSession,
+          sessionManager,
+          hookRunner: null,
+          hookAgentId: "main",
+          diagnosticTrace: { traceId: "11111111111111111111111111111111" },
+          isRawModelRun,
+          sessionAgentId: "main",
+          runtimeModel: "test-model",
+          systemPromptText: input.systemPrompt,
+          applyPromptBuildToolsAllow: () => [],
+          setActiveSessionSystemPrompt: vi.fn(),
+          setLeasedSteering: vi.fn(),
+        });
+        await submitEmbeddedAttemptPrompt({
+          ...input,
+          attempt,
+          activeSession,
+          transcriptLeafId: assembly.transcriptLeafId,
+          transcriptPrompt: currentUser.content,
+          modelPrompt: currentUser.content,
+          promptActiveSession: async () => undefined,
+        });
+        const snapshot = getActiveEmbeddedRunSnapshot(sessionId);
+        if (!snapshot) {
+          throw new Error("Expected the submitted main-run snapshot");
         }
-      });
-    },
-  );
+        expect(snapshot.messages).toEqual(expectedSnapshotMessages);
+        expect(snapshot.inFlightPrompt).toBe(currentUser.content);
+        const messages = await readBtwTranscriptMessages({
+          ...target,
+          sessionFile: target.sessionKey,
+          snapshotLeafId: snapshot.transcriptLeafId,
+        });
+        expect(messages).toEqual(excludeCurrentUser ? [] : [currentUser]);
+        expect(snapshot.transcriptLeafId).toBe(
+          excludeCurrentUser ? beforeCurrentUserLeaf : sessionManager.getLeafId(),
+        );
+        expect(loadTranscriptEventsSync(target)).toEqual(persistedBefore);
+      } finally {
+        admission.close();
+        clearActiveEmbeddedRun(sessionId, handle, target.sessionKey);
+        forgetPromptBuildDrainCacheForRun(runId);
+      }
+    });
+  });
 
   it.each([
     { skipPreparedUserTurnMessage: false, expectedKey: "persisted-current-user" },
@@ -599,7 +749,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       ...input,
       activeSession,
       images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
-      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"] },
+      leasedSteering: { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true },
       promptActiveSession,
       runtimeOnly: true,
     });
@@ -618,7 +768,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
       customType: "openclaw.runtime-context",
       content: "runtime context",
       display: false,
-      details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
+      details: {
+        source: "openclaw-runtime-context",
+        runtimeContextCarrier: true,
+      },
       timestamp: 2,
     };
     const promptActiveSession = vi.fn(
@@ -718,7 +871,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     ).toEqual([{ type: "text", text: oversized }]);
   });
 
-  it("records aggregate truncation on a provider-bound cache break", async () => {
+  it("declares new pruning once and records aggregate truncation on a provider-bound cache break", async () => {
     const { activeSession } = createSession();
     const input = createBaseInput();
     const promptCacheKey = `${sessionId}:aggregate-truncation`;
@@ -732,13 +885,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
       systemPrompt: input.systemPrompt,
       tools: [],
     } as const;
-    beginPromptCacheObservation(observation);
-    completePromptCacheObservation({
-      sessionId,
-      promptCacheKey,
-      usage: { cacheRead: 8_000 },
-    });
-    beginPromptCacheObservation(observation);
     activeSession.agent.state.messages = [
       { role: "user", content: "call tools", timestamp: 1 },
       {
@@ -757,25 +903,38 @@ describe("submitEmbeddedAttemptPrompt", () => {
         isError: false,
         timestamp: 3,
       },
-      // Real dispatch pins a non-tool carrier after tool results, so the fresh
-      // batch is not trailing-protected and aggregate recovery can engage.
-      { role: "user", content: "continue", timestamp: 4 },
+      // Consumed results remain eligible when history is projected for the first time.
+      { role: "assistant", content: [{ type: "text", text: "results processed" }], timestamp: 4 },
+      { role: "user", content: "continue", timestamp: 5 },
     ] as AgentMessage[];
-    activeSession.agent.streamFn = (() => undefined as never) as StreamFn;
-
-    await submitEmbeddedAttemptPrompt({
-      ...input,
-      attempt: { sessionId, promptCacheKey },
-      activeSession,
-      toolResultAggregateMaxChars: 6_000,
-      promptActiveSession: async () => {
-        await activeSession.agent.streamFn(
-          {} as never,
-          { messages: activeSession.messages } as never,
-          {} as never,
-        );
-      },
+    beginPromptCacheObservation({
+      ...observation,
+      messages: activeSession.messages as Context["messages"],
     });
+    completePromptCacheObservation({ sessionId, promptCacheKey, usage: { cacheRead: 8_000 } });
+    const changes: ReturnType<typeof beginPromptCacheObservation>["changes"][] = [];
+    activeSession.agent.streamFn = (_model, context) => {
+      changes.push(
+        beginPromptCacheObservation({ ...observation, messages: context.messages }).changes,
+      );
+      return undefined as never;
+    };
+
+    const submit = () =>
+      submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: { sessionId, promptCacheKey },
+        activeSession,
+        toolResultAggregateMaxChars: 6_000,
+        promptActiveSession: async () => {
+          await activeSession.agent.streamFn(
+            {} as never,
+            { messages: activeSession.messages } as never,
+            {} as never,
+          );
+        },
+      });
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
 
     expect(
       completePromptCacheObservation({
@@ -791,7 +950,16 @@ describe("submitEmbeddedAttemptPrompt", () => {
           code: "aggregateToolResultTruncation",
           detail: "aggregate tool-result truncation changed provider prompt",
         },
+        { code: "pruning", detail: "pruning changed provider history" },
       ],
     });
+    await withEnvAsync({ OPENCLAW_PROMPT_CACHE_ASSERT: "1" }, submit);
+    expect(changes).toEqual([
+      [
+        expect.objectContaining({ code: "aggregateToolResultTruncation" }),
+        expect.objectContaining({ code: "pruning" }),
+      ],
+      null,
+    ]);
   });
 });

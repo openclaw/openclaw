@@ -1,50 +1,14 @@
-// Discord tests cover pluralkit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
-type MockResponse = {
-  status: number;
-  ok: boolean;
-  text: () => Promise<string>;
-  json: () => Promise<unknown>;
-  body: null;
-  arrayBuffer: () => Promise<Buffer>;
-};
-
-const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
+const buildResponse = (params: { status: number; body?: unknown }): Response => {
   const body = params.body;
-  const textPayload = typeof body === "string" ? body : body == null ? "" : JSON.stringify(body);
-  return {
+  return new Response(typeof body === "string" ? body : JSON.stringify(body ?? {}), {
     status: params.status,
-    ok: params.status >= 200 && params.status < 300,
-    text: async () => textPayload,
-    json: async () => body ?? {},
-    body: null,
-    arrayBuffer: async () => Buffer.from(textPayload),
-  };
-};
-
-function cancelTrackedResponse(
-  text: string,
-  init: ResponseInit,
-): {
-  response: Response;
-  wasCanceled: () => boolean;
-} {
-  let canceled = false;
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new TextEncoder().encode(text));
-    },
-    cancel() {
-      canceled = true;
-    },
+    headers: { "content-type": "application/json" },
   });
-  return {
-    response: new Response(stream, init),
-    wasCanceled: () => canceled,
-  };
-}
+};
 
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
@@ -59,7 +23,7 @@ describe("fetchPluralKitMessageInfo", () => {
   });
 
   it("returns null on 404", async () => {
-    const tracked = cancelTrackedResponse("missing", { status: 404 });
+    const tracked = cancelTrackedTextResponse("missing", { status: 404 });
     const fetcher = vi.fn(async () => tracked.response);
     const result = await fetchPluralKitMessageInfo({
       messageId: "missing",
@@ -181,7 +145,7 @@ describe("fetchPluralKitMessageInfo", () => {
   });
 
   it("bounds PluralKit API error bodies without using response.text()", async () => {
-    const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
+    const tracked = cancelTrackedTextResponse(`${"plural failure ".repeat(1024)}tail`, {
       status: 500,
       headers: { "content-type": "text/plain" },
     });

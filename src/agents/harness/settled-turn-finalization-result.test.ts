@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../../llm/types.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
+import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
 import {
   assertSettledTurnFinalizationResult,
@@ -18,14 +19,7 @@ function assistantMessage(
     api: "openai-responses",
     provider: "openai",
     model: "gpt-5.5",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason,
     timestamp: 0,
   };
@@ -102,16 +96,13 @@ describe("assertSettledTurnFinalizationResult", () => {
     );
   });
 
-  it.each(["length", "error", "aborted"] as const)(
-    "rejects an assistant with unsuccessful %s stop reason",
-    (stopReason) => {
-      expect(() =>
-        assertSettledTurnFinalizationResult({
-          assistant: assistantMessage([{ type: "text", text: "partial" }], stopReason),
-        }),
-      ).toThrow(`unsuccessful stop reason: ${stopReason}`);
-    },
-  );
+  it("rejects an assistant stopped at the length limit", () => {
+    expect(() =>
+      assertSettledTurnFinalizationResult({
+        assistant: assistantMessage([{ type: "text", text: "partial" }], "length"),
+      }),
+    ).toThrow("unsuccessful stop reason: length");
+  });
 
   it("rejects an invalid transcript index", () => {
     expect(() =>

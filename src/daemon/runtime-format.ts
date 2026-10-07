@@ -1,19 +1,13 @@
 /** Formats daemon runtime state into compact status lines for CLI output. */
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
-import { getSystemdCgroupHygieneSummary } from "./service-runtime.js";
+import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 
-type ServiceRuntimeLike = {
-  status?: string;
-  state?: string;
-  subState?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-  lastRunResult?: string;
-  lastRunTime?: string;
-  detail?: string;
-  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
-};
+export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntime): string {
+  if (runtime?.inspectionReason === "service-manager-unavailable") {
+    return "no supported service manager detected";
+  }
+  return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
+}
 
 // Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
@@ -31,7 +25,7 @@ function formatLastExitStatus(status: number): string {
   return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
 }
 
-export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
+export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | null {
   if (!runtime) {
     return null;
   }

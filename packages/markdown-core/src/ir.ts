@@ -1,12 +1,9 @@
-// Markdown Core module implements ir behavior.
-import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt, {
   type MarkdownIt as MarkdownItParser,
   type StateCore,
   type StateInline,
 } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
-import { visibleWidth } from "../../terminal-core/src/ansi.js";
 import {
   ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
   markdownItAssistantTranscriptRoles,
@@ -15,20 +12,27 @@ import {
 } from "./assistant-transcript.js";
 import { chunkText } from "./chunk-text.js";
 import { matchMarkdownHtmlTag, tokenizeHtmlTags } from "./html-tags.js";
+import { appendAssistantTranscriptRoleText, appendImageAlternative } from "./ir-annotations.js";
 import {
-  appendAssistantTranscriptRoleImage,
-  appendAssistantTranscriptRoleText,
-} from "./ir-annotations.js";
+  appendHtmlTags,
+  attachBlockMetadata,
+  copyMarkdownListItem,
+  copyHtmlTags,
+  defineMetadata,
+  RAW_HTML_TOKEN_TYPE,
+  sliceListMarker,
+  type MarkdownHtmlMetadata,
+  type MarkdownListItemMarker,
+  type MarkdownListItemWithMetadata,
+  type MarkdownBlockSpan,
+  type MarkdownIRWithMetadata,
+} from "./ir-metadata.js";
+import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
-  clampAnnotationSpans,
-  clampLinkSpans,
-  clampStyleSpans,
   copyMarkdownLinkSpan,
   createMarkdownLinkSpan,
   createStyleSpan,
-  mergeAnnotationSpans,
-  mergeStyleSpans,
   sliceAnnotationSpans,
   sliceLinkSpans,
   sliceStyleSpans,
@@ -37,8 +41,10 @@ import {
   type MarkdownStyle,
   type MarkdownStyleSpan,
 } from "./ir-spans.js";
+import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-layout.js";
 import type { MarkdownTableMode } from "./types.js";
 
+export { sliceMarkdownIR } from "./ir-slice.js";
 export type { MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir-spans.js";
 
 type ListState = {
@@ -54,8 +60,6 @@ type LinkState = {
   labelStart: number;
   autoLinked: boolean;
 };
-
-const OPEN_MARKDOWN_HTML_TAG_PATTERN = /<\/?[a-zA-Z][a-zA-Z0-9-]*\b[^<>]*$/;
 
 const INLINE_STYLE_BY_TOKEN = new Map<string, MarkdownStyle>([
   ["underline_open", "underline"],
@@ -83,6 +87,7 @@ type RenderEnv = {
   assistantTranscriptRoleHeaders?: boolean;
   assistantTranscriptRolePreserveLinks?: boolean;
   listStack: ListState[];
+  tableSourceColumns?: Map<number, number>;
 };
 
 type MarkdownToken = {
@@ -101,62 +106,12 @@ type MarkdownToken = {
   taskListMarker?: boolean;
 };
 
-type MarkdownListItemMarker = {
-  kind: "bullet" | "ordered";
-  listMarker?: { start: number; end: number };
-  task?: true;
-  taskMarker?: { start: number; end: number };
-  /** Parser-owned identity and rendered span for block-native list emitters. */
-  listId?: number;
-  parentListId?: number;
-  depth?: number;
-  start?: number;
-  end?: number;
-};
-
-type MarkdownListItemMetadata = {
-  /** Rendered content owned by this item after its native marker. */
-  contentStart?: number;
-  contentEnd?: number;
-  /** True when the source marker line itself contains no item content. */
-  markerOnly?: true;
-  /** Original Markdown source ownership, attached without changing legacy serialization. */
-  sourceMarker?: { start: number; end: number };
-  sourceContent?: { start: number; end: number };
-  sourceIndent?: number;
-  sourceStartLine?: number;
-  sourceEndLine?: number;
-};
-
-type MarkdownListItemWithMetadata = MarkdownListItemMarker & MarkdownListItemMetadata;
-
-type MarkdownBlockSpan = {
-  kind: "blockquote" | "code_block" | "heading" | "thematic_break";
-  start: number;
-  end: number;
-  /** Parser-owned container nesting depth, starting at one. */
-  depth: number;
-  blockquoteDepth?: number;
-  codeOrigin?: "fenced" | "indented";
-  codeClosed?: boolean;
-  headingLevel?: number;
-  headingOrigin?: "atx" | "setext";
-  language?: string;
-  sourceStartLine?: number;
-  sourceEndLine?: number;
-};
-
-export type MarkdownIR = {
+export type MarkdownIR = MarkdownHtmlMetadata & {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
   annotations?: MarkdownAnnotationSpan[];
   listItems?: MarkdownListItemMarker[];
-};
-
-type MarkdownIRWithMetadata = MarkdownIR & {
-  /** Parser-owned block metadata, attached without changing legacy serialization. */
-  blocks?: MarkdownBlockSpan[];
 };
 
 type MarkdownTableAlignment = "left" | "center" | "right";
@@ -167,7 +122,7 @@ export type MarkdownTableData = {
   aligns?: (MarkdownTableAlignment | undefined)[];
 };
 
-export type MarkdownTableCell = {
+export type MarkdownTableCell = MarkdownHtmlMetadata & {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
@@ -179,6 +134,20 @@ export type MarkdownTableMeta = MarkdownTableData & {
   headerCells: MarkdownTableCell[];
   rowCells: MarkdownTableCell[][];
 };
+
+type MarkdownTableSource = {
+  start: number;
+  end: number;
+  prefix: string;
+  headers: string[];
+  rows: string[][];
+};
+type MarkdownTableWithSource = MarkdownTableMeta & { source?: MarkdownTableSource };
+
+/** Private source coordinates do not change the serialized native-table payload. */
+export function getMarkdownTableSource(table: MarkdownTableWithSource) {
+  return table.source;
+}
 
 type OpenStyle = {
   style: MarkdownStyle;
@@ -194,13 +163,15 @@ type RenderTarget = {
   annotations: MarkdownAnnotationSpan[];
 };
 
-type TableCell = MarkdownTableCell;
-
 type TableState = {
-  headers: TableCell[];
-  rows: TableCell[][];
+  sourceLines?: [number, number];
+  sourceHeaders: string[];
+  sourceRows: string[][];
+  currentSourceRow: string[];
+  headers: MarkdownTableCell[];
+  rows: MarkdownTableCell[][];
   aligns: (MarkdownTableAlignment | undefined)[];
-  currentRow: TableCell[];
+  currentRow: MarkdownTableCell[];
   currentCell: RenderTarget | null;
   inHeader: boolean;
 };
@@ -233,45 +204,6 @@ type RenderState = RenderTarget & {
   sourceIndex: ReturnType<typeof indexSourceLines> | undefined;
 };
 
-function defineMetadata<T extends object, K extends keyof T>(target: T, key: K, value: T[K]): void {
-  if (value === undefined) {
-    return;
-  }
-  Object.defineProperty(target, key, {
-    configurable: true,
-    enumerable: false,
-    value,
-    writable: true,
-  });
-}
-
-function attachListItemMetadata(
-  item: MarkdownListItemMarker,
-  metadata: MarkdownListItemMetadata,
-): MarkdownListItemWithMetadata {
-  const itemWithMetadata = item as MarkdownListItemWithMetadata;
-  for (const key of [
-    "contentStart",
-    "contentEnd",
-    "markerOnly",
-    "sourceMarker",
-    "sourceContent",
-    "sourceIndent",
-    "sourceStartLine",
-    "sourceEndLine",
-  ] as const) {
-    defineMetadata(itemWithMetadata, key, metadata[key]);
-  }
-  return itemWithMetadata;
-}
-
-function attachBlockMetadata(ir: MarkdownIR, blocks: MarkdownBlockSpan[]): MarkdownIR {
-  if (blocks.length > 0) {
-    defineMetadata(ir as MarkdownIRWithMetadata, "blocks", blocks);
-  }
-  return ir;
-}
-
 export type MarkdownParseOptions = {
   /** Mark assistant-authored transcript-role headers after Markdown parsing. */
   assistantTranscriptRoleHeaders?: boolean;
@@ -295,6 +227,12 @@ export type MarkdownParseOptions = {
    * instead of emphasis delimiters. Disabled by default.
    */
   preserveDunderIdentifiers?: boolean;
+  /**
+   * Let links with any scheme (file:, data:, javascript:, ...) tokenize instead
+   * of being dropped by markdown-it's built-in denylist. Only set this when the
+   * caller's own `buildLink` already applies a scheme allowlist downstream.
+   */
+  allowAllLinkSchemes?: boolean;
 };
 
 function appendHeadingSeparator(state: RenderState, nextBlockStart: number | undefined) {
@@ -304,7 +242,7 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
     state.headingLineEnd,
   );
   if (newlineCount === undefined) {
-    appendParagraphSeparator(state);
+    appendParagraphSeparator(state, undefined, nextBlockStart);
     return;
   }
   if (newlineCount > 0) {
@@ -313,7 +251,7 @@ function appendHeadingSeparator(state: RenderState, nextBlockStart: number | und
   state.headingLineEnd = undefined;
 }
 
-// These seven parser switches bound the prepared configurations to 128 entries.
+// These eight parser switches bound the prepared configurations to 256 entries.
 // Parse state and rendered options remain local to each markdownToIRWithMeta call.
 const markdownParsers = new Map<number, MarkdownItParser>();
 
@@ -325,7 +263,8 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
     (options.enableHtmlUnderline ? 8 : 0) |
     (options.enableSpoilers ? 16 : 0) |
     (options.tableMode && options.tableMode !== "off" ? 32 : 0) |
-    (options.autolink === false ? 64 : 0);
+    (options.autolink === false ? 64 : 0) |
+    (options.allowAllLinkSchemes ? 128 : 0);
   const prepared = markdownParsers.get(key);
   if (prepared) {
     return prepared;
@@ -349,9 +288,10 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   if (options.enableTaskLists) {
     md.core.ruler.before("inline", "markdown_core_task_lists", protectTaskListMarkers);
   }
-  if (options.enableHtmlUnderline) {
-    md.inline.ruler.before("html_inline", "markdown_core_html_underline", parseHtmlUnderline);
-  }
+  const enableHtmlUnderline = options.enableHtmlUnderline === true;
+  md.inline.ruler.before("html_inline", RAW_HTML_TOKEN_TYPE, (state, silent) =>
+    parseHtmlLexeme(state, silent, enableHtmlUnderline),
+  );
   if (options.enableSpoilers) {
     // Spoiler delimiters can surround a line-leading role header. Normalize
     // them before semantic detection so later rendering cannot expose a role
@@ -363,14 +303,65 @@ function createMarkdownIt(options: MarkdownParseOptions): MarkdownItParser {
   md.enable("strikethrough");
   if (options.tableMode && options.tableMode !== "off") {
     md.enable("table");
+    md.block.ruler.before("table", "markdown_core_table_source", (state, line, _end, silent) => {
+      // SAFETY: markdownToIRWithMeta creates and passes this parser's RenderEnv.
+      const env = state.env as RenderEnv;
+      if (!silent && env.tableSourceColumns) {
+        const start = (state.bMarks[line] ?? 0) + (state.tShift[line] ?? 0);
+        env.tableSourceColumns.set(line, start - state.src.lastIndexOf("\n", start - 1) - 1);
+      }
+      return false;
+    });
   } else {
     md.disable("table");
   }
   if (options.autolink === false) {
     md.disable("autolink");
   }
+  if (options.allowAllLinkSchemes) {
+    // markdown-it's default validateLink drops file:/javascript:/vbscript:/data:
+    // links before they ever tokenize as a link, so the raw `[label](href)`
+    // source leaks through unparsed. Scheme allowlisting belongs to the
+    // renderer's own buildLink policy, not this parser (see image-spans.ts).
+    md.validateLink = () => true;
+  }
   markdownParsers.set(key, md);
   return md;
+}
+
+/** Count fenced code body characters using the same block grammar as rendering. */
+export function countMarkdownFencedCodeChars(markdown: string): number {
+  if (!markdown.includes("```") && !markdown.includes("~~~")) {
+    return 0;
+  }
+  const parser = createMarkdownIt({ linkify: false, autolink: false, tableMode: "bullets" });
+  let count = 0;
+  for (const token of parser.parse(markdown, {})) {
+    if (token.type === "fence") {
+      // The parser's final LF frames the code body; counting it shifts the speech threshold.
+      count += token.content.length - (token.content.endsWith("\n") ? 1 : 0);
+    }
+  }
+  return count;
+}
+
+/** Locate table source ranges using the same block grammar as table rendering. */
+export function findMarkdownTableRanges(markdown: string): Array<{ start: number; end: number }> {
+  if (!markdown.includes("|")) {
+    return [];
+  }
+  const parser = createMarkdownIt({ linkify: false, autolink: false, tableMode: "block" });
+  const tableLines = parser
+    .parse(markdown, {})
+    .flatMap((token) => (token.type === "table_open" && token.map ? [token.map] : []));
+  if (tableLines.length === 0) {
+    return [];
+  }
+  const { lines, starts } = indexSourceLines(markdown);
+  return tableLines.map(([first, after]) => ({
+    start: starts[first] ?? 0,
+    end: (starts[after - 1] ?? 0) + (lines[after - 1]?.length ?? 0),
+  }));
 }
 
 function preserveDunderIdentifier(state: StateInline, silent: boolean): boolean {
@@ -428,7 +419,7 @@ function protectTaskListMarkers(state: StateCore): void {
   }
 }
 
-function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
+function parseHtmlLexeme(state: StateInline, silent: boolean, enableUnderline: boolean): boolean {
   if (state.src.charCodeAt(state.pos) !== 0x3c) {
     return false;
   }
@@ -438,11 +429,11 @@ function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
   }
   const tag = tokenizeHtmlTags(raw).next().value;
   const underlineTag =
-    tag && tag.start === 0 && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
+    enableUnderline && tag && (tag.name === "u" || tag.name === "ins") ? tag : undefined;
   if (!silent) {
     const token = state.push(
       !underlineTag || underlineTag.selfClosing
-        ? "text"
+        ? RAW_HTML_TOKEN_TYPE
         : underlineTag.closing
           ? "underline_close"
           : "underline_open",
@@ -450,7 +441,12 @@ function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
       0,
     );
     if (!underlineTag || underlineTag.selfClosing) {
+      // Preserve the complete lexeme before entity decoding or text joining; raw
+      // anchors intentionally leave linkLevel unchanged so their bodies still linkify.
       token.content = raw;
+      if (tag) {
+        defineMetadata(token, "htmlTags", [tag]);
+      }
     }
   }
   state.pos += raw.length;
@@ -458,17 +454,9 @@ function parseHtmlUnderline(state: StateInline, silent: boolean): boolean {
 }
 
 function getAttr(token: MarkdownToken, name: string): string | null {
-  if (token.attrGet) {
-    return token.attrGet(name);
-  }
-  if (token.attrs) {
-    for (const [key, value] of token.attrs) {
-      if (key === name) {
-        return value;
-      }
-    }
-  }
-  return null;
+  return token.attrGet
+    ? token.attrGet(name)
+    : (token.attrs?.find(([key]) => key === name)?.[1] ?? null);
 }
 
 function markdownTableAlignmentFromToken(token: MarkdownToken): MarkdownTableAlignment | undefined {
@@ -521,7 +509,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
   const usableDelims = totalDelims - (totalDelims % 2);
 
   const result: MarkdownToken[] = [];
-  const state = { spoilerOpen: false };
+  let spoilerOpen = false;
   let consumedDelims = 0;
 
   for (const token of tokens) {
@@ -540,9 +528,7 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
     while (index < content.length) {
       const next = content.indexOf("||", index);
       if (next === -1) {
-        if (index < content.length) {
-          result.push(createTextToken(token, content.slice(index)));
-        }
+        result.push(createTextToken(token, content.slice(index)));
         break;
       }
       if (consumedDelims >= usableDelims) {
@@ -553,9 +539,9 @@ function injectSpoilersIntoInline(tokens: MarkdownToken[]): MarkdownToken[] {
         result.push(createTextToken(token, content.slice(index, next)));
       }
       consumedDelims += 1;
-      state.spoilerOpen = !state.spoilerOpen;
+      spoilerOpen = !spoilerOpen;
       result.push({
-        type: state.spoilerOpen ? "spoiler_open" : "spoiler_close",
+        type: spoilerOpen ? "spoiler_open" : "spoiler_close",
       });
       index = next + 2;
     }
@@ -579,11 +565,12 @@ function resolveRenderTarget(state: RenderState): RenderTarget {
   return state.table?.currentCell ?? state;
 }
 
-function appendText(state: RenderState, value: string) {
+function appendText(state: RenderState, value: string, provenance?: object) {
   if (!value) {
     return;
   }
   const target = resolveRenderTarget(state);
+  appendHtmlTags(target, provenance, target.text.length);
   target.text += value;
 }
 
@@ -615,27 +602,36 @@ function closeStyle(
   }
 }
 
-function appendParagraphSeparator(state: RenderState, token?: MarkdownToken) {
+function appendParagraphSeparator(
+  state: RenderState,
+  token?: MarkdownToken,
+  nextBlockStart?: number,
+) {
   if (state.table) {
     return;
-  } // Don't add paragraph separators inside tables
+  }
   if (state.env.listStack.length > 0) {
     const currentList = state.env.listStack[state.env.listStack.length - 1];
     const directListParagraphLevel = (currentList?.openLevel ?? 0) + 2;
+    const itemEnd = state.openListItems.at(-1)?.sourceEndLine;
+    // Tight wrappers still separate sibling blocks inside their owning item.
+    // Item transitions keep their existing spacing at list_item_close.
+    const hasFollowingBlock =
+      nextBlockStart !== undefined && itemEnd !== undefined && nextBlockStart < itemEnd;
     if (
-      token?.type !== "paragraph_close" ||
-      token.hidden ||
-      token.level !== directListParagraphLevel
+      !hasFollowingBlock &&
+      (token?.type !== "paragraph_close" ||
+        token.hidden ||
+        token.level !== directListParagraphLevel)
     ) {
       return;
     }
   }
-  state.text += "\n\n";
+  state.text += token?.hidden ? "\n" : "\n\n";
 }
 
 function appendTopLevelListSeparator(state: RenderState) {
-  const trailingNewlines = state.text.match(/\n*$/)?.[0].length ?? 0;
-  if (trailingNewlines < 2) {
+  if (!state.text.endsWith("\n\n")) {
     state.text += "\n";
   }
 }
@@ -741,11 +737,6 @@ function renderInlineCode(state: RenderState, content: string) {
   target.styles.push({ start, end: start + content.length, style: "code" });
 }
 
-function resolveFenceLanguage(info: string | undefined): string | undefined {
-  const language = info?.trim().split(/\s+/, 1)[0]?.trim();
-  return language || undefined;
-}
-
 function renderCodeBlock(
   state: RenderState,
   content: string,
@@ -755,13 +746,13 @@ function renderCodeBlock(
   sourceMap?: [number, number] | null,
   codeClosed?: boolean,
 ) {
-  let code = content ?? "";
+  let code = content;
   if (!code.endsWith("\n")) {
     code = `${code}\n`;
   }
   const target = resolveRenderTarget(state);
   const start = target.text.length;
-  const language = resolveFenceLanguage(info);
+  const language = info?.trim().split(/\s+/, 1)[0] || undefined;
   target.text += code;
   target.styles.push(
     createStyleSpan({
@@ -817,23 +808,15 @@ function handleLinkClose(state: RenderState) {
   }
   const start = link.labelStart;
   const end = target.text.length;
-  const span = createMarkdownLinkSpan({ start, end, href }, { autoLinked: link.autoLinked });
+  const span = createMarkdownLinkSpan({ start, end, href }, link.autoLinked);
   target.links.push(span);
-}
-
-function isInsideMarkdownHtmlTag(text: string): boolean {
-  const openTagStart = text.lastIndexOf("<");
-  if (openTagStart === -1) {
-    return false;
-  }
-  return (
-    text.lastIndexOf(">") < openTagStart &&
-    OPEN_MARKDOWN_HTML_TAG_PATTERN.test(text.slice(openTagStart))
-  );
 }
 
 function initTableState(): TableState {
   return {
+    sourceHeaders: [],
+    sourceRows: [],
+    currentSourceRow: [],
     headers: [],
     rows: [],
     aligns: [],
@@ -843,17 +826,17 @@ function initTableState(): TableState {
   };
 }
 
-function finishTableCell(cell: RenderTarget): TableCell {
+function finishTableCell(cell: RenderTarget): MarkdownTableCell {
   closeRemainingStyles(cell);
-  return {
+  return copyHtmlTags(cell, {
     text: cell.text,
     styles: cell.styles,
     links: cell.links,
     ...(cell.annotations.length > 0 ? { annotations: cell.annotations } : {}),
-  };
+  });
 }
 
-function trimCell(cell: TableCell): TableCell {
+function trimCell(cell: MarkdownTableCell): MarkdownTableCell {
   const text = cell.text;
   let start = text.length - text.trimStart().length;
   let end = text.trimEnd().length;
@@ -867,221 +850,95 @@ function trimCell(cell: TableCell): TableCell {
   return start === 0 && end === text.length ? cell : sliceMarkdownIR(cell, start, end);
 }
 
-function appendCell(state: RenderState, cell: TableCell) {
+function appendCell(state: RenderState, cell: MarkdownTableCell) {
   if (!cell.text) {
     return;
   }
-  const start = state.text.length;
-  state.text += cell.text;
-  for (const span of cell.styles) {
-    state.styles.push({
-      start: start + span.start,
-      end: start + span.end,
-      style: span.style,
-    });
-  }
-  for (const link of cell.links) {
-    state.links.push(
-      copyMarkdownLinkSpan(link, {
-        start: start + link.start,
-        end: start + link.end,
-      }),
-    );
-  }
-  for (const annotation of cell.annotations ?? []) {
-    state.annotations.push({
-      ...annotation,
-      start: start + annotation.start,
-      end: start + annotation.end,
-    });
-  }
+  appendMarkdownIR(
+    state,
+    copyHtmlTags(cell, {
+      text: cell.text,
+      styles: cell.styles.map(({ start, end, style }) => ({ start, end, style })),
+      links: cell.links.map((link) => copyMarkdownLinkSpan(link)),
+      annotations: cell.annotations?.map((annotation) => ({ ...annotation })),
+    }),
+  );
 }
 
-function appendCellTextOnly(state: RenderState, cell: TableCell) {
-  if (!cell.text) {
-    return;
-  }
-  state.text += cell.text;
-  // Do not append styles - this is used for code blocks where inner styles would overlap
-}
-
-function collectTableBlock(state: RenderState) {
-  if (!state.table) {
-    return;
-  }
-  const headerCells = state.table.headers.map(trimCell);
-  const rowCells = state.table.rows.map((row) => row.map(trimCell));
-  const table = {
+function collectTableBlock(
+  state: RenderState,
+  tableState: TableState,
+  headerCells: MarkdownTableCell[],
+  rowCells: MarkdownTableCell[][],
+) {
+  const table: MarkdownTableWithSource = {
     headers: headerCells.map((cell) => cell.text),
     rows: rowCells.map((row) => row.map((cell) => cell.text)),
     headerCells,
     rowCells,
     placeholderOffset: state.text.length,
-    ...(state.table.aligns.some(Boolean) ? { aligns: [...state.table.aligns] } : {}),
+    ...(tableState.aligns.some(Boolean) ? { aligns: [...tableState.aligns] } : {}),
   };
   state.collectedTables.push(table);
+  if (tableState.sourceLines) {
+    const [first, after] = tableState.sourceLines;
+    const { lines, starts } = (state.sourceIndex ??= indexSourceLines(state.source));
+    const column = state.env.tableSourceColumns?.get(first) ?? 0;
+    defineMetadata(table, "source", {
+      start: (starts[first] ?? 0) + column,
+      end: (starts[after - 1] ?? 0) + (lines[after - 1]?.length ?? 0),
+      // Continue list markers as indentation while retaining enclosing quote markers.
+      prefix: (lines[first] ?? "").slice(0, column).replace(/[^\t >]/gu, " "),
+      headers: tableState.sourceHeaders,
+      rows: tableState.sourceRows,
+    });
+  }
 }
 
-function appendTableBulletValue(
-  state: RenderState,
-  params: {
-    header?: TableCell;
-    value?: TableCell;
-    columnIndex: number;
-    includeColumnFallback: boolean;
-  },
-) {
-  const { header, value, columnIndex, includeColumnFallback } = params;
-  if (!value?.text) {
+function renderTable(state: RenderState) {
+  const table = state.table;
+  if (!table || !["block", "bullets", "code"].includes(state.tableMode)) {
     return;
   }
-  state.text += "• ";
-  if (header?.text) {
-    appendCell(state, header);
-    state.text += ": ";
-  } else if (includeColumnFallback) {
-    state.text += `Column ${columnIndex}: `;
-  }
-  appendCell(state, value);
-  state.text += "\n";
-}
-
-function renderTableAsBullets(state: RenderState) {
-  if (!state.table) {
+  const headers = table.headers.map(trimCell);
+  const rows = table.rows.map((row) => row.map(trimCell));
+  if (state.tableMode === "block") {
+    collectTableBlock(state, table, headers, rows);
     return;
   }
-  const headers = state.table.headers.map(trimCell);
-  const rows = state.table.rows.map((row) => row.map(trimCell));
-
-  // If no headers or rows, skip
-  if (headers.length === 0 && rows.length === 0) {
-    return;
-  }
-
-  // Determine if first column should be used as row labels
-  // (common pattern: first column is category/feature name)
-  const useFirstColAsLabel = headers.length > 1 && rows.length > 0;
-
-  if (useFirstColAsLabel) {
-    // Format: each row becomes a section with header as row[0], then key:value pairs
-    for (const row of rows) {
-      if (row.length === 0) {
-        continue;
-      }
-
-      const rowLabel = row[0];
-      if (rowLabel?.text) {
-        const labelStart = state.text.length;
-        appendCell(state, rowLabel);
-        const labelEnd = state.text.length;
-        if (labelEnd > labelStart) {
-          state.styles.push({ start: labelStart, end: labelEnd, style: "bold" });
+  if (state.tableMode === "bullets") {
+    renderMarkdownTableBullets(
+      headers,
+      rows,
+      (text) => {
+        state.text += text;
+      },
+      (cell, rowLabel) => {
+        const start = state.text.length;
+        appendCell(state, cell);
+        if (rowLabel) {
+          state.styles.push({ start, end: state.text.length, style: "bold" });
         }
+      },
+    );
+  } else {
+    const code = renderMarkdownCodeTable(
+      headers.map((cell) => cell.text),
+      rows.map((row) => row.map((cell) => cell.text)),
+    );
+    if (code) {
+      const start = state.text.length;
+      state.text += code;
+      state.styles.push({ start, end: state.text.length, style: "code_block" });
+      if (state.env.listStack.length === 0) {
         state.text += "\n";
       }
-
-      // Add each column as a bullet point
-      for (let i = 1; i < row.length; i++) {
-        appendTableBulletValue(state, {
-          header: headers[i],
-          value: row[i],
-          columnIndex: i,
-          includeColumnFallback: true,
-        });
-      }
-      state.text += "\n";
     }
-  } else {
-    // Simple table: just list headers and values
-    for (const row of rows) {
-      for (let i = 0; i < row.length; i++) {
-        appendTableBulletValue(state, {
-          header: headers[i],
-          value: row[i],
-          columnIndex: i,
-          includeColumnFallback: false,
-        });
-      }
-      state.text += "\n";
-    }
-  }
-}
-
-function renderTableAsCode(state: RenderState) {
-  if (!state.table) {
-    return;
-  }
-  const measureCell = (cell: TableCell) => {
-    const trimmed = trimCell(cell);
-    return { cell: trimmed, width: visibleWidth(trimmed.text) };
-  };
-  const headers = state.table.headers.map(measureCell);
-  const rows = state.table.rows.map((row) => row.map(measureCell));
-
-  const columnCount = Math.max(headers.length, ...rows.map((row) => row.length));
-  if (columnCount === 0) {
-    return;
-  }
-
-  const widths = Array.from({ length: columnCount }, () => 0);
-  const updateWidths = (cells: typeof headers) => {
-    for (const [i, cell] of cells.entries()) {
-      widths[i] = Math.max(widths[i] ?? 0, cell.width);
-    }
-  };
-  updateWidths(headers);
-  for (const row of rows) {
-    updateWidths(row);
-  }
-
-  const codeStart = state.text.length;
-
-  const appendRow = (cells: typeof headers) => {
-    state.text += "|";
-    for (const [i, width] of widths.entries()) {
-      state.text += " ";
-      const cell = cells[i];
-      if (cell) {
-        // Use text-only append to avoid overlapping styles with code_block
-        appendCellTextOnly(state, cell.cell);
-      }
-      const pad = width - (cell?.width ?? 0);
-      if (pad > 0) {
-        state.text += " ".repeat(pad);
-      }
-      state.text += " |";
-    }
-    state.text += "\n";
-  };
-
-  const appendDivider = () => {
-    state.text += "|";
-    for (const width of widths) {
-      const dashCount = Math.max(3, width);
-      state.text += ` ${"-".repeat(dashCount)} |`;
-    }
-    state.text += "\n";
-  };
-
-  appendRow(headers);
-  appendDivider();
-  for (const row of rows) {
-    appendRow(row);
-  }
-
-  const codeEnd = state.text.length;
-  if (codeEnd > codeStart) {
-    state.styles.push({ start: codeStart, end: codeEnd, style: "code_block" });
-  }
-  if (state.env.listStack.length === 0) {
-    state.text += "\n";
   }
 }
 
 function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
-  const nextMappedBlockStarts = state.preserveSourceBlockSpacing
-    ? computeNextMappedBlockStarts(tokens)
-    : [];
+  const nextMappedBlockStarts = computeNextMappedBlockStarts(tokens);
   for (const [tokenIndex, token] of tokens.entries()) {
     const inlineStyle = INLINE_STYLE_BY_TOKEN.get(token.type);
     if (inlineStyle) {
@@ -1096,21 +953,26 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
     }
     switch (token.type) {
       case "inline":
+        if (state.table?.currentCell) {
+          state.table.currentSourceRow.push(token.content ?? "");
+        }
         if (token.children) {
           renderTokens(token.children, state);
         }
         break;
       case "text":
         recordTaskMarker(state, token.content ?? "");
-        appendText(state, token.content ?? "");
+        appendText(state, token.content ?? "", token);
         break;
       case ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE: {
         const meta = (token.meta as AssistantTranscriptRoleTokenMeta | undefined)
           ?.assistantTranscriptRoleHeader;
         if (meta) {
-          appendAssistantTranscriptRoleText(resolveRenderTarget(state), token.content ?? "", meta);
+          const target = resolveRenderTarget(state);
+          appendHtmlTags(target, token, target.text.length);
+          appendAssistantTranscriptRoleText(target, token.content ?? "", meta);
         } else {
-          appendText(state, token.content ?? "");
+          appendText(state, token.content ?? "", token);
         }
         break;
       }
@@ -1119,7 +981,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "link_open": {
         const target = resolveRenderTarget(state);
-        const href = isInsideMarkdownHtmlTag(target.text) ? "" : (getAttr(token, "href") ?? "");
+        const href = getAttr(token, "href") ?? "";
         target.linkStack.push({
           href,
           labelStart: target.text.length,
@@ -1133,11 +995,10 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "image": {
         const meta = (token.meta as AssistantTranscriptRoleImageMeta | undefined)
           ?.assistantTranscriptRoleImage;
-        if (meta) {
-          appendAssistantTranscriptRoleImage(resolveRenderTarget(state), meta);
-        } else {
-          appendText(state, token.content ?? "");
-        }
+        appendImageAlternative(
+          resolveRenderTarget(state),
+          meta ?? { text: token.content ?? "", spans: [] },
+        );
         break;
       }
       case "softbreak":
@@ -1145,7 +1006,7 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         appendText(state, "\n");
         break;
       case "paragraph_close":
-        appendParagraphSeparator(state, token);
+        appendParagraphSeparator(state, token, nextMappedBlockStarts[tokenIndex]);
         break;
       case "heading_open":
         state.headingLineEnd = token.map?.[1];
@@ -1260,28 +1121,14 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
           const markerOnly = !state.text
             .slice(markerEnd, markerContentEnd)
             .replace(/[ \t\r\n]/gu, "");
-          const listItem: MarkdownListItemMarker = {
-            kind: item.kind,
-            ...(item.listMarker ? { listMarker: item.listMarker } : {}),
-            ...(item.task ? { task: true } : {}),
-            ...(item.taskMarker ? { taskMarker: item.taskMarker } : {}),
-            ...(item.listId !== undefined ? { listId: item.listId } : {}),
-            ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-            ...(item.depth !== undefined ? { depth: item.depth } : {}),
-            ...(item.start !== undefined ? { start: item.start } : {}),
-            end,
-          };
           state.listItems.push(
-            attachListItemMetadata(listItem, {
+            copyMarkdownListItem(item, {
+              listMarker: item.listMarker,
+              taskMarker: item.taskMarker,
+              start: item.start,
+              end,
               ...(contentEnd > contentStart ? { contentStart, contentEnd } : {}),
-              ...((item.sourceMarker ? item.markerOnly : markerOnly)
-                ? { markerOnly: true as const }
-                : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
+              markerOnly: (item.sourceMarker ? item.markerOnly : markerOnly) ? true : undefined,
             }),
           );
         }
@@ -1309,26 +1156,19 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
         break;
       case "html_block":
       case "html_inline":
-        appendText(state, token.content ?? "");
+      case RAW_HTML_TOKEN_TYPE:
+        appendText(state, token.content ?? "", token);
         break;
 
-      // Table handling
       case "table_open":
         if (state.tableMode !== "off") {
           state.table = initTableState();
+          state.table.sourceLines = token.map ?? undefined;
           state.hasTables = true;
         }
         break;
       case "table_close":
-        if (state.table) {
-          if (state.tableMode === "bullets") {
-            renderTableAsBullets(state);
-          } else if (state.tableMode === "code") {
-            renderTableAsCode(state);
-          } else if (state.tableMode === "block") {
-            collectTableBlock(state);
-          }
-        }
+        renderTable(state);
         state.table = null;
         break;
       case "thead_open":
@@ -1347,14 +1187,17 @@ function renderTokens(tokens: MarkdownToken[], state: RenderState): void {
       case "tr_open":
         if (state.table) {
           state.table.currentRow = [];
+          state.table.currentSourceRow = [];
         }
         break;
       case "tr_close":
         if (state.table) {
           if (state.table.inHeader) {
             state.table.headers = state.table.currentRow;
+            state.table.sourceHeaders = state.table.currentSourceRow;
           } else {
             state.table.rows.push(state.table.currentRow);
+            state.table.sourceRows.push(state.table.currentSourceRow);
           }
           state.table.currentRow = [];
         }
@@ -1431,6 +1274,7 @@ function appendSpans<T extends { start: number; end: number }>(
 /** Transfers a separately owned IR slice, including its metadata, into an accumulator. */
 export function appendMarkdownIR(target: MarkdownIR, source: MarkdownIR): void {
   const offset = target.text.length;
+  appendHtmlTags(target, source, offset);
   target.text += source.text;
   appendSpans(target.styles, source.styles, offset);
   appendSpans(target.links, source.links, offset);
@@ -1461,110 +1305,6 @@ export function appendMarkdownIR(target: MarkdownIR, source: MarkdownIR): void {
     appendSpans(blocks, sourceWithMetadata.blocks, offset);
     attachBlockMetadata(target, blocks);
   }
-}
-
-function sliceListMarker(
-  marker: { start: number; end: number },
-  start: number,
-  end: number,
-): { start: number; end: number } | undefined {
-  const sliceStart = Math.max(marker.start, start);
-  const sliceEnd = Math.min(marker.end, end);
-  return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
-}
-
-export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
-  const textLength = ir.text.length;
-  const integerStart = Math.trunc(start) || 0;
-  const integerEnd = Math.trunc(end) || 0;
-  let normalizedStart =
-    integerStart < 0 ? Math.max(textLength + integerStart, 0) : Math.min(integerStart, textLength);
-  let normalizedEnd =
-    integerEnd < 0 ? Math.max(textLength + integerEnd, 0) : Math.min(integerEnd, textLength);
-
-  if (normalizedStart < normalizedEnd) {
-    // Normalize once so text, formatting, links, and structural metadata share
-    // the same complete-code-point boundaries.
-    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedStart);
-    if (safeStart !== normalizedStart) {
-      normalizedStart = safeStart < normalizedStart ? safeStart : normalizedStart - 1;
-    }
-
-    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedEnd);
-    if (safeEnd !== normalizedEnd) {
-      normalizedEnd = safeEnd > normalizedEnd ? safeEnd : normalizedEnd + 1;
-    }
-  }
-
-  const metadataIR = ir as MarkdownIRWithMetadata;
-  const annotations = sliceAnnotationSpans(ir.annotations ?? [], normalizedStart, normalizedEnd);
-  const listItems = ((ir.listItems ?? []) as MarkdownListItemWithMetadata[]).flatMap((item) => {
-    const listMarker = item.listMarker
-      ? sliceListMarker(item.listMarker, normalizedStart, normalizedEnd)
-      : undefined;
-    const taskMarker = item.taskMarker
-      ? sliceListMarker(item.taskMarker, normalizedStart, normalizedEnd)
-      : undefined;
-    const content =
-      item.contentStart !== undefined && item.contentEnd !== undefined
-        ? sliceListMarker(
-            { start: item.contentStart, end: item.contentEnd },
-            normalizedStart,
-            normalizedEnd,
-          )
-        : undefined;
-    return listMarker || taskMarker
-      ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined
-                ? { start: Math.max(item.start, normalizedStart) - normalizedStart }
-                : {}),
-              ...(item.end !== undefined
-                ? { end: Math.min(item.end, normalizedEnd) - normalizedStart }
-                : {}),
-            },
-            {
-              ...(content ? { contentStart: content.start, contentEnd: content.end } : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
-        ]
-      : [];
-  });
-  const blocks = (metadataIR.blocks ?? []).flatMap((block) => {
-    if (block.start === block.end) {
-      const containsPoint =
-        normalizedStart === normalizedEnd
-          ? block.start === normalizedStart
-          : block.start >= normalizedStart && block.start < normalizedEnd;
-      return containsPoint
-        ? [{ ...block, start: block.start - normalizedStart, end: block.end - normalizedStart }]
-        : [];
-    }
-    const sliced = sliceListMarker(block, normalizedStart, normalizedEnd);
-    return sliced ? [{ ...block, ...sliced }] : [];
-  });
-  const sliced: MarkdownIR = {
-    text: ir.text.slice(normalizedStart, normalizedEnd),
-    styles: sliceStyleSpans(ir.styles, normalizedStart, normalizedEnd),
-    links: sliceLinkSpans(ir.links, normalizedStart, normalizedEnd),
-    ...(annotations.length > 0 ? { annotations } : {}),
-    ...(listItems.length > 0 ? { listItems } : {}),
-  };
-  return attachBlockMetadata(sliced, blocks);
 }
 
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
@@ -1599,6 +1339,7 @@ export function markdownToIRWithMeta(
   const source = markdown ?? "";
   const env: RenderEnv = {
     listStack: [],
+    ...(options.tableMode === "block" ? { tableSourceColumns: new Map<number, number>() } : {}),
     assistantTranscriptRoleHeaders: options.assistantTranscriptRoleHeaders === true,
     assistantTranscriptRolePreserveLinks: options.assistantTranscriptRoleHeaders === true,
   };
@@ -1608,12 +1349,7 @@ export function markdownToIRWithMeta(
   const tableMode = options.tableMode ?? "off";
 
   const state: RenderState = {
-    text: "",
-    styles: [],
-    openStyles: [],
-    links: [],
-    linkStack: [],
-    annotations: [],
+    ...initRenderTarget(),
     env,
     headingStyle: options.headingStyle ?? "none",
     blockquotePrefix: options.blockquotePrefix ?? "",
@@ -1651,7 +1387,7 @@ export function markdownToIRWithMeta(
   const finalLength = Math.max(trimmedLength, codeEnd);
   const finalText =
     finalLength === state.text.length ? state.text : state.text.slice(0, finalLength);
-  const annotations = mergeAnnotationSpans(clampAnnotationSpans(state.annotations, finalLength));
+  const annotations = sliceAnnotationSpans(state.annotations, 0, finalLength);
   const listItems = state.listItems.flatMap((item) => {
     const listMarker = item.listMarker
       ? sliceListMarker(item.listMarker, 0, finalLength)
@@ -1661,47 +1397,27 @@ export function markdownToIRWithMeta(
       : undefined;
     return listMarker || taskMarker
       ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined ? { start: Math.min(item.start, finalLength) } : {}),
-              ...(item.end !== undefined ? { end: Math.min(item.end, finalLength) } : {}),
-            },
-            {
-              ...(item.contentStart !== undefined
-                ? { contentStart: Math.min(item.contentStart, finalLength) }
-                : {}),
-              ...(item.contentEnd !== undefined
-                ? { contentEnd: Math.min(item.contentEnd, finalLength) }
-                : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
+          copyMarkdownListItem(item, {
+            listMarker,
+            taskMarker,
+            start: item.start !== undefined ? Math.min(item.start, finalLength) : undefined,
+            end: item.end !== undefined ? Math.min(item.end, finalLength) : undefined,
+            contentStart:
+              item.contentStart !== undefined
+                ? Math.min(item.contentStart, finalLength)
+                : undefined,
+            contentEnd:
+              item.contentEnd !== undefined ? Math.min(item.contentEnd, finalLength) : undefined,
+            markerOnly: item.markerOnly,
+          }),
         ]
       : [];
   });
   const blocks = state.blocks
-    .flatMap((block) => {
+    .map((block) => {
       const start = Math.min(block.start, finalLength);
       const end = Math.min(block.end, finalLength);
-      return end > start ||
-        block.kind === "blockquote" ||
-        block.kind === "code_block" ||
-        block.kind === "heading" ||
-        block.kind === "thematic_break"
-        ? [{ ...block, start, end }]
-        : [];
+      return { ...block, start, end };
     })
     .toSorted(
       (left, right) =>
@@ -1713,17 +1429,18 @@ export function markdownToIRWithMeta(
 
   const ir: MarkdownIR = {
     text: finalText,
-    styles: mergeStyleSpans(clampStyleSpans(state.styles, finalLength)),
-    links: clampLinkSpans(state.links, finalLength),
+    styles: sliceStyleSpans(state.styles, 0, finalLength),
+    links: sliceLinkSpans(state.links, 0, finalLength),
     ...(annotations.length > 0 ? { annotations } : {}),
     ...(listItems.length > 0 ? { listItems } : {}),
   };
   attachBlockMetadata(ir, blocks);
+  copyHtmlTags(state, ir, 0, finalLength);
   return {
     ir,
     hasTables: state.hasTables,
     tables: state.collectedTables.map((table) =>
-      Object.assign({}, table, {
+      Object.assign(table, {
         placeholderOffset: Math.min(table.placeholderOffset, finalLength),
       }),
     ),
@@ -1739,7 +1456,8 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
   }
 
   const chunks = chunkText(ir.text, limit);
-  const results: MarkdownIR[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  const texts: string[] = [];
   let cursor = 0;
 
   chunks.forEach((chunk, index) => {
@@ -1753,12 +1471,14 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
     }
     const start = cursor;
     const end = Math.min(ir.text.length, start + chunk.length);
-    const sliced = sliceMarkdownIR(ir, start, end);
-    sliced.text = chunk;
-    results.push(sliced);
+    ranges.push({ start, end });
+    texts.push(chunk);
     cursor = end;
   });
 
-  return results;
+  return sliceMarkdownIRRanges(ir, ranges).map((slice, index) => {
+    slice.text = texts[index] ?? slice.text;
+    return slice;
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

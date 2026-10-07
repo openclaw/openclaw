@@ -6,8 +6,13 @@ import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setQaChannelRuntime } from "../api.js";
 import { deleteQaBusMessage, editQaBusMessage, sendQaBusMessage } from "./bus-client.js";
+import { qaChannelPlugin } from "./channel.js";
 import { handleQaInbound } from "./inbound.js";
-import { createQaInboundParams, firstRunAssembledParams } from "./inbound.test-harness.js";
+import {
+  createQaInboundParams,
+  firstRunAssembledParams,
+  startQaInbound,
+} from "./inbound.test-harness.js";
 
 const QA_GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
@@ -56,7 +61,7 @@ describe("handleQaInbound", () => {
       setQaChannelRuntime(runtime);
       const mediaPath = path.join(process.cwd(), "qa-channel-inbound-generated.png");
 
-      await handleQaInbound(createQaInboundParams());
+      await startQaInbound(runtime, createQaInboundParams());
       const assembled = firstRunAssembledParams(runtime);
       await assembled.delivery.deliver(
         { text: "Here is your generated image.", mediaUrls: [mediaPath] },
@@ -85,7 +90,8 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(
+    await startQaInbound(
+      runtime,
       createQaInboundParams({
         message: {
           conversation: { id: "qa-room", kind: "group" },
@@ -105,9 +111,18 @@ describe("handleQaInbound", () => {
         replyToId: "msg-1",
         text: "preview",
         threadId: "42",
-        to: "thread:/v1/group/qa-room/42",
+        to: "group:qa-room",
       }),
     );
+    expect(assembled.ctxPayload).toMatchObject({
+      To: "group:qa-room",
+      OriginatingTo: "group:qa-room",
+      SessionKey: expect.stringMatching(/:thread:42$/u),
+    });
+    expect(assembled.ctxPayload.ParentSessionKey).toBe(
+      assembled.ctxPayload.SessionKey?.replace(/:thread:42$/u, ""),
+    );
+    expect(assembled.route.sessionKey).toBe(assembled.ctxPayload.SessionKey);
     expect(editQaBusMessage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ messageId: "preview-1", text: "preview expanded" }),
@@ -118,11 +133,35 @@ describe("handleQaInbound", () => {
     );
   });
 
+  it("uses one session for inbound channel threads and explicit thread replies", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          conversation: { id: "qa-room", kind: "channel" },
+          threadId: "42",
+        },
+      }),
+    );
+
+    const assembled = firstRunAssembledParams(runtime);
+    const outboundRoute = await qaChannelPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "thread:qa-room/42",
+    });
+
+    expect(outboundRoute?.sessionKey).toBe(assembled.route.sessionKey);
+  });
+
   it("treats deliveries without dispatcher metadata as final replies", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
@@ -142,7 +181,7 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "preview" });
@@ -178,7 +217,7 @@ describe("handleQaInbound", () => {
       const runtime = createPluginRuntimeMock();
       setQaChannelRuntime(runtime);
 
-      await handleQaInbound(createQaInboundParams());
+      await startQaInbound(runtime, createQaInboundParams());
 
       const assembled = firstRunAssembledParams(runtime);
       await assembled.delivery.deliver(
@@ -200,7 +239,7 @@ describe("handleQaInbound", () => {
       const runtime = createPluginRuntimeMock();
       setQaChannelRuntime(runtime);
 
-      await handleQaInbound(createQaInboundParams());
+      await startQaInbound(runtime, createQaInboundParams());
 
       const assembled = firstRunAssembledParams(runtime);
       await assembled.delivery.deliver(
@@ -221,7 +260,7 @@ describe("handleQaInbound", () => {
   it("retains the delivered media tool trace while suppressing its matching text final", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "image" });
     await assembled.delivery.deliver(
@@ -243,7 +282,7 @@ describe("handleQaInbound", () => {
   it("does not suppress the final caption after a failed media delivery", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
     const assembled = firstRunAssembledParams(runtime);
     vi.mocked(loadOutboundMediaFromUrl).mockRejectedValueOnce(new Error("media too large"));
     await expect(
@@ -263,7 +302,7 @@ describe("handleQaInbound", () => {
   it("keeps captionless media and a subsequent text final", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
     const assembled = firstRunAssembledParams(runtime);
     await assembled.delivery.deliver({ mediaUrl: "/tmp/answer.png" }, { kind: "block" });
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
@@ -284,7 +323,7 @@ describe("handleQaInbound", () => {
   it("retains tool calls started while media is loading in the later final", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "image" });
     vi.mocked(loadOutboundMediaFromUrl).mockImplementationOnce(async () => {
@@ -314,7 +353,7 @@ describe("handleQaInbound", () => {
   it("delivers a new attachment even when its caption was already sent", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
     const assembled = firstRunAssembledParams(runtime);
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
     await assembled.delivery.deliver(
@@ -334,7 +373,7 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onToolStart?.({
@@ -357,7 +396,7 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onToolStart?.({
@@ -387,7 +426,7 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "block" });
@@ -405,7 +444,7 @@ describe("handleQaInbound", () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
@@ -425,7 +464,7 @@ describe("handleQaInbound", () => {
     setQaChannelRuntime(runtime);
     vi.mocked(editQaBusMessage).mockRejectedValueOnce(new Error("edit failed"));
 
-    await handleQaInbound(createQaInboundParams());
+    await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
     await assembled.replyOptions?.onPartialReply?.({ text: "first preview" });
@@ -455,7 +494,7 @@ describe("handleQaInbound", () => {
     setQaChannelRuntime(runtime);
 
     try {
-      await handleQaInbound(createQaInboundParams());
+      await startQaInbound(runtime, createQaInboundParams());
 
       const assembled = firstRunAssembledParams(runtime);
       await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });

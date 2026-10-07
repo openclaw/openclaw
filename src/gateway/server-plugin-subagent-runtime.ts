@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
-import { normalizeModelRef } from "../agents/model-ref-shared.js";
-import { parseModelRef } from "../agents/model-selection-normalize.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { assertOperatorModelAllowed } from "../agents/admitted-run-context.js";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import type { ModelRef } from "../agents/model-ref-shared.js";
 import type { AgentWaitResult } from "../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -15,43 +19,22 @@ import { resolvePluginSubagentCompletionRequester } from "../plugins/runtime/sub
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { createBackgroundWorkOwner } from "../process/background-work.js";
-import { ADMIN_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "./operator-scopes.js";
 import type { GatewayContextResolver, GatewayRequestOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
+  getInProcessGatewayRequestContext,
   prepareInProcessAgentExecution,
 } from "./server-plugin-in-process-dispatch.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
 
-function resolvePluginSubagentRequestedModelRef(params: {
-  provider?: string;
-  model?: string;
-}): string | null {
-  if (params.provider && params.model) {
-    const normalizedRequest = normalizeModelRef(params.provider, params.model);
-    return `${normalizedRequest.provider}/${normalizedRequest.model}`;
-  }
-  const rawModel = params.model?.trim();
-  if (!rawModel || !rawModel.includes("/")) {
-    return null;
-  }
-  const parsed = parseModelRef(rawModel, "");
-  if (!parsed?.provider || !parsed.model) {
-    return null;
-  }
-  return `${parsed.provider}/${parsed.model}`;
-}
-
 function normalizePluginSubagentRunRuntime(
   value: unknown,
 ): Awaited<ReturnType<PluginRuntime["subagent"]["run"]>>["runtime"] {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  const harness = typeof record.harness === "string" ? record.harness.trim() : "";
-  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
-  const model = typeof record.model === "string" ? record.model.trim() : "";
+  const record = asOptionalRecord(value);
+  const harness = normalizeOptionalString(record?.harness);
+  const provider = normalizeOptionalString(record?.provider);
+  const model = normalizeOptionalString(record?.model);
   return harness && provider && model ? { harness, provider, model } : undefined;
 }
 
@@ -89,65 +72,57 @@ export function resolvePluginSubagentOverridePolicies(
   return policies;
 }
 
-function authorizeFallbackModelOverride(params: {
+function resolveFallbackModelOverridePolicy(params: {
   policies: PluginSubagentOverridePolicies;
   pluginId?: string;
   provider?: string;
   model?: string;
-}): { allowed: true } | { allowed: false; reason: string } {
+}): PluginSubagentOverridePolicy | undefined {
   const pluginId = params.pluginId?.trim();
   if (!pluginId) {
-    return {
-      allowed: false,
-      reason: "provider/model override requires plugin identity in fallback subagent runs.",
-    };
+    throw new Error("provider/model override requires plugin identity in fallback subagent runs.");
   }
   const policy = params.policies[pluginId];
   if (!policy?.allowModelOverride) {
-    return {
-      allowed: false,
-      reason:
-        `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
+    throw new Error(
+      `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
         "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
-    };
+    );
   }
   if (policy.allowAny) {
-    return { allowed: true };
+    return undefined;
   }
   if (policy.configured && policy.models.size === 0) {
-    return {
-      allowed: false,
-      reason: `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
-    };
+    throw new Error(
+      `plugin "${pluginId}" configured subagent.allowedModels, but none of the entries normalized to a valid provider/model target.`,
+    );
   }
   if (policy.models.size === 0) {
-    return { allowed: true };
+    return undefined;
   }
-  const requestedModelRef = resolvePluginSubagentRequestedModelRef(params);
-  if (!requestedModelRef) {
-    return {
-      allowed: false,
-      reason:
-        "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
-    };
+  if (!params.model?.trim() || (!params.provider && !params.model.includes("/"))) {
+    throw new Error(
+      "fallback provider/model overrides that use an allowlist must resolve to a canonical provider/model target.",
+    );
   }
-  if (policy.models.has(requestedModelRef)) {
-    return { allowed: true };
-  }
-  return {
-    allowed: false,
-    reason: `model override "${requestedModelRef}" is not allowlisted for plugin "${pluginId}".`,
-  };
+  return policy;
 }
 
-function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
+function assertPluginSubagentModelAllowed(
+  policy: PluginSubagentOverridePolicy | undefined,
+  selection: ModelRef,
+  pluginId: string | undefined,
+  authProfileId?: string,
+): void {
+  const modelRef = `${selection.provider}/${selection.model}${authProfileId ? `@${authProfileId}` : ""}`;
+  if (policy && !policy.models.has(modelRef)) {
+    throw new Error(`model override "${modelRef}" is not allowlisted for plugin "${pluginId}".`);
+  }
 }
 
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
+  return hasGatewayAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
 export function canTrustedOfficialPluginRequestScopes(params: {
@@ -179,23 +154,21 @@ export function createGatewaySubagentRuntime(
     const hasRequestScopeClient = Boolean(scope?.client);
     let allowOverride = hasRequestScopeClient && canClientUseModelOverride(scope?.client ?? null);
     let allowSyntheticModelOverride = false;
+    let policy: PluginSubagentOverridePolicy | undefined;
     if (overrideRequested && !allowOverride && !hasRequestScopeClient) {
-      const fallbackAuth = authorizeFallbackModelOverride({
+      policy = resolveFallbackModelOverridePolicy({
         policies: overridePolicies,
         pluginId: scope?.pluginId,
         provider: params.provider,
         model: params.model,
       });
-      if (!fallbackAuth.allowed) {
-        throw new Error(fallbackAuth.reason);
-      }
       allowOverride = true;
       allowSyntheticModelOverride = true;
     }
     if (overrideRequested && !allowOverride) {
       throw new Error("provider/model override is not authorized for this plugin subagent run.");
     }
-    return { allowOverride, allowSyntheticModelOverride };
+    return { allowOverride, allowSyntheticModelOverride, policy };
   };
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
     const scope = getPluginRuntimeGatewayRequestScope();
@@ -233,95 +206,138 @@ export function createGatewaySubagentRuntime(
           "Plugin background completion requires a plugin identity and Gateway binding.",
         );
       }
-      const execution = prepareInProcessAgentExecution({
+      const execution = await prepareInProcessAgentExecution({
         agentId: params.agentId,
         pluginRuntimeOwnerId: pluginId,
         resolveGatewayContext,
       });
-      const assertCurrent = () => {
+      try {
+        const assertCurrent = () => {
+          runtimeLifetime?.throwIfAborted();
+          execution.assertCurrent();
+        };
         runtimeLifetime?.throwIfAborted();
-        execution.assertCurrent();
-      };
-      runtimeLifetime?.throwIfAborted();
-      await execution.authorize();
-      assertCurrent();
-      authorizeModelOverride(params);
-      const signals = [params.signal, runtimeLifetime, execution.signal].filter(
-        (signal): signal is AbortSignal => signal !== undefined,
-      );
-      // Preserve subagent authority while sharing the sessionless inference owner.
-      // Queueing must not outlive the Gateway instance that admitted the plugin.
-      return await createBackgroundWorkOwner({
-        owner: `plugin:${pluginId}`,
-        maxConcurrent: 3,
-      }).enqueue(
-        async (signal) => {
-          assertCurrent();
-          const [
-            { resolveConfiguredAgentId },
-            { resolveSimpleCompletionSelectionForAgent },
-            { runIsolatedCompletion },
-            { finalizePluginLlmCompletion },
-          ] = await Promise.all([
-            import("../agents/agent-scope.js"),
-            import("../agents/simple-completion-runtime.js"),
-            import("../agents/isolated-completion.js"),
-            import("../plugins/runtime/runtime-llm.runtime.js"),
-          ]);
-          await execution.authorize();
-          assertCurrent();
-          signal.throwIfAborted();
-          authorizeModelOverride(params);
-          const cfg = execution.context.getRuntimeConfig();
-          const agentId = resolveConfiguredAgentId(cfg, params.agentId);
-          const selection = resolveSimpleCompletionSelectionForAgent({
-            cfg,
-            agentId,
-            modelRef: params.model,
-          });
-          if (!selection) {
-            throw new Error(`No model configured for agent ${agentId}.`);
-          }
-          const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
-          const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
-          // Hold capacity through runtime cleanup; a response-only abort race would
-          // admit another completion while the previous model still unwinds.
-          const result = await execution.run(() =>
-            runIsolatedCompletion({
-              config: cfg,
+        await execution.authorize();
+        assertCurrent();
+        authorizeModelOverride(params);
+        const signals = [params.signal, runtimeLifetime, execution.signal].filter(
+          (signal): signal is AbortSignal => signal !== undefined,
+        );
+        // Preserve subagent authority while sharing the sessionless inference owner.
+        // Queueing must not outlive the Gateway instance that admitted the plugin.
+        return await createBackgroundWorkOwner({
+          owner: `plugin:${pluginId}`,
+          maxConcurrent: 3,
+        }).enqueue(
+          async (signal) => {
+            assertCurrent();
+            const [
+              { resolveConfiguredAgentId },
+              { resolveSimpleCompletionSelectionForAgent },
+              { runIsolatedCompletion },
+              { runWithModelFallback },
+              { finalizePluginLlmCompletion },
+            ] = await Promise.all([
+              import("../agents/agent-scope.js"),
+              import("../agents/simple-completion-runtime.js"),
+              import("../agents/isolated-completion.js"),
+              import("../agents/model-fallback-runner.js"),
+              import("../plugins/runtime/runtime-llm.runtime.js"),
+            ]);
+            await execution.authorize();
+            assertCurrent();
+            signal.throwIfAborted();
+            const { policy } = authorizeModelOverride(params);
+            const cfg = execution.context.getRuntimeConfig();
+            const agentId = resolveConfiguredAgentId(cfg, params.agentId);
+            const explicitOverride = Boolean(params.model?.trim());
+            const selection = resolveSimpleCompletionSelectionForAgent({
+              cfg,
               agentId,
-              provider: selection.provider,
-              model: selection.modelId,
-              authProfileId: selection.profileId,
-              systemPrompt: params.extraSystemPrompt ?? "",
-              prompt: params.message,
-              timeoutMs,
-              abortSignal: runSignal,
-              assertCurrent,
-            }),
-          );
-          runSignal.throwIfAborted();
-          assertCurrent();
-          signal.throwIfAborted();
-          finalizePluginLlmCompletion({
-            cfg,
-            hostPluginId: pluginId,
-            rawUsage: result.usage,
-            result: {
-              text: result.text,
-              provider: result.provider,
-              model: result.model,
-              agentId,
-              execution: { mode: "isolated-agent-runtime", owner: result.owner },
-              audit: { caller: { kind: "plugin", id: pluginId } },
-            },
-          });
-          return { text: result.text };
-        },
-        { abortSignal: signals.length ? AbortSignal.any(signals) : undefined },
-      );
+              modelRef: params.model,
+            });
+            if (!selection) {
+              throw new Error(`No model configured for agent ${agentId}.`);
+            }
+            assertPluginSubagentModelAllowed(
+              policy,
+              { provider: selection.provider, model: selection.modelId },
+              pluginId,
+              selection.profileId,
+            );
+            const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 30_000);
+            const runSignal = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+            // Hold capacity through runtime cleanup; a response-only abort race would
+            // admit another completion while the previous model still unwinds.
+            const fallbackResult = await execution.run(() =>
+              runWithModelFallback({
+                cfg,
+                agentId,
+                provider: selection.provider,
+                model: selection.modelId,
+                operatorAuthority: execution.operatorAuthority,
+                abortSignal: runSignal,
+                skipAuthProfileRuntime: true,
+                requestedRouteResolution: "resolved",
+                ...(explicitOverride ? { fallbacksOverride: [] } : {}),
+                run: async (provider, model) => {
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  runSignal.throwIfAborted();
+                  const isSelectedPrimary =
+                    provider === selection.provider && model === selection.modelId;
+                  const result = await runIsolatedCompletion({
+                    purpose: "plugin-completion",
+                    config: cfg,
+                    agentId,
+                    provider,
+                    model,
+                    authProfileId: isSelectedPrimary ? selection.profileId : undefined,
+                    operatorAuthority: execution.operatorAuthority,
+                    systemPrompt: params.extraSystemPrompt ?? "",
+                    prompt: params.message,
+                    timeoutMs,
+                    abortSignal: runSignal,
+                    assertCurrent,
+                  });
+                  runSignal.throwIfAborted();
+                  assertCurrent();
+                  signal.throwIfAborted();
+                  assertOperatorModelAllowed(execution.operatorAuthority, result);
+                  return result;
+                },
+              }),
+            );
+            runSignal.throwIfAborted();
+            assertCurrent();
+            signal.throwIfAborted();
+            const result = fallbackResult.result;
+            assertOperatorModelAllowed(execution.operatorAuthority, result);
+            finalizePluginLlmCompletion({
+              cfg,
+              hostPluginId: pluginId,
+              rawUsage: result.usage,
+              result: {
+                text: result.text,
+                provider: result.provider,
+                model: result.model,
+                agentId,
+                execution: { mode: "isolated-agent-runtime", owner: result.owner },
+                audit: { caller: { kind: "plugin", id: pluginId } },
+              },
+            });
+            return { text: result.text };
+          },
+          { abortSignal: signals.length ? AbortSignal.any(signals) : undefined },
+        );
+      } finally {
+        execution.release();
+      }
     },
-    async run(params) {
+    async run(request) {
+      const params = { ...request };
+      const assertCurrent = params.assertCurrent;
+      assertCurrent?.();
       if (params.disableTools === true && (params.toolsAlsoAllow?.length ?? 0) > 0) {
         throw new Error("Tool-free plugin subagent runs cannot request additive tools.");
       }
@@ -329,15 +345,63 @@ export function createGatewaySubagentRuntime(
         params.completionDelivery,
       );
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
         pluginId,
         toolsAlsoAllow: params.toolsAlsoAllow,
       });
-      const { allowOverride, allowSyntheticModelOverride } = authorizeModelOverride(params);
+      const { allowOverride, allowSyntheticModelOverride, policy } = authorizeModelOverride(params);
+      let sessionMutationCommitGuard = assertCurrent;
+      if (policy) {
+        const context = getInProcessGatewayRequestContext(resolveGatewayContext);
+        if (!context) {
+          throw new Error("Plugin model override requires a live Gateway binding.");
+        }
+        const cfg = context.getRuntimeConfig();
+        sessionMutationCommitGuard = () => {
+          assertCurrent?.();
+          runtimeLifetime?.throwIfAborted();
+          if (
+            getInProcessGatewayRequestContext(resolveGatewayContext) !== context ||
+            context.getRuntimeConfig() !== cfg
+          ) {
+            throw new Error(
+              "Plugin model override configuration changed before admission. Retry the run.",
+            );
+          }
+        };
+        const [modelRefs, agentScope, metadata] = await Promise.all([
+          import("../agents/command/model-ref.js"),
+          import("../agents/agent-scope.js"),
+          import("../plugins/plugin-metadata-snapshot.js"),
+        ]);
+        sessionMutationCommitGuard();
+        const model = expectDefined(params.model, "authorized model override");
+        const agentId = agentScope.resolveSessionAgentId({
+          config: cfg,
+          sessionKey: params.sessionKey,
+        });
+        const manifestPlugins =
+          cfg.plugins?.enabled === false
+            ? []
+            : metadata.resolvePluginMetadataSnapshot({
+                config: cfg,
+                env: process.env,
+                workspaceDir: agentScope.resolveAgentWorkspaceDir(cfg, agentId),
+              });
+        const selection = params.provider
+          ? modelRefs.normalizeAgentCommandModelRef(cfg, params.provider, model, {
+              manifestPlugins,
+            })
+          : modelRefs.parseAgentCommandModelRef(cfg, agentId, model, "", { manifestPlugins });
+        if (!selection) {
+          throw new Error("Invalid model override.");
+        }
+        const authProfileId = params.provider ? undefined : splitTrailingAuthProfile(model).profile;
+        assertPluginSubagentModelAllowed(policy, selection, pluginId, authProfileId);
+        // The command owns parsing. Replacing its input with this result would
+        // apply non-idempotent provider aliases again; retain the authorized syntax.
+      }
       const payload = await dispatchGatewayMethodInProcess<{
         runId?: string;
         sessionKey?: string;
@@ -360,6 +424,7 @@ export function createGatewaySubagentRuntime(
         },
         {
           allowSyntheticModelOverride,
+          sessionMutationCommitGuard,
           agentRunTracking: "plugin_subagent",
           ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
@@ -378,9 +443,7 @@ export function createGatewaySubagentRuntime(
       return { runId, sessionKey, ...(runtime ? { runtime } : {}) };
     },
     async waitForRun(params) {
-      const payload = await dispatchGatewayMethodInProcess<
-        Omit<AgentWaitResult, "status"> & { status?: string }
-      >(
+      const payload = await dispatchGatewayMethodInProcess<AgentWaitResult>(
         "agent.wait",
         {
           runId: params.runId,
@@ -388,16 +451,9 @@ export function createGatewaySubagentRuntime(
         },
         { resolveGatewayContext },
       );
-      const { status: rawStatus, error, ...metadata } = payload;
-      let status = rawStatus;
-      if (status === "completed" || status === "succeeded") {
-        status = "ok";
-      } else if (status === "error" && error?.trim().toLowerCase() === "completed") {
-        status = "ok";
-      }
-      if (status !== "ok" && status !== "error" && status !== "timeout" && status !== "pending") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${rawStatus}`);
-      }
+      const { status: waitStatus, error, ...metadata } = payload;
+      const status =
+        waitStatus === "error" && error?.trim().toLowerCase() === "completed" ? "ok" : waitStatus;
       return {
         ...metadata,
         status,
@@ -407,14 +463,11 @@ export function createGatewaySubagentRuntime(
     getSessionMessages,
     async deleteSession(params) {
       const scope = getPluginRuntimeGatewayRequestScope();
-      const pluginId =
-        typeof scope?.pluginId === "string" && scope.pluginId.trim()
-          ? scope.pluginId.trim()
-          : undefined;
+      const pluginId = normalizeOptionalString(scope?.pluginId);
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
+            ...(!hasGatewayAdminScope(scope?.client)
               ? {
                   forceSyntheticClient: true,
                   syntheticScopes: [ADMIN_SCOPE],

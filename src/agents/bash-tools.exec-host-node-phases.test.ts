@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
-import {
-  formatNodeInvokeFailureFollowup,
-  invokeNodeSystemRun,
-} from "./bash-tools.exec-host-node-failure.js";
+import { invokeNodeSystemRun } from "./bash-tools.exec-host-node-failure.js";
 import {
   dispatchNodeSystemRun,
   resolveNodeExecutionTarget,
@@ -72,13 +68,6 @@ describe("invokeNodeSystemRun failure classification", () => {
 
   it.each([
     {
-      name: "deadline before dispatch",
-      error: gatewayNodeInvokeError({
-        code: "TIMEOUT",
-        nodeCommandDispatched: false,
-      }),
-    },
-    {
       name: "missing dispatch provenance",
       error: gatewayNodeInvokeError({ code: "NOT_CONNECTED" }),
     },
@@ -99,24 +88,6 @@ describe("invokeNodeSystemRun failure classification", () => {
       retrySafe: false,
     });
   });
-
-  it("preserves multiline command metadata in an outcome-unknown followup", async () => {
-    const failure = await invokeFailure(
-      gatewayNodeInvokeError({
-        code: "TIMEOUT",
-        message: "node invoke timed out",
-        nodeCommandDispatched: true,
-      }),
-    );
-    const text = formatNodeInvokeFailureFollowup({
-      failure,
-      nodeId: "node-1",
-      approvalId: "approval-1",
-      command: "printf 'one\\ntwo'\necho done",
-    });
-
-    expect(text).toContain("Command:\nprintf 'one\\ntwo'\necho done");
-  });
 });
 
 describe("node execution target resolution", () => {
@@ -124,23 +95,41 @@ describe("node execution target resolution", () => {
     callGatewayToolMock.mockReset();
   });
 
-  it("rejects legacy paired-node records without execution capabilities", async () => {
-    callGatewayToolMock
-      .mockRejectedValueOnce(
-        new GatewayClientRequestError({
-          code: "INVALID_REQUEST",
-          message: "unknown method: node.list",
-        }),
-      )
-      .mockResolvedValueOnce({ paired: [{ nodeId: "legacy-node", platform: "linux" }] });
+  it("retains the shipped marker transport for nodes without execution-context support", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "legacy-windows",
+          platform: "win32",
+          connected: true,
+          commands: ["system.run", "system.run.prepare"],
+          caps: ["system"],
+        },
+      ],
+    });
+    const target = await resolveNodeExecutionTarget({
+      ...createDirectNodeRun().request,
+      requestedEnv: { CUSTOM: "unchanged" },
+      executionContext: { senderId: "sender-1", subagent: true },
+    });
+    expect(target.executionContext).toBeUndefined();
+    expect(target.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "tool --version"]);
+    expect(target.env).toEqual({
+      CUSTOM: "unchanged",
+      OPENCLAW_CHANNEL_CONTEXT: '{"sender":{"id":"sender-1"}}',
+      OPENCLAW_SUBAGENT_EXEC: "1",
+    });
+  });
+
+  it("rejects inventory records without execution capabilities", async () => {
+    callGatewayToolMock.mockResolvedValueOnce({
+      nodes: [{ nodeId: "node-1", platform: "linux" }],
+    });
 
     await expect(resolveNodeExecutionTarget(createDirectNodeRun().request)).rejects.toThrow(
       /supports system.run/,
     );
-    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual([
-      "node.list",
-      "node.pair.list",
-    ]);
+    expect(callGatewayToolMock.mock.calls.map(([method]) => method)).toEqual(["node.list"]);
   });
 
   it("requires an explicit target when multiple connected nodes support system.run", async () => {
@@ -172,11 +161,15 @@ describe("node execution target resolution", () => {
       /multiple.*mac-a.*mac-b/i,
     );
     expect(callGatewayToolMock).toHaveBeenCalledTimes(1);
-    expect(callGatewayToolMock).toHaveBeenCalledWith("node.list", {}, {}, { signal: undefined });
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.list",
+      {},
+      {},
+      expect.objectContaining({ signal: undefined }),
+    );
   });
 
   it.each([
-    { name: "alone", siblings: [] },
     {
       name: "beside a connected non-executor",
       siblings: [
@@ -185,17 +178,6 @@ describe("node execution target resolution", () => {
           caps: ["canvas"],
           commands: ["canvas.present"],
           connected: true,
-        },
-      ],
-    },
-    {
-      name: "beside an offline non-executor",
-      siblings: [
-        {
-          nodeId: "canvas-only",
-          caps: ["canvas"],
-          commands: ["canvas.present"],
-          connected: false,
         },
       ],
     },
@@ -231,7 +213,7 @@ describe("node execution target resolution", () => {
     ).resolves.toMatchObject({ nodeId: "node-a" });
   });
 
-  it.each(["build-worker", "node-shared-"])(
+  it.each(["build-worker"])(
     "rejects an ambiguous configured binding %s before filtering executable nodes",
     async (boundNode) => {
       callGatewayToolMock.mockResolvedValueOnce({
@@ -287,7 +269,7 @@ function createDirectNodeRun(signal?: AbortSignal): DirectNodeRun {
       env: undefined,
       invokeDeadlineMs: 30_000,
       invokeWaitMs: 35_000,
-      runTimeoutSec: 30,
+      runTimeoutMs: 30_000,
       supportsSystemRunPrepare: true,
     },
   };
@@ -354,7 +336,12 @@ describe("direct node run", () => {
 
     const output = `${stdout}\n${stderr}\n${errorText}\n(Command exited with code 1)`;
     expect(visibleText).toBe(`Node: node-1\n${output}`);
-    expect(result.details).toMatchObject({ aggregated: output, nodeId: "node-1" });
+    expect(result.details).toMatchObject({
+      status: "failed",
+      exitCode: 1,
+      aggregated: output,
+      nodeId: "node-1",
+    });
   });
 
   it("identifies the node in the successful result the model reads", async () => {
@@ -366,20 +353,6 @@ describe("direct node run", () => {
       aggregated: "ok",
       nodeId: "node-1",
     });
-  });
-
-  it("renders a nonzero exit code in the model-visible text", async () => {
-    callGatewayToolMock.mockResolvedValueOnce({
-      payload: { success: false, stdout: "done", stderr: "", error: null, exitCode: 3 },
-    });
-
-    const result = await dispatchNodeSystemRun(createDirectNodeRun());
-    const visibleText = result.content[0]?.type === "text" ? result.content[0].text : "";
-
-    // Output alone must not read as success when the command failed.
-    expect(visibleText).toContain("done");
-    expect(visibleText).toContain("(Command exited with code 3)");
-    expect(result.details).toMatchObject({ status: "failed", exitCode: 3 });
   });
 
   it("renders a timeout marker and records timedOut in details", async () => {

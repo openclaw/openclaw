@@ -1,11 +1,9 @@
-// Mattermost plugin module implements probe behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromPrivateNetworkOptIn,
-  type LookupFn,
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeMattermostBaseUrl, readMattermostError, type MattermostUser } from "./client.js";
@@ -17,24 +15,18 @@ type MattermostProbe = BaseProbeResult & {
   bot?: MattermostUser;
 };
 
-/** Optional test hooks so probe can exercise the real guarded-fetch owner. */
-type ProbeMattermostDeps = {
-  fetchImpl?: typeof fetch;
-  lookupFn?: LookupFn;
-};
-
 export async function probeMattermost(
   baseUrl: string,
   botToken: string,
   timeoutMs = 2500,
   allowPrivateNetwork = false,
-  deps?: ProbeMattermostDeps,
 ): Promise<MattermostProbe> {
   const normalized = normalizeMattermostBaseUrl(baseUrl);
   if (!normalized) {
     return { ok: false, error: "baseUrl missing" };
   }
   const url = `${normalized}/api/v4/users/me`;
+  const headers = { Authorization: `Bearer ${botToken}` };
   return await runChannelProbe(
     undefined,
     async ({ elapsedMs }) => {
@@ -43,18 +35,16 @@ export async function probeMattermost(
       const { response: res, release } = await fetchWithSsrFGuard({
         url,
         init: {
-          headers: { Authorization: `Bearer ${botToken}` },
+          headers,
         },
         auditContext: "mattermost-probe",
         policy: ssrfPolicyFromPrivateNetworkOptIn(allowPrivateNetwork),
         ...(resolvedTimeoutMs !== undefined ? { timeoutMs: resolvedTimeoutMs } : {}),
-        ...(deps?.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
-        ...(deps?.lookupFn ? { lookupFn: deps.lookupFn } : {}),
       });
       const requestElapsedMs = elapsedMs();
       try {
         if (!res.ok) {
-          const detail = await readMattermostError(res);
+          const detail = await readMattermostError(res, headers);
           return {
             ok: false,
             status: res.status,

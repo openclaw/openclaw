@@ -4,10 +4,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { stageHookInstall } from "../hooks/install-record-transaction.js";
 import type { HookInstallUpdate } from "../hooks/installs.js";
 import type { PackageDirInstallTransaction } from "../infra/install-package-dir.js";
-import type { ConfigSnapshotForInstallPersist } from "../plugins/install-persistence.js";
+import type { ConfigSnapshotForInstallPersist } from "../plugins/install-config-mutation.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { enableInternalHookEntries } from "./plugins-command-helpers.js";
 
 export async function persistHookPackInstall(params: {
   snapshot: ConfigSnapshotForInstallPersist;
@@ -26,7 +25,22 @@ export async function persistHookPackInstall(params: {
       params.snapshot.writeOptions.assertConfigPathForWrite?.();
       params.beforePersistentApply?.();
     };
-    const next = enableInternalHookEntries(params.snapshot.config, params.hooks);
+    const config = params.snapshot.config;
+    const entries = { ...config.hooks?.internal?.entries };
+    for (const hookName of params.hooks) {
+      entries[hookName] = { ...entries[hookName], enabled: true };
+    }
+    const next: OpenClawConfig = {
+      ...config,
+      hooks: {
+        ...config.hooks,
+        internal: {
+          ...config.hooks?.internal,
+          enabled: true,
+          entries,
+        },
+      },
+    };
     const transaction = await stageHookInstall({
       update: { hookId: params.hookPackId, hooks: params.hooks, ...params.install },
       payloadTransaction: params.payloadTransaction,

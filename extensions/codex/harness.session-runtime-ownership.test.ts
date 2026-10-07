@@ -1,4 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { clearCodexBindingAfterInvalidImagePayload } from "./src/app-server/run-attempt-state.js";
 import {
@@ -6,6 +14,8 @@ import {
   sessionBindingIdentity,
   type CodexAppServerThreadBinding,
 } from "./src/app-server/session-binding.test-helpers.js";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "codex-ownership-predecessor-");
 
 const session = {
   agentId: "worker",
@@ -91,7 +101,9 @@ describe("Codex session runtime ownership", () => {
       await fixture.bindingStore.mutate(identity, { kind: "set", binding });
     }
 
-    expect(fixture.resolveOwnership()).toEqual(expected);
+    const readPreviousSessionId = vi.fn(() => undefined);
+    expect(fixture.resolveOwnership({ readPreviousSessionId })).toEqual(expected);
+    expect(readPreviousSessionId).toHaveBeenCalledTimes(binding ? 0 : 1);
     expect(fixture.bindingStore.read(identity)).toEqual(binding);
   });
 
@@ -99,17 +111,78 @@ describe("Codex session runtime ownership", () => {
     "respects expected native ownership during image cleanup (%s)",
     async (expected) => {
       const fixture = createOwnershipFixture();
-      const binding = { ...observedBinding, preserveNativeModel: true as const };
+      const binding = {
+        ...observedBinding,
+        clientId: "image-owner",
+        preserveNativeModel: true as const,
+      };
       await fixture.bindingStore.mutate(identity, { kind: "set", binding });
 
       await clearCodexBindingAfterInvalidImagePayload(
         fixture.bindingStore,
         identity,
-        { phase: "turn_completed", threadId: binding.threadId, error: "synthetic invalid image" },
+        {
+          phase: "turn_completed",
+          threadId: binding.threadId,
+          clientId: binding.clientId,
+          error: "synthetic invalid image",
+        },
+        createNativeSessionBindingAuthority([], () => {}),
         expected ? { model: "native", auth: "host" } : undefined,
       );
 
       expect(fixture.bindingStore.read(identity)).toEqual(expected ? binding : undefined);
+    },
+  );
+
+  it.each(["host", "native"] as const)(
+    "reads %s auth ownership from the recorded predecessor without adopting it",
+    async (auth) => {
+      const root = sessionDirs.make();
+      const storePath = path.join(root, "sessions.json");
+      const scope = { agentId: session.agentId, sessionKey: session.sessionKey, storePath };
+      const fixture = createOwnershipFixture();
+      const successor = { ...identity, sessionId: "session-successor" };
+      const binding: CodexAppServerThreadBinding = {
+        ...observedBinding,
+        preserveNativeModel: true,
+        ...(auth === "native"
+          ? {
+              connectionScope: "supervision",
+              supervisionSourceThreadId: "native-source",
+              conversationSourceTransferComplete: true,
+            }
+          : {}),
+      };
+      await upsertSessionEntry({
+        ...scope,
+        entry: { sessionId: session.sessionId, updatedAt: 1 },
+      });
+      await fixture.bindingStore.mutate(identity, { kind: "set", binding });
+      await patchSessionEntry({ ...scope, update: () => ({ sessionId: successor.sessionId }) });
+      const readPreviousSessionId = () => {
+        const entry = getSessionEntry({
+          ...scope,
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        });
+        return entry?.sessionId === successor.sessionId ? entry.previousSessionId : undefined;
+      };
+
+      expect(
+        fixture.resolveOwnership({
+          sessionId: successor.sessionId,
+          readPreviousSessionId,
+          storePath,
+          config: { session: { store: path.join(root, "other", "sessions.json") } },
+        }),
+      ).toEqual({
+        model: "native",
+        auth,
+        modelRef: { provider: binding.modelProvider, model: binding.model },
+      });
+      expect(fixture.bindingStore.read(identity)).toEqual(binding);
+      expect(fixture.bindingStore.read(successor)).toBeUndefined();
     },
   );
 

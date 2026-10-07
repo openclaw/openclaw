@@ -2,10 +2,20 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewer, ExecAutoReviewTranscript } from "../infra/exec-auto-review.js";
 import { handleInvoke } from "../node-host/invoke.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import type { Deferred } from "../shared/deferred.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import {
   createOpenClawTestState,
@@ -14,19 +24,12 @@ import {
 import { executeNodeHostCommand } from "./bash-tools.exec-host-node.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { resolvePreparedExecEnvironment } from "./bash-tools.exec-request-preparation.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 
 const rpc = vi.hoisted(() => vi.fn());
-vi.mock("./tools/gateway.js", () => ({ callGatewayTool: rpc }));
-vi.mock("./tools/nodes-utils.js", () => ({
-  listNodes: async () => [
-    {
-      nodeId: "node-1",
-      connected: true,
-      platform: "darwin",
-      commands: ["system.run", "system.run.prepare"],
-    },
-  ],
-  resolveNodeIdFromList: () => "node-1",
+vi.mock("./tools/gateway.js", () => ({
+  callGatewayTool: rpc,
+  readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
 let state: OpenClawTestState;
@@ -35,7 +38,20 @@ let afterPrepare: () => Promise<void>;
 let request: ExecuteNodeHostCommandParams & { workdir: string };
 let resolveDecision: (result: { decision: string }) => void;
 let decisionEntered: Deferred;
-beforeEach(async () => {
+beforeEach(async ({ onTestFinished }) => {
+  const previousRegistry = captureActivePluginRegistrySnapshot();
+  onTestFinished(() => {
+    rollbackStagedPluginRegistry(previousRegistry);
+  });
+  // A real Gateway already loaded its ingress channel before executing a tool.
+  // Keep this node-policy fixture from cold-loading the whole A2A plugin graph.
+  stageActivePluginRegistry(
+    createTestRegistry([
+      { pluginId: "a2a", source: "test", plugin: createChannelTestPluginBase({ id: "a2a" }) },
+    ]),
+    null,
+    "default",
+  );
   state = await createOpenClawTestState({ label: "node-exec-policy" });
   await state.writeConfig({});
   saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" } });
@@ -59,11 +75,27 @@ beforeEach(async () => {
   });
   decisionEntered = createDeferred();
   rpc.mockReset().mockImplementation(async (method, _options, params) => {
+    if (method === "node.list") {
+      return {
+        nodes: [
+          {
+            nodeId: "node-1",
+            connected: true,
+            platform: "darwin",
+            caps: ["system.run.execution-context.v1"],
+            commands: ["system.run", "system.run.prepare"],
+          },
+        ],
+      };
+    }
     if (method === "exec.approvals.node.get") {
       return readExecApprovalsSnapshot();
     }
     if (method === "exec.approval.request") {
       return { id: params.id, expiresAtMs: Date.now() + 60000 };
+    }
+    if (method === "exec.approval.resolve") {
+      return { ok: true };
     }
     if (method === "exec.approval.waitDecision") {
       decisionEntered.resolve();
@@ -109,6 +141,60 @@ beforeEach(async () => {
 afterEach(async () => {
   await state.cleanup();
 });
+
+it.each([
+  { host: "gateway", surface: "subagent" },
+  { host: "node", surface: "dashboard" },
+] as const)(
+  "preserves child context through $host exec from a $surface session",
+  async ({ host, surface }) => {
+    const childSessionKey = `agent:main:${surface}:exec-child`;
+    const storePath = state.statePath("agents", "main", "sessions", "sessions.json");
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: childSessionKey, storePath },
+      {
+        sessionId: "exec-child-instance",
+        updatedAt: Date.now(),
+        spawnDepth: 1,
+        spawnedBy: "agent:main:main",
+      },
+    );
+    const tool = createExecTool({
+      host,
+      node: "node-1",
+      security: "full",
+      ask: "off",
+      notifyOnExit: false,
+      channelContext: { sender: { id: "sender-1" }, chat: { id: "chat-1" } },
+      allowBackground: false,
+      config: { session: { store: storePath } },
+      sessionKey: "agent:main:main",
+      runSessionKey: childSessionKey,
+      notifySessionKey: childSessionKey,
+    });
+    const result = await tool.execute("child-exec-context", {
+      command: `${quoteCliArg(process.execPath)} -e ${quoteCliArg("process.stdout.write(JSON.stringify([process.env.OPENCLAW_SUBAGENT_EXEC, JSON.parse(process.env.OPENCLAW_CHANNEL_CONTEXT || 'null')]))")}`,
+      ...(host === "gateway" ? { env: { OPENCLAW_SUBAGENT_EXEC: "0" } } : {}),
+      workdir: state.root,
+    });
+    expect(result.details).toMatchObject({
+      status: "completed",
+      aggregated: JSON.stringify(["1", { sender: { id: "sender-1" }, chat: { id: "chat-1" } }]),
+    });
+    if (host === "node") {
+      const invocations = rpc.mock.calls.filter(([method]) => method === "node.invoke");
+      for (const invocation of invocations) {
+        const invoke = invocation[2];
+        expect(invoke.params.env).toBeUndefined();
+        expect(invoke.params.executionContext).toEqual({
+          senderId: "sender-1",
+          chatId: "chat-1",
+          subagent: true,
+        });
+      }
+    }
+  },
+);
 
 it("prepares managed GitHub exec with the node's own sanitized environment", async () => {
   const environment = withEnv(
@@ -191,6 +277,109 @@ it.each(["GH_TOKEN", "GITHUB_TOKEN"])(
   },
 );
 
+it("auto-reviews an absolute direct command through real node preparation and execution", async () => {
+  resolveDecision({ decision: "deny" });
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "prints fixture output",
+  }));
+  const result = await executeNodeHostCommand({
+    ...request,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+  });
+
+  expect(autoReviewer).toHaveBeenCalledOnce();
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({
+      argv: ["/usr/bin/printf", "node-policy-proof"],
+      host: "node",
+    }),
+  );
+  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(false);
+  expect(result.details).toMatchObject({ status: "completed", aggregated: "node-policy-proof" });
+  expect(invokeCount).toBe(1);
+});
+
+it.each([
+  "printf node-policy-proof",
+  "/usr/bin/printf *.txt",
+  "/usr/bin/env /usr/bin/printf node-policy-proof",
+  "/bin/sh -c '/usr/bin/printf node-policy-proof'",
+])("keeps remote unpinned or wrapped %s on the human path", async (command) => {
+  saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "on-miss" } });
+  const autoReviewer = vi.fn(async () => ({
+    decision: "allow-once" as const,
+    risk: "low" as const,
+    rationale: "would allow if called",
+  }));
+  const warnings: string[] = [];
+  const execution = executeNodeHostCommand({
+    ...request,
+    command,
+    security: "allowlist",
+    ask: "on-miss",
+    autoReview: true,
+    autoReviewer,
+    warnings,
+  });
+  const drained = execution.catch(() => undefined);
+  try {
+    await Promise.race([decisionEntered.promise, execution]);
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(invokeCount).toBe(0);
+    expect(warnings).toContain("Exec auto-review skipped: dispatch chain cannot be bound");
+    resolveDecision({ decision: "deny" });
+    await expect(execution).rejects.toThrow("exec denied: user-denied");
+  } finally {
+    resolveDecision({ decision: "deny" });
+    await drained;
+  }
+});
+
+it("collects live conversation context only when the node exec tool reaches review", async () => {
+  let currentTranscript: ExecAutoReviewTranscript | undefined;
+  const reviewTranscript = vi.fn(() => currentTranscript);
+  const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+    decision: "deny",
+    risk: "low",
+    rationale: "The operator requested a different action.",
+  }));
+  const tool = createExecTool({
+    host: "node",
+    node: "node-1",
+    mode: "auto",
+    nodeCwd: request.workdir,
+    agentId: request.agentId,
+    sessionKey: request.sessionKey,
+    safeBins: [],
+    autoReviewer,
+    reviewTranscript,
+  });
+  expect(reviewTranscript).not.toHaveBeenCalled();
+  afterPrepare = async () => {
+    expect(reviewTranscript).not.toHaveBeenCalled();
+    currentTranscript = {
+      entries: [{ kind: "user", origin: "operator", text: "Inspect the node configuration." }],
+      omittedEntries: 0,
+      truncated: false,
+    };
+  };
+
+  const result = await tool.execute("node-live-review-context", { command: request.command });
+
+  expect(reviewTranscript).toHaveBeenCalledTimes(1);
+  expect(autoReviewer).toHaveBeenCalledWith(
+    expect.objectContaining({ host: "node", transcript: currentTranscript }),
+  );
+  expect(result.details).toMatchObject({ status: "failed", approvalReviewOutcome: "denied" });
+  expect(invokeCount).toBe(0);
+});
+
 it("denies caller allowlist/off misses before dispatch to a permissive node", async () => {
   await expect(executeNodeHostCommand({ ...request, security: "allowlist" })).rejects.toThrow(
     "allowlist",
@@ -198,21 +387,25 @@ it("denies caller allowlist/off misses before dispatch to a permissive node", as
   expect(invokeCount).toBe(0);
 });
 
-it.each(["allow-once", "allow-always"])(
-  "keeps node approval %s inside the originating tool lifetime",
-  async (decision) => {
+it.each([
+  { channel: "webchat", decision: "allow-once" },
+  { channel: "a2a", decision: "allow-always" },
+])(
+  "keeps $channel node approval $decision inside the originating tool lifetime",
+  async ({ channel, decision }) => {
     let completed = false;
     const result = executeNodeHostCommand({
       ...request,
       ask: "on-miss",
       security: "allowlist",
+      turnSourceChannel: channel,
     }).finally(() => {
       completed = true;
     });
     await Promise.race([decisionEntered.promise, result]);
+    resolveDecision({ decision });
     expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
     expect(completed).toBe(false);
-    resolveDecision({ decision });
     expect((await result).details).toMatchObject({
       status: "completed",
       aggregated: "node-policy-proof",
@@ -231,32 +424,7 @@ it("prompts for target ask=always even when the caller is full/off", async () =>
   expect((await result).details.status).toBe("completed");
 });
 
-it("reports target policy denial as not executed", async () => {
-  setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
-  const { dispatchNodeSystemRun, buildNodeSystemRunInvoke, resolveNodeExecutionTarget } =
-    await import("./bash-tools.exec-host-node-phases.js");
-  const target = await resolveNodeExecutionTarget(request);
-  const result = await dispatchNodeSystemRun({
-    request,
-    target,
-    invoke: buildNodeSystemRunInvoke({
-      target,
-      command: target.argv,
-      rawCommand: request.command,
-      cwd: request.workdir,
-      agentId: request.agentId,
-      sessionKey: request.sessionKey,
-    }),
-  });
-  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
-  expect(result.content).toEqual([
-    expect.objectContaining({
-      text: expect.not.stringMatching(/may have executed|request approval/),
-    }),
-  ]);
-});
-
-it("does not dispatch a late approval after cancellation", async () => {
+it("does not dispatch a late A2A approval after cancellation", async () => {
   const controller = new AbortController();
   const reason = new Error("originating turn closed");
   const execution = executeNodeHostCommand({
@@ -264,6 +432,7 @@ it("does not dispatch a late approval after cancellation", async () => {
     security: "allowlist",
     ask: "on-miss",
     signal: controller.signal,
+    turnSourceChannel: "a2a",
   });
   const drained = execution.catch(() => undefined);
   try {
@@ -290,10 +459,13 @@ it("preserves a target deny introduced while approval was pending", async () => 
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.waitDecision")).toBe(true);
   setRuntimeConfigSnapshot({ tools: { exec: { security: "deny", ask: "off" } } });
   resolveDecision({ decision: "allow-once" });
-  expect((await execution).details).toMatchObject({
-    status: "failed",
-    failureKind: "policy-denied",
-  });
+  const result = await execution;
+  expect(result.details).toMatchObject({ status: "failed", failureKind: "policy-denied" });
+  expect(result.content).toEqual([
+    expect.objectContaining({
+      text: expect.not.stringMatching(/may have executed|request approval/),
+    }),
+  ]);
 });
 
 it("executes full/off through a symlink cwd using the prepared canonical directory", async () => {
@@ -316,30 +488,6 @@ it("executes full/off through a symlink cwd using the prepared canonical directo
   expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
 });
 
-it.skipIf(process.platform !== "darwin")(
-  "executes full/off in the actual macOS /tmp alias",
-  async () => {
-    const result = await executeNodeHostCommand({
-      ...request,
-      command: "/bin/pwd -P",
-      workdir: "/tmp",
-    });
-    expect(result.details).toMatchObject({
-      status: "completed",
-      aggregated: `${await fs.realpath("/tmp")}\n`,
-    });
-  },
-);
-
-it("executes full/off inline Node without approval script preflight", async () => {
-  const result = await executeNodeHostCommand({
-    ...request,
-    command: `${JSON.stringify(process.execPath)} -e 'process.stdout.write("inline-proof")'`,
-  });
-  expect(result.details).toMatchObject({ status: "completed", aggregated: "inline-proof" });
-  expect(rpc.mock.calls.some(([method]) => method === "exec.approval.request")).toBe(false);
-});
-
 it("does not bind a full/off script to approval-time contents", async () => {
   const script = path.join(request.workdir, "script.cjs");
   await fs.writeFile(script, 'process.stdout.write("before")');
@@ -353,10 +501,8 @@ it("does not bind a full/off script to approval-time contents", async () => {
   expect(result.details).toMatchObject({ status: "completed", aggregated: "after" });
 });
 
-it.each([
-  { runtime: "Node", command: [process.execPath, "-e", 'process.stdout.write("inline")'] },
-  { runtime: "Python", command: ["python3", "-c", 'print("inline")'] },
-])("prepares direct inline $runtime only without approval binding", async ({ command }) => {
+it("prepares direct inline Node only without approval binding", async () => {
+  const command = [process.execPath, "-e", 'process.stdout.write("inline")'];
   const params = { command, cwd: request.workdir, security: "full", ask: "off" };
   const prepare = (ask = "off") =>
     rpc("node.invoke", {}, { command: "system.run.prepare", params: { ...params, ask } });

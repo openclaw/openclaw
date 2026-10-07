@@ -9,7 +9,18 @@ title: "Voicecall"
 # `openclaw voicecall`
 
 `voicecall` is a plugin-provided command. It only appears when the voice-call
-plugin is installed and enabled.
+plugin is installed and enabled. If `openclaw voicecall` is not recognized,
+install and enable the plugin on the Gateway host:
+
+```bash
+openclaw plugins install @openclaw/voice-call
+openclaw plugins enable voice-call
+```
+
+The commands apply to a running Gateway automatically; start it if it is offline.
+See [Voice call plugin](/plugins/voice-call) for provider credentials and
+webhook configuration, and [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
+for runtime verification.
 
 When the Gateway is running, operational commands (`call`, `start`,
 `continue`, `speak`, `dtmf`, `end`, `status`) route to that Gateway's
@@ -29,10 +40,11 @@ printing a raw `EADDRINUSE` failure.
 ```bash
 openclaw voicecall setup    [--json]
 openclaw voicecall smoke    [-t <phone>] [--message <text>] [--mode <m>] [--yes] [--json]
-openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>]
-openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>]
+openclaw voicecall call     -m <text> [-t <phone>] [--mode <m>] [--brief <text-or-json> | --brief-file <path>]
+openclaw voicecall start    --to <phone> [--message <text>] [--mode <m>] [--brief <text-or-json> | --brief-file <path>]
 openclaw voicecall continue --call-id <id> --message <text>
 openclaw voicecall speak    --call-id <id> --message <text>
+openclaw voicecall steer    --call-id <id> --message <text> [--mode say|guidance]
 openclaw voicecall dtmf     --call-id <id> --digits <digits>
 openclaw voicecall end      --call-id <id>
 openclaw voicecall status   [--call-id <id>] [--json]
@@ -107,6 +119,11 @@ openclaw voicecall call --to "+15555550123" --message "Hello"
 openclaw voicecall call -m "Heads up" --mode notify
 ```
 
+Use `--brief` for a task in plain text or a JSON object. `--brief-file` reads a
+JSON object from a file; the flags are mutually exclusive. The opening message
+is still spoken verbatim first. See [Per-call briefs](/plugins/voice-call/realtime-and-streaming#per-call-briefs-and-errands)
+for the schema, permissions, and duration cap.
+
 ### `start`
 
 Alias for `call` with a different default flag shape.
@@ -134,6 +151,20 @@ Speak a message without waiting for a response.
 | ------------------ | -------- | ----------------- |
 | `--call-id <id>`   | yes      | Call ID.          |
 | `--message <text>` | yes      | Message to speak. |
+
+### `steer`
+
+Send a new owner instruction to an active realtime call:
+
+```bash
+openclaw voicecall steer --call-id "<call-id>" --message "Ask for Tuesday morning"
+openclaw voicecall steer --call-id "<call-id>" --mode say --message "Tuesday morning works for us."
+```
+
+`guidance` is the default. `say` requests the exact words now. The instruction is
+also included in later agent consults. Messages are limited to 500 characters.
+The CLI uses the running Gateway's operator authorization; an unavailable
+Gateway is an error because a standalone process cannot steer its live bridge.
 
 ### `dtmf`
 

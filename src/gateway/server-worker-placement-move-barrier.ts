@@ -1,4 +1,4 @@
-import { clearSessionQueues } from "../auto-reply/reply/queue/cleanup.js";
+import { clearSessionLifecycleQueues } from "../auto-reply/reply/queue/cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import {
@@ -7,98 +7,118 @@ import {
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
-import type { WorkerPlacementSessionRuntime } from "./server-worker-placement-reclaim.js";
-import { resolveWorkerPlacementSessionTarget } from "./server-worker-placement-session-target.js";
+import {
+  resolveWorkerPlacementSessionStoreTarget,
+  resolveWorkerPlacementSessionTarget,
+  type WorkerPlacementSessionRuntime,
+} from "./server-worker-placement-session-target.js";
 import type { WorkerPlacementMoveBarrier } from "./worker-environments/placement-move-service.js";
+import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-export function createGatewayWorkerPlacementMoveBarrier(params: {
+export type WorkerPlacementHandoffParams = {
   placements: Pick<WorkerSessionPlacementStore, "waitForTurnClaimRelease">;
-  loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
+  awaitTurnClaimRelease: (sessionId: string, wait: () => Promise<void>) => Promise<void>;
   revokeSessionAuthority: (request: { sessionId: string; sessionKeys: readonly string[] }) => void;
-  persistAbandonedPartial?: (request: {
-    sessionId: string;
-    sessionKey: string;
-    agentId: string;
-    runId: string;
-  }) => Promise<void>;
-}): WorkerPlacementMoveBarrier {
-  return async ({
-    sessionId,
-    sessionKey,
-    agentId,
-    sourceDisposition,
-    authorize,
+};
+
+export async function runWorkerPlacementHandoff<T>(
+  params: WorkerPlacementHandoffParams,
+  request: WorkerSessionPlacementIdentity & {
+    action: "dispatch" | "move";
+    sourceDisposition?: "reconcile" | "abandon";
+    signal?: AbortSignal;
+  },
+  sessionRuntime: WorkerPlacementSessionRuntime,
+  begin: (resolved: Awaited<ReturnType<typeof resolveWorkerPlacementSessionTarget>>) => Promise<T>,
+): Promise<T> {
+  const { sessionId, sessionKey, agentId, action, signal } = request;
+  const target = resolveWorkerPlacementSessionStoreTarget(
+    sessionRuntime,
+    getRuntimeConfig(),
+    request,
+  );
+  const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
+  let begun: T;
+  return await runExclusiveSessionLifecycleMutation(`placement-${action}`, {
+    scope: target.storePath,
+    identities: lifecycleIdentities,
     signal,
-    begin,
-  }) => {
-    const sessionRuntime = await params.loadSessionRuntime();
-    const target = sessionRuntime.resolveGatewaySessionStoreTargetWithStore({
-      cfg: getRuntimeConfig(),
-      key: sessionKey,
-      agentId,
-      clone: false,
-    });
-    const lifecycleIdentities = [sessionKey, target.canonicalKey, ...target.storeKeys, sessionId];
-    let begun: Awaited<ReturnType<typeof begin>> | undefined;
-    await runExclusiveSessionLifecycleMutation({
-      scope: target.storePath,
-      identities: lifecycleIdentities,
-      signal,
-      prepare: async () => {
-        resolveWorkerPlacementSessionTarget({
-          sessionRuntime,
-          config: getRuntimeConfig(),
-          sessionId,
-          sessionKey,
-          agentId,
-          expectedTarget: target,
-          errorMessage: `Session ${sessionKey} changed before placement move. Retry.`,
+    prepare: async () => {
+      const resolved = await resolveWorkerPlacementSessionTarget({
+        sessionRuntime,
+        config: getRuntimeConfig(),
+        sessionId,
+        sessionKey,
+        agentId,
+        expectedTarget: target,
+        errorMessage: `Session ${sessionKey} changed before ${action === "dispatch" ? "cloud worker dispatch" : "placement move"}. Retry.`,
+      });
+      resolved.assertCurrent(getRuntimeConfig());
+      begun = await begin(resolved);
+      clearSessionLifecycleQueues({
+        keys: lifecycleIdentities,
+        agentId: resolved.target.agentId,
+        sessionKey: resolved.target.canonicalKey,
+        sessionId,
+        // Placement committed; settling its source queues must survive authority changes.
+        assertCurrent: () => {},
+      });
+      params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
+      if (request.sourceDisposition === "abandon") {
+        // Explicit abandonment cannot wait for an unreachable source's acknowledgement.
+        startSessionWorkAdmissionInterruption({
+          scope: target.storePath,
+          identities: lifecycleIdentities,
         });
-        authorize?.();
-        begun = await begin(async (runId) => {
-          if (params.persistAbandonedPartial) {
-            // Persist before a new durable drain closes the exact worker run;
-            // joined decisions never invoke this mint-only callback.
-            await params.persistAbandonedPartial({ sessionId, sessionKey, agentId, runId });
-            authorize?.();
-          }
-        });
-        clearSessionQueues(lifecycleIdentities);
-        params.revokeSessionAuthority({ sessionId, sessionKeys: lifecycleIdentities });
-        if (sourceDisposition === "abandon") {
-          // Explicit abandonment revokes the old owner locally; its unreachable
-          // transport acknowledgement cannot delay the exact force-abandon owner.
-          startSessionWorkAdmissionInterruption({
-            scope: target.storePath,
-            identities: lifecycleIdentities,
-          });
-          return;
-        }
+        return;
+      }
+      await params.awaitTurnClaimRelease(sessionId, async () => {
         const released = await interruptSessionWorkAdmissions({
           scope: target.storePath,
           identities: lifecycleIdentities,
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
         });
         if (!released) {
-          throw new Error(`Session ${sessionKey} is still active; placement move interrupted`);
+          throw new Error(
+            `Session ${sessionKey} is still active; ${action === "dispatch" ? "dispatch stopped" : "placement move interrupted"}`,
+          );
         }
         await params.placements.waitForTurnClaimRelease(sessionId, {
           timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
+          signal,
         });
-        await runExclusiveSessionStoreWrite(target.storePath, async () => {}, {
-          reentrant: true,
+      });
+      await runExclusiveSessionStoreWrite(target.storePath, async () => {}, { reentrant: true });
+    },
+    run: async () => begun,
+  });
+}
+
+export function createGatewayWorkerPlacementMoveBarrier(
+  params: WorkerPlacementHandoffParams & {
+    loadSessionRuntime: () => Promise<WorkerPlacementSessionRuntime>;
+    persistAbandonedPartial?: (
+      request: WorkerSessionPlacementIdentity & { runId: string },
+    ) => Promise<void>;
+  },
+): WorkerPlacementMoveBarrier {
+  return async (request) =>
+    runWorkerPlacementHandoff(
+      params,
+      { ...request, action: "move" },
+      await params.loadSessionRuntime(),
+      async () => {
+        request.authorize?.();
+        return await request.begin(async (runId) => {
+          if (params.persistAbandonedPartial) {
+            // Persist before a new durable drain closes the exact worker run;
+            // joined decisions never invoke this mint-only callback.
+            const { sessionId, sessionKey, agentId } = request;
+            await params.persistAbandonedPartial({ sessionId, sessionKey, agentId, runId });
+            request.authorize?.();
+          }
         });
       },
-      run: async () => {
-        if (!begun) {
-          throw new Error(`Session ${sessionKey} placement move barrier did not start`);
-        }
-      },
-    });
-    if (!begun) {
-      throw new Error(`Session ${sessionKey} placement move barrier did not complete`);
-    }
-    return begun;
-  };
+    );
 }

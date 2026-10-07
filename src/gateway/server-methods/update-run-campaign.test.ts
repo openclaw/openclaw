@@ -1,18 +1,38 @@
 // update.run campaign tests cover failure release and concurrent campaign ownership.
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateScheduleState } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateCampaignController } from "../../infra/update-campaign.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import {
+  createGatewayUpdateLifecycle,
+  type UpdateCheckLifecycle,
+} from "../../infra/update-check-lifecycle.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { createTempHomeEnv, type TempHomeEnv } from "../../test-utils/temp-home.js";
+import type { RespondFn } from "./types.js";
+
+let ledgerHome: TempHomeEnv | undefined;
+let lifecycle: UpdateCheckLifecycle;
+beforeEach(async () => {
+  ledgerHome = await createTempHomeEnv("openclaw-update-campaign-rpc-");
+  lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
+});
+afterEach(async () => {
+  await lifecycle.stop();
+  await ledgerHome?.restore();
+  ledgerHome = undefined;
+});
 
 let currentCampaignId: string | undefined;
 let updateSchedule: UpdateScheduleState | null;
 let updateChannel: "stable" | "beta" | "dev" | null;
 const versionMock = vi.hoisted(() => ({ value: "1.0.0" }));
+const sentinelAdmission = vi.hoisted((): { beforeGrant?: (stage: string) => void } => ({}));
 type UpdateCampaignAdoption = ReturnType<UpdateCampaignController["adopt"]>;
 
 const adoptCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() => ({
@@ -32,14 +52,13 @@ const getCampaignStateMock = vi.fn(() =>
       }
     : undefined,
 );
-const runGatewayUpdateMock =
-  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdate>();
-const runGatewayUpdatePreflightMock =
-  vi.fn<typeof import("../../infra/update-runner.js").runGatewayUpdatePreflight>();
+
 const resolveUpdateInstallSurfaceMock =
-  vi.fn<typeof import("../../infra/update-runner.js").resolveUpdateInstallSurface>();
-const initializeGatewayUpdateStatusMock =
-  vi.fn<typeof import("../../infra/update-startup.js").initializeGatewayUpdateStatus>();
+  vi.fn<
+    typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
+  >();
+const resolveStartupInstallStatusMock =
+  vi.fn<typeof import("../../infra/update-install-status.js").resolveStartupInstallStatus>();
 const detectRespawnSupervisorMock = vi.fn<() => RespawnSupervisor | null>();
 const startManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
@@ -51,14 +70,20 @@ const startManagedServiceUpdateHandoffMock = vi.fn<
   handoffId: "handoff-1",
   installRoot: "/tmp/openclaw",
 }));
-const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
+const transferManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
+>(async () => true);
+const cancelManagedServiceUpdateHandoffMock = vi.fn<
+  typeof import("../../infra/update-managed-service-handoff.js").cancelManagedServiceUpdateHandoff
+>(async () => "restored-in-process");
+const scheduleGatewayRestartMock = vi.fn(() => ({ scheduled: true }));
 const logGatewayInfoMock = vi.fn();
-const writeRestartSentinelMock = vi.fn(async () => undefined);
+const writeRestartSentinelMock = vi.fn<
+  (
+    ...args: Parameters<typeof import("../../infra/restart-sentinel.js").writeRestartSentinel>
+  ) => Promise<unknown>
+>(async () => undefined);
 const recordLatestUpdateRestartSentinelMock = vi.fn();
-
-vi.mock("../../../packages/gateway-protocol/src/index.js", () => ({
-  validateUpdateRunParams: () => true,
-}));
 
 vi.mock("../../config/commands.flags.js", () => ({
   isRestartEnabled: () => true,
@@ -91,20 +116,71 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   };
 });
 
+vi.mock("../../infra/sqlite-worker-store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/sqlite-worker-store.js")>();
+  return {
+    ...actual,
+    createSqliteWorkerWriteAdmission: (
+      assertCurrent: Parameters<typeof actual.createSqliteWorkerWriteAdmission>[0],
+      nativeLocations: readonly string[],
+    ) =>
+      actual.createSqliteWorkerWriteAdmission((request) => {
+        sentinelAdmission.beforeGrant?.(request.stage);
+        assertCurrent(request);
+      }, nativeLocations),
+  };
+});
+
 vi.mock("../../infra/restart.js", async () => ({
   ...(await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js")),
-  scheduleGatewaySigusr1Restart: scheduleGatewaySigusr1RestartMock,
+  scheduleGatewayRestart: scheduleGatewayRestartMock,
 }));
 
 vi.mock("../../infra/supervisor-markers.js", () => ({
   detectRespawnSupervisor: detectRespawnSupervisorMock,
 }));
 
+vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/gateway-entrypoint.js")>()),
+  resolveGatewayInstallEntrypoint: async (root: string) => `${root}/dist/index.js`,
+}));
+
+vi.mock("../../infra/gateway-owner-lease.js", () => ({
+  readGatewayOwnerLease: () =>
+    detectRespawnSupervisorMock.mock.results.at(-1)?.value
+      ? undefined
+      : {
+          owner: "foreground-owner",
+          pid: process.pid,
+          host: "fixture-host",
+          startedAt: 1,
+          port: 18789,
+          mode: "foreground",
+          state: "live",
+          expired: false,
+          supervisor: null,
+        },
+}));
+
+vi.mock("../../infra/update-check-lifecycle.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/update-check-lifecycle.js")>();
+  return {
+    ...actual,
+    currentUpdateCheckLifecycle: () => ({
+      ...actual.currentUpdateCheckLifecycle(),
+      campaign: {
+        adopt: adoptCampaignMock,
+        clear: clearCampaignMock,
+        getState: getCampaignStateMock,
+        bindRun: vi.fn(),
+      },
+    }),
+  };
+});
+
 vi.mock("../../infra/update-campaign.js", () => ({
-  gatewayUpdateCampaign: {
-    adopt: adoptCampaignMock,
-    clear: clearCampaignMock,
-    getState: getCampaignStateMock,
+  UpdateCampaignController: function unexpectedCampaignConstruction() {
+    throw new Error("update.run must consume its existing campaign owner");
   },
 }));
 
@@ -116,29 +192,23 @@ vi.mock("../../infra/update-channels.js", async () => {
 });
 
 vi.mock("../../infra/update-managed-service-handoff.js", () => ({
-  buildManagedServiceHandoffUnavailableMessage: () => "handoff unavailable",
-  formatManagedServiceUpdateCommand: () => "openclaw update --yes",
+  claimManagedServiceUpdateHandoff: () => true,
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
+  transferManagedServiceUpdateHandoff: transferManagedServiceUpdateHandoffMock,
+  cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
-vi.mock("../../infra/update-post-core-finalize.js", () => ({
-  foldPostCoreFinalizeIntoResult: (result: UpdateRunResult) => result,
-  runPostCoreFinalizeAfterGatewayUpdate: async () => ({
-    status: "skipped" as const,
-    reason: "not-git-update",
-  }),
-}));
-
-vi.mock("../../infra/update-runner.js", () => ({
+vi.mock("../../infra/update-runner-install-surface.js", () => ({
   resolveUpdateInstallSurface: resolveUpdateInstallSurfaceMock,
-  runGatewayUpdate: runGatewayUpdateMock,
-  runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: () => updateSchedule,
-  initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
+}));
+
+vi.mock("../../infra/update-install-status.js", () => ({
+  resolveStartupInstallStatus: resolveStartupInstallStatusMock,
 }));
 
 vi.mock("../../version.js", () => ({
@@ -147,27 +217,16 @@ vi.mock("../../version.js", () => ({
   },
 }));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: () => null,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: async () => null,
+  prepareLatestUpdateRestartSentinel: async () => null,
 }));
 
 vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: () => ({}),
 }));
-
-vi.mock("./validation.js", () => ({
-  assertValidParams: () => true,
-}));
-
-const failedUpdate: UpdateRunResult = {
-  status: "error",
-  mode: "git",
-  reason: "build-failed",
-  steps: [],
-  durationMs: 100,
-};
 
 beforeEach(() => {
   currentCampaignId = "campaign-1";
@@ -182,10 +241,14 @@ beforeEach(() => {
   });
   clearCampaignMock.mockClear();
   getCampaignStateMock.mockClear();
-  runGatewayUpdateMock.mockReset();
-  runGatewayUpdateMock.mockResolvedValue(failedUpdate);
-  runGatewayUpdatePreflightMock.mockReset();
-  runGatewayUpdatePreflightMock.mockResolvedValue(undefined);
+  startManagedServiceUpdateHandoffMock.mockReset().mockImplementation(async (params) => ({
+    status: "started",
+    pid: 12345,
+    command: "openclaw update --yes --timeout 1800",
+    logPath: "/tmp/fixture.log",
+    handoffId: "handoff-1",
+    installRoot: params.root,
+  }));
   resolveUpdateInstallSurfaceMock.mockReset();
   resolveUpdateInstallSurfaceMock.mockResolvedValue({
     kind: "git",
@@ -193,8 +256,8 @@ beforeEach(() => {
     root: "/tmp/openclaw",
     packageRoot: "/tmp/openclaw",
   });
-  initializeGatewayUpdateStatusMock.mockReset();
-  initializeGatewayUpdateStatusMock.mockResolvedValue({
+  resolveStartupInstallStatusMock.mockReset();
+  resolveStartupInstallStatusMock.mockResolvedValue({
     root: "/tmp/openclaw",
     status: { root: "/tmp/openclaw", installKind: "git", packageManager: "pnpm" },
     installReceipt: null,
@@ -202,7 +265,9 @@ beforeEach(() => {
   detectRespawnSupervisorMock.mockReset();
   detectRespawnSupervisorMock.mockReturnValue(null);
   startManagedServiceUpdateHandoffMock.mockClear();
-  scheduleGatewaySigusr1RestartMock.mockClear();
+  transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
+  cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
+  scheduleGatewayRestartMock.mockClear();
   logGatewayInfoMock.mockClear();
   writeRestartSentinelMock.mockClear();
   recordLatestUpdateRestartSentinelMock.mockClear();
@@ -242,7 +307,7 @@ function setDevCampaignSchedule(upstreamSha = "frozen-upstream-sha"): void {
 
 function mockGitInstallStatus(upstreamSha: string, upstreamRef = "origin/main"): void {
   const root = "/tmp/openclaw";
-  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValueOnce({
     root,
     status: {
       root,
@@ -267,7 +332,7 @@ function mockGitInstallStatus(upstreamSha: string, upstreamRef = "origin/main"):
 
 function mockPackageInstallSurface(kind: "global" | "package-root"): void {
   const root = "/tmp/openclaw";
-  initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+  resolveStartupInstallStatusMock.mockResolvedValueOnce({
     root,
     status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
@@ -281,7 +346,7 @@ function mockPackageInstallSurface(kind: "global" | "package-root"): void {
 
 async function invokeUpdateRun(
   params: Record<string, unknown> = {},
-  respond: (ok: boolean, response?: unknown) => void = () => undefined,
+  respond: RespondFn = () => undefined,
 ): Promise<void> {
   const { updateHandlers } = await import("./update.js");
   await expectDefined(
@@ -297,7 +362,7 @@ async function invokeUpdateRun(
     },
     context: {
       getRuntimeConfig: () => ({ update: {} }) as OpenClawConfig,
-      logGateway: { info: logGatewayInfoMock },
+      logGateway: { info: logGatewayInfoMock, warn: vi.fn() },
     },
   } as never);
 }
@@ -311,23 +376,28 @@ async function captureUpdateRun(params: Record<string, unknown>) {
 }
 
 function expectNoUpdateMutation(): void {
-  expect(runGatewayUpdatePreflightMock).not.toHaveBeenCalled();
   expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-  expect(runGatewayUpdateMock).not.toHaveBeenCalled();
   expect(writeRestartSentinelMock).not.toHaveBeenCalled();
   expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
 }
 
 describe("update.run campaign ownership", () => {
   it("pins a directly applied package campaign to its announced version", async () => {
+    const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
+      "../../infra/restart-sentinel.js",
+    );
+    writeRestartSentinelMock.mockImplementationOnce(sentinel.writeRestartSentinel);
     updateChannel = "beta";
-    mockPackageInstallSurface("package-root");
+    mockPackageInstallSurface("global");
 
     await invokeUpdateRun();
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "beta", tag: "2.0.0" }),
     );
+    await expect(sentinel.readRestartSentinel()).resolves.toMatchObject({
+      payload: { kind: "update", stats: { handoffId: "handoff-1" } },
+    });
     expect(logGatewayInfoMock).toHaveBeenCalledWith(
       expect.stringMatching(/^update\.run adopted campaign campaign-1 actor=control-ui /),
       { target: { kind: "package", version: "2.0.0" } },
@@ -361,19 +431,21 @@ describe("update.run campaign ownership", () => {
   it("keeps a plain package update on the moving configured channel", async () => {
     updateChannel = "beta";
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-    mockPackageInstallSurface("package-root");
+    mockPackageInstallSurface("global");
 
     await invokeUpdateRun();
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(expect.objectContaining({ channel: "beta" }));
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "beta" }),
+    );
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ tag: expect.anything() }),
     );
   });
 
   it("uses the prepared Git checkout instead of process artifacts", async () => {
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-    initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    resolveStartupInstallStatusMock.mockResolvedValueOnce({
       root: "/tmp/openclaw-source",
       status: {
         root: "/tmp/openclaw-source",
@@ -392,25 +464,20 @@ describe("update.run campaign ownership", () => {
             packageRoot: "/tmp/openclaw-launcher-package",
           },
     );
-    runGatewayUpdateMock.mockResolvedValueOnce({
-      status: "ok",
-      mode: "git",
-      root: "/tmp/openclaw-source",
-      steps: [],
-      durationMs: 100,
-    });
 
     await invokeUpdateRun();
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: "/tmp/openclaw-source" }),
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/tmp/openclaw-source",
+        argv1: "/tmp/openclaw-source/dist/index.js",
+      }),
     );
-    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
   it("rejects a missing prepared root without scanning the process working directory", async () => {
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-    initializeGatewayUpdateStatusMock.mockResolvedValueOnce({
+    resolveStartupInstallStatusMock.mockResolvedValueOnce({
       root: null,
       status: { root: null, installKind: "unknown", packageManager: "unknown" },
       installReceipt: null,
@@ -419,7 +486,7 @@ describe("update.run campaign ownership", () => {
 
     await invokeUpdateRun();
 
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
   it("pins a directly applied dev campaign to its announced commit", async () => {
@@ -427,9 +494,8 @@ describe("update.run campaign ownership", () => {
 
     await invokeUpdateRun();
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "dev",
         devTarget: {
           mode: "tracked",
           upstreamRef: "origin/main",
@@ -481,7 +547,7 @@ describe("update.run campaign ownership", () => {
     await invokeUpdateRun();
 
     expect(adoptCampaignMock).toHaveBeenCalledTimes(2);
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: campaignSha },
       }),
@@ -495,7 +561,7 @@ describe("update.run campaign ownership", () => {
 
     await invokeUpdateRun({ target: { kind: "git", upstreamRef: "origin/main", upstreamSha } });
 
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha },
       }),
@@ -520,28 +586,22 @@ describe("update.run campaign ownership", () => {
       adoptCampaignMock.mockReturnValue({ status: "absent" });
     });
 
-    it.each([
-      { name: "matching", campaignSha: requestTarget.upstreamSha },
-      { name: "conflicting", campaignSha: newerUpstreamSha },
-    ])(
-      "rejects a $name explicit target while its campaign is applying",
-      async ({ campaignSha }) => {
-        setDevCampaignSchedule(campaignSha);
-        mockGitInstallStatus(campaignSha);
-        detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-        adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
+    it("rejects an explicit target while its campaign is applying", async () => {
+      setDevCampaignSchedule(newerUpstreamSha);
+      mockGitInstallStatus(newerUpstreamSha);
+      detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+      adoptCampaignMock.mockReturnValueOnce({ status: "applying" });
 
-        const response = await captureUpdateRun({ target: requestTarget });
+      const response = await captureUpdateRun({ target: requestTarget });
 
-        expect(response).toMatchObject({
-          ok: false,
-          result: { status: "error", reason: "update-campaign-applying" },
-        });
-        expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
-        expectNoUpdateMutation();
-        expect(clearCampaignMock).not.toHaveBeenCalled();
-      },
-    );
+      expect(response).toMatchObject({
+        ok: false,
+        result: { status: "error", reason: "update-campaign-applying" },
+      });
+      expect(adoptCampaignMock).toHaveBeenCalledWith(trackedTarget);
+      expectNoUpdateMutation();
+      expect(clearCampaignMock).not.toHaveBeenCalled();
+    });
 
     it("keeps the requested commit through managed preflight and handoff after upstream advances", async () => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -549,11 +609,6 @@ describe("update.run campaign ownership", () => {
 
       const response = await captureUpdateRun({ target: requestTarget });
 
-      expect(runGatewayUpdatePreflightMock).toHaveBeenCalledWith(
-        "/tmp/openclaw",
-        undefined,
-        trackedTarget,
-      );
       expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
         expect.objectContaining({ devTarget: trackedTarget }),
       );
@@ -565,7 +620,7 @@ describe("update.run campaign ownership", () => {
 
       await invokeUpdateRun({ target: requestTarget });
 
-      expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
         expect.objectContaining({ devTarget: trackedTarget }),
       );
     });
@@ -579,9 +634,17 @@ describe("update.run campaign ownership", () => {
     ])("rejects malformed $name before any update mutation", async ({ target }) => {
       detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
 
-      const response = await captureUpdateRun({ target });
+      const respond = vi.fn();
+      await invokeUpdateRun({ target }, respond);
 
-      expect(response?.result).toMatchObject({ status: "error", reason: "invalid-update-target" });
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: expect.stringContaining("invalid update.run params:"),
+        }),
+      );
       expectNoUpdateMutation();
       expect(adoptCampaignMock).not.toHaveBeenCalled();
     });
@@ -630,17 +693,6 @@ describe("update.run campaign ownership", () => {
     });
   });
 
-  it("does not pin a plain dev update without a campaign", async () => {
-    updateChannel = "dev";
-    adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
-
-    await invokeUpdateRun();
-
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
-      expect.not.objectContaining({ devTarget: expect.anything() }),
-    );
-  });
-
   it("does not add a pin environment to a non-campaign managed handoff", async () => {
     updateChannel = "dev";
     adoptCampaignMock.mockReturnValueOnce({ status: "absent" });
@@ -653,7 +705,8 @@ describe("update.run campaign ownership", () => {
     );
   });
 
-  it("records the failure before ending the adopted campaign", async () => {
+  it("records handoff preparation failure before ending the adopted campaign", async () => {
+    startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(new Error("entrypoint unavailable"));
     let outcomeWhenCampaignEnded: unknown;
     clearCampaignMock.mockImplementationOnce(() => {
       outcomeWhenCampaignEnded = recordLatestUpdateRestartSentinelMock.mock.calls.at(-1)?.[0];
@@ -665,7 +718,7 @@ describe("update.run campaign ownership", () => {
     expect(outcomeWhenCampaignEnded).toMatchObject({
       kind: "update",
       status: "error",
-      stats: { reason: "build-failed" },
+      stats: { reason: "managed-service-handoff-failed" },
     });
     expect(logGatewayInfoMock).toHaveBeenCalledWith("update.run failed; adopted campaign cleared", {
       campaignId: "campaign-1",
@@ -680,7 +733,7 @@ describe("update.run campaign ownership", () => {
 
     expect(getCampaignStateMock).not.toHaveBeenCalled();
     expect(clearCampaignMock).not.toHaveBeenCalled();
-    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.not.objectContaining({ devTarget: expect.anything() }),
     );
   });
@@ -701,16 +754,23 @@ describe("update.run campaign ownership", () => {
   });
 
   it("does not clear a replacement campaign when the adopted update fails", async () => {
-    const deferredUpdate = createDeferred<UpdateRunResult>();
-    runGatewayUpdateMock.mockReturnValueOnce(deferredUpdate.promise);
+    const deferredUpdate =
+      createDeferred<
+        Awaited<
+          ReturnType<
+            typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
+          >
+        >
+      >();
+    startManagedServiceUpdateHandoffMock.mockReturnValueOnce(deferredUpdate.promise);
     const updateRun = invokeUpdateRun();
     await vi.waitFor(() => {
       expect(adoptCampaignMock).toHaveBeenCalledOnce();
-      expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
     });
     expect(getCampaignStateMock).not.toHaveBeenCalled();
     currentCampaignId = "campaign-2";
-    deferredUpdate.resolve(failedUpdate);
+    deferredUpdate.reject(new Error("entrypoint unavailable"));
 
     await updateRun;
 
@@ -724,14 +784,42 @@ describe("update.run campaign ownership", () => {
     );
   });
 
-  it("keeps the adopted campaign while a successful update restarts", async () => {
-    runGatewayUpdateMock.mockResolvedValueOnce({
-      status: "ok",
-      mode: "git",
-      steps: [],
-      durationMs: 100,
-    });
+  it.each(["transaction", "commit"] as const)(
+    "preserves the durable sentinel when its campaign retires at %s admission",
+    async (stage) => {
+      const sentinel = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
+        "../../infra/restart-sentinel.js",
+      );
+      const existing = await sentinel.writeRestartSentinel({
+        kind: "restart",
+        status: "ok",
+        ts: 1,
+        message: "Existing notification",
+      });
+      startManagedServiceUpdateHandoffMock.mockRejectedValueOnce(
+        new Error("entrypoint unavailable"),
+      );
+      writeRestartSentinelMock.mockImplementationOnce(sentinel.writeRestartSentinel);
+      const observed: string[] = [];
+      sentinelAdmission.beforeGrant = (requested) => {
+        observed.push(requested);
+        if (requested === stage) {
+          currentCampaignId = "campaign-2";
+        }
+      };
+      try {
+        await invokeUpdateRun();
+      } finally {
+        sentinelAdmission.beforeGrant = undefined;
+      }
+      expect(observed).toContain(stage);
+      await expect(sentinel.readRestartSentinel()).resolves.toEqual(existing);
+      expect(recordLatestUpdateRestartSentinelMock).not.toHaveBeenCalled();
+      expect(clearCampaignMock).not.toHaveBeenCalled();
+    },
+  );
 
+  it("keeps the adopted campaign while a foreground update is accepted", async () => {
     await invokeUpdateRun();
 
     expect(clearCampaignMock).not.toHaveBeenCalled();
@@ -744,6 +832,13 @@ describe("update.run campaign ownership", () => {
     await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, invokeUpdateRun);
 
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
+    expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith({
+      kind: "managed-update-handoff",
+      handoffId: "handoff-1",
+      installRoot: "/tmp/openclaw",
+    });
+    expect(cancelManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+    expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     expect(clearCampaignMock).not.toHaveBeenCalled();
   });
 });

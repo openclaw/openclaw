@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import {
   prepareTsdownBuildExecution,
   TSDOWN_DECLARATION_EXTENSIONS,
@@ -18,6 +19,7 @@ import {
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
 import { publishStagedDeclarations } from "./declaration-stage.mts";
 import { withDistArtifactOwnership } from "./dist-artifact-ownership.mts";
+import { hasUnjoinedWork } from "./managed-child-process.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "./tsdown-declaration-generator-inputs.mts";
 import {
   createDeclarationStage,
@@ -31,7 +33,7 @@ export async function writeTsdownDeclarations(
   previousOutputs: (root: string) => string[],
   generatorEntry: string,
 ) {
-  const root = process.cwd();
+  const root = fs.realpathSync.native(process.cwd());
   const stages: string[] = [];
   const createStage = () => {
     const stage = createDeclarationStage(root);
@@ -40,7 +42,9 @@ export async function writeTsdownDeclarations(
   };
   const failures: unknown[] = [];
   try {
-    await withDistArtifactOwnership(root, async () => {
+    // The private child retains declared cwd ownership; snapshot/output paths are physical.
+    await withDistArtifactOwnership(process.cwd(), async () => {
+      await ensureKyselyTypes(root);
       const { default: configs }: { default: typeof import("../../tsdown.config.ts").default } =
         await import(pathToFileURL(path.join(root, "tsdown.config.ts")).href);
       const staging = createStage();
@@ -71,7 +75,7 @@ export async function writeTsdownDeclarations(
         ) {
           throw new Error(`Missing canonical declaration group ${name}`);
         }
-        // Runtime worker entries are absolute; declaration partitions are checkout-relative.
+        // Runtime worker entries are absolute; declaration roots are checkout-relative.
         const entries = Object.entries(config.entry).map(
           ([entry, inputs]) =>
             [entry, [inputs].flat().map((input) => path.resolve(root, input))] as const,
@@ -122,8 +126,7 @@ export async function writeTsdownDeclarations(
           cache: {
             env: TSDOWN_UNIFIED_CACHE_ENV,
             inputs: generatorInputs,
-            // An empty canonical partition still owns its successful compiler
-            // receipt. Ordinary cache records never admit an empty inventory.
+            // Successful publication includes the compiler membership receipt.
             outputs: [{ path: "dist", extensions: TSDOWN_DECLARATION_EXTENSIONS }, receipt],
             requiredOutputs: [...required.map((entry) => `dist/${entry}`), receipt],
             restore: "always",
@@ -162,13 +165,10 @@ export async function writeTsdownDeclarations(
           throw new Error("Declaration cache changed before restoration; rerun the build");
         }
       }
-      // Keep the existing bounded, sequential executor. Hits never enter a
-      // compiler; misses cannot publish or refresh caches before every group joins.
+      const misses = prepared.filter((group) => !group.state?.fresh);
       const plan = {
         ...prepared[0]!.plan,
-        invocations: prepared.flatMap((group) =>
-          group.state?.fresh ? [] : group.plan.invocations,
-        ),
+        invocations: misses.flatMap((group) => group.plan.invocations),
       };
       await publishStagedDeclarations(
         plan,
@@ -183,7 +183,7 @@ export async function writeTsdownDeclarations(
             const sealed = after.seal(
               "tsconfig.json",
               group.identity,
-              readDeclarationInputs(group.output, [group.name]),
+              readDeclarationInputs(group.output, group.name),
               before,
               startedAt,
               liveDist,
@@ -210,7 +210,9 @@ export async function writeTsdownDeclarations(
   } catch (error) {
     failures.push(error);
   }
-  for (const stage of stages) {
+  // An unjoined child may still be writing a stage; retain its inputs and error
+  // under the checkout's existing fail-closed ownership until explicit recovery.
+  for (const stage of failures.some(hasUnjoinedWork) ? [] : stages) {
     try {
       fs.rmSync(stage, { recursive: true, force: true });
     } catch (error) {

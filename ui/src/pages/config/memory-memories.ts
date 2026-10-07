@@ -3,15 +3,18 @@ import { property, state } from "lit/decorators.js";
 import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
 
+registerSettingsEnglish();
+
 type SearchResult = MemorySearchResponse["results"][number];
 type SearchState =
-  | { kind: "idle" }
-  | { kind: "loading"; query: string }
+  | { kind: "idle" | "loading" }
   | ({ kind: "ready"; query: string } & MemorySearchResponse)
   | { kind: "error"; query: string; message: string };
 type DetailState =
@@ -60,9 +63,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   @state() private openResultKey: string | null = null;
   @state() private details = new Map<string, DetailState>();
 
-  private searchRequest: object | null = null;
-  private detailRequests = new Map<string, object>();
-
   protected override updated(changed: PropertyValues<this>) {
     if (
       changed.has("agentId") ||
@@ -75,8 +75,6 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   }
 
   private resetSearch() {
-    this.searchRequest = null;
-    this.detailRequests.clear();
     this.query = "";
     this.searchState = { kind: "idle" };
     this.openResultKey = null;
@@ -90,24 +88,22 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (!normalizedQuery || !client || !agentId || !this.methodAdvertised) {
       return;
     }
-    const request = { client, agentId, query: normalizedQuery };
-    this.searchRequest = request;
+    const request: SearchState = { kind: "loading" };
     this.query = normalizedQuery;
-    this.searchState = { kind: "loading", query: normalizedQuery };
+    this.searchState = request;
     this.openResultKey = null;
     this.details = new Map();
-    this.detailRequests.clear();
     try {
       const result = await client.request<MemorySearchResponse>("memory.search", {
         query: normalizedQuery,
         agentId,
       });
-      if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
+      if (this.searchState !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
       this.searchState = { kind: "ready", query: normalizedQuery, ...result };
     } catch (error) {
-      if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
+      if (this.searchState !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
       this.searchState = {
@@ -125,45 +121,40 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       return;
     }
     this.openResultKey = key;
-    if (!this.details.has(key)) {
-      void this.loadDetail(key, result);
+    if (!this.details.has(result.path)) {
+      void this.loadDetail(result.path);
     }
   }
 
-  private async loadDetail(key: string, result: SearchResult) {
+  private async loadDetail(path: string) {
     const client = this.connected ? this.client : null;
     const agentId = this.agentId;
     if (!client || !agentId) {
       return;
     }
-    const request = { client, agentId, path: result.path };
-    this.detailRequests.set(key, request);
-    this.details = new Map(this.details).set(key, { kind: "loading" });
+    const pending: DetailState = { kind: "loading" };
+    this.details = new Map(this.details).set(path, pending);
     try {
       const response = await client.request<AgentsWorkspaceGetResult>("agents.workspace.get", {
         agentId,
-        path: result.path,
+        path,
       });
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
       const detail: DetailState =
         response.file.encoding === "utf8"
           ? { kind: "ready", content: response.file.content }
           : { kind: "error", message: t("memoryPage.memories.fileUnsupported") };
-      this.details = new Map(this.details).set(key, detail);
+      this.details = new Map(this.details).set(path, detail);
     } catch (error) {
-      if (this.detailRequests.get(key) !== request || this.agentId !== agentId) {
+      if (this.details.get(path) !== pending || this.agentId !== agentId) {
         return;
       }
-      this.details = new Map(this.details).set(key, {
+      this.details = new Map(this.details).set(path, {
         kind: "error",
         message: formatUiError(error),
       });
-    } finally {
-      if (this.detailRequests.get(key) === request) {
-        this.detailRequests.delete(key);
-      }
     }
   }
 
@@ -171,7 +162,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
     if (this.openResultKey !== key) {
       return nothing;
     }
-    const detail = this.details.get(key);
+    const detail = this.details.get(result.path);
     return html`<div id=${panelId} class="memory-memories__detail">
       ${
         !detail || detail.kind === "loading"
@@ -191,6 +182,14 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
         ? t("memoryPage.memories.hybridSearch")
         : t("memoryPage.memories.keywordSearch");
     return html`
+      ${
+        ready.stale
+          ? html`<div class="callout warn" role="status">
+              ${ready.warning ? html`<p>${ready.warning}</p>` : nothing}
+              ${ready.action ? html`<p>${ready.action}</p>` : nothing}
+            </div>`
+          : nothing
+      }
       <div class="memory-memories__results-heading">
         <span>${t("memoryPage.memories.results", { count: String(ready.results.length) })}</span>
         <span class="memory-memories__mode">${mode}</span>
@@ -279,7 +278,10 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
   }
 
   override render() {
-    return html`<div class="settings-page memory-memories">
+    return html`<div
+      class="settings-page memory-memories"
+      ${shellLayoutTraits({ settingsPage: true })}
+    >
       ${
         !this.methodAdvertised
           ? html`<p class="memory-memories__unavailable">

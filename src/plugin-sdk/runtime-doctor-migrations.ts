@@ -15,6 +15,7 @@ import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.j
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
 
+export { mergeMissing } from "../config/merge-missing.js";
 export { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 export { defineChannelAliasMigration } from "../config/channel-alias-migration.js";
 export {
@@ -53,7 +54,12 @@ export type {
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
 export type {
+  PluginDoctorCronChange,
+  PluginDoctorCronInventory,
+  PluginDoctorCronJob,
   PluginDoctorChannelIngressQueueAccess,
+  PluginDoctorMigrationBackupResource,
+  PluginDoctorMigrationBackupWarning,
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
 } from "../plugins/doctor-contract-module.js";
@@ -61,8 +67,13 @@ export {
   archiveLegacyStateSource,
   legacyStateFileExists,
 } from "../plugins/doctor-state-migration-fs.js";
+export { backupLegacyStateSource } from "../infra/state-migrations.source-backup.js";
+export { resolveLegacyMigrationSourcePath } from "../infra/state-migrations.source-path.js";
+export type { ChannelIngressLegacyEntry } from "../channels/message/ingress-queue.migration.js";
 export { buildLegacyMigrationPreview } from "../channels/plugins/legacy-state-migration-preview.js";
 export { definePluginDoctorMigrationFromPlans } from "./doctor-migration-plan-adapter.js";
+export { defineRetiredPluginStateMigration } from "../plugins/doctor-retired-state.js";
+export { createLegacyWebhookListenerDoctorContract } from "./legacy-webhook-listener-migration.js";
 export type { DoctorSessionRouteStateOwner } from "../plugins/doctor-session-route-state-owner-types.js";
 
 type KeyMoveValue = { value: unknown };
@@ -194,34 +205,25 @@ export function defineKeyMoveMigration(params: {
     changes: string[];
   }) => CompatMutationResult;
 } {
-  const visitScopes = (
-    entry: Record<string, unknown>,
-    scope: readonly string[],
-    visit: (scopeEntry: Record<string, unknown>, scopePath: readonly string[]) => boolean,
-    scopePath: readonly string[] = [],
-  ): boolean => {
+  const visitScopes = (entry: Record<string, unknown>, scope: readonly string[]): boolean => {
     const [segment, ...rest] = scope;
     if (!segment) {
-      return visit(entry, scopePath);
+      const source = readKeyMovePath(entry, params.from, params.sourceOwn);
+      return Boolean(source && (params.match?.(source.value) ?? true));
     }
     if (segment === "*") {
-      return Object.entries(entry).some(([key, value]) => {
+      return Object.values(entry).some((value) => {
         const child = asObjectRecord(value);
-        return child ? visitScopes(child, rest, visit, [...scopePath, key]) : false;
+        return child ? visitScopes(child, rest) : false;
       });
     }
     const child = asObjectRecord(entry[segment]);
-    return child ? visitScopes(child, rest, visit, [...scopePath, segment]) : false;
+    return child ? visitScopes(child, rest) : false;
   };
 
   const hasLegacy = (value: unknown): boolean => {
     const entry = asObjectRecord(value);
-    return entry
-      ? visitScopes(entry, params.scope ?? [], (scopeEntry) => {
-          const source = readKeyMovePath(scopeEntry, params.from, params.sourceOwn);
-          return Boolean(source && (params.match?.(source.value) ?? true));
-        })
-      : false;
+    return entry ? visitScopes(entry, params.scope ?? []) : false;
   };
 
   const normalizeScope = (

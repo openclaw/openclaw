@@ -1,11 +1,7 @@
-/**
- * Nodes lookup helpers.
- *
- * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
- */
+import crypto from "node:crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
@@ -19,33 +15,6 @@ type DefaultNodeSelectionOptions = {
   fallback?: DefaultNodeFallback;
   preferLocalMac?: boolean;
 };
-
-async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
-  try {
-    const res = await callGatewayTool("node.list", opts, {}, { signal });
-    return parseNodeList(res);
-  } catch (error) {
-    if (
-      !(error instanceof GatewayClientRequestError) ||
-      error.gatewayCode !== "INVALID_REQUEST" ||
-      error.retryable ||
-      error.message !== "unknown method: node.list" ||
-      (error.retryAfterMs !== undefined &&
-        (!Number.isInteger(error.retryAfterMs) || error.retryAfterMs < 0))
-    ) {
-      throw error;
-    }
-    // Older gateways only expose paired-node state; preserve node tools until node.list exists.
-    const res = await callGatewayTool("node.pair.list", opts, {}, { signal });
-    const { paired } = parsePairingList(res);
-    return paired.map((n) => ({
-      nodeId: n.nodeId,
-      displayName: n.displayName,
-      platform: n.platform,
-      remoteIp: n.remoteIp,
-    }));
-  }
-}
 
 function isLocalMacNode(node: NodeListNode): boolean {
   return (
@@ -66,14 +35,11 @@ function compareDefaultNodeOrder(
   b: NodeListNode,
   recencyField: "connectedAtMs" | "lastSeenAtMs",
 ): number {
-  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
-  if (recencyOrder !== 0) {
-    return recencyOrder;
-  }
-  return a.nodeId.localeCompare(b.nodeId);
+  return (
+    compareNewestTimestamp(a[recencyField], b[recencyField]) || a.nodeId.localeCompare(b.nodeId)
+  );
 }
 
-/** Selects the implicit node target when a tool call omits an explicit node query. */
 export function selectDefaultNodeFromList(
   nodes: NodeListNode[],
   options: DefaultNodeSelectionOptions = {},
@@ -108,8 +74,11 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
-  return ordered[0] ?? null;
+  return candidates.reduce<NodeListNode | null>(
+    (best, node) =>
+      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
+    null,
+  );
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -120,15 +89,35 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists Gateway nodes, falling back to paired-node records for older Gateway versions. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  return loadNodes(opts, signal);
+  // In-process calls share this build; every transported call replaces this from hello.
+  let supportsContext = true;
+  const res = await callGatewayTool(
+    "node.list",
+    opts,
+    {},
+    {
+      signal,
+      onHelloOk: (hello) => {
+        supportsContext =
+          hello.features.capabilities?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY) === true;
+      },
+    },
+  );
+  // Older Gateways expose unknown node caps but strip the new field from system.run.
+  const nodes = parseNodeList(res);
+  if (!supportsContext) {
+    // Only transport can lack support; these records were decoded for this RPC.
+    for (const node of nodes) {
+      node.caps = node.caps?.filter((cap) => cap !== SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY);
+    }
+  }
+  return nodes;
 }
 
-/** Resolves a node id from an already-loaded node list using shared node matching rules. */
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
@@ -142,24 +131,37 @@ export function resolveNodeIdFromList(
   });
 }
 
-/** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveAgentNodeId(
-  opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
-) {
-  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
+export async function resolveAgentNodeId(opts: GatewayCallOptions, query: string) {
+  return (await resolveAgentNode(opts, query)).nodeId;
 }
 
-/** Loads nodes from the Gateway and returns the requested or default node record. */
 export async function resolveAgentNode(
   opts: GatewayCallOptions,
-  query?: string,
-  allowDefault = false,
+  query: string,
 ): Promise<NodeListNode> {
-  const nodes = await loadNodes(opts);
-  return resolveNodeFromNodeList(nodes, query, {
-    allowDefault,
-    pickDefaultNode,
-  });
+  return resolveNodeFromNodeList(await listNodes(opts), query);
+}
+
+export async function invokeAgentNodeCommand(params: {
+  gatewayOpts: GatewayCallOptions;
+  nodeId: string;
+  command: string;
+  commandParams: Record<string, unknown>;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  signal?: AbortSignal;
+}): Promise<unknown> {
+  const raw = await callGatewayTool<{ payload: unknown }>(
+    "node.invoke",
+    params.gatewayOpts,
+    {
+      nodeId: params.nodeId,
+      command: params.command,
+      params: params.commandParams,
+      timeoutMs: params.timeoutMs,
+      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
+    },
+    { signal: params.signal },
+  );
+  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
 }

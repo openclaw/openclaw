@@ -1,3 +1,9 @@
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  WorkerExecutionMode,
+  WorkerMachineOption as ProtocolWorkerMachineOption,
+  WorkerOperatingSystem as ProtocolWorkerOperatingSystem,
+} from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { ImageGenerationProvider } from "../image-generation/types.js";
 import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
@@ -43,19 +49,18 @@ import type {
   SpeechVoiceOption,
 } from "../tts/provider-types.js";
 import type { VideoGenerationProvider } from "../video-generation/types.js";
-import type { PluginJsonValue } from "./host-hooks.js";
+import type { PluginJsonValue } from "./host-hook-json.js";
 
-/** JSON-compatible provider settings for one configured worker profile. */
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
 /** Provider-authored picker metadata for one machine class or exact machine type. */
-export type WorkerMachineOption = Readonly<{
-  id: string;
-  label: string;
-  cpu?: number;
-  memoryGb?: number;
-  default?: boolean;
-}>;
+export type WorkerMachineOption = Readonly<SchemaContract<ProtocolWorkerMachineOption>>;
+
+/**
+ * Provider-owned operating system choices for one configured worker profile.
+ * disabledReason explains why a target cannot currently be selected, including a repair hint.
+ */
+export type WorkerOperatingSystem = Readonly<SchemaContract<ProtocolWorkerOperatingSystem>>;
 
 /** SSH endpoint material returned by a worker provider after provisioning. */
 export type WorkerSshEndpoint = {
@@ -82,6 +87,8 @@ export type WorkerSshIdentity =
 
 /** Durable context supplied when a worker provider resolves the identity it minted. */
 export type WorkerSshIdentityRequest = {
+  /** Optional live invocation guard; core supplies it for identity resolution. */
+  assertCurrent?: () => void;
   leaseId: string;
   profile: WorkerProfile;
   keyRef: SecretRef;
@@ -92,9 +99,11 @@ export type WorkerDesktopApp =
   | {
       id: "browser";
       executablePath: string;
+      /** Fixed provider-owned arguments, passed directly without a shell. */
+      args?: string[];
       cdpPort: number;
     }
-  | { id: "terminal"; executablePath: string };
+  | { id: "terminal"; executablePath: string; args?: string[] };
 
 /** Optional interactive desktop endpoint provisioned with the lease (warm-time capability). */
 export type WorkerDesktopEndpoint = {
@@ -104,14 +113,27 @@ export type WorkerDesktopEndpoint = {
   port: number;
   /** Absolute on-box path to the per-lease password file; read by the owning transport, never persisted as plaintext. */
   passwordFilePath?: string;
+  /** Managed desktop account for ARD authentication; its password stays in passwordFilePath. */
+  username?: string;
+  /** False restricts a native desktop from the provider-wide virtual display resize capability. */
+  allowsResize?: boolean;
   /** Closed application metadata advertised by the provider for this desktop. */
   apps?: WorkerDesktopApp[];
 };
 
-/** Placement execution modes a worker provider can carry. */
-export type WorkerExecutionMode = "worker-turn" | "remote-exec";
+export type { WorkerExecutionMode } from "../../packages/gateway-protocol/src/schema/environments.js";
+
+/** Grant-free identity of the runtime bytes a provider may retain in a prepared image. */
+export type WorkerNodeRuntimeIdentity = {
+  nodeBootstrapSha256: string;
+  executionMode: WorkerExecutionMode;
+  /** Present only when project preparation retains the independent worker archive. */
+  workerBundleSha256?: string;
+};
 
 type WorkerNodeBootstrapAccess = {
+  /** Core-owned command window for downloading and installing this grant's artifacts. */
+  bootstrapTimeoutMs?: number;
   /** Immutable node distribution prepared by the Gateway for this provision operation. */
   nodeBootstrap: {
     url: string;
@@ -191,6 +213,26 @@ class WorkerProvisionCleanupError extends AggregateError {
   }
 }
 
+/** Provision failed after allocation and the provider confirmed cleanup completed. */
+class WorkerProvisionCleanupCompleteError extends Error {
+  readonly code = "cleanup_complete";
+  readonly leaseId: string;
+
+  constructor(
+    leaseId: string,
+    readonly provisionError: unknown,
+  ) {
+    super(provisionError instanceof Error ? provisionError.message : String(provisionError), {
+      cause: provisionError,
+    });
+    this.name = "WorkerProvisionCleanupCompleteError";
+    this.leaseId = leaseId.trim();
+    if (!this.leaseId) {
+      throw new TypeError("Worker provision cleanup lease id must be non-empty");
+    }
+  }
+}
+
 /** Permanent provider rejection recorded as a terminal worker failure. */
 export class WorkerProviderError extends Error {
   readonly code = "invalid_profile";
@@ -198,6 +240,17 @@ export class WorkerProviderError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "WorkerProviderError";
+  }
+
+  static cleanupComplete(
+    leaseId: string,
+    provisionError: unknown,
+  ): WorkerProvisionCleanupCompleteError {
+    return new WorkerProvisionCleanupCompleteError(leaseId, provisionError);
+  }
+
+  static isCleanupComplete(error: unknown): error is WorkerProvisionCleanupCompleteError {
+    return error instanceof WorkerProvisionCleanupCompleteError;
   }
 
   static cleanupIndeterminate(
@@ -216,8 +269,18 @@ export class WorkerProviderError extends Error {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /**
+   * Nonsecret backend display ID, never a routing or allocation identity.
+   * Synchronous local presentation only: no commands, network, or credential reads.
+   * Return 1–64 lowercase ASCII letters/digits/hyphens, starting with a letter.
+   * Omission, invalid values, and exceptions retain generic provider presentation.
+   */
+  resolveDisplayId?: (profile: WorkerProfile) => string | undefined;
+  /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
+  allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */
   listMachineOptions?: (profile: WorkerProfile) => Promise<readonly WorkerMachineOption[]>;
+  listOperatingSystems?: (profile: WorkerProfile) => Promise<readonly WorkerOperatingSystem[]>;
   /** Omission advertises no placement support; multiple modes use their canonical order. */
   supportedExecutionModes?:
     | readonly [WorkerExecutionMode]
@@ -230,7 +293,24 @@ export type WorkerProvider = {
   /** Provider allocates a node host through the environment-owned enrollment callback. */
   requiresNodeEnrollment?: boolean;
   /** Prepare a pristine project before enrollment so it can be included in a reusable image. */
-  supportsProjectPreparation?: (profile: WorkerProfile, machineClass?: string) => boolean;
+  supportsProjectPreparation?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => boolean;
+  /** Immutable target resolved before project preparation or allocation. */
+  resolvePreparationTarget?: (
+    profile: WorkerProfile,
+    machineClass?: string,
+    os?: string,
+  ) => { machineClass: string; platform: string; arch?: string } | undefined;
+  /** Maximum unused ready-worker lifetime, measured from the original session demand. */
+  resolvePreparedIdleTimeoutMs?: (profile: WorkerProfile) => number | undefined;
+  /** Record successful demand in metadata only; must not allocate, capture, or renew reserves. */
+  notePreparedDemand?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    demand: { preparationKey: string; demandAtMs: number },
+  ) => Promise<void>;
   /**
    * Resolve the exact cleanup handle for this operation, even if no machine was created.
    * Must not provision, start, renew, run setup, enroll, or wait for transport readiness.
@@ -248,27 +328,77 @@ export type WorkerProvider = {
     profile: WorkerProfile,
     operationId: string,
     options?: {
+      /** Configured profile id for display; settings and operation id own allocation identity. */
+      profileId?: string;
       /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
       signal?: AbortSignal;
+      /** Modern hosts supply authority; legacy optionality is source compatibility only. */
+      assertCurrent?: () => void;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
+      os?: string;
+      nodeRuntimeIdentity?: WorkerNodeRuntimeIdentity;
+      /** Upper bound per runtime preparation/enrollment phase, including the node connection wait. */
+      nodeBootstrapTimeoutMs?: number;
       prepareNodeRuntime?: () => Promise<WorkerNodeRuntimePreparation>;
       beginNodeEnrollment?: () => Promise<WorkerNodeEnrollment>;
       project?: {
         key: string;
         baseCommit: string;
+        label?: string;
+        /** Gateway-local checkout root for display and explicit rebuild requests. */
+        root?: string;
+        preparation?: {
+          key: string;
+          cacheKey: string;
+          purpose: "session" | "reserve";
+          demandAtMs: number;
+        };
         signal: AbortSignal;
         assertCurrent: () => void;
+        /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
+        inspectPreparedWorkspace?: (transport: {
+          runScript: (script: string, signal: AbortSignal) => Promise<string>;
+        }) => Promise<void>;
         /** Bound to this provision attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          /** Render using this provider command's remaining budget before repository code runs. */
+          runScriptWithBudget?: (
+            createScript: (timeoutMs: number) => string,
+            signal: AbortSignal,
+          ) => Promise<string>;
           upload: (localPath: string, remotePath: string, signal: AbortSignal) => Promise<void>;
-        }) => Promise<{ seedKey: string; cacheHit: boolean }>;
+        }) => Promise<{
+          seedKey: string;
+          cacheHit: boolean;
+          /** New completed setup must enter the reusable image before enrollment. */
+          captureRequired?: true;
+          preparedWorkspace?: {
+            preparationKey: string;
+            cacheKey: string;
+            workspaceDir: string;
+            homeDir: string;
+            sourceManifestRef: string;
+            preparedManifestRef: string;
+          };
+        }>;
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
+   * returned operation carries prepared facts; core records allocation intent before calling it.
+   * Replay preparation cannot attest that an earlier operation allocated nothing.
+   */
+  prepareProvision?: (
+    ...args: Parameters<WorkerProvider["provision"]>
+  ) => Promise<() => Promise<WorkerLease>>;
   /** Maximum core wait for one provision attempt, including provider-owned setup and cleanup. */
-  resolveProvisionTimeoutMs?: (profile: WorkerProfile) => number;
+  resolveProvisionTimeoutMs?: (
+    profile: WorkerProfile,
+    options?: { nodeBootstrapTimeoutMs?: number },
+  ) => number;
   /**
    * Throws on transient/indeterminate observation failures. `unknown` means the provider no
    * longer recognizes a usable lease; core fences it and requests destroy. Only `destroyed`
@@ -297,7 +427,6 @@ export type WorkerProvider = {
   resolveDestroyTimeoutMs?: (profile: WorkerProfile) => number;
 };
 
-/** Speech capability registered by a plugin. */
 export type SpeechProviderPlugin = {
   id: SpeechProviderId;
   label: string;
@@ -329,7 +458,6 @@ export type SpeechProviderPlugin = {
   listVoices?: (req: SpeechListVoicesRequest) => Promise<SpeechVoiceOption[]>;
 };
 
-/** Realtime transcription capability registered by a plugin. */
 export type RealtimeTranscriptionProviderPlugin = {
   id: RealtimeTranscriptionProviderId;
   label: string;
@@ -344,10 +472,8 @@ export type RealtimeTranscriptionProviderPlugin = {
   createSession: (req: RealtimeTranscriptionSessionCreateRequest) => RealtimeTranscriptionSession;
 };
 
-/** Transcript source capability registered by a channel or meeting plugin. */
 export type TranscriptSourceProvider = TranscriptsSourceProviderCapability;
 
-/** Realtime voice capability registered by a plugin. */
 export type RealtimeVoiceProviderPlugin = {
   id: RealtimeVoiceProviderId;
   label: string;

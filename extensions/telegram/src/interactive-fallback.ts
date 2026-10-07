@@ -1,4 +1,3 @@
-// Telegram plugin module implements interactive fallback behavior.
 import {
   adaptMessagePresentationForChannel,
   legacyInteractiveReplyToPresentation,
@@ -12,14 +11,18 @@ import {
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import {
+  copyReplyPayloadMetadata,
   resolveAskUserQuestionOptionIndices,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import {
+  appendTelegramDroppedControlFallback,
   buildTelegramPresentationButtons,
   resolveTelegramInlineButtons,
   type TelegramButtonBuildOptions,
+  type TelegramDroppedControl,
 } from "./button-types.js";
+import { escapeTelegramHtml } from "./format-html.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 
 const TELEGRAM_CONTROL_ONLY_FALLBACK = "Choose an option.";
@@ -37,13 +40,11 @@ const TELEGRAM_PRESENTATION_CAPABILITIES = {
     actions: {
       maxActions: 100,
       maxActionsPerRow: 3,
-      maxLabelLength: 64,
       supportsStyles: false,
       supportsDisabled: false,
     },
     selects: {
       maxOptions: 100,
-      maxLabelLength: 64,
     },
     text: {
       markdownDialect: "markdown" as const,
@@ -60,12 +61,7 @@ export function resolveTelegramPresentationCapabilities(params: {
 }
 
 function escapeTelegramTableCellText(value: string | number): string {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/\s+/g, " ")
-    .trim();
+  return escapeTelegramHtml(String(value)).replace(/\s+/g, " ").trim();
 }
 
 // The `<table>` HTML island feeds the existing island -> rich-block converter,
@@ -126,11 +122,47 @@ function renderTelegramRichFallbackText(presentation: MessagePresentation): stri
   return parts.join("\n\n");
 }
 
-function canEncodeTelegramPresentationControl(
-  block: MessagePresentationInteractiveBlock,
-  options?: TelegramButtonBuildOptions,
-): boolean {
-  return Boolean(buildTelegramPresentationButtons({ blocks: [block] }, options)?.length);
+const telegramDroppedControlFallbacks = new WeakMap<object, string>();
+export function markTelegramDroppedControlFallback(
+  payload: ReplyPayload,
+  textBefore: string,
+  textAfter: string,
+): ReplyPayload {
+  if (textBefore !== textAfter) {
+    telegramDroppedControlFallbacks.set(payload, textAfter.slice(textBefore.length));
+  }
+  return payload;
+}
+export function copyTelegramDroppedControlFallback<T extends ReplyPayload | undefined>(
+  source: ReplyPayload,
+  payload: T,
+): T {
+  const fallback = telegramDroppedControlFallbacks.get(source);
+  if (payload && fallback) {
+    telegramDroppedControlFallbacks.set(payload, fallback);
+  }
+  return payload;
+}
+export const applyTextToPayload = (payload: ReplyPayload, text: string): ReplyPayload =>
+  payload.text === text
+    ? payload
+    : copyTelegramDroppedControlFallback(
+        payload,
+        copyReplyPayloadMetadata(payload, { ...payload, text }),
+      );
+
+function partitionTelegramControls<T>(
+  controls: readonly T[],
+  blockFor: (control: T) => MessagePresentationInteractiveBlock,
+  options: TelegramButtonBuildOptions,
+): [T[], T[]] {
+  const native: T[] = [];
+  const fallback: T[] = [];
+  for (const control of controls) {
+    const buttons = buildTelegramPresentationButtons({ blocks: [blockFor(control)] }, options);
+    (buttons?.length ? native : fallback).push(control);
+  }
+  return [native, fallback];
 }
 
 function partitionTelegramPresentationBlocks(params: {
@@ -144,26 +176,16 @@ function partitionTelegramPresentationBlocks(params: {
   const fallbackBlocks: MessagePresentation["blocks"] = [];
   const nativeControlBlocks: MessagePresentationInteractiveBlock[] = [];
   for (const block of params.presentation.blocks) {
-    if (!isMessagePresentationInteractiveBlock(block)) {
-      fallbackBlocks.push(block);
-      continue;
-    }
-    if (!params.presentationControlsSelected) {
+    if (!params.presentationControlsSelected || !isMessagePresentationInteractiveBlock(block)) {
       fallbackBlocks.push(block);
       continue;
     }
     if (block.type === "buttons") {
-      const nativeButtons: typeof block.buttons = [];
-      const fallbackButtons: typeof block.buttons = [];
-      for (const button of block.buttons) {
-        const target = canEncodeTelegramPresentationControl(
-          { type: "buttons", buttons: [button] },
-          params.buttonOptions,
-        )
-          ? nativeButtons
-          : fallbackButtons;
-        target.push(button);
-      }
+      const [nativeButtons, fallbackButtons] = partitionTelegramControls(
+        block.buttons,
+        (button) => ({ type: "buttons", buttons: [button] }),
+        params.buttonOptions,
+      );
       if (nativeButtons.length > 0) {
         nativeControlBlocks.push({ type: "buttons", buttons: nativeButtons });
       }
@@ -173,17 +195,11 @@ function partitionTelegramPresentationBlocks(params: {
       continue;
     }
 
-    const nativeOptions: typeof block.options = [];
-    const fallbackOptions: typeof block.options = [];
-    for (const option of block.options) {
-      const target = canEncodeTelegramPresentationControl(
-        { type: "select", options: [option] },
-        params.buttonOptions,
-      )
-        ? nativeOptions
-        : fallbackOptions;
-      target.push(option);
-    }
+    const [nativeOptions, fallbackOptions] = partitionTelegramControls(
+      block.options,
+      (option) => ({ type: "select", options: [option] }),
+      params.buttonOptions,
+    );
     if (nativeOptions.length > 0) {
       nativeControlBlocks.push({ ...block, options: nativeOptions });
     }
@@ -214,7 +230,7 @@ export function canonicalizeTelegramPresentationPayload(
       return payload;
     }
     // Native-only controls need the same visible message anchor as portable controls.
-    return { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK };
+    return copyReplyPayloadMetadata(payload, { ...payload, text: TELEGRAM_CONTROL_ONLY_FALLBACK });
   }
   const richTables = options?.richTables === true;
   const presentation = adaptMessagePresentationForChannel({
@@ -240,10 +256,17 @@ export function canonicalizeTelegramPresentationPayload(
     presentationControlsSelected,
     buttonOptions,
   });
+  // Only native labels are clipped; unavailable controls retain their full text.
   const presentationButtons = buildTelegramPresentationButtons(
-    {
-      blocks: nativeControlBlocks,
-    },
+    adaptMessagePresentationForChannel({
+      presentation: { blocks: nativeControlBlocks },
+      capabilities: {
+        limits: {
+          actions: { maxLabelLength: 64 },
+          selects: { maxLabelLength: 64 },
+        },
+      },
+    }),
     buttonOptions,
   );
   const buttons = existingButtons ?? presentationButtons;
@@ -259,13 +282,14 @@ export function canonicalizeTelegramPresentationPayload(
   const hasFallback =
     fallbackText.length > 0 &&
     (currentText === fallbackText || currentText.endsWith(`\n\n${fallbackText}`));
-  // presentationTextMode "fallback" marks payload.text as the authored plain
-  // rendering of the same presentation: rich accounts replace it with the
-  // native block rendering, plain accounts keep it and drop the generic flatten.
+  // Native controls replace their choice text, including control-only replies.
+  // Text-only delivery keeps the producer's complete authored fallback.
   const text = textIsFallback
-    ? richTables
-      ? fallbackText || currentText
-      : currentText || fallbackText
+    ? nativeControlBlocks.length > 0
+      ? fallbackText
+      : richTables
+        ? fallbackText || currentText
+        : currentText || fallbackText
     : hasFallback
       ? currentText
       : [currentText, fallbackText].filter(Boolean).join("\n\n");
@@ -287,7 +311,7 @@ export function canonicalizeTelegramPresentationPayload(
       },
     };
   }
-  return canonical;
+  return copyReplyPayloadMetadata(payload, canonical);
 }
 
 export function resolveTelegramInteractiveTextFallback(params: {
@@ -322,4 +346,55 @@ export function resolveTelegramInteractiveTextFallback(params: {
   }
   const fallback = renderMessagePresentationFallbackText({ presentation: interactivePresentation });
   return fallback.trim() ? fallback : text;
+}
+export function resolveFinalTelegramPresentationText(params: {
+  payload: ReplyPayload;
+  text: string;
+  richMessages: boolean;
+  allowWebAppButtons?: boolean;
+}): string | undefined {
+  // Rich rendering is opt-in. Preserve the authored plain fallback when the
+  // account cannot encode native presentation blocks.
+  if (!params.richMessages) {
+    return undefined;
+  }
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  if (!presentation) {
+    return undefined;
+  }
+  const droppedControls: TelegramDroppedControl[] = [];
+  const buttonOptions: TelegramButtonBuildOptions = {
+    allowWebAppButtons: params.allowWebAppButtons === true,
+    questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
+  };
+  // SAFETY: untyped channelData buttons are only forwarded for resolver precedence; this path never reads their entries.
+  const telegramData = params.payload.channelData?.telegram as
+    | { buttons?: Parameters<typeof resolveTelegramInlineButtons>[0]["buttons"] }
+    | undefined;
+  resolveTelegramInlineButtons(
+    {
+      buttons: telegramData?.buttons,
+      interactive: normalizeLegacyInteractiveReply(params.payload.interactive),
+    },
+    { ...buttonOptions, onDroppedControl: (control) => droppedControls.push(control) },
+  );
+  const suffix = telegramDroppedControlFallbacks.get(params.payload);
+  const canonicalText =
+    suffix && params.text.endsWith(suffix) ? params.text.slice(0, -suffix.length) : params.text;
+  const canonicalInputText =
+    suffix && params.payload.presentationTextMode !== "fallback"
+      ? appendTelegramDroppedControlFallback(canonicalText, droppedControls)
+      : canonicalText;
+  const rendered = canonicalizeTelegramPresentationPayload(
+    { ...params.payload, text: canonicalInputText },
+    { richTables: true, allowWebAppButtons: params.allowWebAppButtons },
+  ).text?.trimEnd();
+  if (!rendered) {
+    return undefined;
+  }
+  const finalText =
+    params.payload.presentationTextMode === "fallback"
+      ? appendTelegramDroppedControlFallback(rendered, droppedControls)
+      : rendered;
+  return finalText !== params.text.trimEnd() ? finalText : undefined;
 }

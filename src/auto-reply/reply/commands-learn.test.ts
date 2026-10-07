@@ -1,9 +1,10 @@
 // Tests /learn prompt rewriting, defaults, standards, and availability gating.
-import { describe, expect, it, vi } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { SKILL_AUTHORING_STANDARDS_PROMPT } from "../../skills/workshop/skill-authoring-standards.js";
+import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { handleLearnCommand } from "./commands-learn.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -32,7 +33,7 @@ function buildLearnParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig = {},
 ): HandleCommandsParams {
-  const loadedConfig = migratePersistedImplicitMainRoster(cfg).config as OpenClawConfig;
+  const loadedConfig = createCanonicalAgentConfigFixture(cfg).config;
   return {
     cfg: { ...loadedConfig, models: loadedConfig.models ?? DEFAULT_TEST_MODELS },
     ctx: {
@@ -72,6 +73,8 @@ function buildLearnParams(
     isGroup: false,
   } as unknown as HandleCommandsParams;
 }
+
+afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 describe("learn command", () => {
   it.each([
@@ -152,6 +155,18 @@ describe("learn command", () => {
         },
       };
       if (surface === "paired-node") {
+        // Supply runtime backend metadata for the placement and authoring policy checks.
+        cliBackendsTesting.setDepsForTest({
+          resolveRuntimeCliBackends: () => [
+            {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              pluginId: "anthropic",
+              config: { command: "claude" },
+              bundleMcp: true,
+            },
+          ],
+        });
         params.provider = "anthropic";
         params.model = "claude-sonnet-5";
         params.sessionEntry = {
@@ -183,15 +198,6 @@ describe("learn command", () => {
     expect(params.command.commandBodyNormalized).toBe(instruction);
   });
 
-  it("uses the current-conversation default for bare /learn", async () => {
-    const params = buildLearnParams("/learn");
-
-    const result = await handleLearnCommand(params, true);
-
-    expect(result?.shouldContinue).toBe(true);
-    expect((params.ctx as { BodyForAgent?: string }).BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-  });
-
   it("includes the load-bearing skill authoring standards", async () => {
     const params = buildLearnParams("/learn what we just did");
 
@@ -199,7 +205,7 @@ describe("learn command", () => {
     const instruction = (params.ctx as { BodyForAgent?: string }).BodyForAgent ?? "";
 
     expect(instruction).toContain(
-      "Revise the best pending proposal or update the best Workshop-owned skill before creating anything new.",
+      "Revise the best pending proposal or update the best Workshop-generated skill before creating anything new.",
     );
     expect(instruction).toContain("Make at most one proposal mutation.");
     expect(instruction).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);

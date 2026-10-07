@@ -36,8 +36,10 @@ vi.mock("./server/ws-connection/request-start.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./server/ws-connection/request-start.js")>();
   return {
     ...actual,
-    scheduleGatewayRequestStart: (bytes: number) => {
-      const started = actual.scheduleGatewayRequestStart(bytes);
+    scheduleGatewayRequestStart: (
+      ...args: Parameters<typeof actual.scheduleGatewayRequestStart>
+    ) => {
+      const started = actual.scheduleGatewayRequestStart(...args);
       return started?.then(() => boundaries.start()) ?? null;
     },
   };
@@ -148,6 +150,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       });
       let closeSettled = false;
       let closing: Promise<void> | undefined;
+      let dispatch: Promise<void> | undefined;
       const lateResponses: unknown[] = [];
       harness.send.mockImplementation((frame) => {
         if (closeSettled) {
@@ -162,18 +165,19 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         }
       });
       try {
-        await harness.dispatcher.dispatch(
+        dispatch = harness.dispatcher.dispatch(
           { type: "req", id: "held", method: "test.entry", params: {} },
           client,
         );
         await reached.promise;
-        closing = kernel.beginClosePrelude().then(() => {
+        closing = kernel.prepareClose().then(() => {
           closeSettled = true;
         });
         await nextTurn();
         expect.soft(closeSettled).toBe(false);
         held.resolve();
         await harness.awaitResponseFrame("held");
+        await dispatch;
         await closing;
         expect.soft(handler).not.toHaveBeenCalled();
         expect.soft(lateResponses).toEqual([]);
@@ -181,6 +185,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       } finally {
         held.resolve();
         await harness.awaitResponseFrame("held");
+        await dispatch;
         await closing;
       }
     },
@@ -215,9 +220,10 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         return { kind: "sent" };
       });
       let queued: Promise<void> | undefined;
+      let dispatchedMutation: Promise<void> | undefined;
       let closing: Promise<void> | undefined;
       try {
-        await harness.dispatcher.dispatch(
+        dispatchedMutation = harness.dispatcher.dispatch(
           { type: "req", id: "mutation", method: "device.token.revoke", params: {} },
           client,
         );
@@ -226,7 +232,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         await nextTurn();
         expect(waiter).not.toHaveBeenCalled();
         expect(harness.send).not.toHaveBeenCalled();
-        closing = kernel.beginClosePrelude().then(() => {
+        closing = kernel.prepareClose().then(() => {
           events.push("closed");
         });
         await vi.waitFor(() => expect(events).toContain("closed"));
@@ -245,6 +251,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       } finally {
         held.resolve();
         await finished.promise;
+        await dispatchedMutation;
         await queued;
         await closing;
         await harness.awaitResponseFrame("mutation");
@@ -269,8 +276,9 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
       extraHandlers: { "test.entry": handler },
       isClosed: () => disconnected,
     });
+    let dispatch: Promise<void> | undefined;
     try {
-      await harness.dispatcher.dispatch(
+      dispatch = harness.dispatcher.dispatch(
         { type: "req", id: "disconnected", method: "test.entry" },
         client,
       );
@@ -283,6 +291,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     } finally {
       held.resolve();
       await harness.awaitResponseFrame("disconnected");
+      await dispatch;
     }
   });
 
@@ -299,7 +308,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
             owner: { kind: "aux", area: "entry-test" },
             scope: "operator.admin",
             handler: async ({ respond }: Parameters<GatewayRequestHandler>[0]) => {
-              await kernel.beginClosePrelude();
+              await kernel.prepareClose();
               respond(true, { closed: true });
             },
           },
@@ -328,7 +337,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     registry.register(node, { pairingIdentity: "paired", pairingGeneration: "current" });
     const context = { ...kernel.gatewayRequestContext, nodeRegistry: registry };
     const ready = createDeferredCore<string>();
-    await kernel.beginClosePrelude();
+    await kernel.prepareClose();
     markGatewayRestartDraining();
     const invoked = registry.invokeLifecycle({
       nodeId: "entry-node",
@@ -424,7 +433,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
     let closing: Promise<void> | undefined;
     try {
       await reached.promise;
-      closing = kernel.beginClosePrelude().then(() => {
+      closing = kernel.prepareClose().then(() => {
         closeSettled = true;
       });
       await nextTurn();

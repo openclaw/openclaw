@@ -3,16 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   fetchMcpAppView: vi.fn(),
   getMcpAppViewLease: vi.fn(),
-  getOrCreateSessionMcpRuntime: vi.fn(),
+  acquireSessionMcpRuntime: vi.fn(),
+  releaseLease: vi.fn(),
   loadSessionEntry: vi.fn(),
   resolveAgentDir: vi.fn(),
-  resolveAgentIdFromSessionKey: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
   visitSessionMessagesAsync: vi.fn(),
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
-  getOrCreateSessionMcpRuntime: mocks.getOrCreateSessionMcpRuntime,
+  acquireSessionMcpRuntime: mocks.acquireSessionMcpRuntime,
+}));
+vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
+  releaseSessionMcpRuntime: async (lease: { releaseLease: () => void }) => lease.releaseLease(),
 }));
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentDir: mocks.resolveAgentDir,
@@ -22,11 +25,22 @@ vi.mock("../agents/mcp-ui-resource.js", () => ({
   fetchMcpAppView: mocks.fetchMcpAppView,
   getMcpAppViewLease: mocks.getMcpAppViewLease,
 }));
-vi.mock("../routing/session-key.js", () => ({
-  resolveAgentIdFromSessionKey: mocks.resolveAgentIdFromSessionKey,
-}));
 vi.mock("./session-transcript-readers.js", () => ({
-  visitSessionMessagesAsync: mocks.visitSessionMessagesAsync,
+  readSessionTranscriptSummaryAsync: async (
+    _scope: unknown,
+    query: import("./session-transcript-summary.js").SessionTranscriptSummaryQuery,
+  ) => {
+    if (query.kind !== "mcp-app") {
+      throw new Error("Expected MCP transcript query");
+    }
+    const { selectMcpAppReconstructionData } = await import("./mcp-app-transcript.js");
+    return {
+      kind: "mcp-app",
+      data: selectMcpAppReconstructionData((visit) => {
+        mocks.visitSessionMessagesAsync(_scope, visit);
+      }, query.lookup),
+    };
+  },
 }));
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: mocks.loadSessionEntry,
@@ -42,7 +56,6 @@ beforeEach(() => {
   for (const mock of Object.values(mocks)) {
     mock.mockReset();
   }
-  mocks.resolveAgentIdFromSessionKey.mockReturnValue("main");
   mocks.resolveAgentDir.mockReturnValue("/tmp/agent");
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
   mocks.loadSessionEntry.mockReturnValue({
@@ -50,7 +63,10 @@ beforeEach(() => {
     entry: { sessionId: "session-1" },
     storePath: "/tmp/sessions.json",
   });
-  mocks.getOrCreateSessionMcpRuntime.mockResolvedValue(runtime);
+  mocks.acquireSessionMcpRuntime.mockResolvedValue({
+    runtime,
+    releaseLease: mocks.releaseLease,
+  });
   mocks.fetchMcpAppView.mockImplementation(async (params: { viewId?: string }) => ({
     viewId: params.viewId ?? "mcp-app-fresh",
   }));
@@ -59,7 +75,7 @@ beforeEach(() => {
 
 async function restoreFromMessages(messages: unknown[], viewId: string) {
   mocks.visitSessionMessagesAsync.mockImplementation(
-    async (_scope: unknown, visit: (message: unknown) => void) => {
+    (_scope: unknown, visit: (message: unknown) => void) => {
       for (const message of messages) {
         visit(message);
       }
@@ -114,6 +130,7 @@ describe("MCP App transcript reconstruction", () => {
     );
 
     expect(restored).toEqual({ runtime, view });
+    expect(mocks.releaseLease).toHaveBeenCalledOnce();
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith({
       runtime,
       agentId: "main",
@@ -144,7 +161,7 @@ describe("MCP App transcript reconstruction", () => {
         storePath: "/tmp/openclaw-agent.sqlite",
       });
       mocks.visitSessionMessagesAsync.mockImplementation(
-        async (_scope: unknown, visit: (message: unknown) => void) => {
+        (_scope: unknown, visit: (message: unknown) => void) => {
           for (const message of [
             {
               role: "assistant",
@@ -191,6 +208,38 @@ describe("MCP App transcript reconstruction", () => {
       );
       expect(mocks.loadSessionEntry).toHaveBeenCalledWith(sessionKey, { agentId: expectedOwner });
       expect(mocks.fetchMcpAppView.mock.calls.at(-1)?.[0]).not.toHaveProperty("viewId");
+    },
+  );
+
+  it.each(["disabled", "no view", "aborted"])(
+    "releases runtime admission when reconstruction is %s",
+    async (outcome) => {
+      if (outcome === "disabled") {
+        mocks.acquireSessionMcpRuntime.mockResolvedValue({
+          runtime: { mcpAppsEnabled: false },
+          releaseLease: mocks.releaseLease,
+        });
+      } else if (outcome === "no view") {
+        mocks.fetchMcpAppView.mockResolvedValue(undefined);
+      } else {
+        mocks.fetchMcpAppView.mockRejectedValue(new DOMException("aborted", "AbortError"));
+      }
+      const restored = restoreFromMessages(
+        [
+          {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "demo__show", args: {} }],
+          },
+          toolResult("mcp-app-abandoned", "call-1"),
+        ],
+        "mcp-app-abandoned",
+      );
+      if (outcome === "aborted") {
+        await expect(restored).rejects.toMatchObject({ name: "AbortError" });
+      } else {
+        await expect(restored).resolves.toBeUndefined();
+      }
+      expect(mocks.releaseLease).toHaveBeenCalledOnce();
     },
   );
 
@@ -270,7 +319,6 @@ describe("MCP App transcript reconstruction", () => {
 
     await restoreFromMessages(messages, "mcp-app-stream");
 
-    expect(mocks.visitSessionMessagesAsync).toHaveBeenCalledTimes(2);
     expect(mocks.fetchMcpAppView).toHaveBeenCalledWith(
       expect.objectContaining({ toolInput: { page: 1 } }),
     );

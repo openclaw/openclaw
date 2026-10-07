@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
+import { createTestGatewayScheduler } from "../../../test-utils/gateway-scheduler-clock.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -73,11 +74,12 @@ async function createSettlementFixture(state: OpenClawTestState) {
       throw new Error("settlement fixture requires a claimed session writer");
     }
     runParams.sessionTarget = { ...target, ...writer };
-    const session = createEmbeddedRunSessionPromptState({
+    const session = await createEmbeddedRunSessionPromptState({
       runParams,
       sessionAgentId: target.agentId,
       resolvedSessionKey: target.sessionKey,
       lifecycleGeneration: authority.lifecycleGeneration,
+      onInterrupt: (reason) => controller.abort(reason),
     });
     const input: Parameters<typeof settleEmbeddedRun>[0] = {
       runInput: {
@@ -173,6 +175,79 @@ async function withSettlementFixture(
     }
   });
 }
+
+describe("MCP run lifetime", () => {
+  it("retires a run-owned transient successor without a durable commit", async () => {
+    await withSettlementFixture(async (fixture) => {
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+        await import("../../agent-bundle-mcp-manager.test-support.js");
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+        await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
+      const manager = getSessionMcpRuntimeManagerForTesting();
+      const sessionId = randomUUID();
+      fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = true;
+      fixture.input.compaction.durable = false;
+      fixture.session.capturePreparedCompactionTarget({
+        sessionId,
+        sessionFile: fixture.target.sessionKey,
+        sessionTarget: { ...fixture.target, sessionId },
+      });
+      try {
+        await getOrCreateSessionMcpRuntime({
+          sessionId,
+          sessionKey: fixture.target.sessionKey,
+          workspaceDir: fixture.input.runInput.runParams.workspaceDir,
+          cfg: unopenedMcpConfig,
+          manifestRegistry: { plugins: [] },
+        });
+        await fixture.settle();
+        expect(manager.peekSession({ sessionId })).toBeUndefined();
+      } finally {
+        await manager.disposeAll();
+      }
+    });
+  });
+
+  it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
+    await withSettlementFixture(async (fixture) => {
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+        await import("../../agent-bundle-mcp-manager.test-support.js");
+      const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+        await import("../../agent-bundle-mcp-manager-api.js");
+      const scheduler = createTestGatewayScheduler();
+      onTestFinished(() => scheduler.stop());
+      await setSessionMcpRuntimeScheduler(scheduler);
+      const manager = getSessionMcpRuntimeManagerForTesting();
+      fixture.input.runInput.runParams.cleanupBundleMcpOnRunEnd = cleanup;
+      const create = (sessionId: string) =>
+        getOrCreateSessionMcpRuntime({
+          sessionId,
+          sessionKey: fixture.target.sessionKey,
+          workspaceDir: fixture.input.runInput.runParams.workspaceDir,
+          cfg: unopenedMcpConfig,
+          manifestRegistry: { plugins: [] },
+        });
+      try {
+        const original = await create(fixture.target.sessionId);
+        const successorId = randomUUID();
+        await fixture.accept(successorId);
+        const successor = await create(successorId);
+        const rebound = await create(randomUUID());
+        await fixture.settle();
+        expect(manager.peekSession({ sessionId: original.sessionId })).toBeUndefined();
+        expect(manager.peekSession({ sessionId: successor.sessionId })).toBe(
+          cleanup ? undefined : successor,
+        );
+        expect(manager.peekSession({ sessionKey: fixture.target.sessionKey })).toBe(rebound);
+      } finally {
+        await manager.disposeAll();
+      }
+    });
+  });
+});
 
 describe("settleEmbeddedRun compaction identity", () => {
   it.each(["identity publication", "runtime cleanup"] as const)(

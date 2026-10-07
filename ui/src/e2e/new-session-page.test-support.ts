@@ -1,7 +1,9 @@
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { errors, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -34,7 +36,58 @@ export function installMockGateway(
   });
 }
 
+// The scale-in animation moves inventory rows after they first become visible.
+// Wait for its public completion event before hovering a nested details card.
+export async function openEnvironmentPicker(page: Page) {
+  const afterShow = page.locator("wa-popover.new-session-page__where-popover").evaluate(
+    (element) =>
+      new Promise<void>((resolve) => {
+        element.addEventListener("wa-after-show", () => resolve(), { once: true });
+      }),
+  );
+  await page.locator("#new-session-where-trigger").click();
+  await afterShow;
+}
+
+export function checkoutBaseRefInput(scope: Page | Locator): Locator {
+  return scope
+    .getByRole("combobox", { name: "From", exact: true })
+    .or(scope.getByRole("textbox", { name: "From", exact: true }));
+}
+
+export const NEW_SESSION_MODEL_CATALOG = [
+  { id: "gpt-5.5", name: "GPT 5.5", provider: "openai" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+].map(({ id, name, provider }) => ({
+  id,
+  name,
+  provider,
+  reasoning: true,
+  thinkingLevels: ["off", "minimal", "low", "medium", "high"].map((level) => ({
+    id: level,
+    label: level,
+  })),
+  thinkingDefault: "medium",
+}));
+
 export const WORKSPACE = "/home/peter/openclaw";
+
+export function createCloudAgentsListResponse() {
+  return {
+    agents: [
+      {
+        id: "cloud",
+        identity: { name: "Cloud" },
+        name: "Cloud",
+        workspace: WORKSPACE,
+        workspaceGit: true,
+      },
+    ],
+    defaultId: "cloud",
+    mainKey: "main",
+    scope: "agent",
+  };
+}
 
 export const LOCAL_GIT_WORKSPACE_RESPONSES = {
   "agents.list": {
@@ -66,6 +119,8 @@ const LOCATOR_TEXT_READ_TIMEOUT_MS = 500;
 const LOCATOR_TEXT_POLL_TIMEOUT_MS = 10_000;
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+type NewSessionProofSurface = { surface: Locator; content: readonly Locator[] };
 
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
@@ -142,7 +197,7 @@ export async function expectPendingNewSessionPresentation(page: Page) {
     const user = thread.querySelector<HTMLElement>(".chat-group.user")!;
     const bubble = user.querySelector<HTMLElement>(".chat-bubble")!;
     const text = bubble.classList.contains("chat-bubble--with-images")
-      ? bubble.querySelector<HTMLElement>(".chat-text, .chat-json-collapse")!
+      ? bubble.querySelector<HTMLElement>(".chat-text")!
       : bubble;
     const claw = thread.querySelector<SVGElement>(".chat-reading-indicator svg")!;
     const userStyle = getComputedStyle(user);
@@ -224,33 +279,51 @@ export async function captureUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "cloud-worker-session"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "cloud-worker-session"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureProjectUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "project-registry"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "project-registry"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureNewSessionComposerUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "new-session-slash-menu"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "new-session-slash-menu"),
+    fileName,
+    presentation,
+  );
 }
 
 export async function captureEnvironmentMetadataUiProof(
@@ -272,14 +345,43 @@ export async function captureDeviceRuntimeUiProof(
   owner: { readonly artifactDir: string },
   page: Page,
   fileName: string,
+  presentation?: NewSessionProofSurface,
 ) {
   if (!captureUiProofEnabled) {
     return;
   }
-  await captureProof(page, path.join(owner.artifactDir, "device-runtime-gating"), fileName);
+  await captureProof(
+    page,
+    path.join(owner.artifactDir, "device-runtime-gating"),
+    fileName,
+    presentation,
+  );
 }
 
-async function captureProof(page: Page, artifactDir: string, fileName: string) {
+async function captureProof(
+  page: Page,
+  artifactDir: string,
+  fileName: string,
+  presentation?: NewSessionProofSurface,
+) {
+  if (page.video()) {
+    await mkdir(artifactDir, { recursive: true });
+    await writeFile(
+      path.join(artifactDir, fileName),
+      await takeControlUiViewportScreenshot(
+        page,
+        presentation?.surface ?? page.locator(".shell"),
+        presentation?.content ?? [
+          page
+            .locator(
+              ".new-session-page__message:visible, .new-session-page__starting .chat-group.user:visible, .agent-chat__composer-combobox textarea:visible",
+            )
+            .first(),
+        ],
+      ),
+    );
+    return;
+  }
   await page.screenshot({
     animations: "disabled",
     fullPage: true,

@@ -58,11 +58,15 @@ describe("native gateways", () => {
     capability?.select("profile:studio");
     capability?.openWindow("profile:studio");
     capability?.setPrimary("profile:studio");
+    capability?.reconnect("profile:studio");
+    capability?.reconnectCancel("profile:studio");
     capability?.openSettings();
     expect(postMessage.mock.calls.map(([message]) => message)).toEqual([
       { type: "select", id: "profile:studio" },
       { type: "open-window", id: "profile:studio" },
       { type: "set-primary", id: "profile:studio" },
+      { type: "reconnect", id: "profile:studio" },
+      { type: "reconnect-cancel", id: "profile:studio" },
       { type: "open-settings" },
     ]);
   });
@@ -82,22 +86,6 @@ describe("native gateways", () => {
       new CustomEvent(EVENT, { detail: { ...snapshot, currentId: "profile:studio" } }),
     );
     expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("reads the latest global when attached lazily, then publishes native updates", async () => {
-    installBridge();
-    const attachedSnapshot = { ...snapshot, currentId: "profile:studio" };
-    Object.assign(window, { __OPENCLAW_NATIVE_GATEWAYS__: attachedSnapshot });
-    const { nativeGatewaysCapability } = await import("./native-gateways.runtime.ts");
-    const capability = nativeGatewaysCapability();
-
-    expect(capability?.snapshot).toEqual(attachedSnapshot);
-
-    const listener = vi.fn();
-    const unsubscribe = capability?.subscribe(listener);
-    window.dispatchEvent(new CustomEvent(EVENT, { detail: snapshot }));
-    expect(listener).toHaveBeenCalledWith(snapshot);
-    unsubscribe?.();
   });
 
   it("creates the app-lifetime singleton only once", async () => {

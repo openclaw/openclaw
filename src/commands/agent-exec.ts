@@ -4,14 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
+import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
+import {
+  recordAgentCleanupFailure,
+  createAgentCleanupScope,
+} from "../agents/run-cleanup-timeout.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type {
-  EmbeddedStateLockHandle,
-  EmbeddedStateSignalProcess,
-} from "../infra/embedded-state-lock.js";
+import type { EmbeddedStateLockHandle } from "../infra/embedded-state-lock.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { GatewayLockIdentity, GatewayLockOptions } from "../infra/gateway-lock.js";
+import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
 import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
@@ -23,32 +25,15 @@ import {
   resolveExecBaseConfig,
   type AgentExecCliOptions,
 } from "./agent-exec-input.js";
-import {
-  classifyAgentExecResult,
-  type AgentExecEnvelope,
-  type AgentExecRunResult,
-} from "./agent-exec-result.js";
+import { classifyAgentExecResult, type AgentExecEnvelope } from "./agent-exec-result.js";
 
 const AGENT_EXEC_DEFAULT_TIMEOUT_SECONDS = 600;
 
 type AgentExecCommandResult = {
   envelope: AgentExecEnvelope;
   exitCode: 0 | 1 | 2;
+  toolCalls: number;
 };
-
-type AgentExecCommandDeps = {
-  stdin?: AsyncIterable<unknown>;
-  process?: EmbeddedStateSignalProcess;
-  gatewayLockOptions?: GatewayLockOptions;
-  runAgent?: (
-    opts: Record<string, unknown>,
-    runtime: RuntimeEnv,
-  ) => Promise<AgentExecRunResult | undefined>;
-};
-
-function exitCodeForEnvelope(envelope: AgentExecEnvelope): 0 | 1 | 2 {
-  return envelope.status === "ok" ? 0 : envelope.status === "timeout" ? 2 : 1;
-}
 
 function normalizeCodeMode(
   value: AgentExecCliOptions["codeMode"],
@@ -99,30 +84,22 @@ async function requireDirectory(value: string, label: string): Promise<string> {
 }
 
 function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () => void {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  // Repointing the state dir would otherwise make the config resolve relative to
-  // it (see `resolveConfigDir`), so clear any inherited path override and let the
-  // published runtime snapshot own config for this run.
-  const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
+  const previous = {
+    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+    OPENCLAW_WORKSPACE_DIR: process.env.OPENCLAW_WORKSPACE_DIR,
+  };
+  // The published runtime snapshot owns config while state/workspace paths are redirected.
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
   delete process.env.OPENCLAW_CONFIG_PATH;
   process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
   return () => {
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    if (previousWorkspaceDir === undefined) {
-      delete process.env.OPENCLAW_WORKSPACE_DIR;
-    } else {
-      process.env.OPENCLAW_WORKSPACE_DIR = previousWorkspaceDir;
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
   };
 }
@@ -195,10 +172,21 @@ export async function agentExecCommand(
   positionalMessage: string | undefined,
   opts: AgentExecCliOptions,
   runtime: RuntimeEnv,
-  deps: AgentExecCommandDeps = {},
 ): Promise<AgentExecCommandResult> {
   const sessionId = randomUUID();
+  const abortController = new AbortController();
+  const signal = abortController.signal;
+  const toolBudget = createAgentToolExecutionBudget({
+    signal,
+    abort: (reason) => abortController.abort(reason),
+  });
+  const resultForEnvelope = (envelope: AgentExecEnvelope): AgentExecCommandResult => ({
+    envelope,
+    exitCode: envelope.status === "ok" ? 0 : envelope.status === "timeout" ? 2 : 1,
+    toolCalls: toolBudget.toolCalls,
+  });
   let commandResult: AgentExecCommandResult;
+  const runtimeCleanup = createAgentCleanupScope();
   let temporaryStateDir: string | undefined;
   let restoreEnvironment: (() => void) | undefined;
   let restoreConfigEnvironment: (() => void) | undefined;
@@ -207,29 +195,27 @@ export async function agentExecCommand(
   let configIo: typeof import("../config/io.js") | undefined;
   let stopLocalAuditWriter: (() => Promise<void>) | undefined;
   let stateLock: EmbeddedStateLockHandle | null | undefined;
+  let temporaryDatabaseScope:
+    | import("../state/openclaw-state-db-async-lifecycle.js").OpenClawDatabaseMaintenanceScope
+    | undefined;
+  let abortSignal = signal;
   let signalBridge:
     | ReturnType<
         (typeof import("../infra/embedded-state-lock.js"))["createEmbeddedStateSignalBridge"]
       >
     | undefined;
   try {
+    signal.throwIfAborted();
     const codeModeOverride = normalizeCodeMode(opts.codeMode);
-    const prompt = await resolveAgentExecPrompt(
-      positionalMessage,
-      opts.messageFile,
-      deps.stdin ?? process.stdin,
-    );
+    const prompt = await resolveAgentExecPrompt(positionalMessage, opts.messageFile, process.stdin);
     const cwd = await requireDirectory(opts.cwd ?? process.cwd(), "Working directory");
     const stateDir = opts.stateDir
       ? await requireDirectory(opts.stateDir, "State directory")
       : await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-exec-"));
-    // Only a state dir this command created is removed; `--state-dir` is the
-    // caller's and is left alone.
+    // Cleanup owns only the temporary state directory, never the caller's --state-dir.
     temporaryStateDir = opts.stateDir ? undefined : stateDir;
     configIo = await import("../config/io.js");
-    // Both process globals are captured before the config is resolved: an ambient
-    // load publishes a runtime snapshot of its own, so reading "previous" after it
-    // would record exec's snapshot as the caller's.
+    // Ambient loading publishes a snapshot, so capture the caller's snapshot first.
     const previousRuntimeConfigSnapshot = configIo.getRuntimeConfigSnapshot();
     const snapshotIo = configIo;
     restoreRuntimeConfigSnapshot = () => {
@@ -239,13 +225,8 @@ export async function agentExecCommand(
         snapshotIo.clearRuntimeConfigSnapshot();
       }
     };
-    // Resolve the config before the environment repoints the state dir, so the
-    // ordinary config location still applies. A successful load finalizes the
-    // config's `env` block and login-shell import against `process.env`, so undo
-    // exactly those mutations on the way out: otherwise an in-process caller's
-    // later isolated run would inherit provider keys from this one. A failed load
-    // needs no handling here -- the loader applies env vars as its last step and
-    // restores them from its own catch.
+    // Load before redirecting state, then undo its env/shell imports so later runs
+    // cannot inherit these credentials. The loader rolls back its own failed loads.
     const { restoreEnvChangesIfUnchanged, snapshotEnv } = configIo;
     const envBeforeConfigLoad = snapshotEnv(process.env);
     const baseConfig = await resolveExecBaseConfig(opts);
@@ -257,9 +238,7 @@ export async function agentExecCommand(
         after: envAfterConfigLoad,
       });
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
-    // Installed plugins belong to the operator config resolved above, not to
-    // the disposable state root used for this run. Capture all roots before
-    // OPENCLAW_STATE_DIR moves so discovery and the installed-index DB agree.
+    // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
       ? await import("../plugins/install-root-context.js")
@@ -269,13 +248,8 @@ export async function agentExecCommand(
     const fallbacks = normalizeFallbacks(opts.model, opts.fallback);
     const { resolveAgentDir, resolveAmbientOwnerAgentId } =
       await import("../agents/agent-scope-config.js");
-    // Resolve from the inherited config, not `{}`: the default agent may declare
-    // its own `agentDir`, and that is where its stored auth profiles live. This
-    // reads `baseConfig` rather than `runConfig` because the run config
-    // deliberately strips agent directories to keep run state ephemeral, while
-    // credential ownership must still follow the operator's configuration.
-    // Computed before the environment repoints the state dir so the unconfigured
-    // case still resolves against the real one.
+    // Credentials follow the inherited agentDir, which runConfig strips for isolation.
+    // Resolve their owner before redirecting state so default paths also stay real.
     const execAgentId = resolveAmbientOwnerAgentId(baseConfig, undefined, {
       surface: "agent exec",
       hint: "Set agents.defaults.systemAgent.agentId.",
@@ -303,44 +277,35 @@ export async function agentExecCommand(
     const storedAuthStateDir = runtimePaths.resolveStateDir();
     restoreEnvironment = setAgentExecEnvironment({ stateDir, cwd });
     runtimePaths.pinRuntimePaths();
+    if (temporaryStateDir) {
+      const { createOpenClawDatabaseMaintenanceScope } =
+        await import("../state/openclaw-state-db-async-lifecycle.js");
+      // Temporary runs own their resources without borrowing maintenance schema authority.
+      temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
+    }
     if (opts.stateDir) {
       const { acquireEmbeddedStateLock, createEmbeddedStateSignalBridge } =
         await import("../infra/embedded-state-lock.js");
-      signalBridge = createEmbeddedStateSignalBridge(deps.process ?? process);
+      signalBridge = createEmbeddedStateSignalBridge(process);
+      // Retained-state signals and caller cancellation both own the turn's lifetime.
+      abortSignal = AbortSignal.any([abortSignal, signalBridge.signal]);
       stateLock = await acquireEmbeddedStateLock({
-        options: deps.gatewayLockOptions,
-        signal: signalBridge.signal,
+        signal: abortSignal,
         formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
       });
     }
-    // The runtime snapshot is the only in-process config cache (`clearConfigCache`
-    // is a no-op shim), so publishing the composed config here is what makes the
-    // run use it. Serializing it to a temporary file and repointing
-    // OPENCLAW_CONFIG_PATH would only feed this same snapshot, while writing
-    // env-substituted provider keys to disk where the run's own exec tool
-    // could read them.
+    // Publish in memory; a temporary config file would expose resolved provider keys to tools.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
-    if (isExecutionIdentityCollectionEnabled(runConfig)) {
-      try {
-        stopLocalAuditWriter = (await import("./agent-local-audit.js")).startAgentLocalAuditWriter({
-          stateDir,
-        });
-      } catch {
-        // Admission emits a bounded warning if the direct-process writer is unavailable.
-      }
-    }
     const [
       { withAuthProfileStoreAgentDir, withEnvOnlyAuthProfileStore },
       { withHostExecInheritedEnvOmitted },
-      { listKnownProviderAuthEnvVarNames },
-      runAgent,
+      { listKnownProviderAuthEnvVarNamesCore },
+      { agentCommand },
     ] = await Promise.all([
       import("../agents/auth-profiles.js"),
       import("../infra/host-env-security.js"),
       import("../secrets/provider-env-vars.js"),
-      deps.runAgent
-        ? Promise.resolve(deps.runAgent)
-        : import("./agent.js").then((module) => module.agentCommand),
+      import("./agent.js"),
     ]);
     let fallbackExhausted = false;
     let resultErrorPayload: string | true | undefined;
@@ -349,8 +314,9 @@ export async function agentExecCommand(
       error: (...args) => runtime.error(...args),
       exit: (code, exitOpts) => runtime.exit(code, exitOpts),
     };
-    const invoke = async () =>
-      await runAgent(
+    const invoke = async () => {
+      abortSignal.throwIfAborted();
+      return await agentCommand(
         {
           message: prompt,
           sessionId,
@@ -365,7 +331,7 @@ export async function agentExecCommand(
           cleanupBundleMcpOnRunEnd: true,
           cleanupCliLiveSessionOnRunEnd: true,
           oneShotCliRun: true,
-          abortSignal: signalBridge?.signal,
+          abortSignal,
           onModelFallbackExhausted: () => {
             fallbackExhausted = true;
           },
@@ -375,9 +341,7 @@ export async function agentExecCommand(
         },
         silentRuntime,
       );
-    // Stored credentials are the default so a folder-scoped run reaches the
-    // same logins as the rest of the CLI; `--auth-env-only` opts back into an
-    // environment-only scope for automation.
+    };
     const runWithPluginInstallRoots = () =>
       pluginInstallContext && pluginInstallRoots
         ? pluginInstallContext.withPluginInstallRoots(pluginInstallRoots, invoke)
@@ -390,10 +354,27 @@ export async function agentExecCommand(
             storedAuthStateDir,
             runWithPluginInstallRoots,
           );
-    const result = await withHostExecInheritedEnvOmitted(
-      listKnownProviderAuthEnvVarNames({ env: process.env }),
-      runWithAuthScope,
+    const run = async () => {
+      if (isExecutionIdentityCollectionEnabled(runConfig)) {
+        try {
+          stopLocalAuditWriter = (
+            await import("./agent-local-audit.js")
+          ).startAgentLocalAuditWriter(runConfig, { stateDir });
+        } catch {
+          // Admission emits a bounded warning if the direct-process writer is unavailable.
+        }
+      }
+      return await toolBudget.run(() =>
+        withHostExecInheritedEnvOmitted(
+          listKnownProviderAuthEnvVarNamesCore({ env: process.env }),
+          runWithAuthScope,
+        ),
+      );
+    };
+    const result = await runtimeCleanup.run(() =>
+      temporaryDatabaseScope ? temporaryDatabaseScope.run(run) : run(),
     );
+    signal.throwIfAborted();
     if (!result) {
       throw new Error("Agent run returned no result");
     }
@@ -401,17 +382,54 @@ export async function agentExecCommand(
     if (!envelope.sessionId) {
       envelope.sessionId = sessionId;
     }
-    commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    commandResult = resultForEnvelope(envelope);
   } catch (error) {
-    const envelope = errorEnvelope(error, sessionId);
-    commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+    commandResult = resultForEnvelope(errorEnvelope(error, sessionId));
   }
 
-  let cleanupError: unknown;
-  await stopLocalAuditWriter?.().catch(() => undefined);
-  await stateLock?.release().catch((error: unknown) => {
-    cleanupError ??= error;
-  });
+  let cleanupError: unknown =
+    runtimeCleanup.outcome === "uncertain"
+      ? new Error(
+          "Agent runtime cleanup did not settle; state ownership retained until this process exits",
+        )
+      : undefined;
+  const stopAudit = async () => await stopLocalAuditWriter?.();
+  await (temporaryDatabaseScope ? temporaryDatabaseScope.run(stopAudit) : stopAudit()).catch(
+    () => undefined,
+  );
+  // Delayed worker registration can outlive its lexical maintenance scope. Drain the
+  // exact temporary owners before the scope closes and the filesystem root is removed.
+  if (!cleanupError && temporaryStateDir) {
+    const { closeOpenClawAgentDatabasesAsync } =
+      await import("../state/openclaw-agent-db-lifecycle.js");
+    await closeOpenClawAgentDatabasesAsync(temporaryStateDir).catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
+  if (!cleanupError && temporaryStateDir) {
+    const [{ closeOpenClawStateDatabaseByPathAsync }, { resolveOpenClawStateSqlitePath }] =
+      await Promise.all([
+        import("../state/openclaw-state-db-cache.js"),
+        import("../state/openclaw-state-db.paths.js"),
+      ]);
+    const temporaryStatePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: temporaryStateDir,
+    });
+    await closeOpenClawStateDatabaseByPathAsync(temporaryStatePath).catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
+  if (!cleanupError) {
+    await temporaryDatabaseScope?.close().catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
+  if (!cleanupError) {
+    await stateLock?.release().catch((error: unknown) => {
+      cleanupError = error;
+    });
+  }
   const runCleanupStep = (step: () => void) => {
     try {
       step();
@@ -428,7 +446,7 @@ export async function agentExecCommand(
       : configIo?.clearRuntimeConfigSnapshot(),
   );
   runCleanupStep(() => runtimePaths?.pinRuntimePaths());
-  if (temporaryStateDir) {
+  if (temporaryStateDir && !cleanupError) {
     try {
       await fs.rm(temporaryStateDir, { recursive: true, force: true });
     } catch (error) {
@@ -436,12 +454,12 @@ export async function agentExecCommand(
     }
   }
   if (cleanupError) {
+    recordAgentCleanupFailure();
     const cleanupFailure = new Error(
       `Agent exec cleanup failed: ${formatErrorMessage(cleanupError)}`,
     );
     if (commandResult.envelope.ok) {
-      const envelope = errorEnvelope(cleanupFailure, sessionId);
-      commandResult = { envelope, exitCode: exitCodeForEnvelope(envelope) };
+      commandResult = resultForEnvelope(errorEnvelope(cleanupFailure, sessionId));
     } else {
       runtime.error(cleanupFailure.message);
     }

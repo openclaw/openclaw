@@ -16,7 +16,7 @@ import { buildCopilotPromptGuidance } from "./prompt-guidance.js";
 import type { ResolvedCopilotProvider } from "./provider-bridge.js";
 import { shouldForceCopilotMessageTool, type createCopilotToolBridge } from "./tool-bridge.js";
 import { createCopilotUserInputBridge } from "./user-input-bridge.js";
-import { resolveCopilotWorkspaceBootstrapContext } from "./workspace-bootstrap.js";
+import { loadCopilotWorkspaceInstructions } from "./workspace-bootstrap.js";
 export async function createCopilotSessionSetup(params: {
   attempt: AttemptParamsLike;
   byokProxy: Awaited<ReturnType<typeof import("./byok-proxy.js").createCopilotByokProxy>>;
@@ -55,13 +55,13 @@ export async function createCopilotSessionSetup(params: {
         assertCopilotAttemptHostCapabilities(input);
         return input;
       })();
-  const workspaceBootstrap = ordinaryAttemptInput
-    ? await resolveCopilotWorkspaceBootstrapContext({
+  const workspaceBootstrapInstructions = ordinaryAttemptInput
+    ? await loadCopilotWorkspaceInstructions({
         attempt: ordinaryAttemptInput,
         effectiveWorkspaceDir,
         warn: (message) => console.warn(message),
       })
-    : { instructions: undefined };
+    : undefined;
   const forceToolNames =
     ordinaryAttemptInput && shouldForceCopilotMessageTool(ordinaryAttemptInput)
       ? (["message"] as const)
@@ -88,7 +88,9 @@ export async function createCopilotSessionSetup(params: {
           return buildCopilotPromptGuidance({
             attempt: input,
             callableToolNames: promptPolicyResult.callableToolNames,
-            workspaceBootstrapInstructions: workspaceBootstrap.instructions,
+            toolSchemaDirectoryPrompt: promptPolicyResult.toolSchemaDirectoryPrompt,
+            requireExplicitMessageTarget: promptToolPolicy.requireExplicitMessageTarget,
+            workspaceBootstrapInstructions,
           });
         },
       },
@@ -140,49 +142,31 @@ export async function createCopilotSessionSetup(params: {
         assertCopilotAttemptHostCapabilities(attemptInput);
         return createCopilotUserInputBridge({ paramsForRun: attemptInput, signal });
       })();
-  const sessionConfig = createSessionConfig(
-    attemptInput,
-    modelRef.id,
-    promptTools,
-    poolAcquire.auth,
-    sessionProvider,
-    finalDeveloperInstructions || undefined,
-    effectiveWorkspaceDir,
-    effectiveCwd,
-    userInputBridge?.onUserInputRequest,
-    {
-      hooksBridgeOptions: hasNativePromptHook
-        ? {
-            onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-              emitLlmInput(prompt, additionalContext),
-          }
-        : undefined,
-      includeAskUser,
-      operation: operation ?? "attempt",
-    },
-  );
+  const buildSessionConfig = (provider: ResolvedCopilotProvider) =>
+    createSessionConfig(
+      attemptInput,
+      modelRef.id,
+      promptTools,
+      poolAcquire.auth,
+      provider,
+      finalDeveloperInstructions || undefined,
+      effectiveWorkspaceDir,
+      effectiveCwd,
+      userInputBridge?.onUserInputRequest,
+      {
+        hooksBridgeOptions: hasNativePromptHook
+          ? {
+              onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                emitLlmInput(prompt, additionalContext),
+            }
+          : undefined,
+        includeAskUser,
+        operation: operation ?? "attempt",
+      },
+    );
+  const sessionConfig = buildSessionConfig(sessionProvider);
   const compactionSessionConfig = byokProxy
-    ? createSessionConfig(
-        attemptInput,
-        modelRef.id,
-        promptTools,
-        poolAcquire.auth,
-        poolAcquire.provider,
-        finalDeveloperInstructions || undefined,
-        effectiveWorkspaceDir,
-        effectiveCwd,
-        userInputBridge?.onUserInputRequest,
-        {
-          hooksBridgeOptions: hasNativePromptHook
-            ? {
-                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
-                  emitLlmInput(prompt, additionalContext),
-              }
-            : undefined,
-          includeAskUser,
-          operation: operation ?? "attempt",
-        },
-      )
+    ? buildSessionConfig(poolAcquire.provider)
     : sessionConfig;
   return {
     attemptInput,

@@ -1,21 +1,14 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { BuildContext } from "tsdown";
-import type ts from "typescript";
 import { portableRelativePath } from "./build-artifact-cache.mts";
+import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
+import { readDeclarationBuildInputs } from "./tsdown-declaration-boundary.mts";
 
 const stagePrefix = (root: string) =>
-  path.join(fs.realpathSync(root), ".artifacts/plugin-sdk-staging-");
+  path.join(fs.realpathSync.native(root), ".artifacts/plugin-sdk-staging-");
 const receiptPath = (output: string, name: string) =>
   path.join(output, "..", "compiler-inputs", `${name}.json`);
-
-export function resolveDeclarationInputCaptureModule() {
-  const require = createRequire(import.meta.url);
-  const fromTsdown = createRequire(require.resolve("tsdown"));
-  return fromTsdown.resolve("rolldown-plugin-dts/tsc-context");
-}
 
 export function createDeclarationStage(root: string) {
   return fs.mkdtempSync(stagePrefix(root));
@@ -30,7 +23,8 @@ export function requestDeclarationInputs(output: string, name: string, roots: st
 
 export function createDeclarationInputCapture(name: string) {
   return async ({ options }: BuildContext) => {
-    const stage = path.dirname(options.outDir);
+    const boundary = createDeclarationInputBoundary(options.cwd);
+    const stage = path.dirname(boundary.resolve(options.outDir));
     const prefix = stagePrefix(options.cwd);
     // Only the writer's private stage owns receipts. A direct build's sibling
     // compiler-inputs directory is ordinary checkout data, even if names match.
@@ -46,50 +40,29 @@ export function createDeclarationInputCapture(name: string) {
       return;
     }
     const request: { roots: string[] } = JSON.parse(fs.readFileSync(file, "utf8"));
-    const { globalContext }: { globalContext: { programs: ts.Program[] } } = await import(
-      pathToFileURL(resolveDeclarationInputCaptureModule()).href
-    );
-    const roots = new Set(
-      globalContext.programs.flatMap((program) =>
-        program.getRootFileNames().map((root) => fs.realpathSync(root)),
-      ),
-    );
-    if (
-      request.roots.some((root) => !roots.has(fs.realpathSync(path.resolve(options.cwd, root))))
-    ) {
+    const compilation = readDeclarationBuildInputs(options);
+    if (request.roots.some((root) => !compilation.roots.has(boundary.resolve(root)))) {
       throw new Error(`Incomplete compiler membership for ${name}`);
     }
-    const inputs = [
-      ...new Set(
-        globalContext.programs.flatMap((program) =>
-          program
-            .getSourceFiles()
-            .map((source) => portableRelativePath(options.cwd, source.fileName)),
-        ),
-      ),
-    ].toSorted();
+    const inputs = [...compilation.inputs]
+      .map((input) => portableRelativePath(boundary.root, boundary.assert(input)))
+      .toSorted();
     fs.writeFileSync(file, JSON.stringify({ ...request, inputs }));
   };
 }
 
-export function readDeclarationInputs(output: string, groups: readonly string[]) {
-  return [
-    ...new Set(
-      groups.flatMap((name) => {
-        const receipt: { roots: string[]; inputs?: unknown } = JSON.parse(
-          fs.readFileSync(receiptPath(output, name), "utf8"),
-        );
-        if (
-          !Array.isArray(receipt.inputs) ||
-          // Bounded selections can leave empty partitions; only those requests
-          // may finish successfully without creating a compiler Program.
-          (!receipt.inputs.length && receipt.roots.length > 0) ||
-          !receipt.inputs.every((input): input is string => typeof input === "string")
-        ) {
-          throw new Error(`Missing successful compiler membership for ${name}`);
-        }
-        return receipt.inputs;
-      }),
-    ),
-  ].toSorted();
+export function readDeclarationInputs(output: string, name: string) {
+  const receipt: { roots: string[]; inputs?: unknown } = JSON.parse(
+    fs.readFileSync(receiptPath(output, name), "utf8"),
+  );
+  if (
+    !Array.isArray(receipt.inputs) ||
+    // Bounded selections can leave empty partitions; only those requests
+    // may finish successfully without creating a compiler Program.
+    (!receipt.inputs.length && receipt.roots.length > 0) ||
+    !receipt.inputs.every((input): input is string => typeof input === "string")
+  ) {
+    throw new Error(`Missing successful compiler membership for ${name}`);
+  }
+  return receipt.inputs;
 }

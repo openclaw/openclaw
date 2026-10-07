@@ -27,13 +27,12 @@ describe("sandbox explain helpers", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: { sandbox: { tools: { allow: ["write"] } } },
           },
-        ],
+        },
       },
       tools: { sandbox: { tools: { allow: ["read"], deny: ["browser"] } } },
     };
@@ -55,15 +54,14 @@ describe("sandbox explain helpers", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent" },
         },
-        list: [
-          {
-            id: "work",
+        entries: {
+          work: {
             workspace: "~/openclaw-work",
             tools: {
               sandbox: { tools: { allow: ["group:memory", "group:fs"] } },
             },
           },
-        ],
+        },
       },
     };
 
@@ -71,6 +69,8 @@ describe("sandbox explain helpers", () => {
     expect(policy.allow).toEqual([
       "memory_search",
       "memory_get",
+      "personal_instructions",
+      "ls",
       "read",
       "write",
       "edit",

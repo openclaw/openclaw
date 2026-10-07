@@ -1,11 +1,12 @@
 import fs from "node:fs/promises";
+import { readFileWindowFully } from "openclaw/plugin-sdk/file-access-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import {
-  isRecord,
-  normalizeBoundedOptionalString as readBoundedString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+  publishSessionCatalogHost,
+  type SessionCatalogProvider,
+} from "openclaw/plugin-sdk/session-catalog";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { listClaudeSessions } from "./session-catalog-discovery.js";
 import { resolveClaudeCatalogHomeDir } from "./session-catalog-home.js";
@@ -121,15 +122,9 @@ export async function readLocalClaudeTranscriptPage(
       );
       position -= size;
       const chunk = Buffer.allocUnsafe(size);
-      // Positional reads may return short, so complete the bounded window.
-      // A zero-byte read before it fills means the file changed after stat.
-      let filled = 0;
-      while (filled < size) {
-        const { bytesRead } = await handle.read(chunk, filled, size - filled, position + filled);
-        if (bytesRead === 0) {
-          throw new Error("Claude transcript changed while it was being read");
-        }
-        filled += bytesRead;
+      const filled = await readFileWindowFully(handle, chunk, position);
+      if (filled !== size) {
+        throw new Error("Claude transcript changed while it was being read");
       }
       scanned += filled;
       let right = filled;
@@ -140,7 +135,7 @@ export async function readLocalClaudeTranscriptPage(
         const segment = chunk.subarray(index + 1, right);
         if (segment.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([segment, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           fragments = [];
           if (item) {
             item.resumeCursor = encodeOffset(position + index + 1 + line.length);
@@ -159,7 +154,7 @@ export async function readLocalClaudeTranscriptPage(
       if (position === 0) {
         if (prefix.length > 0 || fragments.length > 0) {
           const line = Buffer.concat([prefix, ...fragments.toReversed()]);
-          const item = parseTranscriptLine(line, readBoundedString);
+          const item = parseTranscriptLine(line);
           if (item) {
             item.resumeCursor = encodeOffset(line.length);
             found.push({ item, start: 0 });
@@ -209,6 +204,8 @@ export async function listClaudeSessionCatalog(params: {
   allowProcessHomeFallback?: boolean;
   listNodes?: Parameters<SessionCatalogProvider["list"]>[0]["listNodes"];
   onHost?: (host: ClaudeSessionCatalogHost) => void;
+  waitUntil?: (completion: Promise<void>) => void;
+  signal?: AbortSignal;
 }): Promise<ClaudeSessionCatalogResult> {
   const query = parseGatewayQuery(params.query);
   const requested = query.hostIds ? new Set(query.hostIds) : undefined;
@@ -253,9 +250,7 @@ export async function listClaudeSessionCatalog(params: {
         ]
       : [];
   for (const host of localHosts) {
-    if (params.onHost) {
-      void host.then(params.onHost).catch(() => undefined);
-    }
+    publishSessionCatalogHost(params, host);
   }
   const wantsNodes = !requested || query.hostIds?.some((hostId) => hostId.startsWith("node:"));
   if (!wantsNodes) {
@@ -279,6 +274,7 @@ export async function listClaudeSessionCatalog(params: {
       hosts: [...(await Promise.all(localHosts)), registryHost],
     };
   }
+  params.signal?.throwIfAborted();
   const eligible = nodes
     .filter(
       (node) =>
@@ -333,6 +329,7 @@ export async function listClaudeSessionCatalog(params: {
             },
             timeoutMs: NODE_INVOKE_TIMEOUT_MS,
             scopes: ["operator.write"],
+            signal: params.signal,
           });
           return Object.assign({}, common, parseCatalogPage(unwrapNodePayload(raw)));
         })
@@ -344,11 +341,8 @@ export async function listClaudeSessionCatalog(params: {
             },
           }),
         );
-      if (params.onHost) {
-        // The fail-soft response can finish first; the original node invoke still
-        // publishes its authoritative host page whenever cold discovery completes.
-        void eventualHost.then(params.onHost).catch(() => undefined);
-      }
+      // Retain publication through cold discovery without extending the fail-soft response.
+      publishSessionCatalogHost(params, eventualHost);
       try {
         return await withTimeout(eventualHost, NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS, {
           message: "paired node Claude session catalog timed out",

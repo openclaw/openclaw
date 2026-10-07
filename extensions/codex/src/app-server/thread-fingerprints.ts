@@ -1,7 +1,7 @@
 import * as crypto from "node:crypto";
 import {
   isJsonObject,
-  type CodexDynamicToolSpec,
+  type CodexTurn,
   type CodexTurnEnvironmentParams,
   type JsonObject,
   type JsonValue,
@@ -10,11 +10,7 @@ import { hashCodexAppServerBindingFingerprint } from "./session-binding.js";
 import { resolveCodexGpt56MultiAgentVersion } from "./thread-binding-policy.js";
 
 export function codexDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
-  return fingerprintDynamicTools(dynamicTools);
-}
-
-export function codexLegacyDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
-  return legacyFingerprintDynamicTools(dynamicTools);
+  return hashCodexAppServerBindingFingerprint(codexLegacyDynamicToolsFingerprint(dynamicTools));
 }
 
 export function areCodexDynamicToolFingerprintsCompatible(params: {
@@ -22,17 +18,15 @@ export function areCodexDynamicToolFingerprintsCompatible(params: {
   next: string;
   nextLegacy?: string;
 }): boolean {
-  return areDynamicToolFingerprintsCompatible(params.previous, params.next, params.nextLegacy);
-}
-
-function fingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
-  return hashCodexAppServerBindingFingerprint(legacyFingerprintDynamicTools(dynamicTools));
-}
-
-function legacyFingerprintDynamicTools(dynamicTools: readonly JsonValue[]): string {
-  return JSON.stringify(
-    dynamicTools.map(fingerprintDynamicToolSpec).toSorted(compareJsonFingerprint),
+  return (
+    !params.previous || params.previous === params.next || params.previous === params.nextLegacy
   );
+}
+
+export function codexLegacyDynamicToolsFingerprint(dynamicTools: readonly JsonValue[]): string {
+  // Codex persists the complete model-visible schema at thread/start; resume
+  // cannot refresh changed tool or nested input descriptions.
+  return JSON.stringify(dynamicTools.map(stabilizeJsonValue).toSorted(compareJsonFingerprint));
 }
 
 export function legacyFingerprintUserMcpServersConfigPatch(
@@ -130,13 +124,7 @@ export function fingerprintEnvironmentSelection(
   return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
 }
 
-function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
-  // Codex persists the complete model-visible schema at thread/start; resume
-  // cannot refresh changed tool or nested input descriptions.
-  return stabilizeJsonValue(tool);
-}
-
-function stabilizeJsonValue(value: JsonValue): JsonValue {
+export function stabilizeJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) {
     return value.map(stabilizeJsonValue);
   }
@@ -151,36 +139,19 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
   );
 }
 
-function readActiveCodexTurnIds(thread: unknown): string[] {
-  const turns = (thread as { turns?: Array<{ id?: unknown; status?: unknown }> }).turns;
-  return (turns ?? [])
-    .filter((turn) => turn.status === "inProgress")
-    .map((turn) => (typeof turn.id === "string" ? turn.id : ""))
-    .filter((turnId) => turnId.trim().length > 0);
-}
-
 export function readActiveCodexTurnIdsFromResume(response: {
-  thread: unknown;
-  initialTurnsPage?: { data?: unknown[] } | null;
+  thread: { turns?: Pick<CodexTurn, "id" | "status">[] };
+  initialTurnsPage?: { data?: Pick<CodexTurn, "id" | "status">[] } | null;
 }): string[] {
-  const pagedTurns = response.initialTurnsPage?.data;
-  return readActiveCodexTurnIds(
-    Array.isArray(pagedTurns) ? { turns: pagedTurns } : response.thread,
-  );
+  return (response.initialTurnsPage?.data ?? response.thread.turns ?? [])
+    .filter((turn) => turn.status === "inProgress" && turn.id.trim().length > 0)
+    .map((turn) => turn.id);
 }
 
-const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = legacyFingerprintDynamicTools([]);
+const LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT = codexLegacyDynamicToolsFingerprint([]);
 const EMPTY_DYNAMIC_TOOLS_FINGERPRINT = hashCodexAppServerBindingFingerprint(
   LEGACY_EMPTY_DYNAMIC_TOOLS_FINGERPRINT,
 );
-
-export function areDynamicToolFingerprintsCompatible(
-  previous: string | undefined,
-  next: string,
-  nextLegacy?: string,
-): boolean {
-  return !previous || previous === next || previous === nextLegacy;
-}
 
 export function areUserMcpServersFingerprintsCompatible(params: {
   previous?: string;

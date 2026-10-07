@@ -1,8 +1,7 @@
-// Discord plugin module implements draft stream behavior.
-import { createFinalizableDraftStreamControlsForState } from "openclaw/plugin-sdk/channel-outbound";
+import { Routes } from "discord-api-types/v10";
+import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
-  createChannelMessage,
   deleteChannelMessage,
   editChannelMessage,
   type RequestClient,
@@ -14,24 +13,8 @@ const DISCORD_STREAM_MAX_CHARS = 2000;
 const DEFAULT_THROTTLE_MS = 1200;
 const DISCORD_PREVIEW_ALLOWED_MENTIONS = { parse: [] };
 
-type DiscordDraftStream = {
-  update: (text: string) => void;
-  flush: () => Promise<void>;
-  messageId: () => string | undefined;
-  clear: () => Promise<void>;
-  deleteCurrentMessage: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-  stop: () => Promise<void>;
-  /** Move the active draft to another Discord channel, preserving its current text. */
-  retarget: (channelId: string) => Promise<void>;
-  /** Retry failed preview deletes at the owning turn's cleanup boundary. */
-  cleanupPendingMessages: () => Promise<void>;
-  /** Reset internal state so the next update creates a new message instead of editing. */
-  forceNewMessage: (mode?: "preserve" | "discard") => void;
-};
-
-type PendingCleanupMessage = { channelId: string; messageId: string; warnPrefix: string };
+type DiscordDraftMessage = { channelId: string; messageId: string };
+type DiscordDraftUpdate = { text: string; complete: boolean };
 
 export function createDiscordDraftStream(params: {
   rest: RequestClient;
@@ -44,7 +27,7 @@ export function createDiscordDraftStream(params: {
   suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
-}): DiscordDraftStream {
+}) {
   const maxChars = Math.min(params.maxChars ?? DISCORD_STREAM_MAX_CHARS, DISCORD_STREAM_MAX_CHARS);
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
@@ -57,19 +40,15 @@ export function createDiscordDraftStream(params: {
       : params.replyToMessageId;
 
   const streamState = { stopped: false, final: false };
-  let streamMessageId: string | undefined;
+  let streamMessage: DiscordDraftMessage | undefined;
   let lastSentText = "";
-  let streamGeneration = 0;
-  let activeCreateGeneration: number | undefined;
-  let discardActiveCreate = false;
-  let pendingCleanupMessages: PendingCleanupMessage[] = [];
 
-  const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
-    const generation = streamGeneration;
-    // Allow final flush even if stopped (e.g., after clear()).
-    if (streamState.stopped && !streamState.final) {
-      return false;
-    }
+  const sendOrEditStreamMessage = async ({
+    text,
+    complete,
+  }: DiscordDraftUpdate): Promise<boolean> => {
+    const generation = lifecycle.generation;
+    const targetChannelId = channelId;
     const trimmed = text.trimEnd();
     if (!trimmed) {
       return false;
@@ -86,66 +65,56 @@ export function createDiscordDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (streamMessageId === undefined && minInitialChars != null && !streamState.final) {
+    if (streamMessage === undefined && minInitialChars != null && !streamState.final && !complete) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
     }
 
-    lastSentText = trimmed;
     try {
-      if (streamMessageId !== undefined) {
-        // Edit existing message
-        await editChannelMessage(rest, channelId, streamMessageId, {
-          body: {
-            content: trimmed,
-            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-            ...(flags ? { flags } : {}),
-          },
+      const body = {
+        content: trimmed,
+        allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+        ...(flags ? { flags } : {}),
+      };
+      if (streamMessage !== undefined) {
+        await editChannelMessage(rest, streamMessage.channelId, streamMessage.messageId, {
+          body,
         });
+        if (generation === lifecycle.generation) {
+          lastSentText = trimmed;
+        }
         return true;
       }
-      // Send new message
       const replyToMessageId = resolveReplyToMessageId()?.trim();
       const messageReference = replyToMessageId
         ? { message_id: replyToMessageId, fail_if_not_exists: false }
         : undefined;
-      activeCreateGeneration = generation;
-      const sent = await createChannelMessage<{ id?: string }>(rest, channelId, {
-        body: {
-          content: trimmed,
-          allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
-          ...(flags ? { flags } : {}),
-          ...(messageReference ? { message_reference: messageReference } : {}),
+      return await lifecycle.createMessage(
+        async () => {
+          const sent = (await rest.post(Routes.channelMessages(targetChannelId), {
+            body: {
+              ...body,
+              ...(messageReference ? { message_reference: messageReference } : {}),
+            },
+          })) as { id?: string }; // SAFETY: The create response's ID is checked before use.
+          return typeof sent?.id === "string" && sent.id
+            ? { channelId: targetChannelId, messageId: sent.id }
+            : undefined;
         },
-      });
-      const sentMessageId = sent?.id;
-      const shouldDiscardStaleCreate = activeCreateGeneration === generation && discardActiveCreate;
-      activeCreateGeneration = undefined;
-      discardActiveCreate = false;
-      if (generation !== streamGeneration) {
-        if (shouldDiscardStaleCreate && typeof sentMessageId === "string" && sentMessageId) {
-          await deleteCleanupMessage({
-            channelId,
-            messageId: sentMessageId,
-            warnPrefix: "discord stale stream preview cleanup failed",
-          });
-        }
-        return true;
-      }
-      if (typeof sentMessageId !== "string" || !sentMessageId) {
-        streamState.stopped = true;
-        params.warn?.("discord stream preview stopped (missing message id from send)");
-        return false;
-      }
-      streamMessageId = sentMessageId;
-      return true;
+        (message) => {
+          if (!message) {
+            streamState.stopped = true;
+            params.warn?.("discord stream preview stopped (missing message id from send)");
+            return false;
+          }
+          streamMessage = message;
+          lastSentText = trimmed;
+          return true;
+        },
+      );
     } catch (err) {
-      if (activeCreateGeneration === generation) {
-        activeCreateGeneration = undefined;
-        discardActiveCreate = false;
-      }
-      if (generation !== streamGeneration) {
+      if (generation !== lifecycle.generation) {
         return true;
       }
       streamState.stopped = true;
@@ -154,101 +123,52 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, discardPending, seal } = createFinalizableDraftStreamControlsForState(
-    {
-      throttleMs,
-      coalesceInFlight: true,
-      state: streamState,
-      sendOrEditStreamMessage,
-    },
-  );
-
-  const forceNewMessage = (mode: "preserve" | "discard" = "preserve") => {
-    // In-flight REST calls may finish after a turn boundary. Advance identity
-    // synchronously so their result cannot overwrite the next turn's state.
-    // Block mode preserves the prior block; progress mode discards its draft.
-    if (mode === "discard" && activeCreateGeneration !== undefined) {
-      discardActiveCreate = true;
-    }
-    streamGeneration += 1;
-    streamState.stopped = false;
-    streamState.final = false;
-    streamMessageId = undefined;
+  const clearMessageId = () => {
+    streamMessage = undefined;
     lastSentText = "";
-    loop.resetPending();
     loop.resetThrottleWindow();
   };
-  const deleteCleanupMessage = async (message: PendingCleanupMessage) => {
-    try {
-      await deleteChannelMessage(rest, message.channelId, message.messageId);
-    } catch (err) {
-      pendingCleanupMessages.push(message);
-      params.warn?.(`${message.warnPrefix}: ${formatErrorMessage(err)}`);
-    }
-  };
-  const cleanupPendingMessages = async () => {
-    const pending = pendingCleanupMessages;
-    pendingCleanupMessages = [];
-    for (const message of pending) {
-      await deleteCleanupMessage(message);
-    }
-  };
+  const lifecycle = createFinalizableDraftLifecycle<DiscordDraftMessage, DiscordDraftUpdate>({
+    throttleMs,
+    coalesceInFlight: true,
+    state: streamState,
+    sendOrEditStreamMessage,
+    emptyValue: { text: "", complete: false },
+    isEmpty: (value) => !value.text,
+    readMessageId: () => streamMessage,
+    clearMessageId,
+    isValidMessageId: (value): value is DiscordDraftMessage => value !== undefined,
+    deleteMessage: (message) => deleteChannelMessage(rest, message.channelId, message.messageId),
+    warn: params.warn,
+    warnPrefix: "discord stream preview cleanup failed",
+  });
+  const { loop, update: updateDraft, stop, discardPending, seal } = lifecycle;
+  const update = (text: string, options?: { complete?: boolean }) =>
+    updateDraft({ text, complete: options?.complete === true });
+
+  /** Move the draft to another channel, preserving its current text. */
   const retarget = async (nextChannelId: string) => {
     const normalized = nextChannelId.trim();
     if (!normalized || normalized === channelId) {
       return;
     }
     await loop.waitForInFlight();
-    const pendingText = loop.takePending?.() ?? "";
-    const previousChannelId = channelId;
-    const previousMessageId = streamMessageId;
-    const previousText = pendingText || lastSentText;
-    streamGeneration += 1;
+    const pending = loop.takePending();
+    const previousMessage = streamMessage;
+    const previousText = pending.text || lastSentText;
     channelId = normalized;
-    streamMessageId = undefined;
-    lastSentText = "";
-    streamState.stopped = false;
-    streamState.final = false;
-    loop.resetThrottleWindow();
+    lifecycle.reset();
     if (previousText) {
-      update(previousText);
+      update(previousText, { complete: pending.text ? pending.complete : true });
       await loop.flush();
     }
-    if (previousMessageId) {
-      const stale = {
-        channelId: previousChannelId,
-        messageId: previousMessageId,
-        warnPrefix: "discord stream preview retarget cleanup failed",
-      };
-      if (!streamMessageId) {
-        pendingCleanupMessages.push(stale);
+    if (previousMessage) {
+      if (!streamMessage) {
+        await lifecycle.retire(previousMessage, { defer: true });
         throw new Error("discord stream preview retarget replacement failed");
       }
-      await deleteCleanupMessage(stale);
+      await lifecycle.retire(previousMessage);
     }
-  };
-  const deleteCurrentMessage = async () => {
-    loop.resetPending();
-    await loop.waitForInFlight();
-    const currentMessage = streamMessageId
-      ? {
-          channelId,
-          messageId: streamMessageId,
-          warnPrefix: "discord stream preview cleanup failed",
-        }
-      : undefined;
-    streamMessageId = undefined;
-    lastSentText = "";
-    loop.resetThrottleWindow();
-    if (!currentMessage) {
-      return;
-    }
-    await deleteCleanupMessage(currentMessage);
-  };
-  const clear = async () => {
-    await discardPending();
-    // Current and detached previews share one failed-delete owner for the final drain.
-    await deleteCurrentMessage();
   };
 
   params.log?.(`discord stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
@@ -256,14 +176,19 @@ export function createDiscordDraftStream(params: {
   return {
     update,
     flush: loop.flush,
-    messageId: () => streamMessageId,
-    clear,
-    deleteCurrentMessage,
+    messageId: () => streamMessage?.messageId,
+    lastDeliveredText: () => lastSentText,
+    clear: () => lifecycle.retireCurrent(discardPending),
+    deleteCurrentMessage: () =>
+      lifecycle.retireCurrent(async () => {
+        loop.resetPending();
+        await loop.waitForInFlight();
+      }),
     discardPending,
     seal,
     stop,
     retarget,
-    cleanupPendingMessages,
-    forceNewMessage,
+    cleanupPendingMessages: lifecycle.cleanupPending,
+    forceNewMessage: lifecycle.reset,
   };
 }

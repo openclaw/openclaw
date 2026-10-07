@@ -1,4 +1,3 @@
-// Discord plugin module implements setup account state behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { inspectDiscordAccountTokenState } from "./account-token-inspect.js";
@@ -9,26 +8,12 @@ import {
 } from "./accounts.js";
 import { resolveDiscordToken } from "./token.js";
 
-type InspectedDiscordSetupAccount = {
-  accountId: string;
-  enabled: boolean;
-  token: string;
-  tokenSource: "env" | "config" | "none";
-  tokenStatus: "available" | "configured_unavailable" | "missing";
-  configured: boolean;
-  config: DiscordAccountConfig;
-};
-
-export function resolveDefaultDiscordSetupAccountId(cfg: OpenClawConfig): string {
-  return resolveDefaultDiscordAccountId(cfg);
-}
-
 export function resolveDiscordSetupAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): { accountId: string; config: DiscordAccountConfig } {
   const accountId = normalizeAccountId(
-    params.accountId ?? resolveDefaultDiscordSetupAccountId(params.cfg),
+    params.accountId ?? resolveDefaultDiscordAccountId(params.cfg),
   );
   return {
     accountId,
@@ -39,7 +24,7 @@ export function resolveDiscordSetupAccountConfig(params: {
 export function inspectDiscordSetupAccount(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): InspectedDiscordSetupAccount {
+}) {
   const { accountId, config } = resolveDiscordSetupAccountConfig(params);
   const enabled = params.cfg.channels?.discord?.enabled !== false && config.enabled !== false;
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);

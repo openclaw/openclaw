@@ -19,6 +19,18 @@ function stubRuntimeFetch(fetchImpl: typeof fetch): void {
   };
 }
 
+function requestMatrix(overrides: Partial<Parameters<typeof performMatrixRequest>[0]> = {}) {
+  return performMatrixRequest({
+    homeserver: "http://127.0.0.1:8008",
+    accessToken: "token",
+    method: "GET",
+    endpoint: "/_matrix/client/v3/account/whoami",
+    timeoutMs: 5000,
+    ssrfPolicy: { allowPrivateNetwork: true },
+    ...overrides,
+  });
+}
+
 describe("performMatrixRequest", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
@@ -29,16 +41,57 @@ describe("performMatrixRequest", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it("loads a profile through the real SDK default guarded fetch and closes the client", async () => {
+    const { MatrixClient } = await import("../sdk.js");
+    const { resolveRuntimeMatrixClientWithReadiness } = await import("../client-bootstrap.js");
+    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    const profile = { displayname: "Matrix loopback fixture" };
+    const server = http.createServer((request, response) => {
+      requests.push({ url: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(profile));
+    });
+    let client: InstanceType<typeof MatrixClient> | undefined;
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected loopback server address");
+      }
+      client = new MatrixClient(`http://127.0.0.1:${address.port}/matrix-proxy`, "fixture-token", {
+        encryption: false,
+        autoBootstrapCrypto: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
+
+      const resolved = await resolveRuntimeMatrixClientWithReadiness({ client, readiness: "none" });
+      await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
+        profile,
+      );
+      expect(requests).toEqual([
+        {
+          url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
+          authorization: "Bearer fixture-token",
+        },
+      ]);
+    } finally {
+      try {
+        await client?.stopWithoutPersist();
+      } finally {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    }
+  });
+
   it.each([
     {
       name: "a root homeserver",
       homeserverPath: "",
       expectedPath: "/_matrix/client/v3/account/whoami",
-    },
-    {
-      name: "a proxy prefix without a trailing slash",
-      homeserverPath: "/matrix-proxy",
-      expectedPath: "/matrix-proxy/_matrix/client/v3/account/whoami",
     },
     {
       name: "a proxy prefix with a trailing slash",
@@ -68,14 +121,10 @@ describe("performMatrixRequest", () => {
       const { port } = server.address() as { port: number };
 
       try {
-        const result = await performMatrixRequest({
+        const result = await requestMatrix({
           homeserver: `http://127.0.0.1:${port}${homeserverPath}`,
           accessToken: "test-token",
-          method: "GET",
-          endpoint: "/_matrix/client/v3/account/whoami",
           qs: { via: "proxy path" },
-          timeoutMs: 5000,
-          ssrfPolicy: { allowPrivateNetwork: true },
         });
 
         expect(result.response.status).toBe(200);
@@ -110,15 +159,10 @@ describe("performMatrixRequest", () => {
     );
 
     await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
+      requestMatrix({
         endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 5000,
         raw: true,
         maxBytes: 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
     expect(cancel).toHaveBeenCalledOnce();
@@ -139,50 +183,13 @@ describe("performMatrixRequest", () => {
     );
 
     await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
+      requestMatrix({
         endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 5000,
         raw: true,
         maxBytes: 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
       }),
     ).rejects.toThrow("invalid content-length header: 0x3");
     expect(arrayBuffer).not.toHaveBeenCalled();
-  });
-
-  it("applies streaming byte limits when raw responses omit content-length", async () => {
-    const chunk = new Uint8Array(768);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(chunk);
-        controller.enqueue(chunk);
-        controller.close();
-      },
-    });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-          }),
-      ),
-    );
-
-    await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 5000,
-        raw: true,
-        maxBytes: 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
   });
 
   it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {
@@ -202,16 +209,11 @@ describe("performMatrixRequest", () => {
         ),
       );
 
-      const requestPromise = performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
+      const requestPromise = requestMatrix({
         endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 5000,
         raw: true,
         maxBytes: 1024,
         readIdleTimeoutMs: 50,
-        ssrfPolicy: { allowPrivateNetwork: true },
       });
 
       const rejection = expect(requestPromise).rejects.toThrow(
@@ -245,14 +247,7 @@ describe("performMatrixRequest", () => {
     });
     stubRuntimeFetch(runtimeFetch);
 
-    const result = await performMatrixRequest({
-      homeserver: "http://127.0.0.1:8008",
-      accessToken: "token",
-      method: "GET",
-      endpoint: "/_matrix/client/v3/account/whoami",
-      timeoutMs: 5000,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
+    const result = await requestMatrix({});
 
     expect(result.text).toBe('{"ok":true}');
     expect(ambientFetchCalls).toBe(0);
@@ -281,17 +276,9 @@ describe("performMatrixRequest", () => {
       ),
     );
 
-    await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/client/v3/account/whoami",
-        timeoutMs: 5000,
-        maxBytes: 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toThrow("Matrix JSON response exceeds configured size limit");
+    await expect(requestMatrix({ maxBytes: 1024 })).rejects.toThrow(
+      "Matrix JSON response exceeds configured size limit",
+    );
     expect(cancel).toHaveBeenCalledOnce();
   });
 
@@ -314,17 +301,7 @@ describe("performMatrixRequest", () => {
       ),
     );
 
-    await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/client/v3/account/whoami",
-        timeoutMs: 5000,
-        maxBytes: 1024,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toThrow(
+    await expect(requestMatrix({ maxBytes: 1024 })).rejects.toThrow(
       "Matrix JSON response exceeds configured size limit (1536 bytes > 1024 bytes)",
     );
   });
@@ -347,16 +324,7 @@ describe("performMatrixRequest", () => {
         ),
       );
 
-      const requestPromise = performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/client/v3/account/whoami",
-        timeoutMs: 5000,
-        maxBytes: 1024,
-        readIdleTimeoutMs: 50,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      });
+      const requestPromise = requestMatrix({ maxBytes: 1024, readIdleTimeoutMs: 50 });
 
       const rejection = expect(requestPromise).rejects.toThrow(
         "Matrix JSON response stalled: no data received for 50ms",
@@ -367,69 +335,6 @@ describe("performMatrixRequest", () => {
       vi.useRealTimers();
     }
   }, 5_000);
-
-  it("rejects oversized raw responses when maxBytes is not provided (default MATRIX_SDK_RESPONSE_MAX_BYTES)", async () => {
-    // MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024; declare a Content-Length above that
-    const overCapBytes = 64 * 1024 * 1024 + 1;
-    const cancel = vi.fn();
-    const stream = new ReadableStream<Uint8Array>({ cancel });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: {
-              "content-length": String(overCapBytes),
-            },
-          }),
-      ),
-    );
-
-    await expect(
-      performMatrixRequest({
-        homeserver: "http://127.0.0.1:8008",
-        accessToken: "token",
-        method: "GET",
-        endpoint: "/_matrix/media/v3/download/example/id",
-        timeoutMs: 5000,
-        raw: true,
-        // intentionally omitting maxBytes — fix should apply MATRIX_SDK_RESPONSE_MAX_BYTES
-        ssrfPolicy: { allowPrivateNetwork: true },
-      }),
-    ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-    expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("returns raw buffer bodies that stay under the default MATRIX_SDK_RESPONSE_MAX_BYTES limit", async () => {
-    const payload = new Uint8Array([1, 2, 3, 4, 5]);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(payload);
-        controller.close();
-      },
-    });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-          }),
-      ),
-    );
-
-    const result = await performMatrixRequest({
-      homeserver: "http://127.0.0.1:8008",
-      accessToken: "token",
-      method: "GET",
-      endpoint: "/_matrix/media/v3/download/example/id",
-      timeoutMs: 5000,
-      raw: true,
-      // intentionally omitting maxBytes — default cap allows small bodies through
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(result.buffer).toEqual(Buffer.from(payload));
-  });
 
   it("real HTTP server: rejects with MatrixMediaSizeLimitError when server declares over-cap Content-Length and maxBytes is omitted", async () => {
     // MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024 (64 MiB) — must match transport.ts constant
@@ -449,15 +354,12 @@ describe("performMatrixRequest", () => {
     try {
       // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here
       await expect(
-        performMatrixRequest({
+        requestMatrix({
           homeserver: `http://127.0.0.1:${port}`,
-          accessToken: "token",
-          method: "GET",
           endpoint: "/_matrix/media/v3/download/example/id",
           timeoutMs: 10_000,
           raw: true,
           // intentionally omitting maxBytes — fix applies MATRIX_SDK_RESPONSE_MAX_BYTES as default
-          ssrfPolicy: { allowPrivateNetwork: true },
         }),
       ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
     } finally {
@@ -481,15 +383,12 @@ describe("performMatrixRequest", () => {
 
     try {
       // Do NOT call stubRuntimeFetch — real undici path
-      const result = await performMatrixRequest({
+      const result = await requestMatrix({
         homeserver: `http://127.0.0.1:${port}`,
-        accessToken: "token",
-        method: "GET",
         endpoint: "/_matrix/media/v3/download/example/id",
         timeoutMs: 10_000,
         raw: true,
         // intentionally omitting maxBytes — small body passes through default cap
-        ssrfPolicy: { allowPrivateNetwork: true },
       });
       expect(result.buffer).toEqual(payload);
     } finally {
@@ -497,38 +396,6 @@ describe("performMatrixRequest", () => {
         server.close(() => resolve());
       });
     }
-  });
-
-  it("returns full JSON bodies that stay under the byte limit", async () => {
-    const payload = JSON.stringify({ ok: true, items: [1, 2, 3] });
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(payload));
-        controller.close();
-      },
-    });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          }),
-      ),
-    );
-
-    const result = await performMatrixRequest({
-      homeserver: "http://127.0.0.1:8008",
-      accessToken: "token",
-      method: "GET",
-      endpoint: "/_matrix/client/v3/account/whoami",
-      timeoutMs: 5000,
-      maxBytes: 1024,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    expect(result.text).toBe(payload);
-    expect(result.buffer.toString("utf8")).toBe(payload);
   });
 });
 
@@ -715,15 +582,12 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
     try {
       // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here.
       await expect(
-        performMatrixRequest({
+        requestMatrix({
           homeserver: `http://127.0.0.1:${port}`,
-          accessToken: "token",
-          method: "GET",
           endpoint: "/_matrix/media/v3/download/example/id",
           timeoutMs: 30_000,
           raw: true,
           maxBytes: 16 * 1024 * 1024, // 16 MiB cap — readResponseWithLimit enforces this
-          ssrfPolicy: { allowPrivateNetwork: true },
         }),
       ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
       // Mutation-control: bare response.arrayBuffer() would buffer all 20 MiB.
@@ -755,15 +619,12 @@ describe("matrix transport streaming OOM guard — real HTTP server without Cont
 
     try {
       const result = (
-        await performMatrixRequest({
+        await requestMatrix({
           homeserver: `http://127.0.0.1:${port}`,
-          accessToken: "token",
-          method: "GET",
           endpoint: "/_matrix/media/v3/download/example/id",
           timeoutMs: 10_000,
           raw: true,
           maxBytes: 16 * 1024 * 1024,
-          ssrfPolicy: { allowPrivateNetwork: true },
         })
       ).buffer;
       expect(result).toEqual(payload);

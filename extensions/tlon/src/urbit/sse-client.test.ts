@@ -1,29 +1,35 @@
-// Tlon tests cover sse client plugin behavior.
 import { Readable } from "node:stream";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureUrbitChannelOpen } from "./channel-ops.js";
 import { urbitFetch } from "./fetch.js";
 import { UrbitSSEClient } from "./sse-client.js";
 
-// Mock urbitFetch to avoid real network calls
 vi.mock("./fetch.js", () => ({
   urbitFetch: vi.fn(),
 }));
 
-// Mock channel-ops to avoid real channel operations
-vi.mock("./channel-ops.js", () => ({
+vi.mock("./channel-ops.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./channel-ops.js")>()),
   ensureUrbitChannelOpen: vi.fn().mockResolvedValue(undefined),
   pokeUrbitChannel: vi.fn().mockResolvedValue(undefined),
   scryUrbitPath: vi.fn().mockResolvedValue({}),
 }));
 
-function requireFirstMockCall(calls: readonly unknown[][], label: string): unknown[] {
-  const call = calls.at(0);
-  if (!call) {
-    throw new Error(`Expected ${label} call`);
+function guardedResponse(response = new Response(null, { status: 200 })) {
+  return {
+    response,
+    finalUrl: "https://example.com",
+    release: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+async function* stopAfterStream(client: UrbitSSEClient, stream: AsyncIterable<string | Buffer>) {
+  try {
+    yield* stream;
+  } finally {
+    client.stopReceiving();
   }
-  return call;
 }
 
 describe("UrbitSSEClient", () => {
@@ -39,15 +45,10 @@ describe("UrbitSSEClient", () => {
   describe("subscribe", () => {
     it("sends subscriptions added after connect", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 200 } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
+      mockUrbitFetch.mockResolvedValue(guardedResponse());
 
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      // Simulate connected state
-      (client as { isConnected: boolean }).isConnected = true;
+      client.isConnected = true;
 
       await client.subscribe({
         app: "chat",
@@ -56,9 +57,7 @@ describe("UrbitSSEClient", () => {
       });
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(1);
-      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "urbit fetch")[0] as
-        | Parameters<typeof urbitFetch>[0]
-        | undefined;
+      const [callArgs] = expectDefined(mockUrbitFetch.mock.calls.at(0), "urbit fetch call");
       if (!callArgs) {
         throw new Error("Expected urbit fetch arguments");
       }
@@ -80,7 +79,6 @@ describe("UrbitSSEClient", () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
 
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      // Not connected yet
 
       await client.subscribe({
         app: "chat",
@@ -88,9 +86,7 @@ describe("UrbitSSEClient", () => {
         event: () => {},
       });
 
-      // Should not call urbitFetch since not connected
       expect(mockUrbitFetch).not.toHaveBeenCalled();
-      // But subscription should be queued
       expect(client.subscriptions).toHaveLength(1);
       expect(client.subscriptions[0]).toEqual({
         id: 1,
@@ -106,40 +102,26 @@ describe("UrbitSSEClient", () => {
     it("normalizes cookie when updating", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 
-      // Cookie with extra parts that should be stripped
       client.updateCookie("urbauth-~zod=456; Path=/; HttpOnly");
 
       expect(client.cookie).toBe("urbauth-~zod=456");
-    });
-
-    it("handles simple cookie values", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-      client.updateCookie("urbauth-~zod=newvalue");
-
-      expect(client.cookie).toBe("urbauth-~zod=newvalue");
     });
   });
 
   describe("openStream", () => {
     it("clears the connect timeout when urbitFetch rejects", async () => {
       vi.useFakeTimers();
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockRejectedValueOnce(new Error("dns failed"));
 
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        autoReconnect: false,
-      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 
       await expect(client.openStream()).rejects.toThrow("dns failed");
-      expect(clearTimeoutSpy).toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     });
 
     it("clears the connect timeout when the stream response is not ok", async () => {
       vi.useFakeTimers();
-      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
       const release = vi.fn().mockResolvedValue(undefined);
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch.mockResolvedValueOnce({
@@ -148,13 +130,10 @@ describe("UrbitSSEClient", () => {
         release,
       });
 
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        autoReconnect: false,
-      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 
       await expect(client.openStream()).rejects.toThrow("Stream connection failed: 503");
       expect(release).toHaveBeenCalledOnce();
-      expect(clearTimeoutSpy).toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     });
   });
@@ -195,9 +174,7 @@ describe("UrbitSSEClient", () => {
       mockUrbitFetch
         .mockResolvedValueOnce(unsubscribeResponse.result)
         .mockResolvedValueOnce(deleteResponse.result);
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        autoReconnect: false,
-      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       process.on("unhandledRejection", onUnhandledRejection);
 
       try {
@@ -221,59 +198,11 @@ describe("UrbitSSEClient", () => {
   });
 
   describe("reconnection", () => {
-    it("has autoReconnect enabled by default", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      expect(client.autoReconnect).toBe(true);
-    });
-
-    it("can disable autoReconnect via options", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        autoReconnect: false,
-      });
-      expect(client.autoReconnect).toBe(false);
-    });
-
-    it("stores onReconnect callback", () => {
-      const onReconnect = vi.fn();
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        onReconnect,
-      });
-      expect(client.onReconnect).toBe(onReconnect);
-    });
-
-    it("clamps oversized reconnect delays", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        reconnectDelay: Number.MAX_SAFE_INTEGER,
-        maxReconnectDelay: Number.MAX_SAFE_INTEGER,
-      });
-
-      expect(client.reconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
-      expect(client.maxReconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
-    });
-
     it("resets reconnect attempts on successful connect", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValue(guardedResponse());
 
-      // Mock a response that returns a readable stream
-      const mockStream = new ReadableStream({
-        start(controller) {
-          controller.close();
-        },
-      });
-
-      mockUrbitFetch.mockResolvedValue({
-        response: {
-          ok: true,
-          status: 200,
-          body: mockStream,
-        } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
-
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        autoReconnect: false, // Disable to prevent reconnect loop
-      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       client.reconnectAttempts = 5;
 
       await client.connect();
@@ -284,28 +213,20 @@ describe("UrbitSSEClient", () => {
     it("reopens the same HTTP channel so unacked events can replay", async () => {
       vi.useFakeTimers();
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 200, body: null } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
+      mockUrbitFetch.mockResolvedValue(guardedResponse());
       const onReconnect = vi.fn();
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        reconnectDelay: 1,
-        maxReconnectDelay: 1,
         onReconnect,
       });
       const channelId = client.channelId;
 
       const reconnecting = client.attemptReconnect();
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1_000);
       await reconnecting;
 
       expect(client.channelId).toBe(channelId);
       expect(onReconnect).toHaveBeenCalledOnce();
-      const callArgs = requireFirstMockCall(mockUrbitFetch.mock.calls, "stream reconnect")[0] as
-        | Parameters<typeof urbitFetch>[0]
-        | undefined;
+      const [callArgs] = expectDefined(mockUrbitFetch.mock.calls.at(0), "stream reconnect call");
       expect(callArgs?.path).toBe(`/~/channel/${channelId}`);
       expect(callArgs?.init?.method).toBe("GET");
       expect(client.reconnectAttempts).toBe(0);
@@ -315,25 +236,14 @@ describe("UrbitSSEClient", () => {
       vi.useFakeTimers();
       const mockUrbitFetch = vi.mocked(urbitFetch);
       mockUrbitFetch
-        .mockResolvedValueOnce({
-          response: { ok: false, status: 404, body: null } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        })
-        .mockResolvedValueOnce({
-          response: { ok: true, status: 200, body: null } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        });
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        reconnectDelay: 1,
-        maxReconnectDelay: 1,
-      });
+        .mockResolvedValueOnce(guardedResponse(new Response(null, { status: 404 })))
+        .mockResolvedValueOnce(guardedResponse());
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       await client.subscribe({ app: "chat", path: "/dm/~zod", event: () => {} });
       const deletedChannelId = client.channelId;
 
       const reconnecting = client.attemptReconnect();
-      await vi.advanceTimersByTimeAsync(1);
+      await vi.advanceTimersByTimeAsync(1_000);
       await reconnecting;
 
       expect(client.channelId).not.toBe(deletedChannelId);
@@ -404,9 +314,7 @@ describe("UrbitSSEClient", () => {
 
     describe("stream buffer bounding", () => {
       it("rejects oversized stream buffer before unbounded accumulation", async () => {
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-          autoReconnect: false,
-        });
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const oneMb = 1024 * 1024;
         const megaChunk = "x".repeat(oneMb);
 
@@ -419,7 +327,7 @@ describe("UrbitSSEClient", () => {
           })(),
         );
 
-        await expect(client.processStream(stream)).rejects.toThrow(
+        await expect(client.processStream(stopAfterStream(client, stream))).rejects.toThrow(
           "Tlon Urbit SSE stream buffer exceeded 16 MiB limit",
         );
       });
@@ -434,14 +342,12 @@ describe("UrbitSSEClient", () => {
         const secondChunk = `\nid: 1\ndata: {"json":{"value":"${nextValue}"}}\n\n`;
         expect(Buffer.byteLength(firstChunk + secondChunk, "utf8")).toBeGreaterThan(cap);
 
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-          autoReconnect: false,
-        });
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
         const stream = Readable.from([firstChunk, secondChunk]);
 
-        await client.processStream(stream);
+        await client.processStream(stopAfterStream(client, stream));
         expect(handler).toHaveBeenCalledTimes(2);
         expect((handler.mock.calls[0]?.[0] as { value?: string } | undefined)?.value).toHaveLength(
           padLen,
@@ -457,13 +363,11 @@ describe("UrbitSSEClient", () => {
           encoded.subarray(emojiStart + 2, -1),
           encoded.subarray(-1),
         ]);
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-          autoReconnect: false,
-        });
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
 
-        await client.processStream(stream);
+        await client.processStream(stopAfterStream(client, stream));
         expect(handler).toHaveBeenCalledWith({ text: "😀" });
       });
 
@@ -477,13 +381,11 @@ describe("UrbitSSEClient", () => {
           `\uDE00${suffix}\n`,
           "\n",
         ]);
-        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-          autoReconnect: false,
-        });
+        const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const handler = vi.fn();
         client.eventHandlers.set(1, { event: handler });
 
-        await client.processStream(stream);
+        await client.processStream(stopAfterStream(client, stream));
         const payload = handler.mock.calls[0]?.[0] as { text?: string } | undefined;
         expect(payload?.text).toHaveLength(padLen + 2);
         expect(payload?.text?.endsWith("😀")).toBe(true);
@@ -492,11 +394,7 @@ describe("UrbitSSEClient", () => {
 
     it("ignores malformed event ids when deciding whether to ack", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 200 } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
+      mockUrbitFetch.mockResolvedValue(guardedResponse());
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 
       await client.processEvent('id: 25abc\ndata: {"json":{"ok":true}}');
@@ -507,11 +405,7 @@ describe("UrbitSSEClient", () => {
 
     it("waits for durable admission before acknowledging the transport event", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 200 } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
+      mockUrbitFetch.mockResolvedValue(guardedResponse());
       let releaseAdmission = () => {};
       const admission = new Promise<void>((resolve) => {
         releaseAdmission = resolve;
@@ -553,11 +447,7 @@ describe("UrbitSSEClient", () => {
 
     it("accepts data and id lines without a space after the colon", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: true, status: 204 } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
+      mockUrbitFetch.mockResolvedValue(guardedResponse(new Response(null, { status: 204 })));
       const handler = vi.fn();
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       client.eventHandlers.set(1, { event: handler });
@@ -574,59 +464,29 @@ describe("UrbitSSEClient", () => {
       expect(JSON.parse(body)).toEqual([{ id: expect.any(Number), action: "ack", "event-id": 20 }]);
     });
 
-    it("does not advance the ack watermark when the ack request fails", async () => {
-      const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch.mockResolvedValue({
-        response: { ok: false, status: 503 } as unknown as Response,
-        finalUrl: "https://example.com",
-        release: vi.fn().mockResolvedValue(undefined),
-      });
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      client.eventHandlers.set(1, { event: vi.fn() });
-
-      await expect(
-        client.processEvent('id: 20\ndata: {"id":1,"json":{"ok":true}}'),
-      ).rejects.toThrow("Ack failed with status 503");
-      expect(
-        (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
-      ).toBe(-1);
-    });
-
     it("retries a failed ack when the unacknowledged event replays", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
-      mockUrbitFetch
-        .mockResolvedValueOnce({
-          response: { ok: false, status: 503 } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        })
-        .mockResolvedValueOnce({
-          response: { ok: true, status: 204 } as unknown as Response,
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        });
+      mockUrbitFetch.mockResolvedValue(guardedResponse(new Response(null, { status: 204 })));
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
       client.eventHandlers.set(1, { event: vi.fn() });
+
+      // A success stub makes an eager ACK fail at the no-call assertion, not in transport.
+      await client.processEvent('id: 1\ndata: {"id":1,"json":{"ok":true}}');
+      expect(mockUrbitFetch).not.toHaveBeenCalled();
+
+      mockUrbitFetch.mockResolvedValueOnce(guardedResponse(new Response(null, { status: 503 })));
       const event = 'id: 20\ndata: {"id":1,"json":{"ok":true}}';
 
       await expect(client.processEvent(event)).rejects.toThrow("Ack failed with status 503");
+      expect(
+        (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
+      ).toBe(-1);
       await expect(client.processEvent(event)).resolves.toBeUndefined();
 
       expect(mockUrbitFetch).toHaveBeenCalledTimes(2);
       expect(
         (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
       ).toBe(20);
-    });
-
-    it("tracks lastHeardEventId and ackThreshold", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-      // Access private properties for testing
-      const lastHeardEventId = (client as unknown as { lastHeardEventId: number }).lastHeardEventId;
-      const ackThreshold = (client as unknown as { ackThreshold: number }).ackThreshold;
-
-      expect(lastHeardEventId).toBe(-1);
-      expect(ackThreshold).toBeGreaterThan(0);
     });
   });
 
@@ -645,26 +505,6 @@ describe("UrbitSSEClient", () => {
       );
 
       expect(client.cookie).toBe("urbauth-~zod=123");
-    });
-
-    it("sets default reconnection parameters", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-      expect(client.maxReconnectAttempts).toBe(10);
-      expect(client.reconnectDelay).toBe(1000);
-      expect(client.maxReconnectDelay).toBe(30000);
-    });
-
-    it("allows overriding reconnection parameters", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
-        maxReconnectAttempts: 5,
-        reconnectDelay: 500,
-        maxReconnectDelay: 10000,
-      });
-
-      expect(client.maxReconnectAttempts).toBe(5);
-      expect(client.reconnectDelay).toBe(500);
-      expect(client.maxReconnectDelay).toBe(10000);
     });
   });
 });

@@ -28,8 +28,15 @@ final class CookieSyncManager: NSObject {
     private(set) var state: State = .stopped
     private(set) var lastSummary: String?
 
+    var isAvailable: Bool {
+        guard AppStateStore.shared.connectionMode == .remote else { return false }
+        #if DEBUG
+        if CommandResolver.projectOpenClawExecutable() != nil { return true }
+        #endif
+        return CLIInstaller.installedLocation() != nil
+    }
+
     @ObservationIgnored private let logger = Logger(subsystem: "ai.openclaw", category: "cookie-sync")
-    @ObservationIgnored private let queue = DispatchQueue(label: "ai.openclaw.cookie-sync")
     @ObservationIgnored private weak var appState: AppState?
     @ObservationIgnored private var endpointState: GatewayEndpointState?
     @ObservationIgnored private var endpointTask: Task<Void, Never>?
@@ -116,7 +123,7 @@ final class CookieSyncManager: NSObject {
         }
     }
 
-    private func scheduleReconcile(resetRetry: Bool, delay: Duration = .milliseconds(350)) {
+    private func scheduleReconcile(resetRetry: Bool, delay: TimeInterval = 0.35) {
         if resetRetry {
             self.retryAttempt = 0
             self.retryTask?.cancel()
@@ -124,13 +131,8 @@ final class CookieSyncManager: NSObject {
         }
         self.reconcileGeneration &+= 1
         let generation = self.reconcileGeneration
-        self.reconcileTask?.cancel()
-        self.reconcileTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: delay)
-            } catch {
-                return
-            }
+        // The shared scheduler uses the non-generic sleep entry point, avoiding Clock frame coalescing.
+        SimpleTaskSupport.schedule(task: &self.reconcileTask, delay: delay) { [weak self] in
             guard !Task.isCancelled, let self, generation == self.reconcileGeneration else { return }
             await self.reconcile(generation: generation)
         }
@@ -151,9 +153,7 @@ final class CookieSyncManager: NSObject {
             return
         }
 
-        let profile = appState.cookieSyncIntoProfile
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .nonEmpty ?? "imported"
+        let profile = appState.cookieSyncIntoProfile.nonEmpty ?? "imported"
         guard let endpoint = self.remoteEndpoint else {
             self.stopChild(nextState: .error("no remote gateway credentials available"))
             return
@@ -180,8 +180,8 @@ final class CookieSyncManager: NSObject {
         guard case let .ready(mode, url, rawToken, rawPassword, _) = self.endpointState,
               mode == .remote
         else { return nil }
-        let token = rawToken?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-        let password = rawPassword?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let token = rawToken?.nonEmpty
+        let password = rawPassword?.nonEmpty
         guard token != nil || password != nil else { return nil }
         return Endpoint(url: url, token: token, password: token == nil ? password : nil)
     }
@@ -273,17 +273,15 @@ final class CookieSyncManager: NSObject {
     }
 
     private func installStartupWatchdog(generation: UUID) {
-        let timer = DispatchSource.makeTimerSource(queue: self.queue)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + 5)
         timer.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self, self.processGeneration == generation else { return }
-                self.startupWatchdog?.cancel()
-                self.startupWatchdog = nil
-                if self.process?.isRunning == true {
-                    self.retryAttempt = 0
-                    self.logger.debug("cookie sync startup watchdog passed")
-                }
+            guard let self, self.processGeneration == generation else { return }
+            self.startupWatchdog?.cancel()
+            self.startupWatchdog = nil
+            if self.process?.isRunning == true {
+                self.retryAttempt = 0
+                self.logger.debug("cookie sync startup watchdog passed")
             }
         }
         self.startupWatchdog = timer
@@ -330,15 +328,8 @@ final class CookieSyncManager: NSObject {
         guard self.shouldBeActive else { return }
         self.retryAttempt += 1
         let delaySeconds = min(30, 1 << min(self.retryAttempt - 1, 5))
-        self.retryTask?.cancel()
-        self.retryTask = Task { [weak self] in
-            do {
-                try await Task.sleep(for: .seconds(delaySeconds))
-            } catch {
-                return
-            }
-            guard !Task.isCancelled, let self else { return }
-            self.scheduleReconcile(resetRetry: false, delay: .zero)
+        SimpleTaskSupport.schedule(task: &self.retryTask, delay: TimeInterval(delaySeconds)) { [weak self] in
+            self?.scheduleReconcile(resetRetry: false, delay: 0)
         }
     }
 

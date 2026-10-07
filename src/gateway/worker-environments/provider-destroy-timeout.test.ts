@@ -1,23 +1,25 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as support from "./service.test-support.js";
 
 describe("worker provider teardown deadlines", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it.each(["destroy", "bootstrap-failure"] as const)(
+  it.for(["destroy", "bootstrap-failure"] as const)(
     "allows provider-owned checkpointing beyond five minutes during %s",
-    async (entrance) => {
+    async (entrance, { signal }) => {
       const started = createDeferred();
       const finish = createDeferred();
       const destroy = vi.fn(async () => {
         started.resolve();
-        await finish.promise;
+        // A test timeout does not unwind finally; release provider ownership on cancellation.
+        await racePromiseWithAbortSignal(finish.promise, signal);
       });
       const resolveDestroyTimeoutMs = vi.fn(() => 10 * 60_000);
       if (entrance === "destroy") {
-        support.seedReady("slow-destroy");
+        await support.seedReady("slow-destroy");
       } else {
         support.testState.bootstrapWorker = vi.fn(async () => {
           throw new Error("bootstrap failed before admission");
@@ -26,12 +28,16 @@ describe("worker provider teardown deadlines", () => {
       const service = support.createService(
         support.createProvider({ destroy, resolveDestroyTimeoutMs }),
       );
-      vi.useFakeTimers();
+      // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let settled = false;
       const operation = (
         entrance === "destroy"
           ? service.destroy("slow-destroy")
-          : service.create("development", "failed-bootstrap-slow-destroy")
+          : service.createWithRequest({
+              profileId: "development",
+              idempotencyKey: "failed-bootstrap-slow-destroy",
+            })
       ).then(
         (result) => {
           settled = true;
@@ -43,7 +49,7 @@ describe("worker provider teardown deadlines", () => {
         },
       );
       try {
-        await started.promise;
+        await support.waitForFast(() => started.promise);
         await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
         expect(settled).toBe(false);
         finish.resolve();
@@ -63,6 +69,7 @@ describe("worker provider teardown deadlines", () => {
         }
       } finally {
         finish.resolve();
+        vi.useRealTimers();
         await operation;
       }
     },
@@ -76,7 +83,7 @@ describe("worker provider teardown deadlines", () => {
       });
       const destroy = vi.fn(async () => {});
       if (entrance === "destroy") {
-        support.seedReady("override-destroy");
+        await support.seedReady("override-destroy");
       } else {
         support.testState.bootstrapWorker = vi.fn(async () => {
           throw new Error("bootstrap failed");
@@ -92,7 +99,10 @@ describe("worker provider teardown deadlines", () => {
         });
       } else {
         await expect(
-          service.create("development", "override-bootstrap-cleanup"),
+          service.createWithRequest({
+            profileId: "development",
+            idempotencyKey: "override-bootstrap-cleanup",
+          }),
         ).rejects.toMatchObject({ code: "bootstrap_failure" });
         expect(support.testState.store.list()[0]?.state).toBe("failed");
       }
@@ -104,7 +114,7 @@ describe("worker provider teardown deadlines", () => {
   it.each([0, -1, 1.5, Number.NaN, MAX_TIMER_TIMEOUT_MS + 1])(
     "retains teardown intent without invoking the provider for invalid deadline %s",
     async (timeoutMs) => {
-      support.seedReady("invalid-destroy-timeout");
+      await support.seedReady("invalid-destroy-timeout");
       const destroy = vi.fn(async () => {});
       const service = support.createService(
         support.createProvider({ destroy, resolveDestroyTimeoutMs: () => timeoutMs }),
@@ -123,34 +133,50 @@ describe("worker provider teardown deadlines", () => {
     },
   );
 
-  it("keeps timed-out teardown queued and rejects a stale owner before retry side effects", async () => {
-    const initial = support.seedReady("timed-out-destroy");
+  it("keeps timed-out teardown queued and rejects a stale owner before retry side effects", async ({
+    signal,
+  }) => {
+    const initial = await support.seedReady("timed-out-destroy");
     const started = createDeferred();
     const finish = createDeferred();
-    const resolveDestroyTimeoutMs = vi.fn(() => 20);
+    const retryQueued = createDeferred();
+    const resolveDestroyTimeoutMs = vi.fn(() => {
+      if (resolveDestroyTimeoutMs.mock.calls.length === 2) {
+        retryQueued.resolve();
+      }
+      return 20;
+    });
     const destroy = vi.fn(async () => {
       started.resolve();
-      await finish.promise;
+      await racePromiseWithAbortSignal(finish.promise, signal);
     });
     const service = support.createService(
       support.createProvider({ destroy, resolveDestroyTimeoutMs }),
     );
-    vi.useFakeTimers();
+    // Keep the monotonic clock shared with real SQLite workers on its native epoch.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const first = service.destroy(initial.environmentId).catch((error: unknown) => error);
     let second: Promise<unknown> | undefined;
     try {
-      await started.promise;
+      await support.waitForFast(() => started.promise);
       await vi.advanceTimersByTimeAsync(21);
       expect(await first).toMatchObject({ code: "provider_failure" });
       expect(support.testState.store.get(initial.environmentId)?.lastError).toBe(
         "Worker provider operation timed out after 20ms",
       );
 
+      await expect(service.requestDestroy(initial.environmentId)).rejects.toMatchObject({
+        code: "invalid_state",
+        message: expect.stringContaining("Worker provider operation timed out after 20ms"),
+      });
+      expect(resolveDestroyTimeoutMs).toHaveBeenCalledOnce();
+      expect(destroy).toHaveBeenCalledOnce();
+
       second = service.destroy(initial.environmentId).catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(0);
+      await retryQueued.promise;
       expect(resolveDestroyTimeoutMs).toHaveBeenCalledTimes(2);
       expect(destroy).toHaveBeenCalledOnce();
-      support.testState.store.transition({
+      await support.testState.store.transition({
         environmentId: initial.environmentId,
         from: "destroying",
         to: "destroyed",
@@ -163,6 +189,7 @@ describe("worker provider teardown deadlines", () => {
       expect(destroy).toHaveBeenCalledOnce();
     } finally {
       finish.resolve();
+      vi.useRealTimers();
       await first;
       await second;
     }

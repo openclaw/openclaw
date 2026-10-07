@@ -7,8 +7,10 @@ import type {
   SimpleStreamOptions,
 } from "@openclaw/llm-core";
 import { describe, expect, it, vi } from "vitest";
+import { createZeroUsageFixture } from "../agents/test-helpers/usage-fixtures.js";
+import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
-import { completeSimple } from "./stream.js";
+import { complete, completeSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
 function createCompletionRuntime(
@@ -34,14 +36,7 @@ function createCompletionRuntime(
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsageFixture(),
     stopReason: "stop",
     timestamp: Date.now(),
   } satisfies AssistantMessage;
@@ -63,30 +58,53 @@ function createCompletionRuntime(
     stream: providerStream,
     streamSimple: providerStream,
   });
-  return { model: bindModelLlmRuntime(model, runtime), message, providerStream };
+  return { model: bindModelLlmRuntime(model, runtime), runtime, message, providerStream };
 }
 
 describe("LLM completion transport host", () => {
-  it("installs runtime transport ports before a bare simple completion", async () => {
+  it("installs runtime transport ports before direct preparation and bare completion", async () => {
     const inertWrapper = getAiTransportHost().plugin.wrapSimpleCompletionStream;
-    const { model, message, providerStream } = createCompletionRuntime((runtimeModel, context) => {
-      const wrapper = getAiTransportHost().plugin.wrapSimpleCompletionStream;
-      expect(wrapper).not.toBe(inertWrapper);
-      expect(
-        wrapper({
-          provider: runtimeModel.provider,
-          context: {
-            provider: runtimeModel.provider,
-            modelId: runtimeModel.id,
-            model: runtimeModel,
-            streamFn: providerStream,
-          },
-        }),
-      ).toBeUndefined();
-      expect(context.messages).toEqual([]);
-    });
+    const { model, runtime, message, providerStream } = createCompletionRuntime(
+      (_runtimeModel, context) => {
+        expect(getAiTransportHost().plugin.wrapSimpleCompletionStream).not.toBe(inertWrapper);
+        expect(context.messages).toEqual([]);
+      },
+    );
 
+    const directModel = bindModelLlmRuntime(
+      attachModelProviderRuntimePluginHandle(model, {
+        provider: model.provider,
+        plugin: {
+          id: model.provider,
+          label: "Completion fixture",
+          auth: [],
+          wrapSimpleCompletionStreamFn: ({ streamFn }) =>
+            streamFn &&
+            ((target, context, options) =>
+              streamFn(target, context, {
+                ...options,
+                headers: { ...options?.headers, "x-runtime-host": "prepared" },
+              })),
+        },
+      }),
+      runtime,
+    );
+    const { completeWithPreparedSimpleCompletionModel } =
+      await import("../agents/simple-completion-execution.js");
+    await expect(
+      completeWithPreparedSimpleCompletionModel({
+        model: directModel,
+        auth: { apiKey: "fixture-key", source: "test", mode: "api-key" },
+        context: { messages: [] },
+      }),
+    ).resolves.toEqual(message);
     await expect(completeSimple(model, { messages: [] })).resolves.toEqual(message);
+    await expect(complete(model, { messages: [] })).resolves.toEqual(message);
+    expect(providerStream.mock.calls.map((call) => call[2]?.headers)).toEqual([
+      { "x-runtime-host": "prepared" },
+      undefined,
+      undefined,
+    ]);
   });
 
   it.each(["current", "retired", "aborted"] as const)(
@@ -139,6 +157,37 @@ describe("LLM completion transport host", () => {
         expect(providerStream).toHaveBeenCalledOnce();
       } else {
         await expect(completion).rejects.toBe(authorityError);
+        expect(providerStream).not.toHaveBeenCalled();
+      }
+      expect(controller.signal.aborted).toBe(authority === "aborted");
+    },
+  );
+
+  it.each(["current", "retired", "aborted"] as const)(
+    "checks %s full-completion authority after transport initialization",
+    async (authority) => {
+      const { model, message, providerStream } = createCompletionRuntime();
+      const controller = new AbortController();
+      const retired = new Error("Completion owner retired.");
+      const options = { signal: controller.signal };
+      let current = true;
+      const completion = complete(model, { messages: [] }, options, () => {
+        if (!current) {
+          throw retired;
+        }
+      });
+      // Even a warm transport host yields before it invokes the provider.
+      current = authority !== "retired";
+      if (authority === "aborted") {
+        controller.abort(retired);
+      }
+
+      if (authority === "current") {
+        await expect(completion).resolves.toEqual(message);
+        expect(providerStream).toHaveBeenCalledOnce();
+        expect(providerStream.mock.calls[0]?.[2]).toBe(options);
+      } else {
+        await expect(completion).rejects.toBe(retired);
         expect(providerStream).not.toHaveBeenCalled();
       }
       expect(controller.signal.aborted).toBe(authority === "aborted");

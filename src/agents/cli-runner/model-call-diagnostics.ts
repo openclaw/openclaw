@@ -26,12 +26,6 @@ import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
 import { isFailoverError } from "../failover-error.js";
 import type { PreparedCliRunContext } from "./types.js";
 
-type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
-type ModelCallFailureKind = Extract<
-  TrustedDiagnosticEventInput,
-  { type: "model.call.error" }
->["failureKind"];
-
 const MAX_CAPTURED_CONTENT_BYTES = 128 * 1024;
 const FALLBACK_RESPONSE_RESERVE_BYTES = 16 * 1024;
 const MAX_CAPTURED_OUTPUT_MESSAGES = 200;
@@ -191,16 +185,10 @@ function assistantMessageHasText(message: unknown): boolean {
   if (typeof message.content === "string") {
     return message.content.length > 0;
   }
-  if (!Array.isArray(message.content)) {
-    return false;
-  }
-  const limit = Math.min(message.content.length, MAX_CAPTURED_OUTPUT_BLOCKS);
-  for (let index = 0; index < limit; index += 1) {
-    if (isTextAssistantContentBlock(message.content[index])) {
-      return true;
-    }
-  }
-  return false;
+  return (
+    Array.isArray(message.content) &&
+    message.content.slice(0, MAX_CAPTURED_OUTPUT_BLOCKS).some(isTextAssistantContentBlock)
+  );
 }
 
 // Claude's assistant envelopes can contain native tool arguments and opaque
@@ -266,20 +254,6 @@ function normalizeClaudeAssistantMessage(
   };
 }
 
-function hasTextContent(messages: readonly Record<string, unknown>[]): boolean {
-  return messages.some(
-    (message) =>
-      Array.isArray(message.content) &&
-      message.content.some(
-        (block) =>
-          isRecord(block) &&
-          block.type === "text" &&
-          typeof block.text === "string" &&
-          block.text.length > 0,
-      ),
-  );
-}
-
 function appendOutputTruncationMarker(messages: Record<string, unknown>[]): void {
   const marker = { type: "text", text: TRUNCATED_CONTENT_SUFFIX };
   if (messages.length < MAX_CAPTURED_OUTPUT_MESSAGES) {
@@ -305,20 +279,6 @@ function privateData(params: {
     ...(params.errorMessage ? { errorMessage: params.errorMessage } : {}),
     ...(params.modelContent ? { modelContent: params.modelContent } : {}),
   };
-}
-
-function failureKindForClaudeCli(
-  error: unknown,
-  abortSignal: AbortSignal | undefined,
-): ModelCallFailureKind | undefined {
-  if (isFailoverError(error) && error.reason === "timeout") {
-    return "timeout";
-  }
-  const inferred = diagnosticErrorFailureKind(error);
-  if (inferred) {
-    return inferred;
-  }
-  return abortSignal?.aborted ? "aborted" : undefined;
 }
 
 function usageField(usage: CliUsage | undefined): { usage?: CliUsage } {
@@ -351,6 +311,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
   const trace = freezeDiagnosticTraceContext(createDiagnosticTraceContextFromActiveScope());
   const baseFields = {
     runId: params.context.params.runId,
+    ...(params.context.params.agentId ? { agentId: params.context.params.agentId } : {}),
     callId: `${params.context.params.runId}:claude-cli:${crypto.randomUUID()}`,
     ...(params.context.params.sessionKey ? { sessionKey: params.context.params.sessionKey } : {}),
     sessionId: params.context.params.sessionId,
@@ -427,7 +388,7 @@ export function createClaudeCliModelCallDiagnostics(params: {
     const messages = capturedAssistantMessages.slice();
     const responseText = output?.rawText ?? output?.text;
     if (
-      !hasTextContent(messages) &&
+      !messages.some(assistantMessageHasText) &&
       responseText &&
       messages.length < MAX_CAPTURED_OUTPUT_MESSAGES
     ) {
@@ -539,7 +500,11 @@ export function createClaudeCliModelCallDiagnostics(params: {
         return;
       }
       terminalEmitted = true;
-      const failureKind = failureKindForClaudeCli(error, params.context.params.abortSignal);
+      const failureKind =
+        isFailoverError(error) && error.reason === "timeout"
+          ? "timeout"
+          : (diagnosticErrorFailureKind(error) ??
+            (params.context.params.abortSignal?.aborted ? "aborted" : undefined));
       emitTrustedDiagnosticEventWithPrivateData(
         {
           type: "model.call.error",

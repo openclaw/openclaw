@@ -1,4 +1,4 @@
-/** Tests ACP setSessionMode and setSessionConfigOption Gateway bridge behavior. */
+/** Tests ACP session configuration patches and client updates. */
 import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
@@ -6,440 +6,121 @@ import {
   createLoadSessionRequest,
   createSetSessionModeRequest,
   createSetSessionConfigOptionRequest,
-  type MockCallSource,
-  requireAcpObject,
   expectConfigOption,
   expectSessionUpdate,
 } from "./translator.bridge-test-helpers.js";
-import { AcpGatewayAgent } from "./translator.js";
-import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
+import {
+  createAcpConnection,
+  createAcpGateway,
+  createAcpGatewayAgent,
+} from "./translator.test-helpers.js";
 
-vi.mock("./commands.js", () => ({
-  getAvailableCommands: () => [],
-}));
+vi.mock("./commands.js", () => ({ getAvailableCommands: () => [] }));
 
-describe("acp setSessionMode bridge behavior", () => {
-  it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.patch") {
-        throw new Error("gateway rejected mode");
-      }
+async function fixture() {
+  const sessionStore = createInMemorySessionStore();
+  const connection = createAcpConnection();
+  const request = vi.fn(async (method: string, _params?: unknown) => {
+    if (method !== "sessions.list") {
       return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
-      sessionStore,
-    });
+    }
+    return {
+      ts: 1,
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          key: "session",
+          kind: "direct",
+          updatedAt: 1,
+          thinkingLevel: "minimal",
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          reasoningLevel: "stream",
+          responseUsage: "tokens",
+        },
+      ],
+    };
+  });
+  const agent = createAcpGatewayAgent(
+    connection,
+    createAcpGateway(request as GatewayClient["request"]),
+    { sessionStore },
+  );
+  await agent.loadSession(createLoadSessionRequest("session"));
+  const sessionUpdate = connection["__sessionUpdateMock"];
+  sessionUpdate.mockClear();
+  request.mockClear();
+  return { agent, request, sessionUpdate };
+}
 
-    await agent.loadSession(createLoadSessionRequest("mode-session"));
-
+describe("acp session configuration", () => {
+  it("surfaces gateway mode patch failures instead of succeeding silently", async () => {
+    const { agent, request } = await fixture();
+    request.mockRejectedValueOnce(new Error("gateway rejected mode"));
     await expect(
-      agent.setSessionMode(createSetSessionModeRequest("mode-session", "high")),
+      agent.setSessionMode(createSetSessionModeRequest("session", "high")),
     ).rejects.toThrow(/gateway rejected mode/i);
   });
 
   it("emits current mode and thought-level config updates after a successful mode change", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "mode-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "high",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("mode-session"));
-    sessionUpdate.mockClear();
-
-    await agent.setSessionMode(createSetSessionModeRequest("mode-session", "high"));
-
+    const { agent, sessionUpdate } = await fixture();
+    await agent.setSessionMode(createSetSessionModeRequest("session", "high"));
     expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "mode-session",
-      update: {
-        sessionUpdate: "current_mode_update",
-        currentModeId: "high",
-      },
+      sessionId: "session",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "high" },
     });
     expectConfigOption(
-      expectSessionUpdate(sessionUpdate, "mode-session", "config_option_update").configOptions,
+      expectSessionUpdate(sessionUpdate, "session", "config_option_update").configOptions,
       "thought_level",
       { currentValue: "high" },
     );
   });
-});
 
-describe("acp setSessionConfigOption bridge behavior", () => {
-  it("updates the thought-level config option and returns refreshed options", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "config-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("config-session"));
-    sessionUpdate.mockClear();
-
+  it.each([
+    { id: "thought_level", value: "minimal", patch: { thinkingLevel: "minimal" } },
+    { id: "fast_mode", value: "on", patch: { fastMode: true } },
+    { id: "response_usage", value: "inherit", patch: { responseUsage: null } },
+    { id: "response_usage", value: "off", patch: { responseUsage: "off" } },
+  ])("patches $id=$value and returns refreshed controls", async ({ id, value, patch }) => {
+    const { agent, request, sessionUpdate } = await fixture();
     const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("config-session", "thought_level", "minimal"),
+      createSetSessionConfigOptionRequest("session", id, value),
     );
-
-    expectConfigOption(result.configOptions, "thought_level", { currentValue: "minimal" });
-    expect(sessionUpdate).toHaveBeenCalledWith({
-      sessionId: "config-session",
-      update: {
-        sessionUpdate: "current_mode_update",
-        currentModeId: "minimal",
-      },
-    });
+    expect(request).toHaveBeenCalledWith("sessions.patch", { key: "session", ...patch });
+    expectConfigOption(result.configOptions, id, { currentValue: value });
     expectConfigOption(
-      expectSessionUpdate(sessionUpdate, "config-session", "config_option_update").configOptions,
-      "thought_level",
-      { currentValue: "minimal" },
+      expectSessionUpdate(sessionUpdate, "session", "config_option_update").configOptions,
+      id,
+      { currentValue: value },
     );
+    if (id === "thought_level") {
+      expect(sessionUpdate).toHaveBeenCalledWith({
+        sessionId: "session",
+        update: { sessionUpdate: "current_mode_update", currentModeId: "minimal" },
+      });
+    }
   });
 
-  it("updates non-mode ACP config options through gateway session patches", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "reasoning-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-              reasoningLevel: "stream",
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("reasoning-session"));
-    sessionUpdate.mockClear();
-
+  it("accepts forwarded timeout config options without patching Gateway sessions", async () => {
+    const { agent, request } = await fixture();
     const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("reasoning-session", "reasoning_level", "stream"),
-    );
-
-    expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "stream" });
-    expectConfigOption(
-      expectSessionUpdate(sessionUpdate, "reasoning-session", "config_option_update").configOptions,
-      "reasoning_level",
-      { currentValue: "stream" },
-    );
-  });
-
-  it("updates fast mode ACP config options through gateway session patches", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const sessionUpdate = connection["__sessionUpdateMock"];
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "fast-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-              fastMode: true,
-            },
-          ],
-        };
-      }
-      if (method === "sessions.patch") {
-        expect(_params).toEqual({
-          key: "fast-session",
-          fastMode: true,
-        });
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("fast-session"));
-    sessionUpdate.mockClear();
-
-    const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("fast-session", "fast_mode", "on"),
-    );
-
-    expectConfigOption(result.configOptions, "fast_mode", { currentValue: "on" });
-    expectConfigOption(
-      expectSessionUpdate(sessionUpdate, "fast-session", "config_option_update").configOptions,
-      "fast_mode",
-      { currentValue: "on" },
-    );
-  });
-
-  it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const requestMock = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "timeout-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
-      }
-      expect(method).not.toBe("sessions.patch");
-      return { ok: true };
-    });
-    const request = requestMock as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("timeout-session"));
-
-    const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("timeout-session", "timeout", "180"),
+      createSetSessionConfigOptionRequest("session", "timeout", "180"),
     );
     expect(Array.isArray(result.configOptions)).toBe(true);
-
-    expect(requestMock.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   });
 
   it("rejects non-string ACP config option values", async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: {
-            modelProvider: null,
-            model: null,
-            contextTokens: null,
-          },
-          sessions: [
-            {
-              key: "bool-config-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("bool-config-session"));
-
+    const { agent, request } = await fixture();
     await expect(
       agent.setSessionConfigOption(
-        createSetSessionConfigOptionRequest("bool-config-session", "thought_level", false),
+        createSetSessionConfigOptionRequest("session", "thought_level", false),
       ),
     ).rejects.toThrow(
       'ACP bridge does not support non-string session config option values for "thought_level".',
     );
-    expect(
-      (request as unknown as MockCallSource).mock.calls.some(
-        ([method, params]) =>
-          method === "sessions.patch" &&
-          requireAcpObject(params, "sessions.patch params").key === "bool-config-session",
-      ),
-    ).toBe(false);
-  });
-
-  it('maps response_usage "inherit" selection to sessions.patch with responseUsage: null', async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [
-            {
-              key: "usage-inherit-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-              responseUsage: "tokens",
-            },
-          ],
-        };
-      }
-      if (method === "sessions.patch") {
-        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
-          key: "usage-inherit-session",
-          responseUsage: null,
-        });
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("usage-inherit-session"));
-
-    const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("usage-inherit-session", "response_usage", "inherit"),
-    );
-
-    // After selecting "inherit", the ACP config option should report "inherit" (unset).
-    expectConfigOption(result.configOptions, "response_usage", { currentValue: "inherit" });
-    expect(
-      (request as unknown as MockCallSource).mock.calls.some(
-        ([method]) => method === "sessions.patch",
-      ),
-    ).toBe(true);
-  });
-
-  it('maps response_usage "off" selection to sessions.patch with responseUsage: "off"', async () => {
-    const sessionStore = createInMemorySessionStore();
-    const connection = createAcpConnection();
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "sessions.list") {
-        return {
-          ts: Date.now(),
-          path: "/tmp/sessions.json",
-          count: 1,
-          defaults: { modelProvider: null, model: null, contextTokens: null },
-          sessions: [
-            {
-              key: "usage-off-session",
-              kind: "direct",
-              updatedAt: Date.now(),
-              thinkingLevel: "minimal",
-              modelProvider: "openai",
-              model: "gpt-5.4",
-            },
-          ],
-        };
-      }
-      if (method === "sessions.patch") {
-        expect(requireAcpObject(_params, "sessions.patch params")).toMatchObject({
-          key: "usage-off-session",
-          responseUsage: "off",
-        });
-      }
-      return { ok: true };
-    }) as GatewayClient["request"];
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
-    });
-
-    await agent.loadSession(createLoadSessionRequest("usage-off-session"));
-
-    const result = await agent.setSessionConfigOption(
-      createSetSessionConfigOptionRequest("usage-off-session", "response_usage", "off"),
-    );
-
-    expectConfigOption(result.configOptions, "response_usage", { currentValue: "off" });
-    expect(
-      (request as unknown as MockCallSource).mock.calls.some(
-        ([method]) => method === "sessions.patch",
-      ),
-    ).toBe(true);
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   });
 });

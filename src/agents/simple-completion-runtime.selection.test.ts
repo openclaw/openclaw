@@ -1,15 +1,21 @@
 // Verifies simple-completion model selection preserves provider, model, and profile refs.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
-import { resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase } from "./simple-completion-runtime.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import {
+  acquireSimpleCompletionModelForAgent,
+  resolveSimpleCompletionSelectionForAgent as resolveSimpleCompletionSelectionForAgentBase,
+} from "./simple-completion-runtime.js";
+import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 function resolveSimpleCompletionSelectionForAgent(
   params: Parameters<typeof resolveSimpleCompletionSelectionForAgentBase>[0],
 ) {
   return resolveSimpleCompletionSelectionForAgentBase({
     ...params,
-    cfg: migratePersistedImplicitMainRoster(params.cfg).config as OpenClawConfig,
+    cfg: createCanonicalAgentConfigFixture(params.cfg).config,
   });
 }
 
@@ -22,6 +28,83 @@ function requireSelection(selection: ReturnType<typeof resolveSimpleCompletionSe
 }
 
 describe("resolveSimpleCompletionSelectionForAgent", () => {
+  it("resolves explicit aliases in the selected agent scope", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "openai/global-model",
+          models: {
+            "openai/global-model": { alias: "fast" },
+          },
+        },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/worker-model": { alias: "fast" },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "worker",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "anthropic", modelId: "worker-model" });
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "main",
+        modelRef: "fast",
+      }),
+    ).toMatchObject({ provider: "openai", modelId: "global-model" });
+  });
+
+  it.each([false, true])("normalizes configured aliases once (explicit=%s)", (explicit) => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: { primary: "fixture/entry" } },
+      },
+      models: {
+        providers: {
+          fixture: {
+            api: "openai-completions",
+            baseUrl: "https://fixture.invalid/v1",
+            models: ["middle", "final"].map((id): ModelDefinitionConfig => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              maxTokens: 256,
+            })),
+          },
+        },
+      },
+    };
+    const selection = requireSelection(
+      resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId: "main",
+        ...(explicit ? { modelRef: "fixture/entry" } : {}),
+        manifestPlugins: [
+          createPluginManifestRecordFixture({
+            id: "fixture",
+            modelIdNormalization: {
+              providers: { fixture: { aliases: { entry: "middle", middle: "final" } } },
+            },
+          }),
+        ],
+      }),
+    );
+
+    expect(selection).toMatchObject({ provider: "fixture", modelId: "middle" });
+  });
+
   it("preserves multi-segment model ids (openrouter provider models)", () => {
     const cfg = {
       agents: {
@@ -36,45 +119,66 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
     expect(selection.modelId).toBe("anthropic/claude-sonnet-4-6");
   });
 
-  it("uses the routed agent model override when present", () => {
-    const cfg = {
-      agents: {
-        defaults: { model: "anthropic/claude-opus-4-6" },
-        list: [{ id: "ops", model: "openrouter/aurora-alpha" }],
-      },
-    } as OpenClawConfig;
-
-    const selection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
-    );
-    expect(selection.provider).toBe("openrouter");
-    expect(selection.modelId).toBe("openrouter/aurora-alpha");
-  });
-
-  it("uses the default utility model only for utility completions", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-6",
-          utilityModel: "openai/gpt-5.4-mini",
+  it.each([
+    {
+      model: "openrouter/aurora-alpha",
+      acp: false,
+      expected: { provider: "openrouter", modelId: "openrouter/aurora-alpha" },
+    },
+    {
+      model: "openrouter/aurora-alpha@harness-profile",
+      acp: true,
+      expected: { provider: "anthropic", modelId: "claude-opus-4-6", profileId: "native-profile" },
+    },
+    {
+      model: "harness-only[context=272k]@harness-profile",
+      acp: true,
+      expected: { provider: "anthropic", modelId: "claude-opus-4-6", profileId: "native-profile" },
+    },
+  ])(
+    "selects the native completion route for model=$model ACP=$acp",
+    ({ model, acp, expected }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-6@native-profile" },
+          entries: { ops: { model, ...(acp ? { runtime: { type: "acp" } } : {}) } },
         },
-      },
-    } as OpenClawConfig;
+      };
 
-    const utilitySelection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({
-        cfg,
-        agentId: "main",
-        useUtilityModel: true,
-      }),
-    );
-    const normalSelection = requireSelection(
-      resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
-    );
+      const selection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "ops" }),
+      );
+      expect(selection).toMatchObject(expected);
+    },
+  );
 
-    expect(utilitySelection).toMatchObject({ provider: "openai", modelId: "gpt-5.4-mini" });
-    expect(normalSelection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
-  });
+  it.each([true, "required"] as const)(
+    "uses the default utility model for utility mode %s",
+    (useUtilityModel) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-6",
+            utilityModel: "openai/gpt-5.4-mini",
+          },
+        },
+      } as OpenClawConfig;
+
+      const utilitySelection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({
+          cfg,
+          agentId: "main",
+          useUtilityModel,
+        }),
+      );
+      const normalSelection = requireSelection(
+        resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
+      );
+
+      expect(utilitySelection).toMatchObject({ provider: "openai", modelId: "gpt-5.4-mini" });
+      expect(normalSelection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
+    },
+  );
 
   it("prefers the per-agent utility model and keeps explicit operation overrides highest", () => {
     const cfg = {
@@ -83,7 +187,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
           model: "anthropic/claude-opus-4-6",
           utilityModel: "openai/gpt-5.4-mini",
         },
-        list: [{ id: "ops", utilityModel: "google/gemini-3.1-flash-lite-preview" }],
+        entries: { ops: { utilityModel: "google/gemini-3.1-flash-lite-preview" } },
       },
     } as OpenClawConfig;
 
@@ -131,6 +235,61 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       }),
     );
     expect(selection).toMatchObject({ provider: "anthropic", modelId: "claude-opus-4-6" });
+  });
+
+  it.each([
+    { label: "disabled", utilityModel: "" },
+    { label: "unavailable", utilityModel: undefined },
+    { label: "invalid", utilityModel: "/" },
+    { label: "invalid override", utilityModel: "fixture/utility", modelRef: "/" },
+  ])(
+    "does not prepare the primary when required utility routing is $label",
+    async ({ utilityModel, modelRef }) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { model: "fixture/primary", utilityModel },
+        },
+      };
+      expect(
+        resolveSimpleCompletionSelectionForAgentBase({
+          cfg,
+          agentId: "main",
+          modelRef,
+          useUtilityModel: "required",
+          manifestPlugins: [],
+        }),
+      ).toBeNull();
+
+      const modelResolver = vi.fn<SimpleCompletionModelResolver>();
+      await expect(
+        acquireSimpleCompletionModelForAgent({
+          cfg,
+          agentId: "main",
+          modelRef,
+          useUtilityModel: "required",
+          modelResolver,
+        }),
+      ).resolves.toEqual({ error: "No model configured for agent main." });
+      expect(modelResolver).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows an explicit utility operation model when required utility routing is disabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: "fixture/primary", utilityModel: "" },
+      },
+    };
+    expect(
+      resolveSimpleCompletionSelectionForAgentBase({
+        cfg,
+        agentId: "main",
+        modelRef: "fixture/operation",
+        useUtilityModel: "required",
+      }),
+    ).toMatchObject({ provider: "fixture", modelId: "operation" });
   });
 
   it("keeps trailing auth profile for credential lookup", () => {
@@ -194,7 +353,7 @@ describe("resolveSimpleCompletionSelectionForAgent", () => {
       resolveSimpleCompletionSelectionForAgent({ cfg, agentId: "main" }),
     );
     expect(selection.provider).toBe("openai");
-    expect(selection.modelId).toBe("gpt-5.6-sol");
+    expect(selection.modelId).toBe("gpt-6-astra");
   });
 
   it("uses the configured provider model when the runtime default is unavailable", () => {

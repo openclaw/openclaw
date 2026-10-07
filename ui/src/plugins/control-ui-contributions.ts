@@ -1,115 +1,21 @@
 import { consume } from "@lit/context";
 import { html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
-import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
+import { state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
-import {
-  isOptionalElementDefined,
-  LazyCustomElementRequestController,
-  type OptionalCustomElement,
-} from "../app/lazy-custom-element.ts";
-import { icons, type IconName } from "../components/icons.ts";
-import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import { renderSettingsRow, renderSettingsSection } from "../components/settings-ui.ts";
 import { t } from "../i18n/index.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { findUiSessionRow } from "../lib/sessions/route-navigation.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
-import { runControlUiPluginAction } from "./control-ui-actions.ts";
-import type { ControlUiRegistration } from "./control-ui-capability.ts";
-import { renderPluginContribution } from "./control-ui-view.ts";
+import { renderCustomPluginUiDisabled } from "./control-ui-disabled.ts";
 
-class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
-  private lifetime = new AbortController();
-  private readonly actionLifetimes = new Map<
-    AbortSignal,
-    { entry: ControlUiRegistration<ControlUiAction>; abort: AbortController }
-  >();
+class ControlUiPluginManager extends OpenClawLightDomContentsElement {
   @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
-  @property({ attribute: false }) kind: "navigation" | "session-header" | "composer" | "header" =
-    "navigation";
-  @property({ attribute: false }) sessionKey = "";
-  @property({ attribute: false }) agentId?: string;
-  @property({ attribute: false }) navigationKey = "";
-  @property({ attribute: false }) excludedNavigationKeys: readonly string[] = [];
-  @property({ type: Boolean }) presented = true;
-  @state() private actionError = "";
-  private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-      () => this.retireHiddenActions(),
-    )
-    .watch(
-      () =>
-        this.kind === "header" || this.kind === "composer" ? this.context?.sessions : undefined,
-      (sessions, notify) => sessions.subscribe(notify),
-      () => this.retireHiddenActions(),
-    );
+  @state() private reloading = false;
+  @state() private reloadError = "";
 
-  override connectedCallback() {
-    if (this.lifetime.signal.aborted) {
-      this.lifetime = new AbortController();
-    }
-    super.connectedCallback();
-  }
-
-  override disconnectedCallback() {
-    this.lifetime.abort();
-    this.actionLifetimes.clear();
-    this.subscriptions.clear();
-    super.disconnectedCallback();
-  }
-
-  override requestUpdate(...args: Parameters<OpenClawLightDomContentsElement["requestUpdate"]>) {
-    const [name, previous] = args;
-    // Lit calls this synchronously; a hide/show before rendering still retires old actions.
-    if (
-      (name === "sessionKey" || name === "agentId" || name === "presented") &&
-      this[name] !== previous
-    ) {
-      this.lifetime.abort();
-      this.actionLifetimes.clear();
-      this.lifetime = new AbortController();
-    }
-    super.requestUpdate(...args);
-  }
-
-  private currentSession() {
-    return this.context ? findUiSessionRow(this.context, this.sessionKey, this.agentId) : undefined;
-  }
-
-  private resolveAction(
-    entry: ControlUiRegistration<ControlUiAction>,
-  ): ReturnType<NonNullable<ControlUiAction["resolve"]>> | undefined {
-    const session = this.currentSession();
-    try {
-      return entry.value.resolve?.({
-        sessionKey: this.sessionKey,
-        agentId: this.agentId ?? session?.agentId,
-        session: session ? structuredClone(session) : undefined,
-      });
-    } catch (error) {
-      this.retireAction(entry.signal);
-      this.context?.plugins.reportError(entry.pluginId, error);
-      return { hidden: true };
-    }
-  }
-
-  private retireAction(signal: AbortSignal) {
-    const action = this.actionLifetimes.get(signal);
-    this.actionLifetimes.delete(signal);
-    action?.abort.abort();
-  }
-
-  private retireHiddenActions() {
-    for (const [signal, { entry }] of this.actionLifetimes) {
-      // An action may disable itself while running. Hiding instead retires
-      // its retained invocations before awaited work can resume.
-      if (signal.aborted || this.resolveAction(entry)?.hidden) {
-        this.retireAction(signal);
-      }
-    }
+  constructor() {
+    super();
+    new SubscriptionsController(this).watchStore(() => this.context?.plugins);
   }
 
   override render() {
@@ -117,183 +23,109 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     if (!runtime) {
       return nothing;
     }
-    if (this.kind === "navigation") {
-      return runtime
-        .registrations("navigation")
-        .filter((entry) =>
-          this.navigationKey
-            ? entry.key === this.navigationKey
-            : entry.value.defaultVisible !== false &&
-              !this.excludedNavigationKeys.includes(entry.key),
-        )
-        .toSorted(
-          (a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key),
-        )
-        .map((entry) => {
-          const href = entry.host.navigation.pageHref(entry.value.page);
-          const active = href === `${window.location.pathname}${window.location.search}`;
-          let icon: IconName = "puzzle";
-          if (entry.value.icon && Object.hasOwn(icons, entry.value.icon)) {
-            // SAFETY: the own-key check narrows this plugin-provided name to the icon registry.
-            icon = entry.value.icon as IconName;
-          }
-          return html`<a
-            class="nav-item ${active ? "nav-item--active" : ""}"
-            href=${href}
-            aria-current=${active ? "page" : nothing}
-            @click=${(event: MouseEvent) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              entry.host.navigation.openPage(entry.value.page);
-            }}
-            ><span class="nav-item__icon" aria-hidden="true">${icons[icon]}</span
-            ><span class="nav-item__text">${entry.value.label}</span></a
-          >`;
-        });
+    const replacements = runtime.registrations("replacements");
+    if (
+      !replacements.length &&
+      !runtime.errors.length &&
+      !(runtime.hasPlugins && runtime.canReload)
+    ) {
+      return nothing;
     }
-    if (this.kind === "session-header") {
-      return runtime
-        .registrations("accessories")
-        .filter((entry) => entry.value.placement === "session-header")
-        .map((entry) =>
-          renderPluginContribution(
-            "accessories",
-            entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId },
-            nothing,
-            this.presented,
-          ),
-        );
-    }
-    return html`${
-      this.actionError ? html`<span role="alert">${this.actionError}</span>` : nothing
-    }${runtime
-      .registrations("actions")
-      .filter((entry) => entry.value.placement === this.kind)
-      .map((entry) => {
-        const actionState = this.resolveAction(entry);
-        if (actionState?.hidden) {
-          this.retireAction(entry.signal);
-          return nothing;
-        }
-        let actionLifetime = this.actionLifetimes.get(entry.signal);
-        if (!actionLifetime) {
-          actionLifetime = { entry, abort: new AbortController() };
-          this.actionLifetimes.set(entry.signal, actionLifetime);
-        }
-        const signal = AbortSignal.any([
-          this.lifetime.signal,
-          entry.signal,
-          actionLifetime.abort.signal,
-        ]);
-        return html`<button
-          class="btn btn--sm"
-          type="button"
-          ?disabled=${actionState?.disabled ?? false}
-          @click=${async () => {
-            if (signal.aborted || !this.presented || !this.isConnected) {
-              return;
+    const surfaces = [...new Set(replacements.map((entry) => entry.value.surface))];
+    return renderSettingsSection(
+      { title: t("pluginUi.customize"), carapace: true },
+      html`
+        ${renderSettingsRow({
+          title: t("pluginUi.selectionScope"),
+          carapace: true,
+          stackedOnNarrow: true,
+          control: html`
+            ${
+              runtime.canReload
+                ? html`<button
+                    class="btn btn--sm oc-action oc-action-secondary"
+                    type="button"
+                    ?disabled=${this.reloading}
+                    @click=${async () => {
+                      this.reloading = true;
+                      this.reloadError = "";
+                      try {
+                        await runtime.reload();
+                      } catch (error) {
+                        this.reloadError = error instanceof Error ? error.message : String(error);
+                      } finally {
+                        this.reloading = false;
+                      }
+                    }}
+                  >
+                    ${t("pluginUi.reload")}
+                  </button>`
+                : nothing
             }
-            this.actionError = "";
-            try {
-              await runControlUiPluginAction({
-                runtime,
-                id: entry.key,
-                placement: entry.value.placement,
-                sessionKey: this.sessionKey,
-                agentId: this.agentId,
-                session: this.currentSession(),
-                signal,
-              });
-            } catch (error) {
-              if (!signal.aborted) {
-                this.actionError = error instanceof Error ? error.message : String(error);
-              }
-            }
-          }}
-        >
-          ${actionState?.label ?? entry.value.label}
-        </button>`;
-      })}`;
-  }
-}
-
-const PLUGIN_MANAGER_DIALOG = {
-  tagName: "openclaw-plugin-manager-dialog",
-  get label() {
-    return t("pluginUi.customize");
-  },
-  loadModule: () => import("./control-ui-manager-dialog.ts"),
-} satisfies OptionalCustomElement;
-
-class ControlUiPluginManager extends OpenClawLightDomContentsElement {
-  @consume({ context: applicationContext, subscribe: true }) private context?: ApplicationContext;
-  @state() private open = false;
-  private readonly dialogLoader = new LazyCustomElementRequestController(this, () => {
-    this.open = false;
-  });
-
-  constructor() {
-    super();
-    new SubscriptionsController(this).watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
-  }
-
-  private get available(): boolean {
-    const runtime = this.context?.plugins;
-    return Boolean(runtime && (runtime.hasPlugins || runtime.errors.length));
-  }
-
-  override willUpdate() {
-    this.dialogLoader.requestWhileActive(
-      PLUGIN_MANAGER_DIALOG,
-      this.isConnected && this.available && this.open,
-    );
-  }
-
-  override disconnectedCallback() {
-    this.dialogLoader.requestWhileActive(PLUGIN_MANAGER_DIALOG, false);
-    super.disconnectedCallback();
-  }
-
-  override render() {
-    // The loader closes its modal after the registered element has rendered.
-    const showDialog = this.available && this.open && !this.dialogLoader.visibleState;
-    return html`${
-      this.available
-        ? html`<button
-              class="btn btn--sm plugin-ui-recovery"
+            <button
+              class="btn btn--sm oc-action oc-action-secondary"
               type="button"
-              @click=${() => {
-                this.open = true;
-              }}
+              @click=${() => void runtime.refresh()}
             >
-              ${t("pluginUi.customize")}
+              ${t("common.retry")}
             </button>
-            ${renderLazyElementModal(this.dialogLoader)}`
-        : nothing
-    }
-    ${
-      isOptionalElementDefined(PLUGIN_MANAGER_DIALOG)
-        ? html`<openclaw-plugin-manager-dialog
-            .runtime=${this.context?.plugins}
-            .open=${showDialog}
-            @modal-cancel=${() => {
-              this.open = false;
-            }}
-          ></openclaw-plugin-manager-dialog>`
-        : nothing
-    }`;
+          `,
+        })}
+        ${surfaces.map((surface) =>
+          renderSettingsRow({
+            title: t(`pluginUi.surface.${surface}`),
+            carapace: true,
+            stackedOnNarrow: true,
+            control: html`<select
+              class="settings-select oc-select"
+              aria-label=${t(`pluginUi.surface.${surface}`)}
+              @change=${(event: Event) =>
+                runtime.selectReplacement(
+                  surface,
+                  // SAFETY: this handler is bound directly to the select element.
+                  (event.currentTarget as HTMLSelectElement).value || null,
+                )}
+            >
+              <option value="" .selected=${!runtime.selectedReplacement(surface)}>
+                ${t("pluginUi.builtin")}
+              </option>
+              ${replacements
+                .filter((entry) => entry.value.surface === surface)
+                .map(
+                  (entry) => html`<option
+                    value=${entry.key}
+                    .selected=${runtime.selectedReplacement(surface)?.key === entry.key}
+                  >
+                    ${entry.value.label} (${entry.pluginId})
+                  </option>`,
+                )}
+            </select>`,
+          }),
+        )}
+        ${runtime.errors.map((entry) => {
+          const disabled = renderCustomPluginUiDisabled(this.context, entry.pluginId);
+          return renderSettingsRow({
+            title: entry.pluginId,
+            carapace: true,
+            stacked: true,
+            role: disabled ? "status" : "alert",
+            control: disabled ?? html`<span>${entry.message}</span>`,
+          });
+        })}
+        ${
+          this.reloadError
+            ? renderSettingsRow({
+                title: this.reloadError,
+                role: "alert",
+                carapace: true,
+              })
+            : nothing
+        }
+      `,
+    );
   }
 }
 
-if (!customElements.get("openclaw-plugin-contributions")) {
-  customElements.define("openclaw-plugin-contributions", ControlUiPluginContributions);
-}
 if (!customElements.get("openclaw-plugin-manager")) {
   customElements.define("openclaw-plugin-manager", ControlUiPluginManager);
 }

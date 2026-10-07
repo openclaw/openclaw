@@ -1,15 +1,14 @@
-/**
- * Synchronous Amazon Bedrock provider registration. It wires Bedrock streaming,
- * model discovery, thinking policy, guardrails, and embedding integration.
- */
 import type { BedrockClient } from "@aws-sdk/client-bedrock";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { hasRuntimeContextMarker, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   OpenClawPluginApi,
   ProviderNormalizeResolvedModelContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { resolveAwsSdkEnvVarName } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   buildProviderReplayFamilyHooks,
   normalizeProviderId,
@@ -18,12 +17,16 @@ import {
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  type BedrockDiscoveryConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
-import { supportsBedrockPromptCaching } from "./bedrock-options.js";
+import { splitSystemPromptCacheBoundary } from "openclaw/plugin-sdk/provider-transport-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveBedrockPromptCachePolicy,
+  supportsBedrockClaudePromptCaching,
+} from "./bedrock-options.js";
 import { loadBedrockControlPlaneSdk, runBedrockControlPlaneRequest } from "./control-plane.js";
-import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { bedrockMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
 import {
@@ -42,14 +45,7 @@ type GuardrailConfig = {
 };
 
 type AmazonBedrockPluginConfig = {
-  discovery?: {
-    enabled?: boolean;
-    region?: string;
-    providerFilter?: string[];
-    refreshInterval?: number;
-    defaultContextWindow?: number;
-    defaultMaxTokens?: number;
-  };
+  discovery?: BedrockDiscoveryConfig;
   guardrail?: GuardrailConfig;
 };
 
@@ -113,10 +109,6 @@ function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): Stream
     });
 }
 
-function isBedrockServiceTier(value: string): value is BedrockServiceTier {
-  return BEDROCK_SERVICE_TIER_VALUES.some((tier) => tier === value);
-}
-
 function resolveBedrockServiceTier(
   extraParams: Record<string, unknown> | undefined,
   warn: (message: string) => void,
@@ -126,8 +118,9 @@ function resolveBedrockServiceTier(
     return undefined;
   }
   const normalized = raw.trim().toLowerCase();
-  if (isBedrockServiceTier(normalized)) {
-    return normalized;
+  const tier = BEDROCK_SERVICE_TIER_VALUES.find((candidate) => candidate === normalized);
+  if (tier) {
+    return tier;
   }
   warn(`ignoring invalid Bedrock service_tier param: ${raw}`);
   return undefined;
@@ -146,41 +139,20 @@ function createBedrockServiceTierWrapper(
   );
 }
 
-function createGuardrailWrapStreamFn(
-  innerWrapStreamFn: (ctx: {
-    modelId: string;
-    model?: { params?: Record<string, unknown> };
-    streamFn?: StreamFn;
-  }) => StreamFn | null | undefined,
+function createGuardrailStreamWrapper(
+  streamFn: StreamFn,
   guardrailConfig: GuardrailConfig,
-): (ctx: {
-  modelId: string;
-  model?: { params?: Record<string, unknown> };
-  streamFn?: StreamFn;
-}) => StreamFn | null | undefined {
-  return (ctx) => {
-    const inner = innerWrapStreamFn(ctx);
-    if (!inner) {
-      return inner;
-    }
-    return createPayloadPatchStreamWrapper(inner, ({ payload }) => {
-      const gc: Record<string, unknown> = {
-        guardrailIdentifier: guardrailConfig.guardrailIdentifier,
-        guardrailVersion: guardrailConfig.guardrailVersion,
-      };
-      if (guardrailConfig.streamProcessingMode) {
-        gc.streamProcessingMode = guardrailConfig.streamProcessingMode;
-      }
-      if (guardrailConfig.trace) {
-        gc.trace = guardrailConfig.trace;
-      }
-      payload.guardrailConfig = gc;
-    });
-  };
-}
-
-function sharedRuntimeWouldInjectCachePoints(modelId: string): boolean {
-  return supportsBedrockPromptCaching(modelId);
+): StreamFn {
+  return createPayloadPatchStreamWrapper(streamFn, ({ payload }) => {
+    payload.guardrailConfig = {
+      guardrailIdentifier: guardrailConfig.guardrailIdentifier,
+      guardrailVersion: guardrailConfig.guardrailVersion,
+      ...(guardrailConfig.streamProcessingMode
+        ? { streamProcessingMode: guardrailConfig.streamProcessingMode }
+        : {}),
+      ...(guardrailConfig.trace ? { trace: guardrailConfig.trace } : {}),
+    };
+  });
 }
 
 /**
@@ -194,49 +166,6 @@ const BEDROCK_APP_INFERENCE_PROFILE_RE =
 
 function isBedrockAppInferenceProfile(modelId: string): boolean {
   return BEDROCK_APP_INFERENCE_PROFILE_RE.test(modelId);
-}
-
-/**
- * The shared runtime's `supportsPromptCaching` checks `model.id` for specific Claude
- * model name patterns, which fails for application inference profile ARNs (opaque
- * IDs that may not contain the model name). When OpenClaw's `isAnthropicBedrockModel`
- * identifies the model but the shared runtime won't inject cache points, we do it via onPayload.
- *
- * Gated to application inference profile ARNs only — regular Claude model IDs and
- * system-defined inference profiles (us.anthropic.claude-*) are left to the shared runtime.
- */
-function needsCachePointInjection(modelId: string): boolean {
-  // Only target application inference profile ARNs.
-  if (!isBedrockAppInferenceProfile(modelId)) {
-    return false;
-  }
-  // If the shared runtime would already inject cache points, skip.
-  if (sharedRuntimeWouldInjectCachePoints(modelId)) {
-    return false;
-  }
-  // Check if OpenClaw identifies this as an Anthropic model via the ARN heuristic.
-  if (isAnthropicBedrockModel(modelId)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * Extract the region from a Bedrock ARN.
- * e.g. "arn:aws:bedrock:us-east-1:123:application-inference-profile/abc" → "us-east-1"
- */
-function extractRegionFromArn(arn: string): string | undefined {
-  const parts = arn.split(":");
-  // ARN format: arn:partition:service:region:account:resource
-  return parts.length >= 4 && parts[3] ? parts[3] : undefined;
-}
-
-/**
- * Check if a resolved foundation model ARN supports prompt caching using the
- * same matcher OpenClaw uses for direct model IDs.
- */
-function resolvedModelSupportsCaching(modelArn: string): boolean {
-  return supportsBedrockPromptCaching(modelArn);
 }
 
 /**
@@ -267,7 +196,7 @@ async function resolveAppProfileTraits(
   let client: BedrockClient | undefined;
   try {
     signal?.throwIfAborted();
-    const region = extractRegionFromArn(modelId) ?? fallbackRegion;
+    const region = modelId.split(":")[3] || fallbackRegion;
     const sdk = await loadBedrockControlPlaneSdk();
     signal?.throwIfAborted();
     const controlPlaneClient = sdk.createClient(region);
@@ -282,7 +211,8 @@ async function resolveAppProfileTraits(
     const modelArns = models.map((model) => model.modelArn ?? "");
     const traits = {
       cacheEligible:
-        models.length > 0 && modelArns.every((modelArn) => resolvedModelSupportsCaching(modelArn)),
+        models.length > 0 &&
+        modelArns.every((modelArn) => supportsBedrockClaudePromptCaching(modelArn)),
       omitTemperature: modelArns.some(isOpus47OrNewerBedrockModelRef),
     };
     appProfileTraitsCache.set(modelId, traits);
@@ -309,15 +239,6 @@ function hasCachePoint(blocks: BedrockContentBlock[] | undefined): boolean {
   return blocks?.some((b) => b.cachePoint != null) === true;
 }
 
-function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
-  return {
-    cachePoint: {
-      type: "default",
-      ...(cacheRetention === "long" ? { ttl: "1h" } : {}),
-    },
-  };
-}
-
 /**
  * Inject Bedrock Converse cache points into the payload when the shared runtime skipped them
  * because it didn't recognize the model ID (application inference profiles).
@@ -325,50 +246,50 @@ function makeCachePoint(cacheRetention: string | undefined): BedrockCachePoint {
 function injectBedrockCachePoints(
   payload: Record<string, unknown>,
   cacheRetention: string | undefined,
+  context: Context,
+  model: Model,
 ): void {
-  if (!cacheRetention || cacheRetention === "none") {
+  if (!cacheRetention || cacheRetention === "none" || resolveBedrockPromptCachePolicy(model)) {
     return;
   }
-  const point = makeCachePoint(cacheRetention);
+  const point: BedrockCachePoint = {
+    cachePoint: { type: "default", ...(cacheRetention === "long" ? { ttl: "1h" } : {}) },
+  };
 
-  // Inject into system prompt if missing.
   const system = payload.system as BedrockContentBlock[] | undefined;
   if (Array.isArray(system) && system.length > 0 && !hasCachePoint(system)) {
-    system.push(point);
+    const split = context.systemPrompt && splitSystemPromptCacheBoundary(context.systemPrompt);
+    if (!split || split.stablePrefix) {
+      system.splice(split ? 1 : system.length, 0, point);
+    }
   }
 
-  // Inject into the last user message if missing.
+  // Unresolved profiles use transient carriers. Conversion has removed their
+  // flags, so fallback injection cannot safely select a conversation anchor.
+  if (context.messages.some(hasRuntimeContextMarker)) {
+    return;
+  }
+
   // Bedrock Converse uses lowercase roles ("user" / "assistant").
   const messages = payload.messages as BedrockMessage[] | undefined;
-  if (Array.isArray(messages) && messages.length > 0) {
-    for (const msg of messages.toReversed()) {
-      if (msg.role === "user" && Array.isArray(msg.content)) {
-        if (!hasCachePoint(msg.content)) {
-          msg.content.push(point);
-        }
-        break;
-      }
+  if (Array.isArray(messages)) {
+    const userContent = messages
+      .toReversed()
+      .find((msg) => msg.role === "user" && Array.isArray(msg.content))?.content;
+    if (userContent && !hasCachePoint(userContent)) {
+      userContent.push(point);
     }
   }
 }
 
 function patchMaxThinkingEffort(payload: Record<string, unknown>): void {
-  const fieldsValue = payload.additionalModelRequestFields;
-  const fields =
-    fieldsValue && typeof fieldsValue === "object" && !Array.isArray(fieldsValue)
-      ? (fieldsValue as Record<string, unknown>)
-      : {};
-  const outputConfigValue = fields.output_config;
-  const outputConfig =
-    outputConfigValue && typeof outputConfigValue === "object" && !Array.isArray(outputConfigValue)
-      ? (outputConfigValue as Record<string, unknown>)
-      : {};
+  const fields = asOptionalRecord(payload.additionalModelRequestFields) ?? {};
+  const outputConfig = asOptionalRecord(fields.output_config) ?? {};
   outputConfig.effort = "max";
   fields.output_config = outputConfig;
   payload.additionalModelRequestFields = fields;
 }
 
-/** Register Amazon Bedrock provider, discovery catalog, stream wrappers, and embeddings. */
 export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   // Keep registration-local constants inside the function so partial module
   // initialization during test bootstrap cannot trip TDZ reads.
@@ -400,30 +321,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
   api.registerEmbeddingProvider(bedrockMemoryEmbeddingProviderAdapter);
 
-  const baseWrapStreamFn = ({
-    modelId,
-    model,
-    streamFn,
-  }: {
-    modelId: string;
-    model?: { params?: Record<string, unknown> };
-    streamFn?: StreamFn;
-  }) => {
-    const modelRef = { id: modelId, params: model?.params };
-    if (
-      isAnthropicBedrockModel(modelId) ||
-      resolveClaudeModelIdentity(modelRef).startsWith("claude-")
-    ) {
-      return streamFn;
-    }
-    // For app inference profiles with opaque IDs, don't force cacheRetention: "none"
-    // yet — we may resolve them as Claude later via GetInferenceProfile.
-    if (isBedrockAppInferenceProfile(modelId)) {
-      return streamFn;
-    }
-    return createBedrockNoCacheWrapper(streamFn);
-  };
-
   function omitUnsupportedClaudeTemperature<TOptions extends object>(
     modelRef: { id: string; params?: Record<string, unknown> },
     options: TOptions,
@@ -449,35 +346,6 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     delete (inferenceConfig as Record<string, unknown>).temperature;
   }
 
-  function withAwsCredentialRefreshOnPayload<TOptions extends object>(
-    options: TOptions,
-  ): TOptions & { onPayload: (payload: unknown, payloadModel: unknown) => Promise<unknown> } {
-    const originalOnPayload = (options as { onPayload?: unknown }).onPayload as
-      | ((payload: unknown, model: unknown) => unknown)
-      | undefined;
-    return {
-      ...options,
-      onPayload: async (payload: unknown, payloadModel: unknown) => {
-        const signal = (options as { signal?: AbortSignal }).signal;
-        signal?.throwIfAborted();
-        await refreshAwsSharedConfigCacheForBedrock();
-        signal?.throwIfAborted();
-        return originalOnPayload?.(payload, payloadModel);
-      },
-    };
-  }
-
-  function createAwsCredentialRefreshStreamWrapper(
-    streamFn: StreamFn | null | undefined,
-  ): StreamFn | null | undefined {
-    if (!streamFn) {
-      return streamFn;
-    }
-    return (streamModel, context, options) =>
-      streamFn(streamModel, context, withAwsCredentialRefreshOnPayload(Object.assign({}, options)));
-  }
-
-  /** Extract the AWS region from a bedrock-runtime baseUrl. */
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
     if (!baseUrl) {
       return undefined;
@@ -485,29 +353,23 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     return bedrockRegionRe.exec(baseUrl)?.[1];
   }
 
-  /** Resolve the AWS region for Bedrock API calls from provider-specific baseUrl. */
   function resolveBedrockRegion(
     config: { models?: { providers?: Record<string, unknown> } } | undefined,
   ): string | undefined {
-    // Try provider-specific baseUrl first.
-    const providers = config?.models?.providers;
-    if (providers) {
-      const exact = (providers[providerId] as { baseUrl?: string } | undefined)?.baseUrl;
-      if (exact) {
-        const region = extractRegionFromBaseUrl(exact);
-        if (region) {
-          return region;
-        }
+    const providers = config?.models?.providers ?? {};
+    const exact = (providers[providerId] as { baseUrl?: string } | undefined)?.baseUrl;
+    const exactRegion = extractRegionFromBaseUrl(exact);
+    if (exactRegion) {
+      return exactRegion;
+    }
+    // Exact provider configuration takes precedence over aliases such as "bedrock".
+    for (const [key, value] of Object.entries(providers)) {
+      if (key === providerId || normalizeProviderId(key) !== providerId) {
+        continue;
       }
-      // Fall back to alias matches (e.g. "bedrock" instead of "amazon-bedrock").
-      for (const [key, value] of Object.entries(providers)) {
-        if (key === providerId || normalizeProviderId(key) !== providerId) {
-          continue;
-        }
-        const region = extractRegionFromBaseUrl((value as { baseUrl?: string }).baseUrl);
-        if (region) {
-          return region;
-        }
+      const region = extractRegionFromBaseUrl((value as { baseUrl?: string }).baseUrl);
+      if (region) {
+        return region;
       }
     }
     return undefined;
@@ -520,23 +382,24 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     auth: [],
     catalog: {
       order: "simple",
-      run: async (ctx) => {
-        const { resolveImplicitBedrockProvider } = await import("./discovery.js");
-        const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
-        const implicit = await resolveImplicitBedrockProvider({
-          pluginConfig: currentPluginConfig,
-          env: ctx.env,
-        });
-        if (!implicit) {
-          return null;
-        }
-        return {
-          provider: implicit,
-        };
-      },
+      run: (ctx) =>
+        runLiveProviderCatalog({
+          providerId,
+          run: async () => {
+            const { resolveImplicitBedrockProvider } = await import("./discovery.js");
+            const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);
+            const implicit = await resolveImplicitBedrockProvider({
+              discoveryMode: "strict",
+              pluginConfig: currentPluginConfig,
+              env: ctx.env,
+            });
+            return implicit ? { provider: implicit } : null;
+          },
+        }),
     },
-    resolveConfigApiKey: ({ env }) => resolveBedrockConfigApiKey(env),
+    resolveConfigApiKey: ({ env }) => resolveAwsSdkEnvVarName(env),
     normalizeResolvedModel: normalizeBedrockResolvedModel,
+    supportsSystemPromptCacheBoundary: true,
     createStreamFn: ({ model }) =>
       model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
     ...anthropicByModelReplayHooks,
@@ -551,17 +414,18 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       const opus47OrNewer =
         isOpus47OrNewerBedrockModelRef(modelId) || isOpus47OrNewerBedrockModelRef(canonicalModelId);
       const supportsNativeMax = supportsBedrockNativeMaxEffort(modelId, model?.params);
+      const heuristicMatch = isAnthropicBedrockModel(modelId);
+      // Opaque application profiles may resolve to Claude through GetInferenceProfile.
       let wrapped =
-        (currentGuardrail?.guardrailIdentifier && currentGuardrail?.guardrailVersion
-          ? createGuardrailWrapStreamFn(
-              baseWrapStreamFn,
-              currentGuardrail,
-            )({
-              modelId,
-              model,
-              streamFn,
-            })
-          : baseWrapStreamFn({ modelId, model, streamFn })) ?? undefined;
+        resolveBedrockPromptCachePolicy(modelRef) === "nova" ||
+        heuristicMatch ||
+        canonicalModelId.startsWith("claude-") ||
+        isBedrockAppInferenceProfile(modelId)
+          ? streamFn
+          : createBedrockNoCacheWrapper(streamFn);
+      if (wrapped && currentGuardrail?.guardrailIdentifier && currentGuardrail.guardrailVersion) {
+        wrapped = createGuardrailStreamWrapper(wrapped, currentGuardrail);
+      }
 
       const serviceTier = resolveBedrockServiceTier(extraParams, (message) =>
         api.logger.warn(message),
@@ -582,18 +446,14 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
         extractRegionFromBaseUrl(model?.baseUrl) ??
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =
-        isBedrockAppInferenceProfile(modelId) && !sharedRuntimeWouldInjectCachePoints(modelId);
+        isBedrockAppInferenceProfile(modelId) && !supportsBedrockClaudePromptCaching(modelId);
       const shouldOmitTemperature =
         opus47OrNewer || fable5 || isLatestAdaptiveBedrockModelRef(modelId, model?.params);
       const shouldPatchMaxThinking = supportsNativeMax && thinkingLevel === "max";
       const shouldPatchPayload = shouldOmitTemperature || shouldPatchMaxThinking;
 
-      // For known Anthropic models (heuristic match), enable injection immediately.
-      // For opaque profile IDs, we'll resolve via GetInferenceProfile on first call.
-      const heuristicMatch = needsCachePointInjection(modelId);
-
       if (!region && !mayNeedCacheInjection && !shouldOmitTemperature && !shouldPatchMaxThinking) {
-        return createAwsCredentialRefreshStreamWrapper(wrapped);
+        return wrapped;
       }
 
       const underlying = wrapped ?? streamFn;
@@ -611,97 +471,58 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
           | undefined;
 
         if (!mayNeedCacheInjection) {
-          return underlying(
-            streamModel,
-            context,
-            withAwsCredentialRefreshOnPayload({
-              ...merged,
-              ...(shouldPatchPayload
-                ? {
-                    onPayload: (payload: unknown, payloadModel: unknown) => {
-                      if (payload && typeof payload === "object") {
-                        const payloadRecord = payload as Record<string, unknown>;
-                        if (shouldPatchMaxThinking) {
-                          patchMaxThinkingEffort(payloadRecord);
-                        }
-                        if (shouldOmitTemperature) {
-                          omitUnsupportedClaudePayloadTemperature(payloadRecord);
-                        }
+          return underlying(streamModel, context, {
+            ...merged,
+            ...(shouldPatchPayload
+              ? {
+                  onPayload: (payload: unknown, payloadModel: unknown) => {
+                    if (payload && typeof payload === "object") {
+                      const payloadRecord = payload as Record<string, unknown>;
+                      if (shouldPatchMaxThinking) {
+                        patchMaxThinkingEffort(payloadRecord);
                       }
-                      return originalOnPayload?.(payload, payloadModel);
-                    },
-                  }
-                : {}),
-            }),
-          );
+                      if (shouldOmitTemperature) {
+                        omitUnsupportedClaudePayloadTemperature(payloadRecord);
+                      }
+                    }
+                    return originalOnPayload?.(payload, payloadModel);
+                  },
+                }
+              : {}),
+          });
         }
 
-        // Use the cacheRetention from options if explicitly set.
-        // When undefined, default to "short" to match the shared runtime default.
-        // Note: if the user set cacheRetention: "none" but the opaque ARN wasn't
-        // recognized by resolveAnthropicCacheRetentionFamily, the value may have
-        // been dropped upstream. This is a known limitation — the proper fix is
-        // to also teach resolveAnthropicCacheRetentionFamily about opaque profiles
-        // (tracked separately). In practice, users with app inference profiles
-        // want caching enabled, so defaulting to "short" is the safer behavior.
+        // Unresolved profiles retain the shared runtime's short-cache default.
         const cacheRetention =
           typeof merged.cacheRetention === "string" ? merged.cacheRetention : "short";
-        if (heuristicMatch) {
-          // Fast path: ARN heuristic already identified this as Claude, but the
-          // concrete target may still need profile traits for Opus 4.7 payloads.
-          const mayNeedTemperatureTrait = "temperature" in merged;
-          return underlying(
-            streamModel,
-            context,
-            withAwsCredentialRefreshOnPayload({
-              ...merged,
-              onPayload: async (payload: unknown, payloadModel: unknown) => {
-                if (payload && typeof payload === "object") {
-                  const payloadRecord = payload as Record<string, unknown>;
-                  injectBedrockCachePoints(payloadRecord, cacheRetention);
-                  if (shouldPatchMaxThinking) {
-                    patchMaxThinkingEffort(payloadRecord);
-                  }
-                  if (shouldOmitTemperature) {
-                    omitUnsupportedClaudePayloadTemperature(payloadRecord);
-                  } else if (mayNeedTemperatureTrait) {
-                    const traits = await resolveAppProfileTraits(modelId, region, merged.signal);
-                    if (traits.omitTemperature) {
-                      omitUnsupportedClaudePayloadTemperature(payloadRecord);
-                    }
-                  }
-                }
-                return originalOnPayload?.(payload, payloadModel);
-              },
-            }),
-          );
-        }
-
-        // Slow path: opaque profile ID — resolve underlying model via API (cached).
-        // onPayload supports async, so we await the resolution inline.
-        return underlying(
-          streamModel,
-          context,
-          withAwsCredentialRefreshOnPayload({
-            ...merged,
-            onPayload: async (payload: unknown, payloadModel: unknown) => {
-              const traits = await resolveAppProfileTraits(modelId, region, merged.signal);
-              if (payload && typeof payload === "object") {
-                const payloadRecord = payload as Record<string, unknown>;
-                if (traits.cacheEligible) {
-                  injectBedrockCachePoints(payloadRecord, cacheRetention);
-                }
-                if (shouldPatchMaxThinking) {
-                  patchMaxThinkingEffort(payloadRecord);
-                }
-                if (traits.omitTemperature) {
-                  omitUnsupportedClaudePayloadTemperature(payloadRecord);
-                }
+        return underlying(streamModel, context, {
+          ...merged,
+          onPayload: async (payload: unknown, payloadModel: unknown) => {
+            // Opaque profiles need resolved traits even when no payload is produced.
+            // Named Claude profiles only need a lookup for an unresolved temperature rule.
+            const traits = heuristicMatch
+              ? undefined
+              : await resolveAppProfileTraits(modelId, region, merged.signal);
+            if (payload && typeof payload === "object") {
+              const payloadRecord = payload as Record<string, unknown>;
+              if (heuristicMatch || traits?.cacheEligible) {
+                injectBedrockCachePoints(payloadRecord, cacheRetention, context, streamModel);
               }
-              return originalOnPayload?.(payload, payloadModel);
-            },
-          }),
-        );
+              if (shouldPatchMaxThinking) {
+                patchMaxThinkingEffort(payloadRecord);
+              }
+              const omitTemperature = heuristicMatch
+                ? shouldOmitTemperature ||
+                  ("temperature" in merged &&
+                    (await resolveAppProfileTraits(modelId, region, merged.signal)).omitTemperature)
+                : traits?.omitTemperature;
+              if (omitTemperature) {
+                omitUnsupportedClaudePayloadTemperature(payloadRecord);
+              }
+            }
+            return originalOnPayload?.(payload, payloadModel);
+          },
+        });
       };
     },
     matchesContextOverflowError: ({ errorMessage }) =>

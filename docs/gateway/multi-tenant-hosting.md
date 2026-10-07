@@ -7,7 +7,7 @@ read_when:
 title: "Multi-tenant hosting"
 ---
 
-# Multi-tenant hosting
+<a id="multi-tenant-hosting" />
 
 OpenClaw's default security model is one trusted operator boundary per Gateway, not hostile multi-tenant isolation inside one shared Gateway. Hosting users or organizations that do not share a trust boundary therefore means running a separate complete OpenClaw instance for each tenant.
 

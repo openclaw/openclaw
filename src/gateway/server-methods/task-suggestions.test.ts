@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -266,7 +271,7 @@ describe("task suggestion gateway methods", () => {
       session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
         defaults: { sessionStore: { agentId: "ops" } },
       },
     };
@@ -411,7 +416,7 @@ describe("task suggestion gateway methods", () => {
     expect(createSession).toHaveBeenCalledTimes(100);
   });
 
-  it("coalesces concurrent acceptance requests", async () => {
+  it("coalesces concurrent acceptance requests", async ({ signal }) => {
     const created = await call("taskSuggestions.create", {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
@@ -420,47 +425,42 @@ describe("task suggestion gateway methods", () => {
       sessionKey: "agent:main:main",
     });
     const taskId = (requirePayload(created) as { taskId: string }).taskId;
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: gate, resolve: release } = createDeferred();
+    const entered = createDeferred();
     const createSession = vi
       .spyOn(sessionCreateHandlers, "sessions.create")
       .mockImplementation(async ({ params, respond }) => {
+        entered.resolve();
         await gate;
         respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
       });
 
-    const first = call("taskSuggestions.accept", { taskId });
-    await vi.waitFor(() => expect(createSession).toHaveBeenCalledTimes(1));
-    const second = call("taskSuggestions.accept", { taskId });
-    release?.();
-    const [firstResult, secondResult] = await Promise.all([first, second]);
+    const first = call("taskSuggestions.accept", { taskId }).then((result) => {
+      expect(result.response?.[2]).toBeUndefined();
+      requirePayload(result);
+      return result;
+    });
+    let second: ReturnType<typeof call> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          first,
+          "acceptance settled before entering sessions.create",
+        ),
+        signal,
+      );
+      expect(createSession).toHaveBeenCalledTimes(1);
+      second = call("taskSuggestions.accept", { taskId });
+      release();
+      const [firstResult, secondResult] = await withinTest(Promise.all([first, second]), signal);
 
-    expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
-    expect(createSession).toHaveBeenCalledTimes(1);
-  });
-
-  it("starts local acceptance in the suggestion cwd without a worktree", async () => {
-    const taskId = await createSourceSuggestion();
-    const createSession = vi
-      .spyOn(sessionCreateHandlers, "sessions.create")
-      .mockImplementation(async ({ params, respond }) => {
-        expect(params).toMatchObject({
-          agentId: "main",
-          parentSessionKey: SOURCE_SESSION_KEY,
-          label: "Fix the source session",
-          task: "Apply the focused fix in this session.",
-          cwd: GIT_CWD,
-        });
-        expect(params).not.toHaveProperty("worktree");
-        respond(true, { key: (params as { key: string }).key, runStarted: true }, undefined);
-      });
-
-    const accepted = await call("taskSuggestions.accept", { taskId, mode: "local" });
-
-    expect(accepted.response?.[0]).toBe(true);
-    expect(createSession).toHaveBeenCalledTimes(1);
+      expect(firstResult.response?.[1]).toEqual(secondResult.response?.[1]);
+      expect(createSession).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+      await Promise.allSettled([first, second]);
+    }
   });
 
   it("rolls back a local session when its initial task does not start", async () => {
@@ -667,7 +667,7 @@ describe("task suggestion gateway methods", () => {
       expect(accepted.response?.[0]).toBe(false);
       expect(accepted.response?.[2]).toMatchObject({
         code: "INVALID_REQUEST",
-        message: "source session no longer exists; start it in a worktree instead",
+        message: "source session no longer exists; start it in a new session instead",
       });
       expect(deleteSession).not.toHaveBeenCalled();
       expect(listed.response?.[1]).toMatchObject({ suggestions: [{ id: taskId }] });
@@ -839,19 +839,19 @@ describe("task suggestion gateway methods", () => {
     expect(listed.response?.[1]).toEqual({ suggestions: [] });
   });
 
-  it.each([
-    ["relative/repo", "task suggestion cwd must be absolute"],
-    ["/not-a-git-checkout", "task suggestion cwd must be inside a git checkout"],
-  ])("rejects an invalid cwd %s before recording or broadcasting", async (cwd, message) => {
+  it("rejects a relative cwd before recording or broadcasting", async () => {
     const result = await call("taskSuggestions.create", {
       title: "Add coverage",
       prompt: "Add the missing regression test.",
       tldr: "The edge case is untested.",
-      cwd,
+      cwd: "relative/folder",
       sessionKey: "agent:main:main",
     });
     expect(result.response?.[0]).toBe(false);
-    expect(result.response?.[2]).toMatchObject({ code: "INVALID_REQUEST", message });
+    expect(result.response?.[2]).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "task suggestion cwd must be absolute",
+    });
     expect(result.broadcast).not.toHaveBeenCalled();
   });
 
@@ -888,7 +888,7 @@ describe("task suggestion gateway methods", () => {
         agentId: "work",
       },
       vi.fn(),
-      { agents: { list: [{ id: "main" }, { id: "work" }] } },
+      { agents: { entries: { main: {}, work: {} } } },
     );
 
     expect(result.response?.[0]).toBe(false);

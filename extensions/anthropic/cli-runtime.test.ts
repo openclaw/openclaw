@@ -1,0 +1,879 @@
+import { createHash } from "node:crypto";
+import { access, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
+import type {
+  CliBackendExecuteContext,
+  CliBackendLiveSessionCapability,
+  CliBackendLiveSessionHandle,
+  CliBackendPreparedExecution,
+  CliBackendToolPermissionResult,
+} from "openclaw/plugin-sdk/cli-backend";
+import { formatErrorMessageForDisplay } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { buildAnthropicCliBackend } from "./cli-backend.js";
+import type { ClaudeCliSecretInput } from "./cli-process.js";
+import { CLAUDE_PROTOCOL_FIXTURE } from "./cli-runtime.test-support.js";
+import { executeClaudeCli } from "./cli.runtime.js";
+
+const roots: string[] = [];
+const handles = new Set<CliBackendLiveSessionHandle>();
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
+
+afterEach(async () => {
+  for (const handle of handles) {
+    handle.close("restart");
+    await handle.waitForExit();
+  }
+  handles.clear();
+  vi.restoreAllMocks();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+async function createContext(
+  scenario = "normal",
+  overrides: Partial<CliBackendExecuteContext> = {},
+): Promise<CliBackendExecuteContext> {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-claude-protocol-")));
+  roots.push(root);
+  const fixture = path.join(root, "claude.mjs");
+  await writeFile(
+    fixture,
+    `${fixtureReceiptClientSource(receipts.endpoint)}
+${CLAUDE_PROTOCOL_FIXTURE}`,
+  );
+  return {
+    command: process.execPath,
+    args: [fixture],
+    cwd: root,
+    env: {
+      PATH: process.env.PATH ?? "",
+      HOME: root,
+      CLAUDE_CONFIG_DIR: root,
+      CLAUDE_FIXTURE_SCENARIO: scenario,
+    },
+    prompt: "synthetic user input",
+    systemPrompt: "synthetic operator instructions",
+    modelId: "claude-sonnet-4-6",
+    useResume: false,
+    liveSession: createLiveSession(),
+    timeoutMs: 10_000,
+    abortSignal: AbortSignal.timeout(10_000),
+    requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(async () => ({
+      behavior: "deny",
+      message: "Fixture denied.",
+    })),
+    requestUserInput: vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
+      status: "cancelled",
+      message: "No question expected.",
+    })),
+    ...overrides,
+  };
+}
+
+function createLiveSession(cleanup?: () => Promise<void>): CliBackendLiveSessionCapability {
+  let current: CliBackendLiveSessionHandle | undefined;
+  let retiredCleanup: Promise<void> | undefined;
+  return {
+    fingerprint: "synthetic-process-policy",
+    current: () => current,
+    restart: async () => {
+      const previous = current;
+      previous?.close("restart");
+      await previous?.waitForExit();
+      await retiredCleanup;
+    },
+    register: (handle) => {
+      if (retiredCleanup) {
+        throw new Error("Previous CLI live session cleanup has not settled.");
+      }
+      current = handle;
+      handles.add(handle);
+    },
+    activate: () => {},
+    remove: (handle) => {
+      if (current === handle) {
+        current = undefined;
+        if (cleanup) {
+          retiredCleanup = handle
+            .waitForExit()
+            .then(cleanup)
+            .then(() => {
+              retiredCleanup = undefined;
+            });
+        }
+      }
+    },
+  };
+}
+
+async function collect(context: CliBackendExecuteContext) {
+  const records: Record<string, unknown>[] = [];
+  for await (const record of executeClaudeCli(context)) {
+    records.push(record);
+  }
+  return records;
+}
+
+function resultDetail(records: Record<string, unknown>[]): Record<string, unknown> {
+  const result = records.findLast((record) => record.type === "result");
+  expect(result).toEqual(
+    expect.objectContaining({ subtype: "success", result: expect.any(String) }),
+  );
+  return JSON.parse(String(result?.result)) as Record<string, unknown>;
+}
+
+async function fixtureReadyBeforeSettlement(
+  context: CliBackendExecuteContext,
+  fileName: string,
+  operation: PromiseLike<unknown>,
+  signal: AbortSignal,
+): Promise<void> {
+  const readyPath = path.join(context.cwd, fileName);
+  const recorded = async () => {
+    expect(await readFile(readyPath, "utf8")).toBe("ready");
+  };
+  // The fixture writes this record before replying; receipt and protocol pipes are unordered.
+  const settled = Promise.resolve(operation).then(recorded, async (error: unknown) => {
+    try {
+      await recorded();
+    } catch {
+      throw error;
+    }
+  });
+  await withinTest(Promise.race([receipts.waitFor(readyPath, "ready"), settled]), signal);
+}
+
+// Native transport joins its root and signal dispatch, not foreign descendant extinction.
+async function waitForProcessExit(pids: number[], signal: AbortSignal): Promise<void> {
+  try {
+    for (;;) {
+      if (
+        pids.every((pid) => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        return;
+      }
+      await waitForProcessTick(10, undefined, { signal });
+    }
+  } catch (cause) {
+    throw new Error(`Claude process tree ${pids.join(", ")} did not exit before the test aborted`, {
+      cause,
+    });
+  }
+}
+
+describe("Claude native stdio boundary", () => {
+  it.for([
+    { scenario: "shutdown-ignore", name: "native parent and child ignore EOF and SIGTERM" },
+    { scenario: "shutdown-eof", name: "native parent exits immediately on EOF" },
+  ])(
+    "closes its whole process tree within the host cancellation window when $name",
+    async ({ scenario }, { signal }) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, { liveSession });
+      const iterator = executeClaudeCli(context)[Symbol.asyncIterator]();
+      const first = await iterator.next();
+      expect(first.value).toMatchObject({
+        subtype: "fixture_shutdown",
+        pid: expect.any(Number),
+        descendantPid: expect.any(Number),
+      });
+      const pids = [Number(first.value?.pid), Number(first.value?.descendantPid)];
+      const deadline = AbortSignal.timeout(4_000);
+      const deadlineExceeded = new Promise<never>((_resolve, reject) => {
+        deadline.addEventListener(
+          "abort",
+          () => reject(new Error("Native shutdown exceeded the host cancellation window.")),
+          { once: true },
+        );
+      });
+      try {
+        await withinTest(
+          Promise.race([
+            (async () => {
+              await iterator.return?.();
+              await waitForProcessExit(pids, AbortSignal.any([signal, deadline]));
+            })(),
+            deadlineExceeded,
+          ]),
+          signal,
+        );
+        expect(liveSession.current()).toBeUndefined();
+      } finally {
+        for (const pid of pids) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {}
+        }
+      }
+    },
+  );
+
+  it("starts a fresh process after host cleanup when the execution fingerprint changes", async () => {
+    const gate = createDeferred<void>();
+    const cleanup = vi.fn(() => gate.promise);
+    const liveSession = createLiveSession(cleanup);
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    const pending = collect({
+      ...context,
+      useResume: true,
+      systemPrompt: "changed authoritative instructions",
+    });
+    void pending.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(cleanup).toHaveBeenCalledOnce());
+      expect(liveSession.current()).toBeUndefined();
+      gate.resolve();
+      const second = resultDetail(await pending);
+      expect(second.pid).not.toBe(first.pid);
+      expect(second.turn).toBe(1);
+      expect(second.initialize).toMatchObject({
+        appendSystemPrompt: "changed authoritative instructions",
+      });
+      expect(() => process.kill(Number(first.pid), 0)).toThrow();
+    } finally {
+      gate.resolve();
+    }
+  });
+
+  it("refuses replacement when the retired predecessor's cleanup failed", async () => {
+    const failure = new Error("artifact cleanup failed");
+    const liveSession = createLiveSession(async () => {
+      throw failure;
+    });
+    const context = await createContext("normal", { liveSession });
+    const first = resultDetail(await collect(context));
+    liveSession.fingerprint = "changed-authoritative-prompt";
+    await expect(
+      collect({ ...context, useResume: true, systemPrompt: "changed authoritative instructions" }),
+    ).rejects.toBe(failure);
+    expect(liveSession.current()).toBeUndefined();
+    expect(() => process.kill(Number(first.pid), 0)).toThrow();
+  });
+
+  it("refuses process startup when the admitted owner rejects capture activation", async () => {
+    const liveSession = createLiveSession();
+    const reason = new Error("Synthetic capture owner rejected this run.");
+    liveSession.activate = () => {
+      throw reason;
+    };
+    const context = await createContext("normal", { liveSession });
+    await expect(collect(context)).rejects.toBe(reason);
+    expect(liveSession.current()).toBeUndefined();
+    await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
+  });
+
+  it.each(["background-success", "background-agent-subagent-bash"])(
+    "keeps an interim result open until native background agents report their final answer (%s)",
+    async (scenario) => {
+      const liveSession = createLiveSession();
+      const release = createDeferred<CliBackendToolPermissionResult>();
+      const decision = { behavior: "deny" as const, message: "Fixture released." };
+      const context = await createContext(scenario, {
+        liveSession,
+        requestToolPermission: () => release.promise,
+      });
+      const results: Record<string, unknown>[] = [];
+      try {
+        for await (const record of executeClaudeCli(context)) {
+          if (record.type !== "result") {
+            continue;
+          }
+          results.push(record);
+          if (results.length === 1) {
+            expect(record).toHaveProperty("openclaw_interim_result", true);
+            expect(liveSession.current()?.isIdle()).toBe(false);
+            release.resolve(decision);
+          } else {
+            expect(resultDetail([record]).finalBackgroundAnswer).toBe(true);
+            expect(record).not.toHaveProperty("openclaw_interim_result");
+          }
+        }
+      } finally {
+        release.resolve(decision);
+      }
+      expect(results).toHaveLength(2);
+      expect(liveSession.current()?.isIdle()).toBe(true);
+    },
+  );
+
+  const allowRead = { behavior: "allow" as const, updatedInput: { file_path: "approved.txt" } };
+  it.for([
+    {
+      scenario: "background-bash-success",
+      decision: { behavior: "deny" as const, message: "Fixture denied." },
+    },
+    { scenario: "background-bash-batched", decision: allowRead },
+    { scenario: "background-bash-early", decision: allowRead },
+    { scenario: "background-bash-inline", decision: allowRead },
+    { scenario: "background-bash-overlap", replayReceipts: true, decision: allowRead },
+    { scenario: "background-bash-overlap", replayReceipts: false, decision: allowRead },
+    {
+      scenario: "background-bash-overlap",
+      replayReceipts: false,
+      taskType: "local_agent",
+      decision: allowRead,
+    },
+  ])(
+    "retains host policy's $decision.behavior decision for $scenario (replay: $replayReceipts, type: $taskType)",
+    async ({ scenario, decision, replayReceipts, taskType }, { signal }) => {
+      const context = await createContext(scenario, {
+        requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+          async () => decision,
+        ),
+      });
+      if (replayReceipts === false) {
+        context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
+      }
+      if (taskType) {
+        context.env.CLAUDE_FIXTURE_TASK_TYPE = taskType;
+      }
+      let settled = false;
+      const running = collect(context).then((records) => {
+        settled = true;
+        return records;
+      });
+      void running.catch(() => {});
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        expect(settled).toBe(false);
+      } finally {
+        await writeFile(path.join(context.cwd, "background.release"), "release");
+      }
+      const records = await withinTest(running, signal);
+      if (scenario === "background-bash-overlap") {
+        expect(records.filter((record) => record.type === "result")).toHaveLength(3);
+      }
+      const detail = resultDetail(records);
+      expect(detail.finalBackgroundAnswer).toBe(true);
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      for (const interim of records.filter((record) => record.type === "result").slice(0, -1)) {
+        expect(interim).toHaveProperty("openclaw_interim_result", true);
+      }
+      if (replayReceipts === false) {
+        expect(records.some((record) => record.type === "user" && record.isReplay === true)).toBe(
+          false,
+        );
+        expect(context.liveSession?.current()?.isIdle()).toBe(true);
+        const next = resultDetail(
+          await collect({
+            ...context,
+            prompt: "next input",
+            useResume: true,
+            requestToolPermission: async () => ({ behavior: "deny", message: "Fixture denied." }),
+          }),
+        );
+        expect(next).toMatchObject({ pid: detail.pid, turn: 2, user: "next input" });
+      }
+      // Host policy, not the stale-run guard, answered the notification turn's hook.
+      expect(context.requestToolPermission).toHaveBeenCalledWith(
+        expect.objectContaining({ toolName: "Read", toolCallId: "tool-bg-read" }),
+      );
+      expect(detail.notificationDecision).toMatchObject({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.behavior,
+          ...(decision.behavior === "allow"
+            ? { updatedInput: decision.updatedInput }
+            : { permissionDecisionReason: decision.message }),
+        },
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "distinguishes explicit=%s when Bash first appears backgrounded",
+    async (explicit) => {
+      const context = await createContext("background-bash-first-seen", {
+        requestToolPermission: async ({ toolInput }) => ({
+          behavior: "allow",
+          updatedInput: toolInput,
+        }),
+      });
+      context.env.CLAUDE_FIXTURE_EXPLICIT_BACKGROUND = explicit ? "1" : "0";
+      const records = await collect(context);
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(explicit ? 1 : 2);
+      expect(results[0]?.openclaw_interim_result).toBe(explicit ? undefined : true);
+      expect(results.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      expect(context.liveSession?.current()?.isIdle()).toBe(true);
+      if (explicit) {
+        const first = resultDetail(records);
+        const handle = context.liveSession?.current();
+        expect(resultDetail(await collect({ ...context, useResume: true }))).toMatchObject({
+          firstSeenBackground: true,
+          turn: 2,
+          pid: first.pid,
+        });
+        expect(context.liveSession?.current()).toBe(handle);
+      }
+    },
+  );
+
+  it.for(["abort", "process exit"])(
+    "rejects a pending Bash continuation on %s and starts the next turn in a fresh process",
+    async (termination, { signal }) => {
+      const liveSession = createLiveSession();
+      const controller = new AbortController();
+      const context = await createContext("background-bash-success", {
+        liveSession,
+        abortSignal: controller.signal,
+      });
+      const running = collect(context);
+      const outcome = running.catch((error: unknown) => error);
+      let firstPid: number;
+      try {
+        await fixtureReadyBeforeSettlement(context, "background.ready", running, signal);
+        firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+        expect(liveSession.current()?.isIdle()).toBe(false);
+        if (termination === "abort") {
+          controller.abort(new Error("Synthetic background turn cancelled."));
+        } else {
+          process.kill(firstPid, "SIGTERM");
+        }
+        expect(await withinTest(outcome, signal)).toBeInstanceOf(Error);
+      } finally {
+        controller.abort();
+      }
+      expect(liveSession.current()).toBeUndefined();
+      expect(() => process.kill(firstPid, 0)).toThrow();
+      const next = resultDetail(
+        await collect({
+          ...context,
+          useResume: true,
+          env: { ...context.env, CLAUDE_FIXTURE_SCENARIO: "normal" },
+          abortSignal: AbortSignal.timeout(10_000),
+        }),
+      );
+      expect(next.turn).toBe(1);
+      expect(next.pid).not.toBe(firstPid);
+    },
+  );
+
+  it.for([
+    { type: "token" as const, descriptor: "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR" },
+    { type: "api_key" as const, descriptor: "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR" },
+  ])(
+    "keeps a selected $type in a reopenable one-use descriptor and closes its process tree",
+    async ({ type, descriptor }, { signal }) => {
+      const context = await createContext("credential-tree");
+      const credential = "synthetic-selected-descriptor-value";
+      const backend = buildAnthropicCliBackend();
+      const prepared = (await backend.prepareExecution?.({
+        workspaceDir: context.cwd,
+        provider: "claude-cli",
+        modelId: context.modelId,
+        executionMode: "agent",
+        authCredential: type === "token" ? { type, token: credential } : { type, key: credential },
+      } as Parameters<NonNullable<typeof backend.prepareExecution>>[0])) as
+        | (CliBackendPreparedExecution & { secretInput?: ClaudeCliSecretInput })
+        | undefined;
+      if (!prepared?.execute || !prepared.secretInput || !prepared.cleanup) {
+        throw new Error("Expected provider-owned credential execution.");
+      }
+      const buffers: Buffer[] = [];
+      const createData = prepared.secretInput.createData;
+      vi.spyOn(prepared.secretInput, "createData").mockImplementation(() => {
+        const bytes = createData();
+        buffers.push(bytes);
+        return bytes;
+      });
+      Object.assign(context.env, prepared.env);
+      const iterator = prepared.execute(context)[Symbol.asyncIterator]();
+      let descendantPid: number | undefined;
+      try {
+        const first = await iterator.next();
+        descendantPid = Number(first.value?.descendantPid);
+        expect(context.env[descriptor]).toBe("3");
+        expect(first.value).toMatchObject({
+          subtype: "fixture_credential",
+          descriptor: "3",
+          digest: createHash("sha256").update(credential).digest("hex"),
+          credentialInArgs: false,
+          credentialInEnv: false,
+        });
+      } finally {
+        await iterator.return?.();
+        await prepared.cleanup();
+      }
+      try {
+        await waitForProcessExit([descendantPid], signal);
+      } finally {
+        if (descendantPid) {
+          try {
+            process.kill(descendantPid, "SIGKILL");
+          } catch {}
+        }
+      }
+      expect(buffers.length).toBeGreaterThan(0);
+      expect(buffers.every((bytes) => bytes.every((byte) => byte === 0))).toBe(true);
+      expect(() => prepared.secretInput?.createData()).toThrow("no longer available");
+    },
+  );
+
+  it("denies an awaited hook decision when its admitted authority is revoked", async () => {
+    let active = true;
+    const approvalStarted = createDeferred<void>();
+    const approval = createDeferred<CliBackendToolPermissionResult>();
+    const context = await createContext("revoked-approval", {
+      assertCurrent: () => {
+        if (!active) {
+          throw new Error("Synthetic owner revoked.");
+        }
+      },
+      requestToolPermission: () => {
+        approvalStarted.resolve();
+        return approval.promise;
+      },
+    });
+    const running = collect(context);
+    await approvalStarted.promise;
+    active = false;
+    approval.resolve({ behavior: "allow", updatedInput: { file_path: "approved.txt" } });
+    const detail = resultDetail(await running);
+    expect(detail.hookDecision).toMatchObject({
+      hookSpecificOutput: { permissionDecision: "deny" },
+    });
+    expect(detail.hookDecision).not.toHaveProperty("hookSpecificOutput.updatedInput");
+  });
+
+  it("preserves native resume and plugin controls while sending the private system prompt only over stdin", async () => {
+    const context = await createContext("normal", {
+      sessionId: "a174e16f-b6e9-48da-ad5a-c437dfc2f9b4",
+      useResume: true,
+    });
+    const nativeArgs = ["--fork-session", "--plugin-dir", "/tmp/synthetic-skills"];
+    context.args = [
+      ...context.args,
+      ...nativeArgs,
+      "--exclude-dynamic-system-prompt-sections",
+      "--replay-user-messages",
+    ];
+    const detail = resultDetail(await collect(context));
+    const args = detail.argv as string[];
+
+    expect(args.slice(0, nativeArgs.length)).toEqual(nativeArgs);
+    expect(args).toEqual(expect.arrayContaining(["--resume", context.sessionId]));
+    expect(args).not.toContain("--session-id");
+    expect(args).not.toContain(context.systemPrompt);
+    expect(args.filter((arg) => arg === "--replay-user-messages")).toHaveLength(1);
+    expect(detail.initialize).toMatchObject({
+      appendSystemPrompt: context.systemPrompt,
+      excludeDynamicSections: true,
+    });
+  });
+
+  it("leaves admitted OpenClaw MCP tools with their own host policy", async () => {
+    const context = await createContext("mcp-hook");
+    const detail = resultDetail(await collect(context));
+    expect(detail.hookDecision).toEqual({ continue: true });
+    expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it("declines unsupported MCP elicitation without interrupting the native turn", async () => {
+    const context = await createContext("mcp-elicitation");
+    const detail = resultDetail(await collect(context));
+    expect(detail.elicitation).toEqual({ action: "decline" });
+    expect(context.requestUserInput).not.toHaveBeenCalled();
+    expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it("ignores replayed records until the lifecycle acknowledges the current input UUID", async () => {
+    const context = await createContext("input-lifecycle", {
+      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+        async ({ toolInput }) => ({
+          behavior: "allow",
+          updatedInput: toolInput,
+        }),
+      ),
+    });
+    for (const prompt of ["first input", "second input"]) {
+      const records = await collect({
+        ...context,
+        prompt,
+        promptContext: { prependContext: "current private context" },
+      });
+      expect(records.filter((record) => record.type === "result")).toHaveLength(1);
+      expect(records.some((record) => record.type === "assistant")).toBe(false);
+      const detail = resultDetail(records);
+      expect(detail).toMatchObject({ user: prompt, matchedInputUuid: expect.any(String) });
+      if (prompt === "second input") {
+        expect(detail.priorResponses).toMatchObject({
+          "prior-pre": { hookSpecificOutput: { permissionDecision: "deny" } },
+          "prior-permission": { behavior: "deny" },
+          "prior-context": {},
+        });
+        expect((detail.priorResponses as Record<string, unknown>)["prior-context"]).toEqual({});
+      }
+    }
+    expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it("rejects an already aborted run before reading its credential or creating a native process", async () => {
+    const controller = new AbortController();
+    const reason = new Error("Synthetic owner cancelled before startup.");
+    controller.abort(reason);
+    const context = await createContext("normal", { abortSignal: controller.signal });
+    const createData = vi.fn(() => Buffer.from("synthetic unused credential"));
+    const run = async () => {
+      for await (const record of executeClaudeCli(context, { fd: 3, createData })) {
+        void record;
+      }
+    };
+    await expect(run()).rejects.toBe(reason);
+    expect(createData).not.toHaveBeenCalled();
+    await expect(access(path.join(context.cwd, "fixture.pid"))).rejects.toThrow();
+  });
+
+  it("revalidates the admitted owner after native initialization before sending any user input", async ({
+    signal,
+  }) => {
+    let active = true;
+    const reason = new Error("Synthetic admitted owner was released.");
+    const liveSession = createLiveSession();
+    const context = await createContext("revoked-initialize", {
+      liveSession,
+      assertCurrent: () => {
+        if (!active) {
+          throw reason;
+        }
+      },
+    });
+    const running = collect(context);
+    const outcome = running.catch((error: unknown) => error);
+    try {
+      await fixtureReadyBeforeSettlement(context, "initialize.ready", running, signal);
+      active = false;
+    } finally {
+      await writeFile(path.join(context.cwd, "initialize.release"), "release");
+    }
+    expect(await withinTest(outcome, signal)).toBe(reason);
+    expect(liveSession.current()).toBeUndefined();
+    await expect(access(path.join(context.cwd, "user.received"))).rejects.toThrow();
+  });
+
+  it("reuses one child while delivering private context and host permissions for each turn", async () => {
+    const liveSession = createLiveSession();
+    const context = await createContext("normal", {
+      liveSession,
+      prompt: "Remember orange.",
+      promptContext: { prependContext: "private prefix", appendContext: "private suffix" },
+    });
+    const first = resultDetail(await collect(context));
+    const handle = liveSession.current();
+    const second = resultDetail(
+      await collect({
+        ...context,
+        prompt: "Which color?",
+        promptContext: { prependContext: "second private context" },
+        useResume: true,
+      }),
+    );
+
+    expect(first).toMatchObject({
+      turn: 1,
+      user: "Remember orange.",
+      privateContext: "private prefix\n\nprivate suffix",
+      permission: { behavior: "deny" },
+    });
+    expect(second).toMatchObject({
+      turn: 2,
+      user: "Which color?",
+      privateContext: "second private context",
+      pid: first.pid,
+    });
+    expect(liveSession.current()).toBe(handle);
+    expect(handle?.isIdle()).toBe(true);
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(4);
+    expect(context.requestToolPermission).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cwd: context.cwd,
+        toolName: "Read",
+        toolInput: { file_path: "fixture.txt" },
+      }),
+    );
+  });
+
+  it("answers a native user question once when both hook and permission callbacks request it", async () => {
+    const requestUserInput = vi.fn(async () => ({
+      status: "answered" as const,
+      answers: { question_1: ["Shared flow"] },
+    }));
+    const context = await createContext("user-question", {
+      requestUserInput,
+    });
+    const detail = resultDetail(await collect(context));
+
+    expect(detail.permission).toMatchObject({
+      behavior: "allow",
+      updatedInput: { answers: { "Which path should Claude take?": "Shared flow" } },
+    });
+    expect(requestUserInput).toHaveBeenCalledOnce();
+    expect(context.requestToolPermission).not.toHaveBeenCalled();
+  });
+
+  it("keeps bypass arguments and native allow rules behind the admitted host policy", async () => {
+    const context = await createContext("normal", {
+      toolAvailability: { native: ["Read"], openClaw: ["message"] },
+    });
+    context.args = [
+      ...context.args,
+      "--permission-mode",
+      "bypassPermissions",
+      "--allowedTools",
+      "Bash",
+      "mcp__openclaw__*",
+    ];
+    const detail = resultDetail(await collect(context));
+    const args = detail.argv as string[];
+    const flagValues = (flag: string) => {
+      const start = args.indexOf(flag);
+      if (start === -1) {
+        return [];
+      }
+      const end = args.findIndex((argument, index) => index > start && argument.startsWith("--"));
+      return args
+        .slice(start + 1, end === -1 ? undefined : end)
+        .flatMap((value) => value.split(","));
+    };
+
+    expect(args).not.toContain("bypassPermissions");
+    expect(flagValues("--permission-mode")).toEqual(["default"]);
+    expect(flagValues("--tools")).toEqual(["Read"]);
+    expect(flagValues("--allowedTools")).toEqual(["mcp__openclaw__message"]);
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a pending native permission without blocking the protocol reader", async () => {
+    let cancelled = false;
+    const context = await createContext("cancel-permission", {
+      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+        async ({ toolInput, abortSignal }) => {
+          if (toolInput.file_path === "cancel.txt") {
+            await new Promise<void>((resolve) => {
+              if (abortSignal?.aborted) {
+                resolve();
+              } else {
+                abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+              }
+            });
+            cancelled = true;
+          }
+          return { behavior: "deny", message: "Fixture denied." };
+        },
+      ),
+    });
+
+    const detail = resultDetail(await collect(context));
+
+    expect(cancelled).toBe(true);
+    expect(detail.cancelledDecision).toMatchObject({ behavior: "deny" });
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(3);
+  });
+
+  it("fences background permission decisions after the next turn starts", async () => {
+    const approval = createDeferred<CliBackendToolPermissionResult>();
+    const context = await createContext("background-bash-late-approval", {
+      requestToolPermission: vi.fn<CliBackendExecuteContext["requestToolPermission"]>(
+        async ({ toolCallId }) =>
+          toolCallId === "late-tool"
+            ? approval.promise
+            : { behavior: "deny", message: "Fixture denied." },
+      ),
+    });
+    context.env.CLAUDE_FIXTURE_REPLAY_RECEIPTS = "0";
+    await writeFile(path.join(context.cwd, "background.release"), "release");
+    await collect(context);
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(2);
+    const records: Record<string, unknown>[] = [];
+    for await (const record of executeClaudeCli({
+      ...context,
+      prompt: "next admitted turn",
+      useResume: true,
+    })) {
+      records.push(record);
+      if (record.subtype === "fixture_second_turn") {
+        approval.resolve({ behavior: "allow", updatedInput: { command: "echo late" } });
+      }
+    }
+
+    expect(resultDetail(records).lateDecision).toMatchObject({
+      behavior: "deny",
+      message: "The OpenClaw run is no longer active.",
+    });
+    expect(context.requestToolPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it("frames a large native record across UTF-8 byte boundaries without corrupting it", async () => {
+    const records = await collect(await createContext("large-split-record"));
+    expect(records).toContainEqual({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "🦞" + "x".repeat(300_000) + "🦞" }],
+      },
+    });
+    expect(resultDetail(records).turn).toBe(1);
+  });
+
+  it("reports a native exit with bounded process diagnostics instead of a successful empty reply", async () => {
+    const error = await collect(await createContext("missing-result")).catch(
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(formatErrorMessageForDisplay(error)).toContain(
+      "PermissionError: fixture cannot read its input",
+    );
+  });
+
+  it.each([
+    {
+      scenario: "background-bash-queued-error",
+      expected: { is_error: true, errors: ["fixture background turn failed"] },
+    },
+    {
+      scenario: "background-bash-queued-raw-result",
+      expected: { result: expect.stringContaining('<invoke name="Read">') },
+    },
+  ])(
+    "ends $scenario immediately while native background work remains listed",
+    async ({ scenario, expected }) => {
+      const liveSession = createLiveSession();
+      const context = await createContext(scenario, { liveSession });
+      const records = await collect(context);
+      expect(records.at(-1)).toMatchObject({ type: "result", ...expected });
+      expect(records.at(-1)).not.toHaveProperty("openclaw_interim_result");
+      const firstPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+      expect(liveSession.current()).toBeUndefined();
+      expect(() => process.kill(firstPid, 0)).toThrow();
+      const second = await collect({ ...context, useResume: true });
+      expect(second.at(-1)).toMatchObject({ type: "result", ...expected });
+      const secondPid = Number(await readFile(path.join(context.cwd, "fixture.pid"), "utf8"));
+      expect(secondPid).not.toBe(firstPid);
+      expect(liveSession.current()).toBeUndefined();
+    },
+  );
+});

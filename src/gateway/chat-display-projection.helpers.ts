@@ -1,7 +1,10 @@
-import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  asOptionalObjectRecord as readObjectRecord,
+  asOptionalRecord as readRecord,
+} from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
-import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
+import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
@@ -11,6 +14,24 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+/** Removes private yield inputs from a display copy without changing the source argument objects. */
+export function stripPrivateToolCallContextForDisplay(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "toolCall" || entry.name !== "sessions_yield") {
+    return false;
+  }
+  let changed = false;
+  for (const field of ["arguments", "input"]) {
+    const toolInput = readRecord(entry[field]);
+    if (!toolInput || !("message" in toolInput)) {
+      continue;
+    }
+    const { message: _, ...publicInput } = toolInput;
+    entry[field] = publicInput;
+    changed = true;
+  }
+  return changed;
+}
 
 export function takeAssistantManagedMediaUrlsForDisplay(
   entry: Record<string, unknown>,
@@ -38,13 +59,12 @@ export function stripAssistantMediaDirectivesForDisplay(
   text: string,
   managedMediaUrls: readonly string[],
 ): string {
-  if (managedMediaUrls.length === 0 || !/(?:^|\n)\s*MEDIA:/iu.test(text)) {
+  if (managedMediaUrls.length === 0 || !/(?:^|[\r\n])\s*MEDIA:/iu.test(text)) {
     return text;
   }
   const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));
-  const parsed = splitMediaFromOutput(text, {
+  const parsed = splitMediaOutput(text, {
     extractAudioDirectives: false,
-    extractMarkdownImages: false,
   });
   if (
     !parsed.mediaUrls?.some(
@@ -65,7 +85,7 @@ export function stripAssistantMediaDirectivesForDisplay(
 }
 
 /** Resolve the text cap used when projecting chat history for display. */
-export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
+export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
   }
@@ -75,22 +95,21 @@ export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: nu
 export function truncateChatHistoryText(
   text: string,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  preserveExactPrefix = false,
 ): { text: string; truncated: boolean } {
   if (text.length <= maxChars) {
     return { text, truncated: false };
   }
+  const prefix = truncateUtf16Safe(text, maxChars);
   return {
-    text: `${truncateUtf16Safe(text, maxChars)}\n...(truncated)...`,
+    text: preserveExactPrefix ? prefix : `${prefix}\n...(truncated)...`,
     truncated: true,
   };
 }
 
 export function extractAssistantTextForSilentCheck(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (entry.role !== "assistant") {
+  const entry = readObjectRecord(message);
+  if (entry?.role !== "assistant") {
     return undefined;
   }
   if (typeof entry.text === "string") {
@@ -105,10 +124,10 @@ export function extractAssistantTextForSilentCheck(message: unknown): string | u
 
   const texts: string[] = [];
   for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
+    const typed = readObjectRecord(block);
+    if (!typed) {
       return undefined;
     }
-    const typed = block as { type?: unknown; text?: unknown };
     if (isAssistantInternalReasoningContentType(typed.type)) {
       continue;
     }
@@ -124,45 +143,38 @@ export function isAssistantTextContentType(type: unknown): boolean {
   return type === "text" || type === "input_text" || type === "output_text";
 }
 
-function isAssistantInternalReasoningContentType(type: unknown): boolean {
+export function isAssistantInternalReasoningContentType(type: unknown): boolean {
   return type === "thinking" || type === "reasoning" || type === "redacted_thinking";
 }
 
 export function hasAssistantNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      !isAssistantTextContentType((block as { type?: unknown }).type),
+  const content = readObjectRecord(message)?.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      const entry = readObjectRecord(block);
+      return entry && !isAssistantTextContentType(entry.type);
+    })
   );
 }
 
 export function hasAssistantDisplayableNonTextContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return false;
-  }
-  return content.some(
-    (block) =>
-      block &&
-      typeof block === "object" &&
-      !isAssistantTextContentType((block as { type?: unknown }).type) &&
-      !isAssistantInternalReasoningContentType((block as { type?: unknown }).type),
+  const content = readObjectRecord(message)?.content;
+  return (
+    Array.isArray(content) &&
+    content.some((block) => {
+      const entry = readObjectRecord(block);
+      return (
+        entry &&
+        !isAssistantTextContentType(entry.type) &&
+        !isAssistantInternalReasoningContentType(entry.type)
+      );
+    })
   );
 }
 
 export function shouldPreserveAssistantControlReplyText(message: Record<string, unknown>): boolean {
-  if (isProjectedSessionsSendForwardedMessage(message)) {
+  if (isProjectedForwardedMessage(message)) {
     return true;
   }
   if (!hasAssistantDisplayableNonTextContent(message)) {
@@ -174,11 +186,8 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
       ? [content]
       : Array.isArray(content)
         ? content.flatMap((block) => {
-            if (!block || typeof block !== "object" || Array.isArray(block)) {
-              return [];
-            }
-            const typed = block as { type?: unknown; text?: unknown };
-            return isAssistantTextContentType(typed.type) && typeof typed.text === "string"
+            const typed = readRecord(block);
+            return isAssistantTextContentType(typed?.type) && typeof typed?.text === "string"
               ? [typed.text]
               : [];
           })
@@ -208,24 +217,13 @@ export function isEmptyTextOnlyContent(content: unknown): boolean {
   if (!Array.isArray(content)) {
     return false;
   }
-  if (content.length === 0) {
-    return true;
-  }
-  let sawText = false;
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const entry = block as { type?: unknown; text?: unknown };
-    if (entry.type !== "text") {
-      return false;
-    }
-    sawText = true;
-    if (typeof entry.text !== "string" || entry.text.trim().length > 0) {
+    const entry = readObjectRecord(block);
+    if (entry?.type !== "text" || typeof entry.text !== "string" || entry.text.trim().length > 0) {
       return false;
     }
   }
-  return sawText;
+  return true;
 }
 
 export function hasTranscriptMediaFacts(message: Record<string, unknown>): boolean {
@@ -241,10 +239,7 @@ export function extractProjectedText(content: unknown): string {
   }
   const parts: string[] = [];
   for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const text = (block as { text?: unknown }).text;
+    const text = readObjectRecord(block)?.text;
     if (typeof text === "string") {
       parts.push(text);
     }
@@ -252,18 +247,27 @@ export function extractProjectedText(content: unknown): string {
   return parts.join("\n");
 }
 
-export function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "user") {
-    return false;
-  }
+export function isCronRunMessage(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  return (
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "cron" &&
+    Boolean(provenance.jobId && provenance.runId && provenance.sourceSessionKey)
+  );
 }
 
-export function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
+export function isForwardedUserMessage(message: Record<string, unknown>): boolean {
+  return message.role === "user" && hasForwardedMessageProvenance(message);
+}
+
+export function isProjectedForwardedMessage(message: Record<string, unknown>): boolean {
+  return message.role === "assistant" && hasForwardedMessageProvenance(message);
+}
+
+function hasForwardedMessageProvenance(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
-  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+  return (
+    (provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send") ||
+    isCronRunMessage(message)
+  );
 }

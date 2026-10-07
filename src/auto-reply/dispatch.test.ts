@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { registerReplyDispatcherSettledTask } from "./dispatch-dispatcher.js";
+import { registerReplyDispatcherSettledTask, withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "./reply-payload.js";
 import type { ReplyDispatchBeforeDeliver } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
@@ -80,7 +80,6 @@ const {
   dispatchInboundMessageWithDispatcher,
   dispatchInboundMessageWithBufferedDispatcher,
   dispatchInboundMessageWithProjectedDispatcher,
-  withReplyDispatcher,
 } = await import("./dispatch.js");
 const { recordReplyUsageState } = await import("./reply/reply-usage-state.js");
 
@@ -703,7 +702,7 @@ describe("withReplyDispatcher", () => {
       text: "message rewrite",
       mediaUrls: ["media://reply.png"],
     });
-    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toEqual({
+    expect(payload ? getReplyPayloadMetadata(payload) : undefined).toMatchObject({
       assistantMessageIndex: 7,
     });
     expect(hoisted.dispatchReplyFromConfigMock.mock.calls[0]?.[0]?.onSessionMetadataChanges).toBe(

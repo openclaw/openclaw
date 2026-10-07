@@ -6,25 +6,20 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { appendRegularFile } from "../infra/fs-safe.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 let rawStreamReady = false;
 
-function isRawStreamEnabled(): boolean {
-  return isTruthyEnvValue(process.env.OPENCLAW_RAW_STREAM);
-}
-
-function resolveRawStreamPath(): string {
-  return (
-    process.env.OPENCLAW_RAW_STREAM_PATH?.trim() ||
-    path.join(resolveStateDir(), "logs", "raw-stream.jsonl")
-  );
-}
-
-export function appendRawStream(createPayload: () => Record<string, unknown>) {
-  if (!isRawStreamEnabled()) {
+export function appendRawStream(
+  createPayload: () => Record<string, unknown>,
+  sessionKey: string | undefined,
+) {
+  if (!isTruthyEnvValue(process.env.OPENCLAW_RAW_STREAM) || isIncognitoSessionKey(sessionKey)) {
     return;
   }
-  const rawStreamPath = resolveRawStreamPath();
+  const rawStreamPath =
+    process.env.OPENCLAW_RAW_STREAM_PATH?.trim() ||
+    path.join(resolveStateDir(), "logs", "raw-stream.jsonl");
   if (!rawStreamReady) {
     rawStreamReady = true;
     try {

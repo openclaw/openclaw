@@ -1,10 +1,11 @@
 // Line tests cover how the bot resolves the inbound media cap it hands to the handlers.
 import type { webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliverFn = (
-  event: webhook.Event,
+  events: readonly webhook.Event[],
   destination: string,
   control: Record<string, unknown>,
 ) => Promise<void>;
@@ -46,10 +47,7 @@ function configWith(mediaMaxMb?: number): OpenClawConfig {
 
 // The bot only reveals the resolved cap by handing it to the handlers, so drive
 // the spool's deliver callback once and read what the handlers were given.
-async function resolveMediaMaxBytes(opts: {
-  configuredMediaMaxMb?: number;
-  optionMediaMaxMb?: number;
-}): Promise<number> {
+async function resolveMediaMaxBytes(configuredMediaMaxMb?: number): Promise<number> {
   let deliver: DeliverFn | undefined;
   createLineWebhookSpoolMock.mockImplementation((spoolOptions: { deliver: DeliverFn }) => {
     deliver = spoolOptions.deliver;
@@ -57,16 +55,15 @@ async function resolveMediaMaxBytes(opts: {
   });
 
   createLineBot({
-    channelAccessToken: "test-token",
-    channelSecret: "test-secret",
-    config: configWith(opts.configuredMediaMaxMb),
-    ...(opts.optionMediaMaxMb === undefined ? {} : { mediaMaxMb: opts.optionMediaMaxMb }),
+    config: configWith(configuredMediaMaxMb),
+    runtime: createNonExitingRuntime(),
+    onMessage: async () => {},
   });
 
   if (!deliver) {
     throw new Error("createLineBot did not build a spool deliver callback");
   }
-  await deliver({ type: "message" } as webhook.Event, "destination", {});
+  await deliver([{ type: "message" } as webhook.Event], "destination", {});
 
   const context = handleLineWebhookEventsMock.mock.calls.at(-1)?.[1];
   if (typeof context?.mediaMaxBytes !== "number") {
@@ -85,27 +82,15 @@ describe("createLineBot media cap", () => {
     { mediaMaxMb: -5, label: "negative" },
   ])("treats a $label mediaMaxMb as unset instead of a 0-byte cap", async ({ mediaMaxMb }) => {
     // A non-positive cap would otherwise reject every non-empty inbound download.
-    await expect(resolveMediaMaxBytes({ configuredMediaMaxMb: mediaMaxMb })).resolves.toBe(10 * MB);
+    await expect(resolveMediaMaxBytes(mediaMaxMb)).resolves.toBe(10 * MB);
   });
 
   it("keeps the default when mediaMaxMb is unset", async () => {
-    await expect(resolveMediaMaxBytes({})).resolves.toBe(10 * MB);
+    await expect(resolveMediaMaxBytes()).resolves.toBe(10 * MB);
   });
 
   it("still caps at a configured positive mediaMaxMb", async () => {
-    await expect(resolveMediaMaxBytes({ configuredMediaMaxMb: 2 })).resolves.toBe(2 * MB);
-  });
-
-  it("keeps the caller override ahead of account config", async () => {
-    await expect(
-      resolveMediaMaxBytes({ configuredMediaMaxMb: 2, optionMediaMaxMb: 3 }),
-    ).resolves.toBe(3 * MB);
-  });
-
-  it("falls through a non-positive caller override to the account config", async () => {
-    await expect(
-      resolveMediaMaxBytes({ configuredMediaMaxMb: 2, optionMediaMaxMb: 0 }),
-    ).resolves.toBe(2 * MB);
+    await expect(resolveMediaMaxBytes(2)).resolves.toBe(2 * MB);
   });
 });
 
@@ -132,16 +117,16 @@ describe("createLineBot pending history cap", () => {
       },
     };
     createLineBot({
-      channelAccessToken: "test-token",
-      channelSecret: "test-secret",
       accountId: "work",
+      runtime: createNonExitingRuntime(),
+      onMessage: async () => {},
       config: {
         messages: { groupChat: { historyLimit: 7 } },
         channels: { line },
       } as unknown as OpenClawConfig,
     });
 
-    await deliver?.({ type: "message" } as webhook.Event, "destination", {});
+    await deliver?.([{ type: "message" } as webhook.Event], "destination", {});
     expect(handleLineWebhookEventsMock.mock.calls.at(-1)?.[1].historyLimit).toBe(testCase.expected);
   });
 });

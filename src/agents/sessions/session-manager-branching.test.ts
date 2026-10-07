@@ -1,5 +1,6 @@
 // Branch replacement keeps the live manager and durable identity on the same commit edge.
 import path from "node:path";
+import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -9,7 +10,6 @@ import {
   loadTranscriptEvents,
   onSessionIdentityMutation,
   replaceTranscriptEventsSync,
-  resolveSessionTranscriptDatabasePath,
   updateSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -17,16 +17,25 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
+import { SessionManager } from "./session-manager.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 afterEach(() => vi.restoreAllMocks());
 
 describe("SessionManager branch replacement", () => {
-  it.each(["memory", "sqlite"])(
-    "preserves opaque parents and labels in a %s branch",
-    async (mode) => {
+  it.each(["memory", "sqlite"].flatMap((mode) => [3, 4].map((version) => ({ mode, version }))))(
+    "preserves projection version $version, opaque parents, and labels in a $mode branch",
+    async ({ mode, version }) => {
       const dir = tempDirs.make("openclaw-session-manager-branch-");
       const scope = {
         agentId: "main",
@@ -35,7 +44,7 @@ describe("SessionManager branch replacement", () => {
         storePath: path.join(dir, "sessions.json"),
       };
       const entries = [
-        { type: "session", version: CURRENT_SESSION_VERSION, id: scope.sessionId, cwd: dir },
+        { type: "session", version, id: scope.sessionId, cwd: dir },
         {
           type: "message",
           id: "user",
@@ -73,7 +82,7 @@ describe("SessionManager branch replacement", () => {
 
       const branchId = await manager.createBranchedSession("reply");
       const expected = [
-        expect.objectContaining({ id: manager.getSessionId(), type: "session" }),
+        expect.objectContaining({ id: manager.getSessionId(), type: "session", version }),
         entries[1],
         entries[2],
         entries[3],
@@ -93,6 +102,16 @@ describe("SessionManager branch replacement", () => {
         expect(branchId).toBeUndefined();
         expect(manager.getSessionTarget()).toBeUndefined();
       }
+      manager.appendCompaction("summary", "user", 1);
+      manager.appendResetBoundary("reset", "reply");
+      const reopened =
+        mode === "sqlite"
+          ? SessionManager.openBounded(
+              { ...scope, sessionId: manager.getSessionId() },
+              { maxBytes: 4096, maxEvents: 2 },
+            )
+          : SessionManager.fromEntries(manager.getPersistedEntries());
+      expect(reopened.getHeader()?.version).toBe(version);
     },
   );
 
@@ -129,6 +148,8 @@ describe("SessionManager branch replacement", () => {
     });
 
     const sessionManager = SessionManager.open(scope, dir);
+    const sourceTarget = sessionManager.getSessionTarget();
+    expect(sourceTarget).toMatchObject(scope);
     const observedBranches: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.kind !== "replace" || !mutation.current.sessionKeys.includes(sessionKey)) {
@@ -156,7 +177,7 @@ describe("SessionManager branch replacement", () => {
     expect(observedBranches).toEqual([
       {
         sessionId: branchedSessionId,
-        target: { ...scope, sessionId: branchedSessionId },
+        target: { ...sourceTarget, sessionId: branchedSessionId },
         durableEntries: sessionManager.getEntries(),
       },
     ]);
@@ -185,6 +206,17 @@ describe("SessionManager branch replacement", () => {
       expect.objectContaining({ id: user.messageId, type: "message" }),
       expect.objectContaining({ id: assistant.messageId, type: "message" }),
     ]);
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    expect(sessionManager.removeTrailingEntries((entry) => entry.id === assistant.messageId)).toBe(
+      1,
+    );
+    expect(() => sessionManager.prepareTranscriptRewrite()).not.toThrow();
+    await expect(loadTranscriptEvents({ ...scope, sessionId: branchedSessionId })).resolves.toEqual(
+      [
+        expect.objectContaining({ id: branchedSessionId, type: "session" }),
+        expect.objectContaining({ id: user.messageId, type: "message" }),
+      ],
+    );
   });
 
   it("does not publish a branch identity when transcript persistence fails", async () => {
@@ -200,14 +232,19 @@ describe("SessionManager branch replacement", () => {
     const beforeEntry = loadSessionEntry(scope);
     const beforeEvents = await loadTranscriptEvents(scope);
     const beforeEntries = manager.getEntries();
-    const database = openOpenClawAgentDatabase({
-      agentId: scope.agentId,
-      path: resolveSessionTranscriptDatabasePath(scope),
-    });
-    database.db.exec(`
-      CREATE TRIGGER reject_branch_transcript BEFORE INSERT ON transcript_events
-      BEGIN SELECT RAISE(ABORT, 'branch transcript write failed'); END;
-    `);
+    const beforeTarget = manager.getSessionTarget();
+    expect(beforeTarget).toMatchObject(scope);
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (request.stage === "commit") {
+            throw new Error("branch transcript write failed");
+          }
+          admit(request, grant);
+        }, attachment),
+      );
     const replacements: unknown[] = [];
     const stop = onSessionIdentityMutation((mutation) => {
       if (mutation.previous.sessionKeys.includes(scope.sessionKey)) {
@@ -220,12 +257,13 @@ describe("SessionManager branch replacement", () => {
       );
     } finally {
       stop();
+      admission.mockRestore();
     }
 
     expect(loadSessionEntry(scope)).toEqual(beforeEntry);
     expect(await loadTranscriptEvents(scope)).toEqual(beforeEvents);
     expect(manager.getSessionId()).toBe(scope.sessionId);
-    expect(manager.getSessionTarget()).toEqual(scope);
+    expect(manager.getSessionTarget()).toEqual(beforeTarget);
     expect(manager.getEntries()).toEqual(beforeEntries);
     expect(manager.getLeafId()).toBe(leafId);
     expect(replacements).toEqual([]);
@@ -255,10 +293,7 @@ describe("SessionManager branch replacement", () => {
       const assistant = await appendTranscriptMessage(scope, {
         cwd: dir,
         eventId: "branch-race-assistant",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "answer before raced branch" }],
-        },
+        message: textAssistant("answer before raced branch"),
         parentId: user.messageId,
       });
       const sessionManager = SessionManager.open(scope, dir);
@@ -307,21 +342,25 @@ describe("SessionManager branch replacement", () => {
       });
       await ownerChangeStarted;
 
-      const queuedAt = Date.now();
-      const committedAt = queuedAt + 1_000;
+      const queuedAt = Date.now() - 1_000;
       const clock = vi.spyOn(Date, "now").mockReturnValue(queuedAt);
       const branch = runAsWriter(() => sessionManager.createBranchedSession(assistant.messageId));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       const whileQueued = readManagerState();
-      clock.mockReturnValue(committedAt);
+      clock.mockRestore();
+      const commitStartedAt = Date.now();
       releaseOwnerChange();
 
       await ownerChange;
       if (change === "lifecycle") {
         await expect(branch).rejects.toMatchObject({
-          cause: { code: "session-rebound", expectedSessionId: sessionId, sessionKey },
+          cause: {
+            code: "session-rebound",
+            expectedSessionIdHash: redactIdentifier(sessionId),
+            sessionKeyHash: redactIdentifier(sessionKey),
+          },
         });
         expect(loadSessionEntry(scope)).toMatchObject({
           lifecycleRevision: "branch-replacement-revision",
@@ -340,7 +379,7 @@ describe("SessionManager branch replacement", () => {
             sessionManager.appendMessage({
               role: "user",
               content: "stale successor append",
-              timestamp: committedAt,
+              timestamp: commitStartedAt,
             }),
           ).toThrow(SessionTranscriptWriterClaimReboundError);
         }
@@ -350,9 +389,11 @@ describe("SessionManager branch replacement", () => {
         expect(loadSessionEntry(scope)).toMatchObject({
           label: "updated while branch queued",
           sessionId: branchId,
-          updatedAt: committedAt,
           activeWriterRunId: "branch-original-writer",
         });
+        const updatedAt = loadSessionEntry(scope)?.updatedAt;
+        expect(updatedAt).toBeGreaterThanOrEqual(commitStartedAt);
+        expect(updatedAt).toBeLessThanOrEqual(Date.now());
         expect(sessionManager.getSessionId()).toBe(branchId);
       }
       expect(whileQueued).toEqual(beforeBranch);

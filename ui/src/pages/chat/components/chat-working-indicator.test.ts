@@ -67,6 +67,27 @@ describe("selectWorkingClawSurprise", () => {
 });
 
 describe("renderChatWorkingIndicator", () => {
+  it("renders neutral dots without claw surprises and forwards authored phrases", () => {
+    const container = document.createElement("div");
+    const workingPhrases = ["Building"];
+    render(
+      renderChatWorkingIndicator(
+        { kind: "reading-indicator", key: findRenderKey(true), startedAt: 1 },
+        { mascot: "none", workingPhrases },
+      ),
+      container,
+    );
+    const bubble = container.querySelector(".chat-reading-indicator--neutral");
+    expect(bubble?.querySelectorAll("span")).toHaveLength(3);
+    expect(bubble?.querySelector("svg")).toBeNull();
+    expect(
+      [...bubble!.classList].filter((name) => name.startsWith("chat-reading-indicator--")),
+    ).toEqual(["chat-reading-indicator--neutral"]);
+    expect(container.querySelector("openclaw-working-phrase")).toHaveProperty(
+      "phrases",
+      workingPhrases,
+    );
+  });
   // The render path seeds with the module's per-page-load salt, so probe that
   // same default salt for keys that do (and do not) surprise this session.
   function findRenderKey(wantSurprise: boolean): string {

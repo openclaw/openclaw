@@ -2,6 +2,7 @@ import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { raceWithTimeout, withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { toCopilotError } from "./attempt-config.js";
 import {
   BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
@@ -46,7 +47,7 @@ export async function finalizeCopilotAttempt(
   }
   return result;
 }
-export function deferBackgroundCompactionCleanup(params: {
+export async function deferBackgroundCompactionCleanup(params: {
   abortSignal: AbortSignal | undefined;
   awaitSessionIdle: boolean;
   bridge: ReturnType<typeof attachEventBridge>;
@@ -55,70 +56,51 @@ export function deferBackgroundCompactionCleanup(params: {
   cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
   deleteSessionOnIncompleteCleanup: boolean;
-  finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
   session: SessionLike;
   timeoutMs: number;
 }): Promise<"aborted" | "completed" | "deadline"> {
-  return (async () => {
-    let outcome: "aborted" | "completed" | "deadline" = "deadline";
+  let outcome: "aborted" | "completed" | "deadline" = "deadline";
+  try {
+    outcome = await awaitDeferredCleanupBeforeDeadline({
+      abortSignal: params.abortSignal,
+      awaitSessionIdle: params.awaitSessionIdle,
+      bridge: params.bridge,
+      timeoutMs: params.timeoutMs,
+    });
+  } catch {
+  } finally {
+    if (outcome !== "completed") {
+      await cancelBackgroundCompactionBeforeTeardown(params.session);
+      params.bridge.settleCompactionWait();
+    }
+    params.bridge.detach();
+    await params.bridge.awaitAgentEventChain();
     try {
-      outcome = await awaitDeferredCleanupBeforeDeadline({
-        abortSignal: params.abortSignal,
-        awaitSessionIdle: params.awaitSessionIdle,
-        bridge: params.bridge,
-        timeoutMs: params.timeoutMs,
-      });
-    } catch {
-    } finally {
-      if (outcome !== "completed") {
-        await cancelBackgroundCompactionBeforeTeardown(params.session);
-        params.bridge.settleCompactionWait();
-      }
-      params.finalizeNativeSubagents?.();
-      params.bridge.detach();
+      await params.session.disconnect();
+    } catch {}
+    params.cleanupToolBridge?.();
+    await params.cleanupByokProxy?.();
+    if (outcome !== "completed" && params.deleteSessionOnIncompleteCleanup && params.sdkSessionId) {
       try {
-        await params.session.disconnect();
-      } catch {}
-      params.cleanupToolBridge?.();
-      await params.cleanupByokProxy?.();
-      if (
-        outcome !== "completed" &&
-        params.deleteSessionOnIncompleteCleanup &&
-        params.sdkSessionId
-      ) {
-        try {
-          await params.handle.client.deleteSession(params.sdkSessionId);
-        } catch {}
-      }
-      try {
-        await params.pool.release(params.handle);
+        await params.handle.client.deleteSession(params.sdkSessionId);
       } catch {}
     }
-    return outcome;
-  })();
+    try {
+      await params.pool.release(params.handle);
+    } catch {}
+  }
+  return outcome;
 }
 async function cancelBackgroundCompactionBeforeTeardown(session: SessionLike): Promise<void> {
   const cancelBackgroundCompaction = session.rpc?.history?.cancelBackgroundCompaction;
   if (!cancelBackgroundCompaction) {
     return;
   }
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<void>((resolve) => {
-    timeoutId = setTimeout(resolve, BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS);
-  });
-  try {
-    await Promise.race([
-      Promise.resolve()
-        .then(() => cancelBackgroundCompaction())
-        .catch(() => undefined),
-      deadline,
-    ]);
-  } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-  }
+  await withTimeout(
+    Promise.resolve().then(() => cancelBackgroundCompaction()),
+    BACKGROUND_COMPACTION_CANCEL_TIMEOUT_MS,
+  ).catch(() => undefined);
 }
 async function awaitDeferredCleanupBeforeDeadline(params: {
   abortSignal: AbortSignal | undefined;
@@ -136,21 +118,8 @@ async function awaitDeferredCleanupBeforeDeadline(params: {
     await params.bridge.awaitCompactionCompletion();
     return "completed" as const;
   })();
-  let resolveAbort: () => void = () => undefined;
-  const aborted = new Promise<"aborted">((resolve) => {
-    resolveAbort = () => resolve("aborted");
-    params.abortSignal?.addEventListener("abort", resolveAbort, { once: true });
+  return await raceWithTimeout(completion, params.timeoutMs, () => "deadline" as const, {
+    signal: params.abortSignal,
+    onAbort: () => "aborted" as const,
   });
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<"deadline">((resolve) => {
-    timeoutId = setTimeout(() => resolve("deadline"), params.timeoutMs);
-  });
-  try {
-    return await Promise.race([completion, aborted, deadline]);
-  } finally {
-    params.abortSignal?.removeEventListener("abort", resolveAbort);
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-  }
 }

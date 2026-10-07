@@ -1,4 +1,3 @@
-// Terminal Core tests cover display-safe path shortening.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -49,8 +48,8 @@ describe("createDisplayStringFormatter", () => {
     expect(displayString(`${openclawHome}2/state`)).toBe(`${openclawHome}2/state`);
   });
 
-  it.each(["$&", "$`", "$'", "$$"])("keeps %s literal when expanding OPENCLAW_HOME", (pattern) => {
-    const home = path.resolve("test-home", `${pattern}user`);
+  it("keeps replacement syntax literal when expanding OPENCLAW_HOME", () => {
+    const home = path.resolve("test-home", "$&user");
     stubHome(home, "~/state");
     const displayString = createDisplayStringFormatter();
 

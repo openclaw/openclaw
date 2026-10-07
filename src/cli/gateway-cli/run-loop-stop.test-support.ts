@@ -1,0 +1,558 @@
+import { setImmediate } from "node:timers/promises";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { withTimeout } from "../../infra/fs-safe.js";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
+import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
+import {
+  createActiveWorkSnapshot,
+  createUpdateRespawnChild,
+  type UpdateRespawnFixtures,
+} from "./run-loop.test-support.js";
+
+export function registerForegroundUpdateStopTests({
+  waitForGatewayActiveWork,
+  requestManagedServiceUpdateHandoffPark,
+  consumeGatewayRestartIntent,
+  managedUpdateSuccessorOwner,
+  isForegroundUpdateHandoff,
+  completeForegroundUpdateHandoffAfterClose,
+  captureForegroundUpdateHandoffStop,
+  respawnGatewayProcessForUpdate,
+  hasManagedProviderLocalServices,
+  stopManagedProviderLocalServices,
+  cancelManagedServiceUpdateHandoff,
+  acquireGatewayLock,
+  withIsolatedSignals,
+  createSignaledLoopHarness,
+  waitForLoopCondition,
+  createSignaledStart,
+  createRuntimeWithExitSignal,
+  runLoopWithStart,
+  waitForStart,
+  consumeGatewayRestartIntentPayloadSync,
+  commitManagedServiceUpdateHandoff,
+  flushLogger,
+  waitForGatewayHealthyRestart,
+  respawnHealth,
+  markUpdateRestartSentinelFailure,
+  writeGatewayRestartHandoffSync,
+  isGatewayWorkAdmissionClosed,
+}: UpdateRespawnFixtures): void {
+  function prepareForegroundHandoff() {
+    consumeGatewayRestartIntent.mockReturnValueOnce({
+      reason: "update.run",
+      successorOwner: managedUpdateSuccessorOwner,
+    });
+    isForegroundUpdateHandoff.mockReturnValue(true);
+  }
+
+  async function startStopLoop(close = vi.fn(async () => {}), lockPort?: number) {
+    const { start, started } = createSignaledStart(close);
+    const { runtime, exited } = createRuntimeWithExitSignal();
+    await runLoopWithStart({ start, runtime, lockPort });
+    await waitForStart(started);
+    return { close, start, runtime, exited };
+  }
+
+  it.each(["pending-completion", "false", "reject"] as const)(
+    "retries the captured foreground Stop operation after %s settlement",
+    async (outcome) => {
+      const pendingCompletion = outcome === "pending-completion";
+      const first = createDeferred<boolean>();
+      const retry = createDeferred<boolean>();
+      const settle = vi
+        .fn<() => Promise<boolean>>()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(retry.promise);
+      captureForegroundUpdateHandoffStop.mockReturnValueOnce({ settle, canPark: () => false });
+      const releaseLock = vi.fn(async () => {});
+      acquireGatewayLock.mockResolvedValueOnce({ release: releaseLock });
+      if (pendingCompletion) {
+        prepareForegroundHandoff();
+        completeForegroundUpdateHandoffAfterClose.mockResolvedValueOnce("pending");
+        cancelManagedServiceUpdateHandoff.mockResolvedValueOnce(false);
+      }
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { close, start, runtime, exited } = await startStopLoop(
+          undefined,
+          pendingCompletion ? 18789 : undefined,
+        );
+        const failures: unknown[] = [];
+        try {
+          captureSignal(pendingCompletion ? "SIGUSR2" : "SIGINT")();
+          await waitForLoopCondition(
+            () => settle.mock.calls.length === 1,
+            "first Stop did not join the captured owner",
+          );
+          if (pendingCompletion) {
+            expect(releaseLock).toHaveBeenCalledOnce();
+            expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
+              managedUpdateSuccessorOwner,
+            );
+          } else {
+            captureSignal("SIGINT")();
+            expect(settle).toHaveBeenCalledOnce();
+            expect(isGatewayWorkAdmissionClosed()).toBe(true);
+          }
+          expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          if (outcome === "reject") {
+            first.reject(new Error("fixture ownership inspection unavailable"));
+          } else {
+            first.resolve(false);
+          }
+          await setImmediate();
+          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          captureSignal("SIGINT")();
+          await waitForLoopCondition(
+            () => settle.mock.calls.length === 2,
+            "explicit Stop did not retry its captured owner",
+          );
+          expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+          expect(close).toHaveBeenCalledTimes(pendingCompletion ? 1 : 0);
+          expect(runtime.exit).not.toHaveBeenCalled();
+          retry.resolve(true);
+          const exitCode = pendingCompletion ? 1 : 0;
+          await expect(withTimeout(exited, 4000)).resolves.toBe(exitCode);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(exitCode);
+          expect(close).toHaveBeenCalledOnce();
+          expect(start).toHaveBeenCalledOnce();
+          expect(acquireGatewayLock).toHaveBeenCalledOnce();
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledTimes(
+            pendingCompletion ? 1 : 0,
+          );
+          if (pendingCompletion) {
+            expect(completeForegroundUpdateHandoffAfterClose).toHaveBeenCalledExactlyOnceWith(
+              managedUpdateSuccessorOwner,
+            );
+          }
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
+          first.resolve(true);
+          retry.resolve(true);
+          if (!runtime.exit.mock.calls.length && settle.mock.calls.length < 2) {
+            captureSignal("SIGINT")();
+          }
+          await withTimeout(exited, 4000);
+        } catch (error) {
+          failures.push(error);
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "Stop settlement assertion and cleanup failed", {
+            cause: failures[0],
+          });
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+      });
+    },
+  );
+
+  it.each(["close-deadline", "close-failure-uncertain", "close-failure-confirmed-first"] as const)(
+    "preserves foreground Stop rescue after verified park: %s",
+    async (scenario) => {
+      const first = createDeferred<boolean>();
+      const retry = createDeferred<boolean>();
+      const closing = createDeferred();
+      const cancellation = createDeferred<false | "restored-in-process">();
+      const captured = createDeferred<(identity: typeof managedUpdateSuccessorOwner) => void>();
+      let parkReady = false;
+      const settle = vi
+        .fn<() => Promise<boolean>>()
+        .mockReturnValueOnce(first.promise)
+        .mockReturnValueOnce(retry.promise);
+      captureForegroundUpdateHandoffStop.mockImplementationOnce(({ onPark }) => {
+        captured.resolve(onPark);
+        return {
+          settle,
+          canPark: (identity) =>
+            parkReady &&
+            identity.handoffId === managedUpdateSuccessorOwner.handoffId &&
+            identity.installRoot === managedUpdateSuccessorOwner.installRoot,
+        };
+      });
+      isForegroundUpdateHandoff.mockReturnValue(true);
+      cancelManagedServiceUpdateHandoff.mockImplementationOnce(() => cancellation.promise);
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn(async () => {
+          if (scenario !== "close-deadline") {
+            throw new Error("fixture server-close failure");
+          }
+          await closing.promise;
+        });
+        const { runtime } = await startStopLoop(close);
+        try {
+          captureSignal("SIGINT")();
+          const onPark = await withTimeout(captured.promise, 4000);
+          expect(close).not.toHaveBeenCalled();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          vi.useFakeTimers();
+          parkReady = true;
+          onPark(managedUpdateSuccessorOwner);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(close).toHaveBeenCalledOnce();
+          expect(requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
+            managedUpdateSuccessorOwner,
+          );
+          if (scenario === "close-deadline") {
+            captureSignal("SIGINT")();
+            expect(settle).toHaveBeenCalledOnce();
+            await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_TIMEOUT_MS - 1);
+            expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+          }
+          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
+            managedUpdateSuccessorOwner,
+          );
+          expect(runtime.exit).not.toHaveBeenCalled();
+          if (scenario === "close-failure-uncertain") {
+            cancellation.resolve(false);
+            first.resolve(false);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            captureSignal("SIGINT")();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(settle).toHaveBeenCalledTimes(2);
+            expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            retry.resolve(true);
+          } else if (scenario === "close-failure-confirmed-first") {
+            first.resolve(true);
+            await vi.advanceTimersByTimeAsync(0);
+            expect(runtime.exit).not.toHaveBeenCalled();
+            expect(settle).toHaveBeenCalledOnce();
+            cancellation.resolve(false);
+          } else {
+            cancellation.resolve("restored-in-process");
+            first.resolve(true);
+          }
+          await vi.advanceTimersByTimeAsync(0);
+          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+          expect(close).toHaveBeenCalledOnce();
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
+        } finally {
+          closing.resolve();
+          cancellation.resolve("restored-in-process");
+          first.resolve(true);
+          retry.resolve(true);
+          if (vi.isFakeTimers()) {
+            await vi.advanceTimersByTimeAsync(0);
+          }
+          vi.clearAllTimers();
+          vi.useRealTimers();
+        }
+      });
+    },
+  );
+
+  it("preserves pending Stop admission when SIGUSR2 intent reading fails", async () => {
+    const joined = createDeferred<boolean>();
+    const settle = vi.fn(() => joined.promise);
+    captureForegroundUpdateHandoffStop.mockReturnValueOnce({ settle, canPark: () => false });
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await startStopLoop();
+      const restart = await import("../../infra/restart.js");
+      const actual =
+        await vi.importActual<typeof import("../../infra/restart.js")>("../../infra/restart.js");
+      const rollback = vi
+        .spyOn(restart, "rollbackGatewayRestartSignalAdmission")
+        .mockImplementation(actual.rollbackGatewayRestartSignalAdmission);
+      try {
+        captureSignal("SIGINT")();
+        await waitForLoopCondition(
+          () => settle.mock.calls.length === 1,
+          "Stop did not capture its pending owner",
+        );
+        const reads = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+        consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
+          throw new Error("fixture restart intent unavailable");
+        });
+        captureSignal("SIGUSR2")();
+        await setImmediate();
+        await setImmediate();
+        expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(reads + 1);
+        expect(rollback).not.toHaveBeenCalled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        expect(close).not.toHaveBeenCalled();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(settle).toHaveBeenCalledOnce();
+        expect(captureForegroundUpdateHandoffStop).toHaveBeenCalledOnce();
+        joined.resolve(true);
+        await expect(withTimeout(exited, 4000)).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledOnce();
+        expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+      } finally {
+        joined.resolve(true);
+        rollback.mockRestore();
+        await withTimeout(exited, 4000);
+      }
+    });
+  });
+
+  it("does not start a second active-work drain for repeated shutdown signals", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { exited } = await createSignaledLoopHarness();
+      const drain = createDeferred();
+      waitForGatewayActiveWork.mockImplementationOnce(async () => {
+        await drain.promise;
+        return { drained: true, snapshot: createActiveWorkSnapshot() };
+      });
+
+      try {
+        const sigterm = captureSignal("SIGTERM");
+        const sigint = captureSignal("SIGINT");
+        sigterm();
+        await waitForLoopCondition(
+          () => waitForGatewayActiveWork.mock.calls.length === 1,
+          "expected first shutdown signal to begin the active-work drain",
+        );
+
+        sigint();
+
+        expect(waitForGatewayActiveWork).toHaveBeenCalledOnce();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+
+        drain.resolve();
+        await expect(exited).resolves.toBe(0);
+      } finally {
+        drain.resolve();
+        await exited;
+      }
+    });
+  });
+
+  it.each([
+    { phase: "parking", signal: "SIGINT" },
+    { phase: "provider", signal: "SIGTERM" },
+    { phase: "lock-reacquisition", signal: "SIGINT" },
+  ] as const)(
+    "stops a cancelled foreground handoff during $phase with $signal",
+    async ({ phase, signal }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const initialLockRelease = vi.fn(async () => {});
+      const restoredLockRelease = vi.fn(async () => {});
+      prepareForegroundHandoff();
+      if (phase === "parking") {
+        requestManagedServiceUpdateHandoffPark.mockResolvedValueOnce(false);
+      } else {
+        hasManagedProviderLocalServices.mockReturnValue(true);
+        stopManagedProviderLocalServices.mockRejectedValueOnce(
+          new Error("provider cleanup failed"),
+        );
+      }
+      cancelManagedServiceUpdateHandoff.mockImplementationOnce(async () => {
+        if (phase !== "lock-reacquisition") {
+          entered.resolve();
+          await release.promise;
+        }
+        isForegroundUpdateHandoff.mockReturnValue(false);
+        return "restored-in-process";
+      });
+      acquireGatewayLock.mockResolvedValueOnce({ release: initialLockRelease });
+      if (phase === "lock-reacquisition") {
+        acquireGatewayLock.mockImplementationOnce(async () => {
+          entered.resolve();
+          await release.promise;
+          return { release: restoredLockRelease };
+        });
+      }
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, runtime, exited } = await createSignaledLoopHarness();
+        try {
+          captureSignal("SIGUSR2")();
+          await withTimeout(entered.promise, 4_000);
+          captureSignal(signal)();
+          await setImmediate();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(start).toHaveBeenCalledOnce();
+          release.resolve();
+          await waitForLoopCondition(
+            () => runtime.exit.mock.calls.length > 0 || start.mock.calls.length > 1,
+            "foreground cancellation did not settle",
+          );
+          expect(start).toHaveBeenCalledOnce();
+          await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
+          expect(initialLockRelease).toHaveBeenCalledOnce();
+          expect(restoredLockRelease).toHaveBeenCalledTimes(phase === "lock-reacquisition" ? 1 : 0);
+          expect(acquireGatewayLock).toHaveBeenCalledTimes(phase === "lock-reacquisition" ? 2 : 1);
+          expect(cancelManagedServiceUpdateHandoff).toHaveBeenCalledExactlyOnceWith(
+            managedUpdateSuccessorOwner,
+          );
+          expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          await setImmediate();
+          if (runtime.exit.mock.calls.length === 0) {
+            captureSignal("SIGINT")();
+          }
+          await withTimeout(exited, 4_000);
+        }
+      });
+    },
+  );
+
+  it.each([
+    { phase: "drain", signal: "SIGINT", restartIntent: false },
+    { phase: "server-close", signal: "SIGTERM", restartIntent: false },
+    { phase: "drain", signal: "SIGTERM", restartIntent: true },
+  ] as const)(
+    "retains pre-close foreground $signal during $phase (restart intent: $restartIntent)",
+    async ({ phase, signal, restartIntent }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const updater = createDeferred<{ respawn: boolean }>();
+      const child = createUpdateRespawnChild();
+      prepareForegroundHandoff();
+      completeForegroundUpdateHandoffAfterClose.mockReturnValueOnce(updater.promise);
+      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+        mode: "spawned",
+        pid: child.pid,
+        child,
+      });
+      waitForGatewayActiveWork.mockImplementationOnce(async () => {
+        if (phase === "drain") {
+          entered.resolve();
+          await release.promise;
+        }
+        return { drained: true, snapshot: createActiveWorkSnapshot() };
+      });
+      const close = vi.fn(async () => {
+        if (phase === "server-close") {
+          entered.resolve();
+          await release.promise;
+        }
+      });
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { start, runtime, exited } = await startStopLoop(close, 18789);
+        try {
+          captureSignal("SIGUSR2")();
+          await withTimeout(entered.promise, 4_000);
+          expect(completeForegroundUpdateHandoffAfterClose).not.toHaveBeenCalled();
+          if (restartIntent) {
+            consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ reason: "update.run" });
+          }
+          captureSignal(signal)();
+          await setImmediate();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          release.resolve();
+          await waitForLoopCondition(
+            () => completeForegroundUpdateHandoffAfterClose.mock.calls.length === 1,
+            "foreground updater did not receive its closed witness",
+          );
+          expect(close).toHaveBeenCalledOnce();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          updater.resolve({ respawn: true });
+          await expect(withTimeout(exited, 4_000)).resolves.toBe(0);
+          expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(restartIntent ? 1 : 0);
+          expect(start).toHaveBeenCalledOnce();
+          expect(acquireGatewayLock).toHaveBeenCalledOnce();
+          expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+        } finally {
+          release.resolve();
+          updater.resolve({ respawn: false });
+          await withTimeout(exited, 4_000);
+        }
+      });
+    },
+  );
+
+  it.each([
+    { phase: "updater", signal: "SIGINT" },
+    { phase: "unsafe-updater", signal: "SIGTERM" },
+    { phase: "readiness", signal: "SIGTERM" },
+    { phase: "log-flush", signal: "SIGINT" },
+  ] as const)("retains $signal stop intent during foreground $phase", async ({ signal, phase }) => {
+    const updater = createDeferred<{ respawn: boolean }>();
+    const readiness = createDeferred<GatewayRestartResult>();
+    const flushEntered = createDeferred();
+    const flush = createDeferred();
+    const child = createUpdateRespawnChild();
+    prepareForegroundHandoff();
+    completeForegroundUpdateHandoffAfterClose.mockReturnValueOnce(updater.promise);
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({ mode: "spawned", pid: child.pid, child });
+    flushLogger.mockImplementationOnce(async () => {
+      flushEntered.resolve();
+      await flush.promise;
+    });
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, runtime, exited } = await startStopLoop(undefined, 18789);
+      waitForGatewayHealthyRestart.mockImplementationOnce(() => readiness.promise);
+      const stop = () => captureSignal(signal)();
+      try {
+        captureSignal("SIGUSR2")();
+        await waitForLoopCondition(
+          () => completeForegroundUpdateHandoffAfterClose.mock.calls.length === 1,
+          "foreground updater did not receive its closed witness",
+        );
+        const consumedIntents = consumeGatewayRestartIntentPayloadSync.mock.calls.length;
+        const stoppingUpdater = phase === "updater" || phase === "unsafe-updater";
+        if (!stoppingUpdater) {
+          updater.resolve({ respawn: true });
+          await waitForLoopCondition(
+            () => waitForGatewayHealthyRestart.mock.calls.length === 1,
+            "fresh Gateway readiness observation did not start",
+          );
+          if (phase === "log-flush") {
+            readiness.resolve(respawnHealth());
+            await withTimeout(flushEntered.promise, 4_000);
+          }
+        }
+        stop();
+        stop();
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(consumeGatewayRestartIntentPayloadSync).toHaveBeenCalledTimes(consumedIntents);
+        expect(cancelManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+        if (stoppingUpdater) {
+          expect(respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
+          updater.resolve({ respawn: phase !== "unsafe-updater" });
+        } else {
+          expect(child.kill).toHaveBeenCalledExactlyOnceWith(signal);
+        }
+        readiness.resolve(respawnHealth());
+        flush.resolve();
+        if (!stoppingUpdater) {
+          await setImmediate();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          child.exitCode = 0;
+          child.emit("exit", 0, null);
+          await setImmediate();
+          expect(runtime.exit).not.toHaveBeenCalled();
+          child.emit("close", 0, null);
+        }
+        await expect(withTimeout(exited, 4_000)).resolves.toBe(phase === "unsafe-updater" ? 1 : 0);
+        expect(runtime.exit).toHaveBeenCalledOnce();
+        expect(start).toHaveBeenCalledOnce();
+        expect(acquireGatewayLock).toHaveBeenCalledOnce();
+        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(stoppingUpdater ? 0 : 1);
+        expect(commitManagedServiceUpdateHandoff).not.toHaveBeenCalled();
+        expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+      } finally {
+        updater.resolve({ respawn: false });
+        readiness.resolve(respawnHealth({ healthy: false, waitOutcome: "stopped-free" }));
+        flush.resolve();
+        child.exitCode = 0;
+        child.emit("exit", 0, null);
+        child.emit("close", 0, null);
+        await withTimeout(exited, 4_000);
+        flushLogger.mockReset().mockResolvedValue(undefined);
+      }
+    });
+  });
+}

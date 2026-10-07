@@ -1,34 +1,30 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  assertInsideWorkspace,
+  assertInsideSkillsRoot,
   readWorkspaceSkillFile,
   readWorkspaceSupportFile,
 } from "../lifecycle/workspace-skill-write.js";
 import {
-  applySkillProposalTransition,
   assertSkillProposalSupportTargetUnchanged,
   markSkillProposalStale,
   withSkillProposalLifecycleDispatch,
-  type SkillProposalApplyTransitionDependencies,
-  type SkillProposalTransitionInput,
 } from "./apply-transition.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { resolveSkillProposalName } from "./frontmatter.js";
+import { resolveDraftedSkillDescription, resolveSkillProposalName } from "./frontmatter.js";
 import { createSkillProposalEvent, dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { nextProposalVersion, prepareSkillProposalDraft } from "./proposal-draft.js";
 import { createSkillProposalGenerationDraftFile } from "./proposal-generation.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
-import {
-  assertExpectedRevisionHash,
-  evaluateSkillProposal,
-  SkillProposalCreateTargetConflictError,
-} from "./service-evaluation.js";
+import { assertExpectedRevisionHash } from "./service-evaluation.js";
 import {
   buildSupportFileMetadata,
   mergeProposalOriginRunProvenance,
   normalizeProposalOrigin,
 } from "./service-propose.js";
 import { readRequiredProposal } from "./service-query.js";
+import { resolveWorkshopSkillsDir } from "./skills-root.js";
+import { captureSkillWorkshopStoreOptions } from "./store-client.js";
 import {
   hashSkillProposalContent,
   readSkillProposalRecord,
@@ -38,11 +34,11 @@ import {
 } from "./store.js";
 import type {
   SkillProposalActionInput,
-  SkillProposalApplyResult,
   SkillProposalReadResult,
   SkillProposalRecord,
   SkillProposalReviseInput,
 } from "./types.js";
+export { applySkillProposalTransition as applySkillProposal } from "./apply-transition.js";
 export { readSkillProposalDraftDirectory, readSkillProposalDraftFile } from "./proposal-draft.js";
 export {
   composeSkillBodyPatch,
@@ -52,24 +48,22 @@ export {
   SkillProposalStaleTargetError,
 } from "./service-propose.js";
 export {
-  getSkillProposalRunProgress,
   inspectSkillProposal,
   listSkillProposals,
   resolvePendingSkillProposal,
 } from "./service-query.js";
 export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 
-function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
+function proposalStoreOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig,
+) {
+  if (!agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return { ...(env ? { env } : {}), agentId, config };
 }
-
-const APPLY_TRANSITION_DEPENDENCIES = {
-  assertExpectedRevisionHash,
-  evaluateSkillProposal,
-  isCreateTargetConflict: (error: unknown) =>
-    error instanceof SkillProposalCreateTargetConflictError,
-  readRequiredProposal,
-} satisfies SkillProposalApplyTransitionDependencies;
 
 export async function reviseSkillProposal(
   input: SkillProposalReviseInput,
@@ -83,135 +77,198 @@ export async function reviseSkillProposal(
   ) {
     throw new Error("Skill proposal revision requires at least one changed field.");
   }
-  const config = resolveSkillWorkshopConfig(input.config);
-  const revision = withPendingSkillProposalRevision(input, async (read) => {
-    const { record } = read;
-    assertInsideWorkspace(input.workspaceDir, record.target.skillFile, "skill file");
-    assertInsideWorkspace(input.workspaceDir, record.target.skillDir, "skill directory");
+  const request = {
+    ...input,
+    supportFiles: structuredClone(input.supportFiles),
+    origin: structuredClone(input.origin),
+    eventActor: structuredClone(input.eventActor),
+  };
+  const config = resolveSkillWorkshopConfig(request.config);
+  const revision = (async () => {
+    const storeOptions = captureSkillWorkshopStoreOptions(
+      proposalStoreOptions(request.env, request.agentId, request.config),
+    );
+    const initial = await readRequiredProposal(request.proposalId, storeOptions);
+    return await withSkillProposalTargetLock(
+      initial.record,
+      async (store) => {
+        const read = await readRequiredProposal(
+          request.proposalId,
+          { ...store, config: request.config },
+          { reconcile: false },
+        );
+        if (read.record.status !== "pending") {
+          throw new Error(
+            `Only pending proposals can be revised. Current status: ${read.record.status}.`,
+          );
+        }
+        assertExpectedRevisionHash(read.revisionHash, request.expectedRevisionHash);
+        if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
+          throw new Error("Proposal draft changed without updating proposal metadata.");
+        }
+        const lockedRequest = { ...request, env: store.env };
+        const { record } = read;
+        const skillsRoot = resolveWorkshopSkillsDir(
+          request.config,
+          storeOptions.agentId,
+          store.env,
+        );
+        assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
+        assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
 
-    if (record.kind === "create") {
-      const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
-      if (currentContent !== null) {
-        await markSkillProposalStale({
-          record,
-          reason: "Target skill was created after proposal creation.",
-          message: "Target skill was created after proposal creation; proposal marked stale.",
-          input,
-        });
-      }
-    } else {
-      const currentContent = await readWorkspaceSkillFile(record.target.skillFile);
-      if (currentContent === null) {
-        throw new Error(`Target skill is missing: ${record.target.skillFile}`);
-      }
-      if (
-        record.target.currentContentHash &&
-        hashSkillProposalContent(currentContent) !== record.target.currentContentHash
-      ) {
-        await markSkillProposalStale({
-          record,
-          reason: "Target skill changed after proposal creation.",
-          message: "Target skill changed after proposal creation; proposal marked stale.",
-          input,
-        });
-      }
-      await assertSupportTargetsUnchanged(record, input);
-    }
+        const currentSkillContent = await readWorkspaceSkillFile(record.target.skillFile);
+        if (record.kind === "create") {
+          if (currentSkillContent !== null) {
+            await markSkillProposalStale({
+              store,
+              record,
+              reason: "Target skill was created after proposal creation.",
+              message: "Target skill was created after proposal creation; proposal marked stale.",
+              input: lockedRequest,
+            });
+          }
+        } else {
+          if (currentSkillContent === null) {
+            throw new Error(`Target skill is missing: ${record.target.skillFile}`);
+          }
+          if (
+            record.target.currentContentHash &&
+            hashSkillProposalContent(currentSkillContent) !== record.target.currentContentHash
+          ) {
+            await markSkillProposalStale({
+              store,
+              record,
+              reason: "Target skill changed after proposal creation.",
+              message: "Target skill changed after proposal creation; proposal marked stale.",
+              input: lockedRequest,
+            });
+          }
+          for (const file of record.supportFiles ?? []) {
+            if (file.targetExisted === undefined) {
+              continue;
+            }
+            const currentContent = await readWorkspaceSupportFile({
+              skillDir: record.target.skillDir,
+              relativePath: file.path,
+            });
+            await assertSkillProposalSupportTargetUnchanged({
+              store,
+              record,
+              file,
+              currentContent,
+              input: lockedRequest,
+            });
+          }
+        }
 
-    const supportFiles =
-      input.supportFiles === undefined ? (read.supportFiles ?? []) : input.supportFiles;
-    const requestedContent = input.content ?? read.content;
-    const nextVersion = nextProposalVersion(record.proposedVersion);
-    const description = normalizeOptionalString(input.description) ?? record.description;
-    const now = new Date().toISOString();
-    const prepared = prepareSkillProposalDraft({
-      name: resolveSkillProposalName(record.kind, record.target),
-      description,
-      content: requestedContent,
-      fallbackFrontmatterContent: read.content,
-      version: nextVersion,
-      date: now,
-      maxSkillBytes: config.maxSkillBytes,
-      supportFiles,
-      goal: input.goal === undefined ? record.goal : input.goal,
-      evidence: input.evidence === undefined ? record.evidence : input.evidence,
-    });
-    if (!prepared.ok) {
-      throw prepared.error.cause;
-    }
-    const {
-      content: proposalContent,
-      draftHash,
-      evidence,
-      goal,
-      scan,
-      supportFiles: preparedSupportFiles,
-    } = prepared.value;
-    const supportFileMetadata =
-      preparedSupportFiles.length > 0
-        ? await buildSupportFileMetadata(
-            preparedSupportFiles,
-            record.kind === "update" ? record.target.skillDir : undefined,
-          )
-        : [];
-    const origin = normalizeProposalOrigin(input.origin);
-    const originRunProvenance = mergeProposalOriginRunProvenance(record, origin);
-    const revised: SkillProposalRecord = {
-      ...record,
-      description,
-      updatedAt: now,
-      proposedVersion: nextVersion,
-      draftFile: createSkillProposalGenerationDraftFile(),
-      draftHash,
-      scan,
-      ...(origin ? { origin } : {}),
-      ...originRunProvenance,
-    };
-    delete revised.evaluation;
-    if (preparedSupportFiles.length > 0) {
-      revised.supportFiles = supportFileMetadata;
-    } else {
-      delete revised.supportFiles;
-    }
-    if (goal) {
-      revised.goal = goal;
-    } else {
-      delete revised.goal;
-    }
-    if (evidence) {
-      revised.evidence = evidence;
-    } else {
-      delete revised.evidence;
-    }
-    const event = await replaceSkillProposalDraft({
-      expected: record,
-      record: revised,
-      content: proposalContent,
-      supportFiles: preparedSupportFiles,
-      event: createSkillProposalEvent({
-        record: revised,
-        type: "revised",
-        actor: input.eventActor,
-        ...(input.correlationId ? { correlationId: input.correlationId } : {}),
-        occurredAt: now,
-      }),
-      store: proposalStoreOptions(input.env),
-    });
-    return {
-      read: {
-        record: revised,
-        revisionHash: hashSkillProposalRevision(revised),
-        content: proposalContent,
+        const supportFiles =
+          lockedRequest.supportFiles === undefined
+            ? (read.supportFiles ?? [])
+            : lockedRequest.supportFiles;
+        const requestedContent = lockedRequest.content ?? read.content;
+        const nextVersion = nextProposalVersion(record.proposedVersion);
+        const explicitDescription = normalizeOptionalString(lockedRequest.description);
+        const description = explicitDescription ?? record.description;
+        const now = new Date().toISOString();
+        const prepared = prepareSkillProposalDraft({
+          name: resolveSkillProposalName(record.kind, record.target),
+          description,
+          // The listing label is the skill description only for proposals whose
+          // content never carried one; otherwise the description comes from the drafted
+          // or previously rendered content. An explicitly revised description still wins
+          // for create proposals so description-only revisions reach the applied skill.
+          skillDescription: resolveDraftedSkillDescription({
+            content: requestedContent,
+            fallbackContent: read.content,
+            label: description,
+            ...(record.kind === "create" && explicitDescription ? { explicitDescription } : {}),
+          }),
+          content: requestedContent,
+          fallbackFrontmatterContent: read.content,
+          version: nextVersion,
+          date: now,
+          maxSkillBytes: config.maxSkillBytes,
+          supportFiles,
+          goal: lockedRequest.goal === undefined ? record.goal : lockedRequest.goal,
+          evidence: lockedRequest.evidence === undefined ? record.evidence : lockedRequest.evidence,
+        });
+        const {
+          content: proposalContent,
+          draftHash,
+          evidence,
+          goal,
+          scan,
+          supportFiles: preparedSupportFiles,
+        } = prepared;
+        const supportFileMetadata =
+          preparedSupportFiles.length > 0
+            ? await buildSupportFileMetadata(
+                preparedSupportFiles,
+                record.kind === "update" ? record.target.skillDir : undefined,
+              )
+            : [];
+        const origin = normalizeProposalOrigin(lockedRequest.origin);
+        const originRunProvenance = mergeProposalOriginRunProvenance(record, origin);
+        const revised: SkillProposalRecord = {
+          ...record,
+          description,
+          updatedAt: now,
+          proposedVersion: nextVersion,
+          draftFile: createSkillProposalGenerationDraftFile(),
+          draftHash,
+          scan,
+          ...(origin ? { origin } : {}),
+          ...originRunProvenance,
+        };
+        delete revised.evaluation;
+        if (preparedSupportFiles.length > 0) {
+          revised.supportFiles = supportFileMetadata;
+        } else {
+          delete revised.supportFiles;
+        }
+        if (goal) {
+          revised.goal = goal;
+        } else {
+          delete revised.goal;
+        }
+        if (evidence) {
+          revised.evidence = evidence;
+        } else {
+          delete revised.evidence;
+        }
+        const event = await replaceSkillProposalDraft({
+          assertCommitAllowed: lockedRequest.assertCommitAllowed,
+          expected: record,
+          record: revised,
+          content: proposalContent,
+          supportFiles: preparedSupportFiles,
+          event: createSkillProposalEvent({
+            record: revised,
+            type: "revised",
+            actor: lockedRequest.eventActor,
+            ...(lockedRequest.correlationId ? { correlationId: lockedRequest.correlationId } : {}),
+            occurredAt: now,
+          }),
+          store,
+        });
+        return {
+          read: {
+            record: revised,
+            revisionHash: hashSkillProposalRevision(revised),
+            content: proposalContent,
+          },
+          event,
+        };
       },
-      event,
-    };
-  });
-  const revisedResult = await withSkillProposalLifecycleDispatch(input, revision);
+      storeOptions,
+    );
+  })();
+  const revisedResult = await withSkillProposalLifecycleDispatch(request, revision);
   await dispatchSkillProposalChanged({
     event: revisedResult.event,
     record: revisedResult.read.record,
-    workspaceDir: input.workspaceDir,
-    ...(input.agentId ? { agentId: input.agentId } : {}),
+    workspaceDir: request.workspaceDir,
+    ...(request.agentId ? { agentId: request.agentId } : {}),
   });
   return revisedResult.read;
 }
@@ -228,53 +285,45 @@ export async function quarantineSkillProposal(
   return await markProposal(input, "quarantined");
 }
 
-export async function applySkillProposal(
-  input: SkillProposalActionInput,
-): Promise<SkillProposalApplyResult> {
-  return await applySkillProposalTransition(input, APPLY_TRANSITION_DEPENDENCIES);
-}
-
 async function markProposal(
   input: SkillProposalActionInput,
   status: "quarantined" | "rejected",
 ): Promise<SkillProposalRecord> {
-  const scope = {
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    workspaceDir: input.workspaceDir,
-  };
-  const initial = await readSkillProposalRecord(
-    input.proposalId,
-    proposalStoreOptions(input.env),
-    scope,
-    input.config ? { config: input.config } : undefined,
+  const store = captureSkillWorkshopStoreOptions(
+    proposalStoreOptions(input.env, input.agentId, input.config),
   );
+  const request = { ...input, env: store.env, eventActor: structuredClone(input.eventActor) };
+  const scope = request.agentId ? { agentId: request.agentId } : {};
+  const initial = await readSkillProposalRecord(request.proposalId, store, scope, {
+    config: request.config,
+  });
   if (!initial) {
-    throw new Error(`Skill proposal not found: ${input.proposalId}`);
+    throw new Error(`Skill proposal not found: ${request.proposalId}`);
   }
   const result = await withSkillProposalTargetLock(
     initial,
-    async () => {
+    async (lockedStore) => {
       const current = await readSkillProposalRecord(
-        input.proposalId,
-        proposalStoreOptions(input.env),
+        request.proposalId,
+        { ...lockedStore, config: request.config },
         scope,
-        { reconcile: false },
+        { config: request.config, reconcile: false },
       );
       if (!current) {
-        throw new Error(`Skill proposal not found: ${input.proposalId}`);
+        throw new Error(`Skill proposal not found: ${request.proposalId}`);
       }
       if (current.status !== "pending") {
         throw new Error(
           `Only pending proposals can be ${status}. Current status: ${current.status}.`,
         );
       }
-      assertExpectedRevisionHash(hashSkillProposalRevision(current), input.expectedRevisionHash);
+      assertExpectedRevisionHash(hashSkillProposalRevision(current), request.expectedRevisionHash);
       const now = new Date().toISOString();
       const base = {
         ...current,
         status,
         updatedAt: now,
-        statusReason: normalizeOptionalString(input.reason),
+        statusReason: normalizeOptionalString(request.reason),
       };
       const record: SkillProposalRecord =
         status === "rejected"
@@ -289,86 +338,23 @@ async function markProposal(
         event: createSkillProposalEvent({
           record,
           type: status,
-          actor: input.eventActor,
-          ...(input.correlationId ? { correlationId: input.correlationId } : {}),
+          actor: request.eventActor,
+          ...(request.correlationId ? { correlationId: request.correlationId } : {}),
           occurredAt: now,
         }),
-        store: proposalStoreOptions(input.env),
+        store: lockedStore,
       });
       return { record, event };
     },
-    proposalStoreOptions(input.env),
+    store,
   );
   if (result.event) {
     await dispatchSkillProposalChanged({
       event: result.event,
       record: result.record,
-      workspaceDir: input.workspaceDir,
-      ...(input.agentId ? { agentId: input.agentId } : {}),
+      workspaceDir: request.workspaceDir,
+      ...(request.agentId ? { agentId: request.agentId } : {}),
     });
   }
   return result.record;
-}
-
-async function withPendingSkillProposalRevision<T>(
-  input: Pick<
-    SkillProposalActionInput,
-    "agentId" | "config" | "env" | "expectedRevisionHash" | "proposalId" | "workspaceDir"
-  >,
-  fn: (read: SkillProposalReadResult) => Promise<T>,
-): Promise<T> {
-  const recoveryReadOptions = input.config ? { config: input.config } : undefined;
-  const lockedReadOptions = {
-    ...(input.config ? { config: input.config } : {}),
-    reconcile: false,
-  };
-  const initial = await readRequiredProposal(
-    input.proposalId,
-    input.workspaceDir,
-    input.env,
-    input.agentId,
-    recoveryReadOptions,
-  );
-  return await withSkillProposalTargetLock(
-    initial.record,
-    async () => {
-      const read = await readRequiredProposal(
-        input.proposalId,
-        input.workspaceDir,
-        input.env,
-        input.agentId,
-        lockedReadOptions,
-      );
-      if (read.record.status !== "pending") {
-        throw new Error(
-          `Only pending proposals can be revised. Current status: ${read.record.status}.`,
-        );
-      }
-      assertExpectedRevisionHash(read.revisionHash, input.expectedRevisionHash);
-      if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
-        throw new Error("Proposal draft changed without updating proposal metadata.");
-      }
-      return await fn(read);
-    },
-    proposalStoreOptions(input.env),
-  );
-}
-
-async function assertSupportTargetsUnchanged(
-  record: SkillProposalRecord,
-  input: SkillProposalTransitionInput,
-): Promise<void> {
-  if (record.kind !== "update" || !record.supportFiles) {
-    return;
-  }
-  for (const file of record.supportFiles) {
-    if (file.targetExisted === undefined) {
-      continue;
-    }
-    const currentContent = await readWorkspaceSupportFile({
-      skillDir: record.target.skillDir,
-      relativePath: file.path,
-    });
-    await assertSkillProposalSupportTargetUnchanged({ record, file, currentContent, input });
-  }
 }

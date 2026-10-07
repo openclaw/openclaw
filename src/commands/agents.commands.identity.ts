@@ -1,4 +1,3 @@
-// Implements identity metadata updates for configured agents.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -11,14 +10,14 @@ import {
 import {
   type AgentIdentityFile,
   loadAgentIdentityFromFile,
-  loadAgentIdentityFromWorkspace,
+  loadAgentIdentityFromWorkspaceAsync,
 } from "../agents/identity-file.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { ExpectedCliError } from "../cli/failure-output.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { replaceConfigFile } from "../config/config.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import { logConfigUpdated } from "../config/logging.js";
 import type { IdentityConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -27,7 +26,7 @@ import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
-import { requireValidConfigFileSnapshot } from "./config-validation.js";
+import { requireValidConfigForWrite } from "./config-validation.js";
 
 type AgentsSetIdentityOptions = {
   agent?: string;
@@ -62,19 +61,17 @@ function resolveAgentIdByWorkspace(
   );
 }
 
-/** Update an agent identity from flags or workspace identity markdown. */
 export async function agentsSetIdentityCommand(
   opts: AgentsSetIdentityOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const configSnapshot = await requireValidConfigFileSnapshot(runtime);
-  if (!configSnapshot) {
+  const writeSnapshot = await requireValidConfigForWrite(runtime);
+  if (!writeSnapshot) {
     return;
   }
-  const cfg = migratePersistedImplicitMainRoster(
-    configSnapshot.sourceConfig ?? configSnapshot.config,
-  ).config as OpenClawConfig;
-  const baseHash = configSnapshot.hash;
+  const cfg = applyImplicitAgentRosterDefaults(
+    writeSnapshot.snapshot.sourceConfig,
+  ) as OpenClawConfig;
 
   const nameRaw = normalizeOptionalString(opts.name);
   const emojiRaw = normalizeOptionalString(opts.emoji);
@@ -139,7 +136,7 @@ export async function agentsSetIdentityCommand(
         failAgentIdentity(formatErrorMessage(error));
       }
     } else if (workspaceDir) {
-      identityFromFile = loadAgentIdentityFromWorkspace(workspaceDir);
+      identityFromFile = await loadAgentIdentityFromWorkspaceAsync(workspaceDir);
     }
     if (!identityFromFile) {
       const targetPath =
@@ -165,8 +162,10 @@ export async function agentsSetIdentityCommand(
     identity: incomingIdentity,
   });
   const committed = await replaceConfigFile({
-    nextConfig,
-    ...(baseHash !== undefined ? { baseHash } : {}),
+    ...writeSnapshot,
+    sourceConfig: nextConfig,
+    // Replacing an avatar can intentionally shrink the configuration.
+    writeOptions: { ...writeSnapshot.writeOptions, allowConfigSizeDrop: true },
   });
 
   const committedEntry = expectDefined(
@@ -198,17 +197,16 @@ export async function agentsSetIdentityCommand(
 
   logConfigUpdated(runtime);
   runtime.log(`Agent: ${sanitizeTerminalText(resolvedAgentId)}`);
-  if (committedIdentity.name) {
-    runtime.log(`Name: ${sanitizeTerminalText(committedIdentity.name)}`);
-  }
-  if (committedIdentity.theme) {
-    runtime.log(`Theme: ${sanitizeTerminalText(committedIdentity.theme)}`);
-  }
-  if (committedIdentity.emoji) {
-    runtime.log(`Emoji: ${sanitizeTerminalText(committedIdentity.emoji)}`);
-  }
-  if (committedIdentity.avatar) {
-    runtime.log(`Avatar: ${sanitizeTerminalText(committedIdentity.avatar)}`);
+  for (const [field, label] of [
+    ["name", "Name"],
+    ["theme", "Theme"],
+    ["emoji", "Emoji"],
+    ["avatar", "Avatar"],
+  ] as const) {
+    const value = committedIdentity[field];
+    if (value) {
+      runtime.log(`${label}: ${sanitizeTerminalText(value)}`);
+    }
   }
   runtime.log(`Workspace: ${sanitizeTerminalText(shortenHomePath(storedWorkspaceDir))}`);
   if (locatorDiffers && workspaceLocatorDir) {

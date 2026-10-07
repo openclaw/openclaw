@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { splitShellArgs } from "../utils/shell-argv.js";
+import { splitCommandArgs, splitShellArgs } from "../utils/shell-argv.js";
 
 const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
   "-C",
@@ -20,6 +20,22 @@ const PREFLIGHT_ENV_OPTIONS_WITH_VALUES = new Set([
 
 function isShellEnvAssignmentToken(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(token);
+}
+
+export function stripPreflightAssignments(argv: string[]): string[] {
+  let index = 0;
+  while (isShellEnvAssignmentToken(argv[index] ?? "")) {
+    index += 1;
+  }
+  return argv.slice(index);
+}
+
+export function parsePreflightShellSegment(rawSegment: string): string[] {
+  const argv = splitShellArgs(rawSegment.trim()) ?? [];
+  const command = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
+    ? argv.slice(1)
+    : argv;
+  return stripPreflightAssignments(stripPreflightEnvPrefix(command));
 }
 
 function isEnvExecutableToken(token: string | undefined): boolean {
@@ -185,18 +201,11 @@ function extractInterpreterScriptTargetFromArgv(
   if (!argv || argv.length === 0) {
     return null;
   }
-  let commandIdx = 0;
-  while (
-    commandIdx < argv.length &&
-    /^[A-Za-z_][A-Za-z0-9_]*=.*$/u.test(argv.at(commandIdx) ?? "")
-  ) {
-    commandIdx += 1;
-  }
-  const executable = normalizeOptionalLowercaseString(argv.at(commandIdx));
+  const [command, ...args] = stripPreflightAssignments(argv);
+  const executable = normalizeOptionalLowercaseString(command);
   if (!executable) {
     return null;
   }
-  const args = argv.slice(commandIdx + 1);
   if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
     const script = findFirstPythonScriptArg(args);
     return script ? { kind: "python", relOrAbsPaths: [script] } : null;
@@ -209,16 +218,7 @@ function extractInterpreterScriptTargetFromArgv(
 }
 
 export function extractInterpreterScriptPathsFromSegment(rawSegment: string): string[] {
-  const argv = splitShellArgs(rawSegment.trim());
-  if (!argv || argv.length === 0) {
-    return [];
-  }
-  const withoutLeadingKeyword = /^(?:if|then|do|elif|else|while|until|time)$/i.test(argv[0] ?? "")
-    ? argv.slice(1)
-    : argv;
-  const target = extractInterpreterScriptTargetFromArgv(
-    stripPreflightEnvPrefix(withoutLeadingKeyword),
-  );
+  const target = extractInterpreterScriptTargetFromArgv(parsePreflightShellSegment(rawSegment));
   return target?.relOrAbsPaths ?? [];
 }
 
@@ -226,71 +226,14 @@ export function extractScriptTargetFromCommand(
   command: string,
 ): { kind: "python"; relOrAbsPaths: string[] } | { kind: "node"; relOrAbsPaths: string[] } | null {
   const raw = command.trim();
-  const splitShellArgsPreservingBackslashes = (value: string): string[] | null => {
-    const tokens: string[] = [];
-    let buf = "";
-    let inSingle = false;
-    let inDouble = false;
-
-    const pushToken = () => {
-      if (buf.length > 0) {
-        tokens.push(buf);
-        buf = "";
-      }
-    };
-
-    for (const ch of value) {
-      if (inSingle) {
-        if (ch === "'") {
-          inSingle = false;
-        } else {
-          buf += ch;
-        }
-        continue;
-      }
-      if (inDouble) {
-        if (ch === '"') {
-          inDouble = false;
-        } else {
-          buf += ch;
-        }
-        continue;
-      }
-      if (ch === "'") {
-        inSingle = true;
-        continue;
-      }
-      if (ch === '"') {
-        inDouble = true;
-        continue;
-      }
-      if (/\s/.test(ch)) {
-        pushToken();
-        continue;
-      }
-      buf += ch;
-    }
-
-    if (inSingle || inDouble) {
-      return null;
-    }
-    pushToken();
-    return tokens;
-  };
   const shouldUseWindowsPathTokenizer =
     process.platform === "win32" &&
     /(?:^|[\s"'`])(?:[A-Za-z]:\\|\\\\|[^\s"'`|&;()<>]+\\[^\s"'`|&;()<>]+)/.test(raw);
-  const candidateArgv = shouldUseWindowsPathTokenizer
-    ? [splitShellArgsPreservingBackslashes(raw)]
-    : [splitShellArgs(raw)];
-
-  for (const argv of candidateArgv) {
-    const attempts = [argv, argv ? stripPreflightEnvPrefix(argv) : null];
-    for (const attempt of attempts) {
-      const target = extractInterpreterScriptTargetFromArgv(attempt);
-      if (target) {
-        return target;
-      }
+  const argv = shouldUseWindowsPathTokenizer ? splitCommandArgs(raw) : splitShellArgs(raw);
+  for (const attempt of [argv, argv ? stripPreflightEnvPrefix(argv) : null]) {
+    const target = extractInterpreterScriptTargetFromArgv(attempt);
+    if (target) {
+      return target;
     }
   }
   return null;

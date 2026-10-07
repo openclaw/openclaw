@@ -1,23 +1,5 @@
 import type { MarkdownIRWithBlockMetadata } from "./text-styles-shared.js";
 
-export function sourceContainerPrefixLength(
-  line: string,
-  lineIndex: number,
-  ir: MarkdownIRWithBlockMetadata,
-  sourceLineStarts: number[],
-  sourceLines: string[],
-  blockquoteDepth: number,
-): number {
-  return sourceContainerProjection(
-    line,
-    lineIndex,
-    ir,
-    sourceLineStarts,
-    sourceLines,
-    blockquoteDepth,
-  ).offset;
-}
-
 export function sourceContainerProjection(
   line: string,
   lineIndex: number,
@@ -132,14 +114,14 @@ export function sourceListItemContent(
     const projectedStart = Math.max(
       contentStart,
       lineStart +
-        sourceContainerPrefixLength(
+        sourceContainerProjection(
           sourceLines[lineIndex] ?? "",
           lineIndex,
           ir,
           sourceLineStarts,
           sourceLines,
           blockquoteDepth,
-        ),
+        ).offset,
     );
     contentLines.push(
       source.slice(Math.min(projectedStart, contentEnd), contentEnd).replace(/\r$/u, ""),

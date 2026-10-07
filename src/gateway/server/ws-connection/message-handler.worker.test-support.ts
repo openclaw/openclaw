@@ -11,23 +11,24 @@ import {
   type WorkerLiveEventErrorDetails,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  type WorkerSessionToolResult,
   type WorkerTranscriptCommitErrorReason,
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceEventFrame,
   type WorkerInferenceStartParams,
   type WorkerInferenceTerminalFrame,
   WORKER_INFERENCE_PROTOCOL_FEATURE,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { createToolSurfacePresentationForTest } from "../../../agents/tool-surface-plan.test-support.js";
 import { resetGatewayWorkAdmission } from "../../../process/gateway-work-admission.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
+import { GatewayConnectionWork } from "../../server-connection-work.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import { createGatewayWsTestSocket } from "../ws-connection.test-helpers.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import type { GatewayWsMessageHandlerParams } from "./message-handler-types.js";
 import { attachWorkerWsMessageHandler, type WorkerConnectionService } from "./worker-connection.js";
 
 export const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
@@ -38,10 +39,9 @@ export const HANDSHAKE = {
     "worker-heartbeat-v1",
     WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
     WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
-    WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-    WORKER_PORTAL_PROTOCOL_FEATURE,
     WORKER_INFERENCE_PROTOCOL_FEATURE,
     WORKER_COMPUTER_PROTOCOL_FEATURE,
+    WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   ],
 };
 const WORKER_CONNECT: WorkerConnectParams = {
@@ -130,7 +130,7 @@ export const INFERENCE_EVENT: WorkerInferenceEventFrame = {
     event: { type: "text_delta", contentIndex: 0, delta: "x" },
   },
 };
-const cleanups: Array<() => void> = [];
+const cleanups: Array<() => Promise<void>> = [];
 
 export function waitForWorkerProtocol(assertion: () => void) {
   return vi.waitFor(assertion, { interval: 1 });
@@ -168,7 +168,6 @@ export function attachHarness(
     omitPublicAdmission?: boolean;
     rateLimiter?: AuthRateLimiter;
     onInferenceLaunch?: (sink: InferenceSink) => void;
-    onSessionTool?: (signal: AbortSignal | undefined) => Promise<WorkerSessionToolResult>;
     startupPending?: () => boolean;
     validationFailure?: ReturnType<WorkerConnectionService["validateWorkerConnection"]>;
   } = {},
@@ -200,7 +199,7 @@ export function attachHarness(
         : { ok: true as const, result: { ackedSeq: LIVE_EVENT.seq } },
     ),
     startInference: vi.fn(
-      (
+      async (
         _identity: WorkerConnectionIdentity,
         _request: WorkerInferenceStartParams,
         sink: InferenceSink,
@@ -212,16 +211,31 @@ export function attachHarness(
         };
       },
     ),
-    cancelInference: vi.fn(() => ({
+    cancelInference: vi.fn(async () => ({
       ok: true as const,
       result: { status: "cancelled" as const },
     })),
-    executeSessionTool: vi.fn(async (_identity, _toolName, _request, signal) => ({
-      ok: true as const,
-      result: options.onSessionTool
-        ? await options.onSessionTool(signal)
-        : { resultJson: JSON.stringify({ content: [] }) },
+    getToolSurface: vi.fn<NonNullable<WorkerConnectionService["getToolSurface"]>>(async () => ({
+      ok: true,
+      result: {
+        generation: "generation-1",
+        presentation: createToolSurfacePresentationForTest(),
+        tools: [],
+        policy: {
+          workspaceOnly: true,
+          readOnly: false,
+          applyPatchEnabled: true,
+          applyPatchWorkspaceOnly: true,
+          imageSanitization: {},
+        },
+      },
     })),
+    invokeGatewayTool: vi.fn<NonNullable<WorkerConnectionService["invokeGatewayTool"]>>(
+      async () => ({ ok: true, result: { content: [] } }),
+    ),
+    cancelGatewayTool: vi.fn<NonNullable<WorkerConnectionService["cancelGatewayTool"]>>(
+      async () => ({ ok: true, result: { cancelled: true } }),
+    ),
     executeComputer: vi.fn<NonNullable<WorkerConnectionService["executeComputer"]>>(async () => ({
       ok: true,
       result: { resultJson: JSON.stringify({ format: "png", base64: "a".repeat(128 * 1024) }) },
@@ -238,20 +252,24 @@ export function attachHarness(
   const setCloseCause = vi.fn();
   const setLastFrameMeta = vi.fn();
   const advanceHandshakePhase = vi.fn();
+  const connectionWork = new GatewayConnectionWork();
+  const sendResponse = vi.fn<GatewayWsMessageHandlerParams["send"]>((frame) => {
+    responses.push(frame);
+    if (options.closeDuringHello) {
+      close();
+    }
+    return { kind: "sent" };
+  });
   const cleanup = attachWorkerWsMessageHandler({
     socket: socket as unknown as WebSocket,
+    connectionWork,
     connId: "worker-connection",
     service,
     isStartupPending: options.startupPending,
     publicAdmission: options.omitPublicAdmission
       ? undefined
       : { clientIp: "203.0.113.10", rateLimiter: options.rateLimiter },
-    send: (frame) => {
-      responses.push(frame);
-      if (options.closeDuringHello) {
-        close();
-      }
-    },
+    send: sendResponse,
     close,
     isClosed: () => closed,
     clearHandshakeTimer: vi.fn(),
@@ -264,7 +282,11 @@ export function attachHarness(
     logGateway,
     logWsControl,
   });
-  cleanups.push(cleanup);
+  cleanups.push(async () => {
+    cleanup();
+    connectionWork.beginClose();
+    await connectionWork.drain();
+  });
   const send = (frame: unknown) => socket.emit("message", Buffer.from(JSON.stringify(frame)));
   return {
     client: () => client,
@@ -274,6 +296,7 @@ export function attachHarness(
     logGateway,
     logWsControl,
     responses,
+    sendResponse,
     service,
     setClient,
     setCloseCause,
@@ -291,11 +314,9 @@ export async function admit(harness: ReturnType<typeof attachHarness>): Promise<
 }
 
 export function setupWorkerProtocolTestState() {
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
     resetGatewayWorkAdmission();
-    for (const cleanup of cleanups.splice(0)) {
-      cleanup();
-    }
   });
 }

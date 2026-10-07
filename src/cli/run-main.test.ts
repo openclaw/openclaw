@@ -1,661 +1,268 @@
-// Run main tests cover CLI main entrypoint behavior and process error handling.
-import { describe, expect, it } from "vitest";
-import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
+import process from "node:process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveManifestCommandAliasOwnerInRegistry,
+  resolveManifestToolOwnerInRegistry,
+  type PluginManifestCommandAliasRegistry,
+} from "../plugins/manifest-command-aliases.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   resolveGatewayCatalogCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
+  isGatewayRunFastPathArgv,
   rewriteUpdateFlagArgv,
   resolveMissingPluginCommandMessage,
-  shouldHandleBareRoot,
-  shouldEnsureCliPath,
   shouldStartProxyForCli,
   shouldUseRootHelpFastPath,
-  shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import { isGatewayRunFastPathArgv } from "./run-main.js";
+import { runCli } from "./run-main.js";
 
-const memoryWikiCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
-  plugins: [
-    {
-      id: "memory-wiki",
-      enabledByDefault: true,
-      commandAliases: [{ name: "wiki" }],
+const cliArgs = (...args: string[]) => ["node", "openclaw", ...args];
+vi.mock("node:process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:process")>()),
+  // Stock Bun cannot clear its nonconfigurable native exitCode accessor after help sets zero.
+  default: Object.create(globalThis.process, {
+    exitCode: { value: undefined, writable: true, enumerable: true, configurable: true },
+  }),
+}));
+const runGatewayCommand = vi.hoisted(() => vi.fn());
+const sqliteAdmission = vi.hoisted(() => ({
+  initialize: vi.fn<() => Promise<void>>().mockResolvedValue(),
+  selectGatewayEnvironment: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
+}));
+vi.mock("../infra/bun-sqlite-library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/bun-sqlite-library.js")>()),
+  initializeSqliteRuntimeCapabilities: sqliteAdmission.initialize,
+}));
+vi.mock("./gateway-cli/run.js", () => ({ runGatewayCommand }));
+// Keep Commander parsing independent of native startup; run-main.exit and
+// command-execution-startup tests own bootstrap and admission behavior.
+vi.mock("./gateway-cli/pre-bootstrap.js", () => ({
+  selectGatewayRunEnvironment: sqliteAdmission.selectGatewayEnvironment,
+  prepareGatewayRunBootstrap: async () => false,
+  recheckGatewayRunBootstrap: async () => {
+    throw new Error("Commander parsing fixture unexpectedly rechecked Gateway bootstrap");
+  },
+  reloadTrustedGatewayRunEnvironment: async () => {
+    throw new Error("Commander parsing fixture unexpectedly reloaded Gateway environment");
+  },
+}));
+vi.mock("../state/agent-database-startup.js", () => ({
+  withAgentDatabaseStartupAdmission: <T>(run: () => Promise<T>) => run(),
+}));
+vi.mock("./command-execution-startup.js", () => ({
+  ensureCliExecutionBootstrap: async () => {
+    throw new Error("Commander parsing fixture unexpectedly entered CLI bootstrap");
+  },
+}));
+vi.mock("../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/console.js")>()),
+  enableConsoleCapture: vi.fn(),
+}));
+
+describe("CLI host admission and Gateway fast-path parsing", () => {
+  const previousExitCode = process.exitCode;
+  const pathEnv = captureEnv(["PATH", "OPENCLAW_PATH_BOOTSTRAPPED"]);
+  beforeEach(() => {
+    process.exitCode = undefined;
+    runGatewayCommand.mockClear();
+    sqliteAdmission.initialize.mockReset().mockResolvedValue();
+    sqliteAdmission.selectGatewayEnvironment.mockClear();
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+  afterEach(() => {
+    pathEnv.restore();
+    process.exitCode = previousExitCode;
+    vi.restoreAllMocks();
+  });
+
+  it("awaits SQLite admission before Gateway environment selection can read state", async () => {
+    const entered = createDeferredCore();
+    const decided = createDeferredCore();
+    sqliteAdmission.initialize.mockImplementationOnce(() => {
+      entered.resolve();
+      return decided.promise;
+    });
+    const starting = runCli(cliArgs("gateway", "run"));
+    try {
+      await Promise.race([entered.promise, starting]);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
+      expect(sqliteAdmission.selectGatewayEnvironment).not.toHaveBeenCalled();
+      expect(runGatewayCommand).not.toHaveBeenCalled();
+    } finally {
+      decided.resolve();
+      await starting;
+    }
+    expect(sqliteAdmission.selectGatewayEnvironment).toHaveBeenCalledOnce();
+    expect(runGatewayCommand).toHaveBeenCalledOnce();
+  });
+
+  it.each([["node", "run"], ["node", "worker"], ["worker"]])(
+    "admits the long-lived host before CLI bootstrap: %j",
+    async (...args) => {
+      const stopped = new Error("SQLite admission reached before host bootstrap");
+      sqliteAdmission.initialize.mockRejectedValueOnce(stopped);
+      await expect(runCli(cliArgs(...args))).rejects.toBe(stopped);
+      expect(sqliteAdmission.initialize).toHaveBeenCalledOnce();
     },
-  ],
-};
+  );
 
-const memoryCoreCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
-  plugins: [
-    {
-      id: "memory-core",
-      commandAliases: [{ name: "dreaming", kind: "runtime-slash", cliCommand: "memory" }],
+  it.each([["gateway"], ["gateway", "status"], ["node", "run"], ["worker"], ["config", "get"]])(
+    "keeps help paths free of SQLite capability admission: %j",
+    async (...args) => {
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      await runCli(cliArgs(...args, "--help"));
+      expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
     },
-  ],
-};
+  );
 
-const losslessClawToolRegistry: PluginManifestCommandAliasRegistry = {
-  plugins: [
-    {
-      id: "lossless-claw",
-      contracts: { tools: ["lcm_recent", "lcm_search"] },
-    },
-  ],
-};
-
-const browserCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
-  plugins: [
-    {
-      id: "browser",
-      enabledByDefault: true,
-      commandAliases: [{ name: "browser" }],
-    },
-  ],
-};
-
-const workboardCommandAliasRegistry: PluginManifestCommandAliasRegistry = {
-  plugins: [
-    {
-      id: "workboard",
-      commandAliases: [{ name: "workboard" }],
-    },
-  ],
-};
-
-describe("isGatewayRunFastPathArgv", () => {
-  it("matches only plain gateway foreground starts without root options or help", () => {
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway"])).toBe(true);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--force"])).toBe(true);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port", "18789"])).toBe(true);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--auth=none"])).toBe(true);
-    expect(
-      isGatewayRunFastPathArgv(["node", "openclaw", "--no-color", "gateway", "--bind", "loopback"]),
-    ).toBe(true);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run"])).toBe(true);
-    expect(
-      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level", "debug", "run"]),
-    ).toBe(true);
-    expect(
-      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--log-level=debug", "run"]),
-    ).toBe(true);
-    expect(
-      isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "run", "--raw-stream-path", "x"]),
-    ).toBe(true);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "call", "health"])).toBe(false);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port"])).toBe(false);
-    expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--unknown"])).toBe(false);
+  it("keeps version output free of SQLite capability admission", async () => {
+    vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    await runCli(cliArgs("--version"));
+    expect(sqliteAdmission.initialize).not.toHaveBeenCalled();
   });
 
-  it("keeps post-root log levels out of the gateway command path", () => {
-    expect(
-      resolveGatewayCatalogCommandPath([
-        "node",
-        "openclaw",
-        "gateway",
-        "--log-level",
-        "debug",
-        "run",
-      ]),
-    ).toEqual(["gateway", "run"]);
-    expect(
-      resolveGatewayCatalogCommandPath([
-        "node",
-        "openclaw",
-        "gateway",
-        "--log-level=debug",
-        "restart-handoff",
-        "capabilities",
-      ]),
-    ).toEqual(["gateway", "restart-handoff"]);
-  });
-});
-
-describe("resolveGatewayRunPreBootstrapOptions", () => {
-  it("resolves destructive gateway flags across fast and full Commander paths", () => {
-    expect(
-      resolveGatewayRunPreBootstrapOptions(["node", "openclaw", "gateway", "run", "--force"]),
-    ).toEqual({ force: true, reset: false });
-    expect(
-      resolveGatewayRunPreBootstrapOptions([
-        "node",
-        "openclaw",
-        "--log-level",
-        "debug",
-        "gateway",
-        "run",
-        "--force",
-        "--reset",
-      ]),
-    ).toEqual({ force: true, reset: true });
-  });
-
-  it("does not treat malformed required option values as destructive flags", () => {
-    expect(
-      resolveGatewayRunPreBootstrapOptions(["node", "openclaw", "gateway", "--token", "--force"]),
-    ).toEqual({ force: false, reset: false });
-  });
-});
-
-describe("rewriteUpdateFlagArgv", () => {
-  it("leaves argv unchanged when --update is absent", () => {
-    const argv = ["node", "entry.js", "status"];
-    expect(rewriteUpdateFlagArgv(argv)).toBe(argv);
-  });
-
-  it("rewrites --update into the update command", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update"])).toEqual([
-      "node",
-      "entry.js",
-      "update",
-    ]);
-  });
-
-  it("preserves global flags that appear before --update", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--profile", "p", "--update"])).toEqual([
-      "node",
-      "entry.js",
-      "--profile",
-      "p",
-      "update",
-    ]);
-  });
-
-  it("keeps update options after the rewritten command", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "--json"])).toEqual([
-      "node",
-      "entry.js",
-      "update",
-      "--json",
-    ]);
-  });
-
-  it("does not rewrite --update after -- positional terminator", () => {
-    expect(
-      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--", "--update"]),
-    ).toEqual(["node", "entry.js", "config", "set", "foo", "--", "--update"]);
-  });
-
-  it("does not rewrite --update when a subcommand appears before it", () => {
-    expect(
-      rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "update.channel", "--update"]),
-    ).toEqual(["node", "entry.js", "config", "set", "update.channel", "--update"]);
-  });
-
-  it("does not rewrite --update that appears as a value after a subcommand", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "config", "set", "foo", "--update"])).toEqual(
-      ["node", "entry.js", "config", "set", "foo", "--update"],
-    );
-  });
-
-  it("rewrites --update when it appears before any subcommand", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--update", "config", "set", "foo"])).toEqual(
-      ["node", "entry.js", "update", "config", "set", "foo"],
-    );
-  });
-
-  it("rewrites --update after root boolean flags", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "--update"])).toEqual([
-      "node",
-      "entry.js",
-      "--no-color",
-      "update",
-    ]);
-  });
-
-  it("does not skip root boolean flag followers as option values", () => {
-    expect(rewriteUpdateFlagArgv(["node", "entry.js", "--no-color", "status", "--update"])).toEqual(
-      ["node", "entry.js", "--no-color", "status", "--update"],
+  it.each([
+    ["--update-canary", "--no-color", "run"],
+    ["run", "--update-canary", "--no-color"],
+  ])("accepts no-color beside a boolean flag: %j", async (...args) => {
+    await runCli(cliArgs("gateway", ...args, "--token=--no-color"));
+    expect(process.exitCode).toBeUndefined();
+    expect(runGatewayCommand).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ updateCanary: true, token: "--no-color" }),
+      expect.any(Object),
     );
   });
 });
 
-describe("shouldEnsureCliPath", () => {
-  it("skips path bootstrap for help/version invocations", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw", "--help"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "-v"])).toBe(false);
-  });
-
-  it("skips path bootstrap for read-only fast paths", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "--profile", "work"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "approvals"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "channels"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "cron"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "devices"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "plugins"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "mcp"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "status"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "--log-level", "debug", "status"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "sessions", "--json"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "config", "get", "update"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "models", "status", "--json"])).toBe(false);
-    expect(shouldEnsureCliPath(["node", "openclaw", "tools", "effective"])).toBe(false);
-  });
-
-  it("keeps path bootstrap for mutating or unknown commands", () => {
-    expect(shouldEnsureCliPath(["node", "openclaw", "message", "send"])).toBe(true);
-    expect(shouldEnsureCliPath(["node", "openclaw", "voicecall", "status"])).toBe(true);
-    expect(shouldEnsureCliPath(["node", "openclaw", "acp", "-v"])).toBe(true);
-  });
-});
-
-describe("shouldHandleBareRoot", () => {
-  it("handles bare root invocations", () => {
-    expect(shouldHandleBareRoot(["node", "openclaw"])).toBe(true);
-    expect(shouldHandleBareRoot(["node", "openclaw", "--profile", "work"])).toBe(true);
-    expect(shouldHandleBareRoot(["node", "openclaw", "--dev"])).toBe(true);
-  });
-
-  it("does not handle help, version, or commands", () => {
-    expect(shouldHandleBareRoot(["node", "openclaw", "--help"])).toBe(false);
-    expect(shouldHandleBareRoot(["node", "openclaw", "-V"])).toBe(false);
-    expect(shouldHandleBareRoot(["node", "openclaw", "status"])).toBe(false);
-  });
-});
-
-describe("shouldStartProxyForCli", () => {
-  it("starts managed proxy routing for the --update shorthand", () => {
-    expect(shouldStartProxyForCli(["node", "openclaw", "--update"])).toBe(true);
-    expect(shouldStartProxyForCli(["node", "openclaw", "--profile", "p", "--update"])).toBe(true);
-  });
-
-  it("skips managed proxy routing for bare parent default help", () => {
-    expect(shouldStartProxyForCli(["node", "openclaw", "qa", "suite"])).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "plugins"])).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "channels"])).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "cron"])).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "devices"])).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "mcp"])).toBe(false);
-  });
-
-  it("skips managed proxy routing before shared-state SQLite maintenance", () => {
-    expect(
-      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite", "compact", "--json"]),
-    ).toBe(false);
-    expect(
-      shouldStartProxyForCli(["node", "openclaw", "doctor", "--state-sqlite=compact", "--json"]),
-    ).toBe(false);
-    expect(shouldStartProxyForCli(["node", "openclaw", "doctor", "--lint"])).toBe(true);
-  });
-});
-
-describe("shouldUseRootHelpFastPath", () => {
-  it("uses the fast path for root help only", () => {
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help"])).toBe(true);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--profile", "work", "-h"])).toBe(true);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "--help"])).toBe(true);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "tools", "--help"])).toBe(true);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "status", "--help"])).toBe(false);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "--help", "status"])).toBe(false);
-    expect(shouldUseRootHelpFastPath(["node", "openclaw", "help", "gateway"])).toBe(false);
-  });
-});
-
-describe("shouldUseSetupOnboardConfigureHelpFastPath", () => {
-  it("uses the fast path only for setup, onboard, and configure help", () => {
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "setup", "--help"]),
-    ).toBe(true);
-    expect(shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "onboard", "-h"])).toBe(
+describe("Gateway argv boundaries", () => {
+  it("matches only plain foreground starts without root options or help", () => {
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway"))).toBe(true);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--force"))).toBe(true);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--port", "18789"))).toBe(true);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--auth=none"))).toBe(true);
+    expect(isGatewayRunFastPathArgv(cliArgs("--no-color", "gateway", "--bind", "loopback"))).toBe(
       true,
     );
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "run"))).toBe(true);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--log-level", "debug", "run"))).toBe(false);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "call", "health"))).toBe(false);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--help"))).toBe(false);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--port"))).toBe(false);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--unknown"))).toBe(false);
+    expect(isGatewayRunFastPathArgv(cliArgs("gateway", "--update-canary=true"))).toBe(false);
+  });
+
+  it("resolves destructive flags after root options without consuming option values", () => {
     expect(
-      shouldUseSetupOnboardConfigureHelpFastPath([
-        "node",
-        "openclaw",
-        "--profile",
-        "work",
-        "configure",
-        "-h",
-      ]),
-    ).toBe(true);
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath([
-        "node",
-        "openclaw",
-        "onboard",
-        "status",
-        "--help",
-      ]),
-    ).toBe(false);
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath(["node", "openclaw", "status", "--help"]),
-    ).toBe(false);
-    expect(
-      shouldUseSetupOnboardConfigureHelpFastPath([
-        "node",
-        "openclaw",
-        "onboard",
-        "--gateway-port",
-        "--help",
-      ]),
-    ).toBe(false);
+      resolveGatewayRunPreBootstrapOptions(
+        cliArgs("--log-level", "debug", "gateway", "run", "--force", "--reset"),
+      ),
+    ).toEqual({ force: true, reset: true });
+    expect(resolveGatewayRunPreBootstrapOptions(cliArgs("gateway", "--token", "--force"))).toEqual({
+      force: false,
+      reset: false,
+    });
+  });
+
+  it.each([
+    { args: ["--", "gateway", "--force"], commandPath: ["gateway", "--force"] },
+    { args: ["gateway", "--", "run", "--force"], commandPath: ["gateway", "run"] },
+    { args: ["gateway", "run", "--", "--reset"], commandPath: ["gateway", "run"] },
+  ])("preserves literal commands without destructive flags: $args", ({ args, commandPath }) => {
+    const argv = cliArgs(...args);
+    expect(resolveGatewayCatalogCommandPath(argv)).toEqual(commandPath);
+    const options = resolveGatewayRunPreBootstrapOptions(argv);
+    expect(options?.force).not.toBe(true);
+    expect(options?.reset).not.toBe(true);
   });
 });
 
-describe("resolveMissingPluginCommandMessage", () => {
-  it("explains plugins.allow misses for a bundled plugin command", () => {
-    expect(
-      resolveMissingPluginCommandMessage(
-        "browser",
-        {
-          plugins: {
-            allow: ["quietchat"],
-          },
-        },
-        { registry: browserCommandAliasRegistry },
-      ),
-    ).toBe(
-      'The `openclaw browser` command is unavailable because `plugins.allow` excludes "browser". Add "browser" to `plugins.allow` if you want that bundled plugin CLI surface.',
-    );
+describe("root startup policy", () => {
+  it.each([
+    { args: ["--profile", "p", "--update"], expected: ["--profile", "p", "update"] },
+    { args: ["--", "--update"], expected: ["--", "--update"] },
+    {
+      args: ["config", "set", "update.channel", "--update"],
+      expected: ["config", "set", "update.channel", "--update"],
+    },
+  ])("rewrites only a root update flag: $args", ({ args, expected }) => {
+    expect(rewriteUpdateFlagArgv(cliArgs(...args))).toEqual(cliArgs(...expected));
   });
 
-  it("explains explicit bundled plugin disablement", () => {
-    expect(
-      resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          entries: {
-            browser: {
-              enabled: false,
-            },
-          },
-        },
-      }),
-    ).toBe(
-      "The `openclaw browser` command is unavailable because `plugins.entries.browser.enabled=false`. Re-enable that entry if you want the bundled plugin CLI surface.",
+  it("skips proxy startup before SQLite maintenance", () => {
+    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite", "compact", "--json"))).toBe(
+      false,
     );
+    expect(shouldStartProxyForCli(cliArgs("doctor", "--state-sqlite=compact", "--json"))).toBe(
+      false,
+    );
+    expect(shouldStartProxyForCli(cliArgs("doctor", "--lint"))).toBe(true);
   });
 
-  it("returns null when the bundled plugin command is already allowed", () => {
+  it("uses root help only for root invocations and aliases", () => {
+    expect(shouldUseRootHelpFastPath(cliArgs("--help"))).toBe(true);
+    expect(shouldUseRootHelpFastPath(cliArgs("help", "--help"))).toBe(true);
+    expect(shouldUseRootHelpFastPath(cliArgs("tools", "--help"))).toBe(true);
+    expect(shouldUseRootHelpFastPath(cliArgs("status", "--help"))).toBe(false);
+    expect(shouldUseRootHelpFastPath(cliArgs("--help", "status"))).toBe(false);
+    expect(shouldUseRootHelpFastPath(cliArgs("help", "gateway"))).toBe(false);
+  });
+});
+
+function commandResolvers(registry: PluginManifestCommandAliasRegistry) {
+  return {
+    resolveCommandAliasOwner: ({ command }: { command: string | undefined }) =>
+      resolveManifestCommandAliasOwnerInRegistry({ command, registry }),
+    resolveToolOwner: ({ toolName }: { toolName: string | undefined }) =>
+      resolveManifestToolOwnerInRegistry({ toolName, registry }),
+  };
+}
+
+describe("plugin command policy", () => {
+  it("reports a disabled root without an alias record", () => {
     expect(
       resolveMissingPluginCommandMessage("browser", {
-        plugins: {
-          allow: ["browser"],
-        },
+        plugins: { entries: { browser: { enabled: false } } },
       }),
+    ).toContain("plugins.entries.browser.enabled=false");
+  });
+
+  it.each([
+    {
+      command: "voicecall",
+      plugin: { id: "voice-call", commandAliases: [{ name: "voicecall" }] },
+      config: { plugins: { entries: { "voice-call": { enabled: true } } } },
+    },
+    {
+      command: "wiki",
+      plugin: { id: "memory-wiki", enabledByDefault: true, commandAliases: [{ name: "wiki" }] },
+      config: { plugins: { allow: ["memory-wiki"] } },
+    },
+  ])("accepts enabled parent ownership for $command", ({ command, plugin, config }) => {
+    expect(
+      resolveMissingPluginCommandMessage(command, config, commandResolvers({ plugins: [plugin] })),
     ).toBeNull();
   });
+});
 
-  it("does not classify reserved non-plugin command roots as plugin allowlist misses", () => {
-    for (const root of ["auth", "tool"]) {
-      const message = resolveMissingPluginCommandMessage(root, {
-        plugins: {
-          allow: ["browser"],
-        },
-      });
-      expect(message).toBeNull();
-    }
-  });
+it("keeps post-root log levels out of the gateway command path", () => {
+  expect(
+    resolveGatewayCatalogCommandPath(cliArgs("gateway", "--log-level", "debug", "run")),
+  ).toEqual(["gateway", "run"]);
+  expect(
+    resolveGatewayCatalogCommandPath(
+      cliArgs("gateway", "--log-level=debug", "restart-handoff", "capabilities"),
+    ),
+  ).toEqual(["gateway", "restart-handoff"]);
+});
 
-  it("explains that dreaming is a runtime slash command, not a CLI command", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "dreaming",
-      {},
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
-    );
-    expect(message).toBe(
-      '"dreaming" is a runtime slash command (/dreaming), not a CLI command. It is provided by the "memory-core" plugin. Use `openclaw memory` for related CLI operations, or `/dreaming` in a chat session.',
-    );
-  });
-
-  it("returns the runtime command message even when plugins.allow is set", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "dreaming",
-      {
-        plugins: {
-          allow: ["memory-core"],
-        },
-      },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
-    );
-    expect(message).toContain("runtime slash command");
-    expect(message).not.toContain("plugins.allow");
-  });
-
-  it("points command names in plugins.allow at their parent plugin", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "dreaming",
-      {
-        plugins: {
-          allow: ["dreaming"],
-        },
-      },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
-    );
-    expect(message).toBe(
-      '"dreaming" is not a plugin; it is a command provided by the "memory-core" plugin. Add "memory-core" to `plugins.allow` instead of "dreaming".',
-    );
-  });
-
-  it("explains disabled-by-default parent plugins for CLI command aliases", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "voicecall",
-      {},
-      {
-        registry: {
-          plugins: [
-            {
-              id: "voice-call",
-              commandAliases: [{ name: "voicecall" }],
-            },
-          ],
-        },
-      },
-    );
-
-    expect(message).toContain('"voice-call" plugin');
-    expect(message).toContain("disabled by default");
-    expect(message).toContain("openclaw plugins enable voice-call");
-  });
-
-  it("prefers CLI ownership for plugins that also register a slash command", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "workboard",
-      {},
-      { registry: workboardCommandAliasRegistry },
-    );
-
-    expect(message).toBe(
-      'The `openclaw workboard` command is provided by the "workboard" plugin, but that bundled plugin is disabled by default. Run `openclaw plugins enable workboard` to enable that CLI surface.',
-    );
-  });
-
-  it("returns null for CLI command aliases when disabled-by-default parent plugins are enabled", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "voicecall",
-      {
-        plugins: {
-          entries: {
-            "voice-call": {
-              enabled: true,
-            },
-          },
-        },
-      },
-      {
-        registry: {
-          plugins: [
-            {
-              id: "voice-call",
-              commandAliases: [{ name: "voicecall" }],
-            },
-          ],
-        },
-      },
-    );
-
-    expect(message).toBeNull();
-  });
-
-  it("explains parent plugin disablement for runtime command aliases", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "dreaming",
-      {
-        plugins: {
-          entries: {
-            "memory-core": {
-              enabled: false,
-            },
-          },
-        },
-      },
-      {
-        registry: memoryCoreCommandAliasRegistry,
-      },
-    );
-    expect(message).toContain("plugins.entries.memory-core.enabled=false");
-    expect(message).not.toContain("runtime slash command");
-  });
-
-  it("allows CLI commands when their parent plugin is in plugins.allow", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "wiki",
-      {
-        plugins: {
-          allow: ["memory-wiki"],
-        },
-      },
-      { registry: memoryWikiCommandAliasRegistry },
-    );
-    expect(message).toBeNull();
-  });
-
-  it("blocks CLI commands when parent plugin is NOT in plugins.allow", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "wiki",
-      {
-        plugins: {
-          allow: ["quietchat"],
-        },
-      },
-      { registry: memoryWikiCommandAliasRegistry },
-    );
-    expect(message).toContain('"memory-wiki"');
-    expect(message).toContain("plugins.allow");
-  });
-
-  it("identifies an agent tool name and points the user at model tool-use", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "lcm_recent",
-      {
-        plugins: {
-          allow: ["lossless-claw"],
-        },
-      },
-      { registry: losslessClawToolRegistry },
-    );
-    if (message === null) {
-      throw new Error("expected missing plugin command message");
-    }
-    expect(message).toBe(
-      '"lcm_recent" is an agent tool available from the "lossless-claw" plugin, not a CLI subcommand. Use it from an agent turn (model tool-use), not the CLI. Run `openclaw --help` to see available CLI subcommands.',
-    );
-  });
-
-  it("matches agent tool names case-insensitively", () => {
-    const message = resolveMissingPluginCommandMessage("LCM_Recent", undefined, {
-      registry: losslessClawToolRegistry,
-    });
-    if (message === null) {
-      throw new Error("expected missing plugin command message");
-    }
-    expect(message).toContain("agent tool");
-    expect(message).toContain('"lossless-claw"');
-  });
-
-  it("returns null for unknown names excluded by plugins.allow", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "totally-unknown",
-      {
-        plugins: {
-          allow: ["quietchat"],
-        },
-      },
-      { registry: losslessClawToolRegistry },
-    );
-    expect(message).toBeNull();
-  });
-
-  it("points metadata-only CLI roots in plugins.allow at their parent plugin", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "qa",
-      {
-        plugins: {
-          allow: ["browser"],
-        },
-      },
-      {
-        resolveCliCommandSurfaceOwner: () => "qa-lab",
-      },
-    );
-    expect(message).toContain('"qa" is not a plugin');
-    expect(message).toContain('"qa-lab"');
-    expect(message).toContain('Add "qa-lab" to `plugins.allow` instead of "qa"');
-  });
-
-  it("does not attribute a tool to an owning plugin excluded by plugins.allow", () => {
-    // The owning plugin is denied via plugins.allow, so the manifest-declared
-    // tool is not available through the owning plugin. Tool names are not CLI
-    // command surfaces, so do not suggest adding the tool name to plugins.allow.
-    const message = resolveMissingPluginCommandMessage(
-      "lcm_recent",
-      {
-        plugins: {
-          allow: ["quietchat"],
-        },
-      },
-      { registry: losslessClawToolRegistry },
-    );
-    expect(message).toBeNull();
-  });
-
-  it("does not attribute a tool to an owning plugin disabled via plugins.entries", () => {
-    const message = resolveMissingPluginCommandMessage(
-      "lcm_recent",
-      {
-        plugins: {
-          entries: {
-            "lossless-claw": { enabled: false },
-          },
-        },
-      },
-      { registry: losslessClawToolRegistry },
-    );
-    // entries.<id>.enabled = false on the OWNING plugin invalidates the
-    // plugin-tool attribution. With no allow filter on the bare name the
-    // diagnostic returns null (no actionable message); callers handle that
-    // as "not a recognised plugin command".
-    expect(message).toBeNull();
-  });
-
-  it("uses softer 'may be provided by' wording for manifest-only availability", () => {
-    // Some runtime gates (per-account enabled, per-tool toggles in the Feishu
-    // family etc.) cannot be expressed as manifest configSignals, so the
-    // runtime resolver reports availability: "manifest-only" when ownership is
-    // only manifest-provable. The diagnostic must avoid asserting "registered
-    // by" in that case.
-    const manifestOnlyOwner = {
-      toolName: "feishu_chat",
-      pluginId: "feishu",
-      availability: "manifest-only" as const,
-    };
-    const message = resolveMissingPluginCommandMessage("feishu_chat", undefined, {
-      resolveToolOwner: () => manifestOnlyOwner,
-    });
-    if (message === null) {
-      throw new Error("expected missing plugin command message");
-    }
-    expect(message).toBe(
-      '"feishu_chat" may be provided by the "feishu" plugin as an agent tool, not a CLI subcommand. Run `openclaw --help` to see available CLI subcommands.',
-    );
-  });
+it("keeps reserved non-plugin roots out of plugin allowlist diagnostics", () => {
+  expect(
+    resolveMissingPluginCommandMessage("auth", { plugins: { allow: ["browser"] } }),
+  ).toBeNull();
 });

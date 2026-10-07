@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { SIDEBAR_SESSION_NAV_COLLAPSE_QUERY } from "../app-session-route-paths.ts";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import {
+  createControlUiMockBootstrapConfig,
+  createControlUiMockGatewayInitScript,
+  type MockGatewayRequest,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -114,89 +119,98 @@ suite.define(() => {
     }
   });
 
-  it("collapses the sidebar only for a session opened in a new tab, and Cmd+B restores it", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    try {
-      await installMockGateway(page, sessionsMock());
-      const sessionUrl = new URL(controlUiSessionUrl(suite.server.baseUrl, RESEARCH_KEY));
-      sessionUrl.searchParams.set(
-        SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name,
-        SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
-      );
-      await page.goto(sessionUrl.href);
-      const sidebar = page.locator("openclaw-app-sidebar");
-      const expandButton = page.locator(".shell-chrome-controls__nav-toggle");
-      const composer = page.getByPlaceholder("Message OpenClaw");
-      await expandButton.waitFor({ state: "visible", timeout: 10_000 });
-      // Wait for the conversation itself, not just the missing sidebar: the
-      // collapsed chrome paints before the chat pane, so asserting visibility
-      // alone would pass against a blank page.
-      await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
-      expect(new URL(page.url()).searchParams.has(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
-        false,
-      );
-      await captureUiProof(suite, page, "per-tab-02-session-tab-collapsed.png");
-
-      await page.keyboard.press("Meta+B");
-      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
-      await expect.poll(() => sidebar.isVisible()).toBe(true);
-      await captureUiProof(suite, page, "per-tab-03-session-tab-after-cmd-b.png");
-
-      await page.reload();
-      await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await sidebar.waitFor({ state: "visible", timeout: 10_000 });
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("collapses a native catalog-session tab while rendering its conversation", async () => {
-    const context = await suite.browser.newContext({
-      colorScheme: "dark",
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    try {
-      await installMockGateway(page, catalogSessionsMock());
-      await page.goto(`${suite.server.baseUrl}chat`);
-      const catalogLink = page.locator(
-        '[data-session-section="catalog:codex"] .sidebar-recent-session__link',
-      );
-      await catalogLink.waitFor({ state: "visible", timeout: 10_000 });
-      const catalogHref = await catalogLink.getAttribute("href");
-      expect(catalogHref).not.toBeNull();
-      const catalogUrl = new URL(catalogHref!, page.url());
-      expect(catalogUrl.searchParams.get(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name)).toBe(
-        SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.value,
-      );
-
-      const catalogTab = await context.newPage();
-      const gateway = await installMockGateway(catalogTab, catalogSessionsMock());
-      await catalogTab.goto(catalogUrl.href);
-      const composer = catalogTab.locator(".agent-chat__composer-combobox > textarea");
-      await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await catalogTab.getByText("Catalog transcript loaded", { exact: true }).waitFor();
-      await expect.poll(() => catalogTab.locator("openclaw-app-sidebar").isVisible()).toBe(false);
-      expect(
-        new URL(catalogTab.url()).searchParams.has(SIDEBAR_SESSION_NAV_COLLAPSE_QUERY.name),
-      ).toBe(false);
-      expect((await gateway.waitForRequest("sessions.catalog.read")).params).toMatchObject({
-        catalogId: "codex",
-        hostId: "gateway:local",
-        threadId: "thread-sidebar-collapse",
+  it.each([
+    { catalog: false, gesture: "middle" },
+    { catalog: false, gesture: "modifier" },
+    { catalog: true, gesture: "middle" },
+    { catalog: true, gesture: "modifier" },
+  ] as const)(
+    "opens an expanded session tab (catalog: $catalog, gesture: $gesture)",
+    async ({ catalog, gesture }) => {
+      const context = await suite.browser.newContext({
+        colorScheme: "dark",
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { height: 900, width: 1280 },
       });
-      await captureUiProof(suite, catalogTab, "per-tab-04-catalog-session-tab-collapsed.png");
-    } finally {
-      await context.close();
-    }
-  });
+      const scenario = catalog ? catalogSessionsMock() : sessionsMock();
+      // Browser-created tabs need the fixture before their first document loads.
+      await context.route("**" + CONTROL_UI_BOOTSTRAP_CONFIG_PATH, (route) =>
+        route.fulfill({ json: createControlUiMockBootstrapConfig(scenario) }),
+      );
+      await context.addInitScript({ content: createControlUiMockGatewayInitScript(scenario) });
+      const page = await context.newPage();
+      try {
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, MAIN_KEY));
+        const composer = page.locator(".agent-chat__composer-combobox > textarea");
+        await composer.fill("Keep this unsent draft in the original tab");
+        const originalUrl = page.url();
+        const link = page.locator(
+          catalog
+            ? '[data-session-section="catalog:codex"] .sidebar-recent-session__link'
+            : '[data-session-key="agent:main:research"] .sidebar-recent-session__link',
+        );
+        await link.waitFor({ state: "visible" });
+        const href = await link.getAttribute("href");
+        expect(href).not.toBeNull();
+        const targetUrl = new URL(href!, page.url());
+        const [sessionTab] = await Promise.all([
+          context.waitForEvent("page"),
+          gesture === "middle"
+            ? link.click({ button: "middle" })
+            : link.click({ modifiers: ["ControlOrMeta"] }),
+        ]);
+        const tabComposer = sessionTab.locator(".agent-chat__composer-combobox > textarea");
+        await tabComposer.waitFor({ state: "visible", timeout: 10_000 });
+        if (catalog) {
+          await sessionTab.getByText("Catalog transcript loaded", { exact: true }).waitFor();
+          const requests = await sessionTab.evaluate(() => {
+            const gateway = (
+              window as Window & {
+                openclawControlUiE2eGateway?: {
+                  findRequests: (method: string) => MockGatewayRequest[];
+                };
+              }
+            ).openclawControlUiE2eGateway;
+            if (!gateway) {
+              throw new Error("Mock Gateway is not installed");
+            }
+            return gateway.findRequests("sessions.catalog.read");
+          });
+          expect(requests[0]?.params).toMatchObject({
+            catalogId: "codex",
+            hostId: "gateway:local",
+            threadId: "thread-sidebar-collapse",
+          });
+        }
+        await captureUiProof(
+          suite,
+          sessionTab,
+          (catalog ? "catalog" : "session") + "-" + gesture + "-new-tab.png",
+        );
+        const sidebar = sessionTab.locator("openclaw-app-sidebar");
+        await expect.poll(() => sidebar.isVisible()).toBe(true);
+        expect(targetUrl.searchParams.has("nav")).toBe(false);
+        expect(sessionTab.url()).toBe(targetUrl.href);
+        expect(page.url()).toBe(originalUrl);
+        expect(await composer.inputValue()).toBe("Keep this unsent draft in the original tab");
+
+        await sessionTab.keyboard.press("ControlOrMeta+B");
+        await expect.poll(() => sidebar.isVisible()).toBe(false);
+        expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
+        await sessionTab.keyboard.press("ControlOrMeta+B");
+        await sidebar.waitFor({ state: "visible" });
+
+        await page.keyboard.press("ControlOrMeta+B");
+        await expect.poll(() => page.locator("openclaw-app-sidebar").isVisible()).toBe(false);
+        expect(await sidebar.isVisible()).toBe(true);
+        await sessionTab.reload();
+        await tabComposer.waitFor({ state: "visible" });
+        await sidebar.waitFor({ state: "visible" });
+        expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(false);
+      } finally {
+        await context.close();
+      }
+    },
+  );
 });

@@ -38,7 +38,7 @@ func prettyLanguageLabel(lang string) string {
 	if trimmed == "" {
 		return lang
 	}
-	if label, ok := languageLabels[languageKey(trimmed)]; ok {
+	if label, ok := languageLabels[strings.ToLower(trimmed)]; ok {
 		return label
 	}
 	return trimmed
@@ -50,7 +50,7 @@ func translationPrompt(srcLang, tgtLang string, glossary []GlossaryEntry) string
 		prettyLanguageLabel(srcLang),
 		prettyLanguageLabel(tgtLang),
 		documentationQualityRules,
-		localePromptRules(tgtLang),
+		localeRules[languageKey(tgtLang)],
 		protectedProductNameRule(),
 		buildGlossaryPrompt(glossary),
 	))
@@ -61,36 +61,18 @@ var alwaysProtectedProductNames = []string{
 }
 
 var contextualProtectedProductNames = []string{
-	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+	"Render", "Matrix", "Raft", "Chutes", "fal", "Fal", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 }
 
 func protectedProductNameRule() string {
 	contextualDisplay := []string{
-		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Inferrs", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
+		"Render", "Matrix", "Raft", "Chutes", "fal (title: Fal)", "Fireworks", "Meta", "Runway", "Synthetic", "Upstash Box", "Lobster", "Mantis", "Tokenjuice",
 	}
 	return fmt.Sprintf(
 		"- Keep product names in English: %s. When they name the documented product, provider, protocol, integration, runtime, or plugin, also preserve ambiguous names exactly: %s. Translate the same words normally when the source clearly uses them as ordinary prose instead of a name.",
 		strings.Join(alwaysProtectedProductNames, ", "),
 		strings.Join(contextualDisplay, ", "),
 	)
-}
-
-func isAlwaysProtectedProductName(value string) bool {
-	for _, name := range alwaysProtectedProductNames {
-		if value == name {
-			return true
-		}
-	}
-	return false
-}
-
-func contextualProtectedProductName(value string) (string, bool) {
-	for _, name := range contextualProtectedProductNames {
-		if value == name {
-			return name, true
-		}
-	}
-	return "", false
 }
 
 var localeRules = map[string]string{
@@ -143,10 +125,6 @@ var localeRules = map[string]string{
 - Prefer impersonal Polish instructional constructions and avoid gendered direct address when it is not required.`,
 	"th": `Locale rules:
 - Do not insert spaces between every Thai word; use spacing around Latin text, digits, and protected terms only where natural in Thai.`,
-}
-
-func localePromptRules(tgtLang string) string {
-	return localeRules[languageKey(tgtLang)]
 }
 
 const documentationQualityRules = `Documentation quality rules:

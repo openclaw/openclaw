@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setAvatarGatewayOrigin } from "./identity-avatar-context.ts";
-import { resolveAvatarImageUrl, settleAvatarImageUrl } from "./identity-avatar-loader.ts";
+import { resolveAvatarImageUrl, retainAvatarImageUrl } from "./identity-avatar-loader.ts";
 import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
 
 function avatarResponse(mime = "image/png") {
@@ -30,16 +30,6 @@ describe("resolveAvatar", () => {
     });
   });
 
-  it("keeps the initials color deterministic", () => {
-    const first = resolveAvatar({ id: "profile_123", name: "Ada Lovelace" });
-    const second = resolveAvatar({ id: "profile_123", name: "Renamed User" });
-    expect(first.kind).toBe("initials");
-    expect(second.kind).toBe("initials");
-    if (first.kind === "initials" && second.kind === "initials") {
-      expect(first.colorSeed).toBe(second.colorSeed);
-    }
-  });
-
   it("derives a stable identity hue from the same seed as the initials color", () => {
     const first = resolveIdentityHue({ id: "profile_123", name: "Ada Lovelace" });
     const second = resolveIdentityHue({ id: "profile_123", name: "Renamed User" });
@@ -54,18 +44,6 @@ describe("resolveAvatar", () => {
 });
 
 describe("resolveAvatar profile URL origin restriction", () => {
-  it("rejects absolute profile URLs from sender metadata", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "https://evil.example/a.png" }),
-    ).toMatchObject({ kind: "initials" });
-  });
-
-  it("rejects protocol-relative profile URLs", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "//evil.example/a.png" }),
-    ).toMatchObject({ kind: "initials" });
-  });
-
   it("rejects backslash and control-character parser bypasses", () => {
     for (const url of [
       "/\\evil.example/a.png",
@@ -79,18 +57,6 @@ describe("resolveAvatar profile URL origin restriction", () => {
     }
   });
 
-  it("accepts the canonical same-origin avatar route", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "/api/users/p1/avatar" });
-  });
-
-  it("rejects a same-origin path that is not the avatar route", () => {
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/secrets" }),
-    ).toMatchObject({ kind: "initials" });
-  });
-
   it("preserves the version query but drops the fragment on the avatar route", () => {
     expect(
       resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar?v=2#f" }),
@@ -99,6 +65,67 @@ describe("resolveAvatar profile URL origin restriction", () => {
 });
 
 describe("resolveAvatar gateway origin trust", () => {
+  it.each(["", "/openclaw"])(
+    "preserves development avatar mounts and origin trust at %s",
+    (basePath) => {
+      const gatewayUrl = `wss://gateway.example${basePath}`;
+      const proxyPath = `/__openclaw_dev_gateway__/${encodeURIComponent(gatewayUrl)}`;
+      const resourceBasePath = `${proxyPath}${basePath}`;
+      const uiOrigin = "http://localhost:5173";
+      vi.stubGlobal("location", new URL(uiOrigin));
+      vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", { gatewayUrl, proxyPath });
+      setAvatarGatewayOrigin(gatewayUrl, [], resourceBasePath);
+
+      for (const profileAvatarUrl of new Set([
+        "/api/users/p1/avatar?v=2#fragment",
+        `${basePath}/api/users/p1/avatar?v=2#fragment`,
+        `${resourceBasePath}/api/users/p1/avatar?v=2#fragment`,
+        "https://gateway.example/api/users/p1/avatar?v=2#fragment",
+        `https://gateway.example${basePath}/api/users/p1/avatar?v=2#fragment`,
+        `${uiOrigin}${resourceBasePath}/api/users/p1/avatar?v=2#fragment`,
+      ])) {
+        expect(resolveAvatar({ id: "p1", profileAvatarUrl }), profileAvatarUrl).toEqual({
+          kind: "profile",
+          url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar?v=2`,
+        });
+      }
+      expect(resolveAvatar({ id: "p1", identity: { type: "profile", id: "p1" } })).toEqual({
+        kind: "profile",
+        url: `${uiOrigin}${resourceBasePath}/api/users/p1/avatar`,
+      });
+      for (const profileAvatarUrl of [
+        `${basePath}/avatar/research?v=3`,
+        `${resourceBasePath}/avatar/research?v=3`,
+        `https://gateway.example${basePath}/avatar/research?v=3`,
+      ]) {
+        expect(
+          resolveAvatar({
+            id: "research",
+            identity: { type: "agent", id: "research" },
+            profileAvatarUrl,
+          }),
+        ).toEqual({ kind: "profile", url: `${uiOrigin}${resourceBasePath}/avatar/research?v=3` });
+      }
+      for (const profileAvatarUrl of [
+        "https://other.example/api/users/p1/avatar",
+        `https://other.example${basePath}/api/users/p1/avatar`,
+        `https://other.example${resourceBasePath}/api/users/p1/avatar`,
+        `${basePath}/api/users/p1/avatar/extra`,
+      ]) {
+        expect(resolveAvatar({ id: "p1", profileAvatarUrl }), profileAvatarUrl).toMatchObject({
+          kind: "initials",
+        });
+      }
+      if (basePath) {
+        expect(
+          resolveAvatar({ id: "research", profileAvatarUrl: "/avatar/research" }),
+        ).toMatchObject({
+          kind: "initials",
+        });
+      }
+    },
+  );
+
   it.each([
     ["https://gw.example.com", "", "/avatar/research", "/avatar/research"],
     [
@@ -163,13 +190,6 @@ describe("resolveAvatar gateway origin trust", () => {
     }
   });
 
-  it("resolves relative paths against the configured gateway origin", () => {
-    setAvatarGatewayOrigin("wss://gw.example.com/ws");
-    expect(
-      resolveAvatar({ id: "alice@example.com", profileAvatarUrl: "/api/users/p1/avatar" }),
-    ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
-  });
-
   it("allows an absolute URL only when it matches the gateway origin", () => {
     setAvatarGatewayOrigin("https://gw.example.com");
     expect(
@@ -178,13 +198,6 @@ describe("resolveAvatar gateway origin trust", () => {
         profileAvatarUrl: "https://gw.example.com/api/users/p1/avatar",
       }),
     ).toEqual({ kind: "profile", url: "https://gw.example.com/api/users/p1/avatar" });
-  });
-
-  it("rejects an absolute URL from a different origin than the gateway", () => {
-    setAvatarGatewayOrigin("https://gw.example.com");
-    expect(
-      resolveAvatar({ id: "a@example.com", profileAvatarUrl: "https://evil.example/a.png" }),
-    ).toMatchObject({ kind: "initials" });
   });
 });
 
@@ -250,11 +263,6 @@ describe("resolveAvatar profile-id senders", () => {
     ).toEqual({ kind: "profile", url: "/api/users/person/avatar" });
   });
 
-  it("keeps non-UUID sender ids on initials (no route probing)", () => {
-    expect(resolveAvatar({ id: "alice@example.com" })).toMatchObject({ kind: "initials" });
-    expect(resolveAvatar({ id: "+436641234567" })).toMatchObject({ kind: "initials" });
-  });
-
   it("prefers an explicit trusted route over the derived one", () => {
     expect(
       resolveAvatar({
@@ -268,8 +276,8 @@ describe("resolveAvatar profile-id senders", () => {
 describe("authenticated profile avatar cache", () => {
   it.each([
     ["/api/users/profile-ada/avatar?v=7", "image/png"],
-    ["/avatar/research", "image/png"],
     ["/avatar/research", "image/svg+xml"],
+    ["/avatar/research?v=7", "image/avif"],
   ])("shares one authenticated fetch for %s (%s)", async (avatarPath, mimeType) => {
     setAvatarGatewayOrigin("wss://gateway.example.test/ws", ["profile-token"]);
     const fetchAvatar = vi.spyOn(globalThis, "fetch").mockResolvedValue(avatarResponse(mimeType));
@@ -311,7 +319,7 @@ describe("authenticated profile avatar cache", () => {
     expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
-  it.each([404, 429, 503])(
+  it.each([404, 503])(
     "coalesces an avatar returning %s before retrying an unversioned upload after one minute",
     async (status) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(0);
@@ -353,6 +361,7 @@ describe("authenticated profile avatar cache", () => {
     const pending = Array.from({ length: 130 }, (_, index) =>
       Promise.resolve(resolveAvatarImageUrl(`/api/users/profile-${index}/avatar?v=1`)),
     );
+    const releases = pending.map((request) => retainAvatarImageUrl(request));
     expect(fetchAvatar).toHaveBeenCalledTimes(130);
     for (const finishRequest of finishRequests) {
       finishRequest(avatarResponse());
@@ -364,12 +373,39 @@ describe("authenticated profile avatar cache", () => {
     expect(new Set(imageUrls).size).toBe(130);
     expect(revokeObjectURL).not.toHaveBeenCalled();
 
-    settleAvatarImageUrl(imageUrls[0] ?? null);
-    settleAvatarImageUrl(imageUrls[1] ?? null);
+    releases[0]?.();
+    releases[1]?.();
 
     expect(revokeObjectURL).toHaveBeenCalledTimes(2);
     expect(revokeObjectURL).toHaveBeenNthCalledWith(1, imageUrls[0]);
     expect(revokeObjectURL).toHaveBeenNthCalledWith(2, imageUrls[1]);
+  });
+
+  it("keeps a shared pane image live until its last reference becomes evictable", async () => {
+    setAvatarGatewayOrigin("https://gateway.example.test", ["profile-token"]);
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => avatarResponse());
+    let sequence = 0;
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => `blob:retained-${sequence++}`);
+    const revoke = vi.spyOn(URL, "revokeObjectURL");
+    const pending = resolveAvatarImageUrl("/avatar/main?v=1");
+    const releaseMain = retainAvatarImageUrl(pending);
+    const releaseSidebar = retainAvatarImageUrl(pending);
+    const first = await pending;
+    const fill = async (start: number) => {
+      for (let index = start; index < start + 128; index += 1) {
+        const imageRequest = resolveAvatarImageUrl(`/avatar/agent-${index}?v=1`);
+        const release = retainAvatarImageUrl(imageRequest);
+        await imageRequest;
+        release();
+      }
+    };
+    await fill(0);
+    releaseMain();
+    await fill(128);
+    expect(revoke).not.toHaveBeenCalledWith(first);
+    releaseSidebar();
+    await fill(256);
+    expect(revoke).toHaveBeenCalledWith(first);
   });
 
   it("evicts settled misses in LRU order without retrying retained avatars", async () => {

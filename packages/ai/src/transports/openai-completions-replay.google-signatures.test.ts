@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { processCompletionsStream } from "./openai-completions-stream.js";
 import {
@@ -7,6 +8,7 @@ import {
   expectRecordFields,
   makeCompletionsChunk,
   makeCompletionsModel,
+  streamChunks,
 } from "./openai-completions.test-support.js";
 
 function geminiToolReplayContext(
@@ -23,14 +25,7 @@ function geminiToolReplayContext(
     api: options.sourceApi ?? model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "toolUse",
     timestamp: 1,
     content: [
@@ -92,13 +87,7 @@ describe("openai completions params", () => {
           "tool_calls" as const,
         ),
       ] as const;
-      async function* mockStream() {
-        for (const chunk of chunks) {
-          yield chunk as never;
-        }
-      }
-
-      await processCompletionsStream(mockStream(), output, geminiModel, {
+      await processCompletionsStream(streamChunks(chunks), output, geminiModel, {
         push() {},
       });
 
@@ -134,13 +123,7 @@ describe("openai completions params", () => {
         }),
         makeCompletionsChunk({}, "tool_calls" as const),
       ] as const;
-      async function* mockStream() {
-        for (const chunk of chunks) {
-          yield chunk as never;
-        }
-      }
-
-      await processCompletionsStream(mockStream(), output, veniceGeminiModel, {
+      await processCompletionsStream(streamChunks(chunks), output, veniceGeminiModel, {
         push() {},
       });
 

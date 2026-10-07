@@ -1,13 +1,11 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   projectPluginSessionEntry,
   projectPluginSessionEntryPatch,
-  projectPluginSessionStore,
-  reconcilePluginSessionStore,
 } from "./session-store-runtime-internal.js";
 import {
   patchSessionEntry,
@@ -15,7 +13,7 @@ import {
   type SessionEntry,
 } from "./session-store-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-publication-");
 
 function privateGenerationEntry(): InternalSessionEntry {
   return {
@@ -68,6 +66,54 @@ const sessionFallbackKeepsThinkingSelectionPrivate: "prevThinkingLevelSelection"
 void sessionFallbackKeepsThinkingSelectionPrivate;
 
 describe("plugin session writer claim projection", () => {
+  it.each(["patch", "upsert"] as const)(
+    "preserves server publication through %s lifecycle changes while rejecting forged grants",
+    async (method) => {
+      const sessionKey = "agent:main:plugin-publication";
+      const storePath = path.join(sessionDirs.make(), "sessions.json");
+      const publicShare = { id: "a".repeat(48), sessionId: "session-1", createdAt: 1 };
+      const updatedAt = Date.now();
+      await replaceSessionEntry(
+        { sessionKey, storePath },
+        {
+          ...privateGenerationEntry(),
+          publicShare,
+          updatedAt,
+        },
+      );
+      const mutate = async (entry: InternalSessionEntry) => {
+        if (method === "patch") {
+          await patchSessionEntry({
+            sessionKey,
+            storePath,
+            replaceEntry: true,
+            update: () => entry,
+          });
+        } else {
+          await upsertSessionEntry({ sessionKey, storePath, entry });
+        }
+      };
+      await mutate({
+        sessionId: "session-1",
+        lifecycleRevision: "generation-2",
+        updatedAt,
+        publicShare: { ...publicShare, id: "b".repeat(48) },
+      });
+      const sameSession = loadSessionEntry({ sessionKey, storePath });
+      expect(sameSession?.sessionId).toBe("session-1");
+      expect(sameSession?.publicShare).toEqual(publicShare);
+      expectGenerationPrivateFieldsCleared(sameSession);
+
+      await mutate({
+        sessionId: "session-2",
+        lifecycleRevision: "generation-3",
+        updatedAt,
+        publicShare: { ...publicShare, sessionId: "session-2", id: "c".repeat(48) },
+      });
+      expect(loadSessionEntry({ sessionKey, storePath })?.publicShare).toBeUndefined();
+    },
+  );
+
   it("excludes private claims and retired thinking provenance from entries and patches", () => {
     const entry = {
       activeWriterRunId: "run-writer",
@@ -143,7 +189,7 @@ describe("plugin session writer claim projection", () => {
 
   it("preserves private generation fields when patches and upserts omit lifecycle revision", async () => {
     const sessionKey = "agent:main:patch-preserve-generation";
-    const storePath = path.join(tempDirs.make("openclaw-sdk-generation-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     await replaceSessionEntry({ sessionKey, storePath }, privateGenerationEntry());
 
     await patchSessionEntry({
@@ -185,7 +231,7 @@ describe("plugin session writer claim projection", () => {
 
   it("clears private generation fields when a patch rotates lifecycle revision", async () => {
     const sessionKey = "agent:main:patch-rotate-generation";
-    const storePath = path.join(tempDirs.make("openclaw-sdk-generation-"), "sessions.json");
+    const storePath = path.join(sessionDirs.make(), "sessions.json");
     await replaceSessionEntry({ sessionKey, storePath }, privateGenerationEntry());
 
     await patchSessionEntry({
@@ -197,23 +243,5 @@ describe("plugin session writer claim projection", () => {
     const entry = loadSessionEntry({ sessionKey, storePath }) as InternalSessionEntry | undefined;
     expect(entry).toMatchObject({ lifecycleRevision: "generation-2", sessionId: "session-1" });
     expectGenerationPrivateFieldsCleared(entry);
-  });
-
-  it("clears private generation fields when whole-store reconciliation rotates lifecycle revision", () => {
-    const sessionKey = "agent:main:reconcile-rotate-generation";
-    const internalStore = { [sessionKey]: privateGenerationEntry() };
-    const publicStore = projectPluginSessionStore(internalStore);
-    publicStore[sessionKey] = {
-      ...publicStore[sessionKey]!,
-      lifecycleRevision: "generation-2",
-    };
-
-    reconcilePluginSessionStore({ internalStore, publicStore });
-
-    expect(internalStore[sessionKey]).toMatchObject({
-      lifecycleRevision: "generation-2",
-      sessionId: "session-1",
-    });
-    expectGenerationPrivateFieldsCleared(internalStore[sessionKey]);
   });
 });

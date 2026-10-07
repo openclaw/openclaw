@@ -4,6 +4,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createApiKeyCredential,
+  createAuthProfileStoreFixture,
+} from "../agents/auth-profiles/credential-fixtures.test-support.js";
+import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
@@ -11,7 +15,7 @@ import {
   readPersistedAuthProfileStoreRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../agents/auth-profiles/sqlite.js";
-import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   encodePluginModelCatalogRelativePath,
@@ -21,8 +25,14 @@ import {
 } from "../agents/plugin-model-catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { maybeMigrateModelCatalogCredentials } from "./doctor-model-catalog-credentials.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
 
@@ -34,12 +44,14 @@ const tempDirs: string[] = [];
 function createState(): { agentDir: string; env: NodeJS.ProcessEnv; stateDir: string } {
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-catalog-credentials-"));
   tempDirs.push(stateDir);
+  const env = { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir };
+  openOpenClawStateDatabase({ env });
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   return {
     agentDir,
     stateDir,
-    env: { ...process.env, HOME: stateDir, OPENCLAW_STATE_DIR: stateDir },
+    env,
   };
 }
 
@@ -71,7 +83,8 @@ function migrationParams(state: ReturnType<typeof createState>, cfg: OpenClawCon
   };
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -99,7 +112,7 @@ describe("doctor model catalog credential migration", () => {
       null,
       2,
     )}\n`;
-    replacePersistedPluginModelCatalogs({
+    await replacePersistedPluginModelCatalogs({
       agentDir,
       pluginCatalogWrites: {
         [encodePluginModelCatalogRelativePath("plugin-owner")]: pluginContents,
@@ -205,11 +218,7 @@ describe("doctor model catalog credential migration", () => {
       params.prompter = {
         ...createDoctorPrompter({ runtime: params.runtime, options: {} }),
         confirmAutoFix: async () => {
-          store.profiles["custom:default"] = {
-            type: "api_key",
-            provider: "custom",
-            key: "replacement-secret",
-          };
+          store.profiles["custom:default"] = createApiKeyCredential("custom", "replacement-secret");
           saveAuthProfileStore(store, agentDir);
           return true;
         },
@@ -251,11 +260,7 @@ describe("doctor model catalog credential migration", () => {
       {
         version: 1,
         profiles: {
-          "custom:default": {
-            type: "api_key",
-            provider: "custom",
-            key: "existing-secret",
-          },
+          "custom:default": createApiKeyCredential("custom", "existing-secret"),
         },
         order: { custom: ["custom:default"] },
       },
@@ -295,12 +300,9 @@ describe("doctor model catalog credential migration", () => {
     const childAgentDir = path.join(state.stateDir, "agents", "child", "agent");
     fs.mkdirSync(childAgentDir, { recursive: true });
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "custom:default": { type: "api_key", provider: "custom", key: "stored-secret" },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "custom:default": { type: "api_key", provider: "custom", key: "stored-secret" },
+      }),
       state.agentDir,
     );
     fs.writeFileSync(
@@ -351,21 +353,15 @@ describe("doctor model catalog credential migration", () => {
     const childAgentDir = path.join(state.stateDir, "agents", "child", "agent");
     fs.mkdirSync(childAgentDir, { recursive: true });
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "custom:default": { type: "api_key", provider: "custom", key: "configured-secret" },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "custom:default": { type: "api_key", provider: "custom", key: "configured-secret" },
+      }),
       state.agentDir,
     );
     saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          "custom:default": { type: "api_key", provider: "custom", key: "child-secret" },
-        },
-      },
+      createAuthProfileStoreFixture({
+        "custom:default": { type: "api_key", provider: "custom", key: "child-secret" },
+      }),
       childAgentDir,
     );
 

@@ -1,10 +1,9 @@
 // Session permission-root tests cover optional recorded roots across patch,
 // create, and reset while preserving pinned boundaries and lifecycle behavior.
-import { afterEach, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   sessionStoreEntry,
@@ -13,10 +12,6 @@ import {
 
 const { createSessionStoreDir, openClient, seedActiveMainSession } =
   setupGatewaySessionsTestHarness();
-
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
 
 test("sessions.patch stores and clears rootless modes while preserving recorded roots", async () => {
   const { storePath } = await createSessionStoreDir();

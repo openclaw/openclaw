@@ -27,12 +27,25 @@ Scope includes:
 - Blank text-block cleanup before provider replay
 - Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
-- Empty assistant error-turn repair for Bedrock Converse replay
+- Empty assistant error-turn removal for provider replay
 
 If you need transcript storage details, see
 [Session management deep dive](/reference/session-management-compaction).
 
 ---
+
+## Failed attempts and recovery
+
+Text-only assistant errors are buffered until the logical run settles. Recovery
+discards their partial text because the recovered reply supersedes it. Terminal
+failure persists the last attempt's partial text and error.
+
+Tool calls, displayable non-text content, and attachment facts are persisted
+immediately, before dependent tool results or the recovered reply. These fact
+rows omit the error and use a replayable stop reason so provider replay retains
+the calls. For mixed text/fact messages, partial text and the error remain
+buffered separately; terminal settlement does not duplicate facts or usage.
+This uses existing assistant-row shapes and requires no database migration.
 
 ## Global rule: runtime context is not user transcript
 
@@ -42,6 +55,13 @@ prompt body for Gateway replies, queued followups, ACP, CLI, and embedded
 OpenClaw runs. Stored visible user turns use that transcript body instead of
 the runtime-enriched prompt.
 
+Compaction and saved CLI session notes exclude the reserved
+`openclaw.runtime-context` custom message type, including older entries without
+carrier metadata and entries that opt out of provider replay. Provider carrier
+metadata controls replay authority; it does not make private context eligible
+for summaries or saved notes. Existing transcripts receive this filtering when
+read, without rewriting stored history.
+
 For legacy sessions that already persisted runtime wrappers, Gateway history
 surfaces apply a display projection before returning messages to WebChat,
 TUI, REST, or SSE clients.
@@ -50,7 +70,7 @@ TUI, REST, or SSE clients.
 
 ## Where this runs
 
-All transcript hygiene is centralized in the embedded runner:
+The embedded runner selects and applies transcript policy:
 
 - Policy selection: `src/agents/transcript-policy.ts`
   (`resolveTranscriptPolicy`, keyed on `provider`, `modelApi`, and `modelId`)
@@ -89,6 +109,12 @@ Assistant tool-call blocks missing both `input` and `arguments` are dropped
 before model context is built. This prevents provider rejections from
 partially persisted tool calls (for example, after a rate limit failure).
 
+Completed call/result pairs remain history when their tool is disabled, removed,
+or unavailable in the current catalog. Their names still require valid syntax;
+malformed calls, ambiguous pairing, and synthetic missing-result repairs do not
+grant this exception. Replaying a completed pair does not advertise or authorize
+the tool for a new call.
+
 Implementation:
 
 - `sanitizeToolCallInputs` in `src/agents/session-transcript-repair.ts`
@@ -99,14 +125,29 @@ Implementation:
 
 ## Global rule: tool result pairing
 
+The live runner rewrites a provider ID that repeats an earlier call, keeping IDs
+unique across responses within an embedded run attempt, including after compaction.
+Persisted older transcripts still use occurrence-based pairing.
+
 Tool results are paired to tool-call occurrences within each assistant turn before
 provider-specific call IDs are rewritten. Provider-generated IDs may repeat on later
 turns, so a result adjacent to a repeated call stays with that occurrence. A displaced
 result is moved only when exactly one unresolved occurrence can own it; ambiguous
 extras are dropped and missing occurrences receive synthetic error results.
 
+Synthetic missing results tell the model that the outcome is unknown: retry only
+read-only or idempotent operations, and verify current state before repeating an
+operation that may have had side effects. Responses-family transports retain
+their `aborted` placeholder. Neither placeholder proves that the tool did not run.
+
 Implementation: `sanitizeToolUseResultPairing` in
 `src/agents/session-transcript-repair.ts`
+
+When switching models, provider replay moves delayed asynchronous tool results
+next to their originating call before removing the source model's async metadata.
+Call and result IDs are trimmed before matching, so surrounding whitespace does
+not turn a real result into a synthetic missing-result error. This projection
+runs in `packages/ai/src/transcript-transform.ts` and leaves stored history intact.
 
 ---
 
@@ -134,7 +175,7 @@ Implementation: `normalizeAssistantReplayContent` in
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send`
-(including agent-to-agent reply/announce steps), OpenClaw persists the
+(including a delayed reply delivered to the requester), OpenClaw persists the
 created user turn with `message.provenance.kind = "inter_session"`.
 
 OpenClaw also prepends a same-turn `[Inter-session message] ... isUser=false`
@@ -161,6 +202,10 @@ inter-session user turns that only have provenance metadata.
 - Preserve replayable OpenAI Responses reasoning item payloads, including
   encrypted empty-summary items, so manual/WebSocket replay keeps required
   `rs_*` state paired with assistant output items.
+- Node turns canonicalize fresh reasoning signatures before returning the
+  completed assistant message, so live continuation and transcript storage use
+  the same signature bytes. Encrypted reasoning bytes, executable tool arguments,
+  and previously approved history remain unchanged.
 - Native ChatGPT Codex Responses follows Codex wire parity by replaying
   prior Responses reasoning/message/function payloads without prior item
   IDs while preserving session `prompt_cache_key`.
@@ -199,12 +244,15 @@ inter-session user turns that only have provenance metadata.
   as hidden custom messages immediately after their user turn and replay them in
   place. Inline inbound metadata on older user turns is also retained. This
   model-scoped append-only policy includes Bedrock, Vertex, and Foundry routes.
-  Carriers contain only the delimited context body; the shared instruction lives
-  once in the stable system prompt. Carriers remain user-role context and
-  are excluded from chat history and compaction summarization. Other Claude
-  models and Anthropic-compatible models keep transient carriers, avoiding
-  repeated cache-read charges and context use for old carriers when nothing
-  binds the prefix.
+  Agent core marks carriers with typed runtime-context metadata on a user-role
+  compatibility message. Provider adapters project the message at the strongest
+  authority their protocol supports; Anthropic-family and external plugin adapters
+  retain the labeled user representation, while OpenAI-compatible adapters use
+  system or developer authority.
+  Carriers are excluded from chat history and compaction summarization. Other
+  Claude models and Anthropic-compatible models keep transient carriers, avoiding
+  repeated cache-read charges and context use for old carriers when nothing binds
+  the prefix.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
   alternation). For prefix-binding models on the Messages API, append-only replay keeps
@@ -230,12 +278,11 @@ inter-session user turns that only have provenance metadata.
 
 **Amazon Bedrock (Converse API)**
 
-- Empty assistant stream-error turns are repaired to a non-empty fallback
-  text block before replay. Bedrock Converse rejects assistant messages
-  with `content: []`, so persisted assistant turns with `stopReason:
-"error"` and empty content are also repaired on disk before load.
-- Assistant stream-error turns with only blank text blocks are dropped from
-  the in-memory replay copy instead of replaying an invalid blank block.
+- Empty assistant stream-error turns and legacy fallback placeholders are dropped
+  from the in-memory replay copy. This avoids invalid empty ContentBlocks and
+  synthetic assistant prefill without rewriting the stored transcript.
+- Zero-usage empty stop turns are dropped too; billed silent replies and errors
+  with real assistant content retain their existing replay handling.
 - Pre-compaction assistant thinking signatures are stripped before Converse
   replay when a session has been compacted, for the same reason as
   Anthropic above.

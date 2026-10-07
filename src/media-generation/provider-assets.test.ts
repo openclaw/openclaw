@@ -1,17 +1,46 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { downloadGeneratedVideoAsset } from "./provider-assets.js";
 
 describe("downloadGeneratedVideoAsset", () => {
+  afterEach(() => vi.useRealTimers());
+  const downloadDefaults = {
+    url: "https://cdn.example/video",
+    timeoutMs: 1_000,
+    defaultTimeoutMs: 1_000,
+    fetchFn: fetch,
+    provider: "example",
+    label: "Example generated video download",
+    requestFailedMessage: "Example generated video download failed",
+  };
+
+  it("preserves deadline-only downloads through a pause longer than the default idle timeout", async () => {
+    vi.useFakeTimers();
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          setTimeout(() => controller.close(), 31_000);
+        },
+      }),
+      { headers: { "content-type": "video/mp4" } },
+    );
+    const result = downloadGeneratedVideoAsset({
+      ...downloadDefaults,
+      timeoutMs: 45_000,
+      defaultTimeoutMs: 45_000,
+      validateBinaryResponse: true,
+      chunkTimeoutMs: 0,
+      fetchResponse: async () => ({ response }),
+    }).catch((error: unknown) => error);
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    expect(await result).toMatchObject({ buffer: Buffer.from([1, 2, 3]) });
+  });
+
   it("preserves indexed filenames, metadata, and caller-owned response cleanup", async () => {
     const release = vi.fn(async () => undefined);
     const asset = await downloadGeneratedVideoAsset({
-      url: "https://cdn.example/video",
-      timeoutMs: 1_000,
-      defaultTimeoutMs: 1_000,
-      fetchFn: fetch,
-      provider: "example",
-      label: "Example generated video download",
-      requestFailedMessage: "Example generated video download failed",
+      ...downloadDefaults,
       index: 2,
       metadata: { sourceUrl: "https://cdn.example/video" },
       fetchResponse: async () => ({
@@ -37,13 +66,7 @@ describe("downloadGeneratedVideoAsset", () => {
 
     await expect(
       downloadGeneratedVideoAsset({
-        url: "https://cdn.example/video",
-        timeoutMs: 1_000,
-        defaultTimeoutMs: 1_000,
-        fetchFn: fetch,
-        provider: "example",
-        label: "Example generated video download",
-        requestFailedMessage: "Example generated video download failed",
+        ...downloadDefaults,
         validateBinaryResponse: true,
         fetchResponse: async () => ({
           response: new Response(new ReadableStream<Uint8Array>({ cancel }), {

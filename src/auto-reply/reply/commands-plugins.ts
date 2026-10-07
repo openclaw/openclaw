@@ -1,23 +1,21 @@
-// Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
+import { assertConfigWriteAllowedInCurrentMode } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
-import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
-  type ConfigSnapshotForInstallPersist,
-} from "../../plugins/install-persistence.js";
-import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
-import { resolveInstalledPluginPackageOwnership } from "../../plugins/installed-plugin-package-ownership.js";
+} from "../../plugins/install-config-mutation.js";
+import { createInstalledPluginOwnershipResolver } from "../../plugins/installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
-import type { PluginRecord } from "../../plugins/registry.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   buildAllPluginInspectReports,
-  buildPluginDiagnosticsReport,
+  withPluginDiagnosticsReportForInspection,
   buildPluginInspectReport,
   buildPluginRegistrySnapshotReport,
   formatPluginCompatibilityNotice,
@@ -44,9 +42,9 @@ function renderJsonBlock(label: string, value: unknown): string {
 
 function buildPluginInspectJson(
   inspect: ReturnType<typeof buildAllPluginInspectReports>[number],
-  index: InstalledPluginIndex,
+  ownershipResolver: ReturnType<typeof createInstalledPluginOwnershipResolver>,
 ) {
-  const ownership = resolveInstalledPluginPackageOwnership(index, inspect.plugin.id);
+  const ownership = ownershipResolver.resolvePackage(inspect.plugin.id);
   return {
     inspect,
     compatibilityWarnings: inspect.compatibility.map((warning) => ({
@@ -56,13 +54,6 @@ function buildPluginInspectJson(
     })),
     install: ownership.ok ? ownership.value.installRecord : null,
   };
-}
-
-function formatPluginLabel(plugin: PluginRecord): string {
-  if (!plugin.name || plugin.name === plugin.id) {
-    return plugin.id;
-  }
-  return `${plugin.name} (${plugin.id})`;
 }
 
 function formatPluginsList(report: PluginStatusReport): string {
@@ -77,82 +68,16 @@ function formatPluginsList(report: PluginStatusReport): string {
       const format = plugin.bundleFormat
         ? `${plugin.format ?? "openclaw"}/${plugin.bundleFormat}`
         : (plugin.format ?? "openclaw");
-      return `- ${formatPluginLabel(plugin)} [${plugin.status}] ${format}`;
+      const label =
+        !plugin.name || plugin.name === plugin.id ? plugin.id : `${plugin.name} (${plugin.id})`;
+      return `- ${label} [${plugin.status}] ${format}`;
     }),
   ];
   return lines.join("\n");
 }
 
-function isPluginsWriteAction(action: string): boolean {
-  return action === "install" || action === "enable" || action === "disable";
-}
-
 function hasGatewayAdminScope(params: Parameters<CommandHandler>[0]): boolean {
   return params.ctx.GatewayClientScopes?.includes("operator.admin") === true;
-}
-
-function rejectNixModePluginWrite(): {
-  shouldContinue: false;
-  reply: { text: string };
-} | null {
-  try {
-    assertConfigWriteAllowedInCurrentMode();
-    return null;
-  } catch (error) {
-    return {
-      shouldContinue: false,
-      reply: { text: `⚠️ ${formatErrorMessage(error)}` },
-    };
-  }
-}
-
-function findPlugin(report: PluginStatusReport, rawName: string): PluginRecord | undefined {
-  const target = normalizeOptionalLowercaseString(rawName);
-  if (!target) {
-    return undefined;
-  }
-  return report.plugins.find(
-    (plugin) =>
-      normalizeOptionalLowercaseString(plugin.id) === target ||
-      normalizeOptionalLowercaseString(plugin.name) === target,
-  );
-}
-
-async function loadPluginCommandConfig(): Promise<
-  | { ok: true; path: string; snapshot: ConfigSnapshotForInstallPersist }
-  | { ok: false; path: string; error: string }
-> {
-  const prepared = await readConfigFileSnapshotForWrite();
-  const snapshot = prepared.snapshot;
-  if (!snapshot.valid) {
-    return {
-      ok: false,
-      path: snapshot.path,
-      error: "Config file is invalid; fix it before using /plugins.",
-    };
-  }
-  const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
-  const { pluginMutation } = resolveInstallConfigMutationPreflights({
-    parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
-    snapshotPath: snapshot.path,
-    writeOptions,
-  });
-  if (pluginMutation.mode === "blocked") {
-    return {
-      ok: false,
-      path: snapshot.path,
-      error: pluginMutation.reason,
-    };
-  }
-  return {
-    ok: true,
-    path: snapshot.path,
-    snapshot: {
-      config: structuredClone(snapshot.sourceConfig),
-      baseHash: snapshot.hash,
-      writeOptions,
-    },
-  };
 }
 
 export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
@@ -169,7 +94,11 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       return commandReply(`⚠️ ${pluginsCommand.message}`);
     }
 
-    if (isPluginsWriteAction(pluginsCommand.action)) {
+    if (
+      pluginsCommand.action === "install" ||
+      pluginsCommand.action === "enable" ||
+      pluginsCommand.action === "disable"
+    ) {
       const missingAdminScope = requireGatewayClientScope(params, {
         label: "/plugins write",
         allowedScopes: ["operator.admin"],
@@ -179,36 +108,69 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
       if (missingAdminScope) {
         return missingAdminScope;
       }
-      if (!params.command.senderIsOwner && !hasGatewayAdminScope(params)) {
+      if (!hasGatewayAdminScope(params)) {
         const nonOwner = rejectNonOwnerCommand(params, "/plugins write");
         if (nonOwner) {
           return nonOwner;
         }
       }
-      const nixModeWrite = rejectNixModePluginWrite();
-      if (nixModeWrite) {
-        return nixModeWrite;
+      try {
+        assertConfigWriteAllowedInCurrentMode();
+      } catch (error) {
+        return commandReply(`⚠️ ${formatErrorMessage(error)}`);
       }
     }
 
     if (pluginsCommand.action === "install") {
-      return await withPluginLifecycleLease({}, async () => {
-        const loadedConfig = await loadPluginCommandConfig();
-        if (!loadedConfig.ok) {
-          return commandReply(`⚠️ ${loadedConfig.error}`);
+      const resolveContext =
+        readChannelContextGatewayContextResolver(params.rootCtx ?? params.ctx) ??
+        getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+      const context = resolveContext?.();
+      const assertInvokerOwned = () => {
+        if (!hasGatewayAdminScope(params)) {
+          params.command.assertOwnerCurrent?.();
+        }
+        params.commandInvocationSignal?.throwIfAborted();
+        params.opts?.abortSignal?.throwIfAborted();
+        if (resolveContext && (!context || resolveContext() !== context)) {
+          throw new Error("The Gateway that admitted this command is no longer available.");
+        }
+      };
+      assertInvokerOwned();
+      return await withPluginLifecycleLease({ signal: params.opts?.abortSignal }, async () => {
+        const prepared = await readConfigFileSnapshotForWrite();
+        const snapshot = prepared.snapshot;
+        if (!snapshot.valid) {
+          return commandReply("⚠️ Config file is invalid; fix it before using /plugins.");
+        }
+        const writeOptions = selectInstallMutationWriteOptions(prepared.writeOptions);
+        const { pluginMutation } = resolveInstallConfigMutationPreflights({
+          parsed: (snapshot.parsed ?? {}) as Record<string, unknown>,
+          snapshotPath: snapshot.path,
+          writeOptions,
+        });
+        if (pluginMutation.mode === "blocked") {
+          return commandReply(`⚠️ ${pluginMutation.reason}`);
         }
         const installed = await installPluginFromPluginsCommand({
           raw: pluginsCommand.spec,
           acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
-          snapshot: loadedConfig.snapshot,
+          snapshot: {
+            config: structuredClone(snapshot.sourceConfig),
+            baseHash: snapshot.hash,
+            writeOptions,
+          },
+          applyRuntime: context?.applyPluginLifecycleChange,
+          beforePersistentApply: assertInvokerOwned,
+          signal: params.opts?.abortSignal,
         });
         if (!installed.ok) {
           return commandReply(`⚠️ ${installed.error}`);
         }
         return commandReply(
           [
-            `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
+            `🔌 Installed plugin "${installed.pluginId}". ${installed.application ? `Applied in Gateway generation ${installed.application.generation}.` : "Saved for the next Gateway start."}`,
             ...(installed.warnings ?? []).map((warning) => `⚠️ ${warning}`),
           ].join("\n"),
         );
@@ -225,49 +187,68 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
 
       if (pluginsCommand.action === "inspect") {
         const metadataSnapshot = loadPluginMetadataSnapshot(reportParams);
-        const report = buildPluginDiagnosticsReport({ ...reportParams, metadataSnapshot });
-        if (!pluginsCommand.name) {
-          return commandReply(formatPluginsList(report));
-        }
-        if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
-          const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
-            buildPluginInspectJson(inspect, metadataSnapshot.index),
-          );
-          return commandReply(renderJsonBlock("🔌 Plugins", reports));
-        }
-        const inspect = buildPluginInspectReport({
-          id: pluginsCommand.name,
-          config,
-          report,
-        });
-        if (!inspect) {
-          return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
-        }
-        const payload = buildPluginInspectJson(inspect, metadataSnapshot.index);
-        return commandReply(
-          renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
-            ...inspect,
-            compatibilityWarnings: payload.compatibilityWarnings,
-            install: payload.install,
-          }),
+        const text = await withPluginDiagnosticsReportForInspection(
+          { ...reportParams, metadataSnapshot },
+          (report) => {
+            if (!pluginsCommand.name) {
+              return formatPluginsList(report);
+            }
+            if (normalizeOptionalLowercaseString(pluginsCommand.name) === "all") {
+              const ownershipResolver = createInstalledPluginOwnershipResolver(
+                metadataSnapshot.index,
+              );
+              const reports = buildAllPluginInspectReports({ config, report }).map((inspect) =>
+                buildPluginInspectJson(inspect, ownershipResolver),
+              );
+              return renderJsonBlock("🔌 Plugins", reports);
+            }
+            const inspect = buildPluginInspectReport({
+              id: pluginsCommand.name,
+              config,
+              report,
+            });
+            if (!inspect) {
+              return `🔌 No plugin named "${pluginsCommand.name}" found.`;
+            }
+            const payload = buildPluginInspectJson(
+              inspect,
+              createInstalledPluginOwnershipResolver(metadataSnapshot.index),
+            );
+            return renderJsonBlock(`🔌 Plugin "${inspect.plugin.id}"`, {
+              ...inspect,
+              compatibilityWarnings: payload.compatibilityWarnings,
+              install: payload.install,
+            });
+          },
         );
+        return commandReply(text);
       }
 
       const report = buildPluginRegistrySnapshotReport(reportParams);
       if (pluginsCommand.action === "list") {
         return commandReply(formatPluginsList(report));
       }
-      const plugin = findPlugin(report, pluginsCommand.name);
+      const target = normalizeOptionalLowercaseString(pluginsCommand.name);
+      const plugin = target
+        ? report.plugins.find(
+            (entry) =>
+              normalizeOptionalLowercaseString(entry.id) === target ||
+              normalizeOptionalLowercaseString(entry.name) === target,
+          )
+        : undefined;
       if (!plugin) {
         return commandReply(`🔌 No plugin named "${pluginsCommand.name}" found.`);
       }
 
       let registryWarning: string | undefined;
       try {
-        const committedConfig = await setPluginEnabledFromCommand({
+        await setPluginEnabledFromCommand({
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
+          assertCurrent: hasGatewayAdminScope(params)
+            ? undefined
+            : params.command.assertOwnerCurrent,
           ...resolvePluginCapabilityConsentCliOptions({
             acceptCapabilities:
               pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,
@@ -276,7 +257,6 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           }),
         });
         await refreshPluginRegistryAfterConfigMutation({
-          config: committedConfig,
           reason: "policy-changed",
           logger: {
             warn: (message) => {

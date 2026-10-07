@@ -1,22 +1,32 @@
 import { fileURLToPath } from "node:url";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import {
-  resolveRuntimeProcessEntrypointUrl,
-  resolveRuntimeWorkerArgv,
-} from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 
 function quotePowerShellLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
 /** Carry only a selected profile path through supervision; resolve its token in the child. */
-export function buildGitHubExecLaunchArgv(argv: string[], profileDir: string): string[] {
+export function buildGitHubExecLaunchArgv(
+  argv: string[],
+  profileDir: string,
+  options?: { externalCommandShell?: { shell: string; args: readonly string[] } },
+): string[] {
   const workerUrl = resolveRuntimeProcessEntrypointUrl("githubExec");
   const launcher = [process.execPath, ...resolveRuntimeWorkerArgv(workerUrl), profileDir];
   if (process.platform === "win32") {
+    const externalShell = options?.externalCommandShell;
+    const shellArgv = externalShell
+      ? [
+          externalShell.shell,
+          ...externalShell.args,
+          `$ErrorActionPreference = 'Stop'; & ${argv.map(quotePowerShellLiteral).join(" ")}; exit $LASTEXITCODE`,
+        ]
+      : argv;
     // getShellConfig owns a fresh PowerShell -Command process on Windows. Keep it as
     // the command owner; a Node wrapper's private Job could kill retained descendants.
-    const command = argv.at(-1);
+    const command = shellArgv.at(-1);
     if (command === undefined) {
       throw new Error("Managed GitHub execution requires a shell command.");
     }
@@ -29,7 +39,7 @@ export function buildGitHubExecLaunchArgv(argv: string[], profileDir: string): s
       "$env:GITHUB_TOKEN = ''; $LASTEXITCODE = $null;",
       `& ([scriptblock]::Create(${quotePowerShellLiteral(command)}))`,
     ].join(" ");
-    return [...argv.slice(0, -1), bootstrap];
+    return [...shellArgv.slice(0, -1), bootstrap];
   }
   // Shell exec preserves PID, PTY and inherited lineage fds. Resolver stdout stays inside
   // this private substitution; neither supervisor/relay messages nor argv carry the token.

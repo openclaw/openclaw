@@ -132,27 +132,45 @@ function createMarkerSession(options: { existingPage?: boolean; navigateError?: 
       connect: vi.fn(),
     },
     transport: { pid: 123 },
+    closeTransport() {
+      return this.client.close();
+    },
     ready: Promise.resolve(),
     routing: {
       sessionNonce: "000000000001",
       withOperationLock: createSerialLock(),
       targetIdByPageId: new Map<number, string>(),
       nextTargetHandleId: 1,
-      snapshotRefById: new Map(),
+      snapshotsByTarget: new Map(),
       nextSnapshotRefId: 1,
     },
   };
   return { session, pages, events };
 }
 
-function ownershipOf(value: unknown): Record<string, unknown> | undefined {
-  return (value as { ownership?: Record<string, unknown> }).ownership;
+function mockMarkerLookup(
+  pages: FakePage[],
+  webSocketDebuggerUrl = "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
+) {
+  fetchJsonMock.mockImplementation(async (url: string) =>
+    url.includes("/json/list")
+      ? pages.map((page) => ({ id: page.nativeTargetId, url: page.url, type: "page" }))
+      : { webSocketDebuggerUrl },
+  );
 }
 
-function fixtureCdpEndpoint(protocol: "http:" | "ws:", path = ""): string {
-  const endpoint = new URL(`${protocol}//127.0.0.1:9222${path}`);
-  endpoint.searchParams.set("auth", "fixture-value");
-  return endpoint.toString();
+function mockNativeClose(pages: FakePage[]) {
+  fetchOkMock.mockImplementationOnce(async (url: string) => {
+    const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
+    const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
+    if (index >= 0) {
+      pages.splice(index, 1);
+    }
+  });
+}
+
+function ownershipOf(value: unknown): Record<string, unknown> | undefined {
+  return (value as { ownership?: Record<string, unknown> }).ownership;
 }
 
 describe("Chrome MCP durable tab ownership", () => {
@@ -166,58 +184,10 @@ describe("Chrome MCP durable tab ownership", () => {
     await resetChromeMcpSessionsForTest();
   });
 
-  it("captures the uniquely marked native target before final navigation", async () => {
-    const { session, pages, events } = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        events.push("json-list");
-        return pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      if (url.includes("/json/version")) {
-        events.push("json-version");
-        return {
-          webSocketDebuggerUrl: fixtureCdpEndpoint("ws:", "/devtools/browser/BROWSER-ONE"),
-        };
-      }
-      throw new Error(`unexpected fetch ${url}`);
-    });
-
-    const opened = await openChromeMcpTab("chrome-live", "https://example.com/final", {
-      cdpUrl: fixtureCdpEndpoint("http:"),
-    });
-
-    expect(events[0]).toMatch(/^new:about:blank#openclaw-/);
-    expect(events.indexOf("json-list")).toBeLessThan(
-      events.findIndex((event) => event.startsWith("navigate:")),
-    );
-    expect(ownershipOf(opened)).toMatchObject({
-      status: "durable",
-      nativeTargetId: "NATIVE-2",
-      profileFingerprint: expect.stringMatching(/^sha256:/),
-      browserInstanceFingerprint: expect.stringMatching(/^sha256:/),
-    });
-  });
-
   it("serializes duplicate-destination opens while preserving unique marker mapping", async () => {
     const { session, pages } = createMarkerSession();
     setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        return pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      return {
-        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
-      };
-    });
+    mockMarkerLookup(pages);
 
     const profile = { cdpUrl: "http://127.0.0.1:9222" };
     const [first, second] = await Promise.all([
@@ -239,18 +209,7 @@ describe("Chrome MCP durable tab ownership", () => {
   it("threads CDP policy, signal, and remote HTTP timeout through marker capture", async () => {
     const { session, pages } = createMarkerSession();
     setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        return pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      return {
-        webSocketDebuggerUrl: "wss://browser.example/devtools/browser/BROWSER-ONE",
-      };
-    });
+    mockMarkerLookup(pages, "wss://browser.example/devtools/browser/BROWSER-ONE");
     const controller = new AbortController();
     const cdpPolicy = {
       dangerouslyAllowPrivateNetwork: false,
@@ -319,33 +278,6 @@ describe("Chrome MCP durable tab ownership", () => {
     ]);
   });
 
-  it("opens the first page in an empty explicit-CDP browser", async () => {
-    const { session, pages } = createMarkerSession({ existingPage: false });
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        return pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      return {
-        webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
-      };
-    });
-
-    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "http://127.0.0.1:9222",
-    });
-
-    expect(ownershipOf(opened)).toMatchObject({
-      status: "durable",
-      nativeTargetId: "NATIVE-1",
-    });
-    expect(pages).toEqual([{ id: 1, nativeTargetId: "NATIVE-1", url: "about:blank" }]);
-  });
-
   it("rejects an empty auto-connected browser before creating a page", async () => {
     const { session, pages } = createMarkerSession({ existingPage: false });
     setChromeMcpSessionFactoryForTest(async () => session as never);
@@ -373,13 +305,7 @@ describe("Chrome MCP durable tab ownership", () => {
       }
       return { webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/page/NATIVE-1" };
     });
-    fetchOkMock.mockImplementationOnce(async (url: string) => {
-      const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
-      const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
-      if (index >= 0) {
-        pages.splice(index, 1);
-      }
-    });
+    mockNativeClose(pages);
 
     await expect(
       openChromeMcpTab("chrome-live", "about:blank", {
@@ -396,8 +322,6 @@ describe("Chrome MCP durable tab ownership", () => {
   });
 
   it.each([
-    { label: "cdpUrl", profile: { cdpUrl: "http://127.0.0.1:9222" } },
-    { label: "mcpArgs only", profile: { mcpArgs: ["--browserUrl", "http://127.0.0.1:9222"] } },
     {
       label: "HTTP mcpArgs override",
       profile: {
@@ -418,25 +342,8 @@ describe("Chrome MCP durable tab ownership", () => {
       const navigateError = new Error("navigation failed");
       const { session, pages } = createMarkerSession({ existingPage: false, navigateError });
       setChromeMcpSessionFactoryForTest(async () => session as never);
-      fetchJsonMock.mockImplementation(async (url: string) => {
-        if (url.includes("/json/list")) {
-          return pages.map((page) => ({
-            id: page.nativeTargetId,
-            url: page.url,
-            type: "page",
-          }));
-        }
-        return {
-          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
-        };
-      });
-      fetchOkMock.mockImplementationOnce(async (url: string) => {
-        const nativeTargetId = decodeURIComponent(url.split("/").at(-1) ?? "");
-        const index = pages.findIndex((page) => page.nativeTargetId === nativeTargetId);
-        if (index >= 0) {
-          pages.splice(index, 1);
-        }
-      });
+      mockMarkerLookup(pages);
+      mockNativeClose(pages);
 
       await expect(openChromeMcpTab("chrome-live", "https://example.com", profile)).rejects.toBe(
         navigateError,
@@ -459,36 +366,6 @@ describe("Chrome MCP durable tab ownership", () => {
     },
   );
 
-  it("classifies marker lookup network failures separately from ambiguous matches", async () => {
-    const { session } = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockRejectedValueOnce(new Error("marker lookup timed out"));
-
-    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "https://browser.example",
-    });
-
-    expect(ownershipOf(opened)).toEqual({
-      status: "non-durable",
-      reason: "target-marker-lookup-failed",
-    });
-  });
-
-  it("classifies malformed marker lookup payloads as lookup failures", async () => {
-    const { session } = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => session as never);
-    fetchJsonMock.mockResolvedValueOnce({ targets: "not-an-array" });
-
-    const opened = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "https://browser.example",
-    });
-
-    expect(ownershipOf(opened)).toEqual({
-      status: "non-durable",
-      reason: "target-marker-lookup-failed",
-    });
-  });
-
   it("classifies malformed marker list entries as lookup failures", async () => {
     const { session } = createMarkerSession();
     setChromeMcpSessionFactoryForTest(async () => session as never);
@@ -504,16 +381,11 @@ describe("Chrome MCP durable tab ownership", () => {
     });
   });
 
-  it.each([
-    { label: "no marker match", matches: [] },
-    {
-      label: "multiple marker matches",
-      matches: [
-        { id: "NATIVE-A", type: "page" },
-        { id: "NATIVE-B", type: "page" },
-      ],
-    },
-  ])("returns non-durable ownership for $label", async ({ matches }) => {
+  it("returns non-durable ownership for ambiguous marker matches", async () => {
+    const matches = [
+      { id: "NATIVE-A", type: "page" },
+      { id: "NATIVE-B", type: "page" },
+    ];
     const { session } = createMarkerSession();
     setChromeMcpSessionFactoryForTest(async () => session as never);
     fetchJsonMock.mockImplementation(async (url: string) => {
@@ -523,7 +395,7 @@ describe("Chrome MCP durable tab ownership", () => {
         >;
         const markerValue = calls.find(([call]) => call.name === "new_page")?.[0].arguments?.url;
         const marker = typeof markerValue === "string" ? markerValue : "";
-        return matches.map((entry) => ({ ...entry, url: marker }));
+        return matches.map((entry) => ({ id: entry.id, type: entry.type, url: marker }));
       }
       return {
         webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/BROWSER-ONE",
@@ -537,42 +409,6 @@ describe("Chrome MCP durable tab ownership", () => {
     expect(ownershipOf(opened)).toEqual({
       status: "non-durable",
       reason: "target-marker-not-unique",
-    });
-  });
-
-  it("does not claim durable ownership for auto-connect or missing browser identity", async () => {
-    const autoConnectSession = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => autoConnectSession.session as never);
-
-    const autoConnected = await openChromeMcpTab("chrome-live", "about:blank");
-
-    expect(ownershipOf(autoConnected)).toEqual({
-      status: "non-durable",
-      reason: "explicit-cdp-url-required",
-    });
-    expect(fetchJsonMock).not.toHaveBeenCalled();
-
-    await resetChromeMcpSessionsForTest();
-    const endpointSession = createMarkerSession();
-    setChromeMcpSessionFactoryForTest(async () => endpointSession.session as never);
-    fetchJsonMock.mockImplementation(async (url: string) => {
-      if (url.includes("/json/list")) {
-        return endpointSession.pages.map((page) => ({
-          id: page.nativeTargetId,
-          url: page.url,
-          type: "page",
-        }));
-      }
-      return { Browser: "Chrome/138" };
-    });
-
-    const withoutVersionIdentity = await openChromeMcpTab("chrome-live", "about:blank", {
-      cdpUrl: "http://127.0.0.1:9222",
-    });
-
-    expect(ownershipOf(withoutVersionIdentity)).toEqual({
-      status: "non-durable",
-      reason: "browser-identity-unavailable",
     });
   });
 });

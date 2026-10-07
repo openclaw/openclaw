@@ -1,14 +1,24 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { syncDirectory } from "@openclaw/fs-safe/durability";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
 
+type PublishFileExclusive = typeof import("@openclaw/fs-safe/durability").publishFileExclusive;
+type PublicationFixture = (
+  options: Parameters<PublishFileExclusive>[0],
+  publish: PublishFileExclusive,
+) => ReturnType<PublishFileExclusive>;
+
 const durabilityTestState = vi.hoisted(() => ({
+  publish: undefined as PublicationFixture | undefined,
+  publicationSyncUnsupported: false,
   syncOutcome: undefined as
     | { status: "synced" }
     | { status: "unsupported"; code?: string }
@@ -19,6 +29,17 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/fs-safe/durability")>();
   return {
     ...actual,
+    publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      if (path.basename(path.dirname(args[0].targetPath)).startsWith(".sqlite-publish-")) {
+        return actual.publishFileExclusive(...args);
+      }
+      const published = durabilityTestState.publish
+        ? await durabilityTestState.publish(args[0], actual.publishFileExclusive)
+        : await actual.publishFileExclusive(...args);
+      return durabilityTestState.publicationSyncUnsupported
+        ? { ...published, directorySync: { status: "unsupported" as const, code: "ENOTSUP" } }
+        : published;
+    },
     syncDirectory: async (...args: Parameters<typeof actual.syncDirectory>) =>
       durabilityTestState.syncOutcome ?? (await actual.syncDirectory(...args)),
   };
@@ -47,10 +68,34 @@ function isDirectoryOpen(flags: string | number | undefined): boolean {
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  durabilityTestState.publish = undefined;
+  durabilityTestState.publicationSyncUnsupported = false;
   durabilityTestState.syncOutcome = undefined;
   vi.restoreAllMocks();
   await Promise.all(tempDirs.splice(0).map((tempDir) => fs.rm(tempDir, { recursive: true })));
 });
+
+function mockExclusiveCopyPublication(alterCopy?: (filePath: string) => Promise<void>) {
+  // Model the public copy receipt; native fallback selection belongs to fs-safe.
+  const publish = vi.fn<PublicationFixture>(async (options) => {
+    expect(options.strategy).toBe("link-or-copy");
+    await fs.copyFile(options.sourcePath, options.targetPath, fsSync.constants.COPYFILE_EXCL);
+    await alterCopy?.(options.targetPath);
+    const target = await fs.open(options.targetPath, "r+");
+    try {
+      await target.sync();
+      return {
+        method: "exclusive-copy",
+        identity: await target.stat(),
+        directorySync: await syncDirectory(path.dirname(options.targetPath)),
+      };
+    } finally {
+      await target.close();
+    }
+  });
+  durabilityTestState.publish = publish;
+  return publish;
+}
 
 function createUnsafeIndexDrift(sqlitePath: string): void {
   const sqlite = requireNodeSqlite();
@@ -175,9 +220,13 @@ beforeEach(async () => {
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
 async function expectSnapshotSuccess(options: SnapshotOptions): Promise<void> {
-  await expect(createVerifiedSqliteSnapshot(options)).resolves.toEqual({
+  const snapshot = await createVerifiedSqliteSnapshot(options);
+  const published = await fs.readFile(options.targetPath);
+  expect(snapshot).toEqual({
     path: options.targetPath,
     userVersion: 0,
+    sha256: createHash("sha256").update(published).digest("hex"),
+    sizeBytes: published.length,
   });
 }
 
@@ -265,6 +314,32 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
+  it.each([undefined, true])(
+    "preserves implicit row IDs only when requested (%s), including committed WAL data",
+    async (preserveRowIds) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(
+          "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE records(value TEXT); INSERT INTO records(rowid,value) VALUES(71,'online turn')",
+        );
+        await createVerifiedSqliteSnapshot({ sourcePath, targetPath, preserveRowIds });
+        withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+          expect(snapshot.prepare("SELECT rowid,value FROM records").all()).toEqual([
+            { rowid: preserveRowIds ? 71 : 1, value: "online turn" },
+          ]);
+          expect(snapshot.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "delete" });
+          expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({
+            integrity_check: "ok",
+          });
+        });
+        await expect(fs.access(`${targetPath}-wal`)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(fs.access(`${targetPath}-shm`)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        source.close();
+      }
+    },
+  );
+
   it("captures committed WAL state and removes deleted page contents", async () => {
     const deletedValue = `deleted-secret-${"x".repeat(256)}`;
     const source = new sqlite.DatabaseSync(sourcePath);
@@ -281,8 +356,14 @@ describe("createVerifiedSqliteSnapshot", () => {
       source.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
 
       const result = await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-      expect(result).toEqual({ path: targetPath, userVersion: 0 });
-      expect((await fs.readFile(targetPath)).includes(deletedValue)).toBe(false);
+      const published = await fs.readFile(targetPath);
+      expect(result).toEqual({
+        path: targetPath,
+        userVersion: 0,
+        sha256: createHash("sha256").update(published).digest("hex"),
+        sizeBytes: published.length,
+      });
+      expect(published.includes(deletedValue)).toBe(false);
 
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([
@@ -308,8 +389,13 @@ describe("createVerifiedSqliteSnapshot", () => {
 
       await expectSnapshotSuccess({ sourcePath, targetPath });
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(
           snapshot.prepare("SELECT COUNT(*) AS count FROM records WHERE value = 'committed'").get(),
@@ -369,8 +455,13 @@ describe("createVerifiedSqliteSnapshot", () => {
         /super-journal.*cannot be recovered privately/iu,
       );
 
-      await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
-      await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(journalBefore);
+      expect((await fs.readFile(sourcePath)).equals(sourceBefore), "source bytes unchanged").toBe(
+        true,
+      );
+      expect(
+        (await fs.readFile(`${sourcePath}-journal`)).equals(journalBefore),
+        "journal bytes unchanged",
+      ).toBe(true);
       await expect(fs.readFile(superJournalPath)).resolves.toEqual(superJournalBefore);
       await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
     },
@@ -388,21 +479,6 @@ describe("createVerifiedSqliteSnapshot", () => {
 
     await expect(fs.readFile(sourcePath)).resolves.toEqual(sourceBefore);
     await expect(fs.readFile(`${sourcePath}-journal`)).resolves.toEqual(staleJournal);
-    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
-    });
-  });
-
-  it("uses online backup before compacting the private copy", async () => {
-    const setup = new sqlite.DatabaseSync(sourcePath);
-    setup.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
-    setup.close();
-    const backupSpy = vi.spyOn(sqlite, "backup");
-    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(backupSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
     withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
       expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
     });
@@ -440,14 +516,76 @@ describe("createVerifiedSqliteSnapshot", () => {
     }
   });
 
-  it("rejects unsafe index drift and removes the failed target", async () => {
+  it.each([false, true])("rejects unsafe index drift (isolated=%s)", async (isolated) => {
     createUnsafeIndexDrift(sourcePath);
 
     await expectSnapshotFailureWithoutTarget(
-      { sourcePath, targetPath },
+      {
+        sourcePath,
+        targetPath,
+        ...(isolated
+          ? { sourceAcquisition: { mode: "isolated-process" as const, stagingRoot: tempDir } }
+          : {}),
+      },
       /integrity_check failed|malformed database schema/iu,
     );
   });
+
+  it.each(["index", "foreign-key", "caller"] as const)(
+    "rejects a transformed snapshot that fails %s validation",
+    async (failure) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(`
+          CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL, alternate TEXT NOT NULL);
+          CREATE INDEX records_value ON records(value);
+          CREATE TABLE children (parent_id INTEGER REFERENCES records(id));
+          INSERT INTO records VALUES (1, 'original', 'other');
+        `);
+      } finally {
+        source.close();
+      }
+      const original = await fs.readFile(sourcePath);
+      await expectSnapshotFailureWithoutTarget(
+        {
+          sourcePath,
+          targetPath,
+          preserveRowIds: true,
+          sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+          transform: (database) => {
+            if (failure === "index") {
+              database.enableDefensive?.(false);
+              database.exec(`
+                PRAGMA writable_schema = ON;
+                UPDATE sqlite_schema SET sql = 'CREATE INDEX records_value ON records(alternate)'
+                  WHERE name = 'records_value';
+                PRAGMA writable_schema = OFF;
+              `);
+              const version = Number(
+                database.prepare("PRAGMA schema_version").get()?.schema_version,
+              );
+              database.exec(`PRAGMA schema_version = ${version + 1};`);
+            } else if (failure === "foreign-key") {
+              database.exec("PRAGMA foreign_keys = OFF; INSERT INTO children VALUES (2);");
+            } else {
+              database.exec("UPDATE records SET value = 'invalid';");
+            }
+          },
+          validate: (database) => {
+            if (database.prepare("SELECT value FROM records").get()?.value === "invalid") {
+              throw new Error("Snapshot contains an invalid record");
+            }
+          },
+        },
+        failure === "index"
+          ? /integrity_check failed/iu
+          : failure === "foreign-key"
+            ? /foreign_key_check failed/iu
+            : /Snapshot contains an invalid record/u,
+      );
+      expect(await fs.readFile(sourcePath)).toEqual(original);
+    },
+  );
 
   it("snapshots a zero-byte generic source as an empty SQLite database", async () => {
     await fs.writeFile(sourcePath, "");
@@ -468,6 +606,30 @@ describe("createVerifiedSqliteSnapshot", () => {
       /snapshot source must not be empty/u,
     );
   });
+
+  it.skipIf(process.platform === "win32")(
+    "acquires an isolated snapshot through a source file symlink",
+    async () => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      source.exec("CREATE TABLE records(value TEXT); INSERT INTO records VALUES ('preserved');");
+      source.close();
+      const linkedSource = path.join(tempDir, "linked.sqlite");
+      await fs.symlink(sourcePath, linkedSource);
+      const before = await fs.readFile(sourcePath);
+
+      await createVerifiedSqliteSnapshot({
+        sourcePath: linkedSource,
+        targetPath,
+        sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+      });
+
+      expect(await fs.readlink(linkedSource)).toBe(sourcePath);
+      expect((await fs.readFile(sourcePath)).equals(before)).toBe(true);
+      withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
+        expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "preserved" });
+      });
+    },
+  );
 
   it("rejects an existing target without modifying it", async () => {
     await fs.writeFile(targetPath, "keep");
@@ -566,40 +728,133 @@ describe("createVerifiedSqliteSnapshot", () => {
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
   });
 
-  it("rejects a target replaced after atomic publication", async () => {
-    __setFsSafeTestHooksForTest({
-      afterPublishTargetCreated: async (method, publishedPath) => {
-        if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
-          await fs.unlink(targetPath);
-          await fs.writeFile(targetPath, "racer");
+  it.each(["native", "numeric-collision", "windows-zero", "staging-transition"] as const)(
+    "rejects a target replaced after atomic publication (%s)",
+    async (identityObservation) => {
+      let replaced = false;
+      let stagingReplaced = false;
+      let createdIdentity: { dev: number | bigint; ino: number | bigint } | undefined;
+      const originalLstat = fs.lstat.bind(fs);
+      const originalLstatSync = fsSync.lstatSync.bind(fsSync);
+      function projectReplacementIdentity<
+        T extends { dev: number | bigint; ino: number | bigint } | undefined,
+      >(identity: T, filePath: fsSync.PathLike): T {
+        if (
+          identity &&
+          replaced &&
+          createdIdentity &&
+          identityObservation !== "native" &&
+          identityObservation !== "staging-transition" &&
+          typeof identity.ino === "number" &&
+          path.resolve(String(filePath)) === targetPath
+        ) {
+          // Keep bigint observations native so the dependency can preserve the
+          // replacement even when the caller sees lossy or unknown numeric IDs.
+          return Object.assign(identity, {
+            dev: identityObservation === "windows-zero" ? 0 : Number(createdIdentity.dev),
+            ino: identityObservation === "windows-zero" ? 0 : Number(createdIdentity.ino),
+          });
         }
-      },
-    });
-
-    await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-      /target changed during publication|staging path changed|snapshot file changed/u,
-    );
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "removes target bytes linked from a replaced staging pathname",
-    async () => {
-      const originalLink = fs.link.bind(fs);
-      vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-        if (path.resolve(String(target)) === targetPath) {
-          await fs.unlink(source);
-          const replacement = new sqlite.DatabaseSync(String(source));
-          replacement.exec("CREATE TABLE replacement (value TEXT NOT NULL);");
-          replacement.close();
+        return identity;
+      }
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        const identity = await originalLstat(...args);
+        const filePath = String(args[0]);
+        if (
+          identityObservation === "staging-transition" &&
+          replaced &&
+          !stagingReplaced &&
+          path.basename(filePath) === "database.sqlite" &&
+          path.basename(path.dirname(filePath)).startsWith(".sqlite-publish-")
+        ) {
+          await fs.unlink(filePath);
+          await fs.link(targetPath, filePath);
+          stagingReplaced = true;
         }
-        await originalLink(source, target);
+        return projectReplacementIdentity(identity, args[0]);
+      });
+      vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) =>
+        projectReplacementIdentity(originalLstatSync(...args), args[0]),
+      );
+      __setFsSafeTestHooksForTest({
+        afterPublishTargetCreated: async (method, publishedPath, identity) => {
+          if (method === "hardlink" && path.resolve(publishedPath) === targetPath) {
+            createdIdentity = identity;
+            await fs.unlink(targetPath);
+            await fs.writeFile(targetPath, "racer");
+            replaced = true;
+            if (identityObservation === "windows-zero") {
+              vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+            }
+          }
+        },
       });
 
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /target changed during publication|staging path changed|snapshot file changed/u,
+      );
+      expect(replaced).toBe(true);
+      expect(stagingReplaced).toBe(identityObservation === "staging-transition");
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("racer");
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["hardlink", "exclusive-copy"] as const)(
+    "removes its %s target when publication durability is unsupported",
+    async (method) => {
+      durabilityTestState.publicationSyncUnsupported = true;
+      const copy = method === "exclusive-copy" ? mockExclusiveCopyPublication() : undefined;
       await expectSnapshotFailureWithoutTarget(
         { sourcePath, targetPath },
-        /staging file changed during publication|size mismatch|hash mismatch/u,
+        /File publication directory does not support crash-durable directory synchronization/u,
       );
+      if (copy) {
+        expect(copy).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each(["before", "after"] as const)(
+    "rejects a staging pathname replaced %s publication",
+    async (phase) => {
+      let replacementBytes: Buffer | undefined;
+      durabilityTestState.publish = async (options, publish) => {
+        const replaceStaging = async () => {
+          await fs.unlink(options.sourcePath);
+          const replacement = new sqlite.DatabaseSync(options.sourcePath);
+          replacement.exec("CREATE TABLE replacement (value TEXT NOT NULL);");
+          replacement.close();
+          replacementBytes = await fs.readFile(options.sourcePath);
+        };
+        if (phase === "before") {
+          // Keep the retired inode live so replacement guarantees a different identity.
+          const originalSource = await fs.open(options.sourcePath, "r");
+          try {
+            await replaceStaging();
+            return await publish(options);
+          } finally {
+            await originalSource.close();
+          }
+        }
+        __setFsSafeTestHooksForTest({
+          afterPublishTargetCreated: async () => {
+            await replaceStaging();
+            await fs.unlink(options.targetPath);
+            await fs.link(options.sourcePath, options.targetPath);
+          },
+        });
+        return await publish(options);
+      };
+
+      await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
+        /source identity did not match|staging file changed during publication/u,
+      );
+      expect(replacementBytes).toBeDefined();
+      if (phase === "before") {
+        await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        await expect(fs.readFile(targetPath)).resolves.toEqual(replacementBytes);
+      }
     },
   );
 
@@ -624,54 +879,27 @@ describe("createVerifiedSqliteSnapshot", () => {
     );
   });
 
-  it("uses a private sibling staging file for atomic publication", async () => {
-    const originalOpen = fs.open.bind(fs);
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(
-      openSpy.mock.calls.some(
-        ([filePath, flags]) =>
-          flags === "wx+" &&
-          path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-"),
-      ),
-    ).toBe(true);
-  });
-
-  it("falls back to an exclusive copy when hard links are unavailable", async () => {
-    vi.spyOn(fs, "link").mockRejectedValue(
-      Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" }),
-    );
-
-    await expectSnapshotSuccess({ sourcePath, targetPath });
-    const restored = new sqlite.DatabaseSync(targetPath, { readOnly: true });
-    restored.close();
-  });
-
-  it("removes a fallback target whose copied bytes fail verification", async () => {
-    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      if (path.resolve(String(target)) === targetPath) {
-        await fs.appendFile(source, "changed-before-fallback");
-      }
-      throw Object.assign(new Error("hard links unsupported"), { code: "ENOTSUP" });
+  it("removes an exclusive-copy publication whose bytes fail verification", async () => {
+    const publish = mockExclusiveCopyPublication(async (filePath) => {
+      await fs.appendFile(filePath, "changed-copy");
     });
 
     await expectSnapshotFailureWithoutTarget(
       { sourcePath, targetPath },
       /size mismatch|hash mismatch/u,
     );
+    expect(publish).toHaveBeenCalledTimes(1);
   });
 
   it("removes its hard link when opening the published target fails", async () => {
-    const originalLink = fs.link.bind(fs);
     const originalOpen = fs.open.bind(fs);
     let linked = false;
-    vi.spyOn(fs, "link").mockImplementation(async (source, target) => {
-      await originalLink(source, target);
-      if (path.resolve(String(target)) === targetPath) {
-        linked = true;
-      }
-    });
+    durabilityTestState.publish = async (options, publish) => {
+      const published = await publish(options);
+      expect(published.method).toBe("hardlink");
+      linked = true;
+      return published;
+    };
     vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
       if (linked && path.resolve(String(filePath)) === targetPath && flags === "r") {
         throw Object.assign(new Error("target open failed"), { code: "EIO" });
@@ -680,6 +908,7 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
 
     await expectSnapshotFailureWithoutTarget({ sourcePath, targetPath }, /target open failed/u);
+    expect(linked).toBe(true);
   });
 
   it("cleans publication staging when initialization fails", async () => {
@@ -701,18 +930,30 @@ describe("createVerifiedSqliteSnapshot", () => {
 
   it("removes its published target when final directory sync fails", async () => {
     const originalOpen = fs.open.bind(fs);
-    let targetDirectoryOpenCount = 0;
+    let published = false;
+    let failedSync = false;
+    durabilityTestState.publish = async (options, publish) => {
+      const result = await publish(options);
+      published = true;
+      return result;
+    };
     vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-      if (isDirectoryOpen(flags) && path.resolve(String(filePath)) === tempDir) {
-        targetDirectoryOpenCount += 1;
-      }
-      if (targetDirectoryOpenCount === 2 && path.resolve(String(filePath)) === tempDir) {
+      if (
+        published &&
+        !failedSync &&
+        isDirectoryOpen(flags) &&
+        path.resolve(String(filePath)) === tempDir
+      ) {
+        expect((await fs.lstat(targetPath)).isFile()).toBe(true);
+        failedSync = true;
         throw Object.assign(new Error("directory sync failed"), { code: "EIO" });
       }
       return await originalOpen(filePath, flags, mode);
     });
 
     await expectSnapshotFailureWithoutTarget({ sourcePath, targetPath }, /directory sync failed/u);
+    expect(published).toBe(true);
+    expect(failedSync).toBe(true);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -733,29 +974,35 @@ describe("createVerifiedSqliteSnapshot", () => {
       const displacedPath = `${tempDir}.displaced`;
       const replacementPath = `${tempDir}.replacement`;
       const originalOpen = fs.open.bind(fs);
-      let targetDirectoryOpenCount = 0;
+      let published = false;
       let replaced = false;
+      durabilityTestState.publish = async (options, publish) => {
+        const result = await publish(options);
+        published = true;
+        return result;
+      };
       vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
         const resolvedPath = path.resolve(String(filePath));
-        if (isDirectoryOpen(flags) && resolvedPath === tempDir) {
-          targetDirectoryOpenCount += 1;
-          if (targetDirectoryOpenCount === 2) {
-            replaced = true;
-            await fs.rename(tempDir, displacedPath);
-            await fs.mkdir(tempDir);
-            const replacementHandle = await originalOpen(filePath, flags, mode);
-            await fs.rename(tempDir, replacementPath);
-            await fs.rename(displacedPath, tempDir);
-            return replacementHandle;
-          }
+        if (published && !replaced && isDirectoryOpen(flags) && resolvedPath === tempDir) {
+          expect((await fs.lstat(targetPath)).isFile()).toBe(true);
+          replaced = true;
+          await fs.rename(tempDir, displacedPath);
+          await fs.mkdir(tempDir);
+          const replacementHandle = await originalOpen(filePath, flags, mode);
+          await fs.rename(tempDir, replacementPath);
+          await fs.rename(displacedPath, tempDir);
+          return replacementHandle;
         }
         return await originalOpen(filePath, flags, mode);
       });
 
       try {
-        await expect(createVerifiedSqliteSnapshot({ sourcePath, targetPath })).rejects.toThrow(
-          /handle changed during directory sync/u,
-        );
+        await expect(
+          createVerifiedSqliteSnapshot({ sourcePath, targetPath }),
+        ).rejects.toMatchObject({
+          cause: { name: "FsSafeError", code: "path-mismatch" },
+        });
+        expect(published).toBe(true);
         expect(replaced).toBe(true);
         await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
@@ -765,28 +1012,41 @@ describe("createVerifiedSqliteSnapshot", () => {
     },
   );
 
-  it("validates both the source and transformed snapshot", async () => {
+  it("validates source and transformed isolated snapshot", async () => {
     const removedValue = `removed-secret-${"x".repeat(256)}`;
     const source = new sqlite.DatabaseSync(sourcePath);
     source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
     source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
     source.close();
-    const labels: string[] = [];
+    const validatedValues = new Map<string, unknown>();
 
     await createVerifiedSqliteSnapshot({
       sourcePath,
       targetPath,
+      sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
       transform: (database) => {
         database.exec("DELETE FROM records;");
         database.prepare("INSERT INTO records VALUES (?)").run("new");
       },
-      validate: (_database, label) => labels.push(label),
+      validate: (database, label) => {
+        validatedValues.set(label, database.prepare("SELECT value FROM records").get()?.value);
+      },
     });
 
-    expect(labels).toEqual([sourcePath, targetPath, targetPath]);
+    expect(validatedValues).toEqual(
+      new Map([
+        [sourcePath, removedValue],
+        [targetPath, "new"],
+      ]),
+    );
     expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
     withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
       expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });
+    });
+    withReadOnlySnapshot(sqlite, sourcePath, (unchanged) => {
+      expect(unchanged.prepare("SELECT value FROM records").get()).toEqual({
+        value: removedValue,
+      });
     });
   });
 });

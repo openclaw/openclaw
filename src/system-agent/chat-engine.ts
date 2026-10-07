@@ -3,15 +3,14 @@ import type {
   SystemAgentWizardCancel,
   WizardAnswer,
 } from "../../packages/gateway-protocol/src/index.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../agents/prepared-model-runtime-generation-scope.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   cleanupSystemAgentSession,
   createSystemAgentSession,
   type SystemAgentSession,
-  type SystemAgentTurnRunner,
 } from "./agent-turn.js";
-import type { SystemAgentApprovalClassifier } from "./approval-intent.js";
-import type { SystemAgentAssistantPlanner, SystemAgentAssistantTurn } from "./assistant.js";
+import type { SystemAgentAssistantTurn } from "./assistant.js";
 import {
   ChatTurnRouter,
   redactSensitiveCommandText,
@@ -22,16 +21,12 @@ import {
   type ChatWizardHostDependencies,
   type SystemAgentChatReply,
 } from "./chat-wizard-host.js";
-import type {
-  SystemAgentGreetingFacts,
-  SystemAgentGreetingPlan,
-  SystemAgentGreetingPlanner,
-} from "./greeting.js";
+import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
-import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
+import type { SystemAgentOperation } from "./operations.js";
 import { loadSystemAgentOverview, type SystemAgentOverview } from "./overview.js";
 import { verifyConfigAfterSystemAgentWrite } from "./post-write-verification.js";
 import {
@@ -41,18 +36,9 @@ import {
 
 export { SystemAgentWizardAnswerError } from "./chat-wizard-host.js";
 
-export type SystemAgentChatEngineOptions = {
-  yes?: boolean;
-  deps?: SystemAgentCommandDeps;
-  planWithAssistant?: SystemAgentAssistantPlanner;
+export type SystemAgentChatEngineOptions = ConstructorParameters<typeof ChatTurnRouter>[0] & {
   planGreeting?: SystemAgentGreetingPlanner;
-  runAgentTurn?: SystemAgentTurnRunner;
-  classifyApproval?: SystemAgentApprovalClassifier;
-  surface?: "cli" | "gateway";
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  operatorApprovalOnly?: boolean;
-  /** Host-recorded origin for delegated create-agent proposals. */
-  requesterAgentId?: string;
 };
 
 type SystemAgentChatEngineInternals = {
@@ -102,7 +88,6 @@ export class SystemAgentChatEngine {
         rebindVerifiedInference: (next) => this.rebindVerifiedInference(next),
         getVerifiedInference: () => this.verifiedInference,
         loadOverview: async () => await this.loadOverview(),
-        getHistory: () => this.history,
         verifyConfigAfterWrite: async () => await this.verifyConfigAfterWrite(),
       },
     );
@@ -122,7 +107,7 @@ export class SystemAgentChatEngine {
     beforePersistentApply?: () => void,
     terminalStatus?: "expired" | "cancelled",
   ): Promise<SystemAgentChatReply | null> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const reply = await this.router.resolveOperatorApproval(
         decision,
         proposalHash,
@@ -139,8 +124,6 @@ export class SystemAgentChatEngine {
       }
       return reply;
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   noteAssistantMessage(text: string): void {
@@ -179,7 +162,7 @@ export class SystemAgentChatEngine {
   }
 
   async handle(text: string, options?: SystemAgentChatTurnOptions): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const sensitiveTurn = this.wizard.sensitiveInputPending;
       const reply = await this.router.resolveTurn(text, options);
@@ -188,27 +171,27 @@ export class SystemAgentChatEngine {
         sensitiveTurn ? "<redacted secret>" : redactSensitiveCommandText(text),
       );
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async answerWizard(answer: WizardAnswer): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       await this.requireVerifiedInference();
       const result = await this.router.answerWizard(this.wizard.answer(answer));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
-    this.turnQueue = turn.catch(() => undefined);
-    return await turn;
   }
 
   async cancelWizard(cancel: SystemAgentWizardCancel): Promise<SystemAgentChatReply> {
-    const turn = this.turnQueue.then(async () => {
+    return await this.enqueueTurn(async () => {
       const result = await this.router.answerWizard(this.wizard.cancel(cancel));
       return this.completeTurn({ text: result.text, action: "none" }, result.userHistoryText);
     });
+  }
+
+  private enqueueTurn<T>(run: () => Promise<T>): Promise<T> {
+    const turn = this.turnQueue.then(run);
     this.turnQueue = turn.catch(() => undefined);
-    return await turn;
+    return turn;
   }
 
   private completeTurn(reply: SystemAgentChatReply, userHistoryText: string): SystemAgentChatReply {
@@ -225,24 +208,31 @@ export class SystemAgentChatEngine {
     const overview = await (this.options.deps?.loadOverview ?? loadSystemAgentOverview)({
       agentId: route.agentId,
     });
-    return { ...overview, defaultModel: route.modelLabel };
+    return route.modelTarget === "utility"
+      ? { ...overview, setupModel: route.modelLabel }
+      : { ...overview, defaultModel: route.modelLabel };
   }
 
-  async planGreeting(params: {
-    overview: SystemAgentOverview;
-    facts: SystemAgentGreetingFacts;
-    timeoutMs: number;
-  }): Promise<SystemAgentGreetingPlan | null> {
-    const planner = this.options.planGreeting;
-    const plan = planner
-      ? await planner(params)
-      : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
-          planSystemAgentGreetingWithConfiguredModel({
-            ...params,
-            verifiedInference: this.verifiedInference,
-            deps: this.options.deps,
-          }),
-        );
+  async planGreeting(
+    params: Parameters<SystemAgentGreetingPlanner>[0],
+  ): ReturnType<SystemAgentGreetingPlanner> {
+    const runPlanner = async () => {
+      const planner = this.options.planGreeting;
+      return planner
+        ? await planner(params)
+        : await import("./assistant.js").then(({ planSystemAgentGreetingWithConfiguredModel }) =>
+            planSystemAgentGreetingWithConfiguredModel({
+              ...params,
+              verifiedInference: this.verifiedInference,
+              deps: this.options.deps,
+            }),
+          );
+    };
+    const requesterAgentId = this.options.requesterAgentId?.trim();
+    const plan =
+      requesterAgentId && requesterAgentId !== this.verifiedInference.execution.agentId
+        ? await runOutsidePreparedModelRuntimePluginGenerationScope(runPlanner)
+        : await runPlanner();
     if (plan) {
       await this.requireVerifiedInference();
     }
@@ -305,7 +295,7 @@ export class SystemAgentChatEngine {
       this.wizard.dispose();
     }
     this.history.splice(0);
-    throw new SystemAgentInferenceUnavailableError("conversation", failures);
+    throw new SystemAgentInferenceUnavailableError("conversation", failures, "route-changed");
   }
 
   private async verifyConfigAfterWrite(): Promise<string | null> {

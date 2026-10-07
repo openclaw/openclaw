@@ -7,12 +7,11 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
 } from "../chat/model-ref.ts";
-// Shared effective-tools loading for agent and Chat model changes.
 import { formatUiError } from "../format-error.ts";
 import type { SessionCapability } from "../sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../sessions/session-key.ts";
 
-type ToolsEffectiveState = {
+export type ToolsEffectiveState = {
   chatModelCatalog?: ModelCatalogEntry[];
   client: {
     request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -124,7 +123,7 @@ export function refreshVisibleToolsEffectiveForCurrentSession(
     return undefined;
   }
   const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
-  if (!sessionAgentId || state.agentsSelectedId !== sessionAgentId) {
+  if (state.agentsSelectedId !== sessionAgentId) {
     return undefined;
   }
   return loadToolsEffective(state, {
@@ -137,12 +136,11 @@ function resolveEffectiveToolsModelKey(
   state: Pick<ToolsEffectiveState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   sessionKey: string,
 ): string {
-  const resolvedSessionKey = sessionKey.trim();
-  if (!resolvedSessionKey) {
+  if (!sessionKey) {
     return "";
   }
   const catalog = state.chatModelCatalog ?? [];
-  const cachedOverride = state.sessions.state.modelOverrides[resolvedSessionKey];
+  const cachedOverride = state.sessions.state.modelOverrides[sessionKey];
   const defaults = state.sessionsResult?.defaults;
   const defaultModel = resolvePreferredServerChatModelValue(
     defaults?.model,
@@ -155,7 +153,7 @@ function resolveEffectiveToolsModelKey(
   if (cachedOverride) {
     return normalizeChatModelOverrideValue(cachedOverride, catalog);
   }
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
+  const activeRow = state.sessionsResult?.sessions.find((row) => row.key === sessionKey);
   if (activeRow?.model) {
     return resolvePreferredServerChatModelValue(activeRow.model, activeRow.modelProvider, catalog);
   }

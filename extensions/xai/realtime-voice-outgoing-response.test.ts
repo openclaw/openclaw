@@ -24,7 +24,7 @@ const { FakeWebSocket } = await vi.hoisted(async () => {
   }
   return { FakeWebSocket: MockWebSocket };
 });
-vi.mock("ws", () => ({ default: FakeWebSocket }));
+vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -80,7 +80,7 @@ it("sends xAI creation before its observer can cancel and releases the next turn
     delta: Buffer.alloc(320).toString("base64"),
   });
   expect(onAudio).toHaveBeenCalledTimes(1);
-  bridge.close();
+  await bridge.close();
 });
 
 it.each([
@@ -162,7 +162,7 @@ it.each([
         "response.create",
       ]);
     }
-    bridge.close();
+    await bridge.close();
   },
 );
 
@@ -199,5 +199,5 @@ it("does not drain a replacement when a completed-playback cancellation observer
   bridge.handleBargeIn?.({ force: true });
   expect(onClearAudio).toHaveBeenCalledOnce();
   expect(sent().filter((event) => event.type === "response.create")).toHaveLength(1);
-  bridge.close();
+  await bridge.close();
 });

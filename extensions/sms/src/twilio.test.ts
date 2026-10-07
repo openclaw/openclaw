@@ -1,5 +1,6 @@
 // Sms tests cover twilio plugin behavior.
 import { createHmac } from "node:crypto";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -20,8 +21,30 @@ import {
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
+import { createSmsTestAccount } from "./webhook.test-support.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+
+const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
+vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
+  return {
+    ...actual,
+    captureEffectAuthority: () => {
+      const authority = actual.captureEffectAuthority();
+      const prepare = effectGate.prepare;
+      return prepare
+        ? {
+            ...authority,
+            initiate: async <T>(effect: () => T | Promise<T>) => {
+              await prepare();
+              return authority.initiate(effect);
+            },
+          }
+        : authority;
+    },
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
@@ -32,22 +55,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 });
 
 function createAccount(overrides: Partial<ResolvedSmsAccount> = {}): ResolvedSmsAccount {
-  return {
-    accountId: "default",
-    enabled: true,
-    accountSid: "AC123",
-    authToken: "secret",
-    fromNumber: "+15557654321",
-    messagingServiceSid: "",
-    defaultTo: "",
-    webhookPath: "/webhooks/sms",
-    publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-    dangerouslyDisableSignatureValidation: false,
-    dmPolicy: "pairing",
-    allowFrom: [],
-    textChunkLimit: 1500,
-    ...overrides,
-  };
+  return createSmsTestAccount({ accountId: "default", ...overrides });
 }
 
 function readUrlEncodedRequestBody(init: RequestInit | undefined): URLSearchParams {
@@ -81,6 +89,80 @@ async function readTestTwilioForm(body: string): Promise<Record<string, string>>
 }
 
 describe("Twilio SMS helpers", () => {
+  it.each([false, true])(
+    "rechecks custom-fetch credentials after effect preparation (replaced=%s)",
+    async (replaced) => {
+      const preparing = createDeferred();
+      const prepared = createDeferred();
+      const dispatched = createDeferred();
+      const response = createDeferred<Response>();
+      const account = createAccount();
+      setRuntimeConfigSnapshot({ channels: { sms: account } } as never);
+      const replace = () =>
+        setRuntimeConfigSnapshot({
+          channels: { sms: { ...account, authToken: "replacement" } },
+        } as never);
+      effectGate.prepare = async () => {
+        preparing.resolve();
+        await prepared.promise;
+      };
+      const fetchImpl = vi.fn<typeof fetch>(() => {
+        dispatched.resolve();
+        return response.promise;
+      });
+      const sending = sendSmsViaTwilio({
+        account,
+        to: "+15551234567",
+        text: "hello",
+        fetchImpl,
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([
+          preparing.promise,
+          dispatched.promise.then(() => {
+            throw new Error("dispatched before preparation");
+          }),
+          sending.then(() => {
+            throw new Error("settled before preparation");
+          }),
+        ]);
+        expect(fetchImpl).not.toHaveBeenCalled();
+        if (replaced) {
+          replace();
+        }
+        prepared.resolve();
+        if (!replaced) {
+          await dispatched.promise;
+          replace();
+        }
+        response.resolve(Response.json({ sid: "SM456" }));
+        const outcome = await sending;
+        if (replaced) {
+          expect(outcome).toMatchObject({
+            error: {
+              name: "PlatformMessageNotDispatchedError",
+              cause: { message: "SMS credentials changed for default; retry the operation." },
+            },
+          });
+          expect("error" in outcome && outcome.error).toBeInstanceOf(
+            PlatformMessageNotDispatchedError,
+          );
+        } else {
+          expect(outcome).toEqual({ value: { sid: "SM456", to: "+15551234567" } });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      } finally {
+        prepared.resolve();
+        response.resolve(Response.json({ sid: "SM456" }));
+        await sending;
+        effectGate.prepare = undefined;
+      }
+    },
+  );
+
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
     clearRuntimeConfigSnapshot();
@@ -271,39 +353,23 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("sends SMS through Twilio's Messages API", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            sid: "SM456",
-            to: "+15551234567",
-            from: "+15557654321",
-            status: "queued",
-          }),
-          {
-            status: 201,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        {
+          sid: "SM456",
+          to: "+15551234567",
+          from: "+15557654321",
+          status: "queued",
+        },
+        { status: 201 },
+      ),
     );
 
     await expect(
       sendSmsViaTwilio({
-        account: {
-          accountId: "default",
-          enabled: true,
-          accountSid: "AC123",
-          authToken: "secret",
-          fromNumber: "+15557654321",
-          messagingServiceSid: "",
-          defaultTo: "",
-          webhookPath: "/webhooks/sms",
+        account: createAccount({
           publicWebhookUrl: "https://gateway.example.com/webhooks/sms#rp=4xx",
-          dangerouslyDisableSignatureValidation: false,
-          dmPolicy: "pairing",
-          allowFrom: [],
-          textChunkLimit: 1500,
-        },
+        }),
         to: "+15551234567",
         text: "hello",
         fetchImpl,
@@ -438,10 +504,7 @@ describe("Twilio SMS helpers", () => {
     const events: string[] = [];
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       events.push("post");
-      return new Response(JSON.stringify({ sid: "SM-dispatched" }), {
-        status: 201,
-        headers: { "content-type": "application/json" },
-      });
+      return Response.json({ sid: "SM-dispatched" }, { status: 201 });
     });
     const onPlatformSendDispatch = vi.fn(async () => {
       events.push("dispatch");
@@ -512,12 +575,8 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("sends MMS with repeated MediaUrl fields and no required text body", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ sid: "MM456" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ sid: "MM456" }, { status: 201 }),
     );
 
     await sendSmsViaTwilio({
@@ -549,12 +608,8 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("enforces Twilio's provider-owned Message Body limit", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ sid: "SM1600" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ sid: "SM1600" }, { status: 201 }),
     );
 
     await expect(
@@ -577,25 +632,18 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("lists Twilio phone-number webhook settings", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            incoming_phone_numbers: [
-              {
-                sid: "PN123",
-                phone_number: "+15557654321",
-                sms_url: "https://gateway.example.com/webhooks/sms",
-                sms_method: "POST",
-                voice_url: "https://gateway.example.com/voice/webhook",
-              },
-            ],
-          }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        incoming_phone_numbers: [
           {
-            status: 200,
-            headers: { "content-type": "application/json" },
+            sid: "PN123",
+            phone_number: "+15557654321",
+            sms_url: "https://gateway.example.com/webhooks/sms",
+            sms_method: "POST",
+            voice_url: "https://gateway.example.com/voice/webhook",
           },
-        ),
+        ],
+      }),
     );
 
     await expect(
@@ -624,29 +672,22 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("lists recent Twilio messages for diagnostics", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            messages: [
-              {
-                sid: "SM123",
-                direction: "inbound",
-                status: "received",
-                to: "+15557654321",
-                from: "+15551234567",
-                error_code: 11200,
-                body: "hello",
-                date_created: "Sun, 31 May 2026 10:00:00 +0000",
-                date_sent: null,
-              },
-            ],
-          }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        messages: [
           {
-            status: 200,
-            headers: { "content-type": "application/json" },
+            sid: "SM123",
+            direction: "inbound",
+            status: "received",
+            to: "+15557654321",
+            from: "+15551234567",
+            error_code: 11200,
+            body: "hello",
+            date_created: "Sun, 31 May 2026 10:00:00 +0000",
+            date_sent: null,
           },
-        ),
+        ],
+      }),
     );
 
     await expect(
@@ -677,20 +718,13 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("retrieves Twilio Messaging Service webhook settings", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            sid: "MG123",
-            inbound_request_url: "https://gateway.example.com/webhooks/sms",
-            inbound_method: "POST",
-            use_inbound_webhook_on_number: false,
-          }),
-          {
-            status: 200,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({
+        sid: "MG123",
+        inbound_request_url: "https://gateway.example.com/webhooks/sms",
+        inbound_method: "POST",
+        use_inbound_webhook_on_number: false,
+      }),
     );
 
     await expect(
@@ -714,30 +748,12 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("can send through a Twilio Messaging Service SID", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ sid: "SM789" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ sid: "SM789" }, { status: 201 }),
     );
 
     await sendSmsViaTwilio({
-      account: {
-        accountId: "default",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "",
-        messagingServiceSid: "MG123",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createAccount({ fromNumber: "", messagingServiceSid: "MG123" }),
       to: "+15551234567",
       text: "hello",
       fetchImpl,
@@ -754,30 +770,12 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("prefers an explicit from number when both sender options are resolved", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(JSON.stringify({ sid: "SM999" }), {
-          status: 201,
-          headers: { "content-type": "application/json" },
-        }),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json({ sid: "SM999" }, { status: 201 }),
     );
 
     await sendSmsViaTwilio({
-      account: {
-        accountId: "default",
-        enabled: true,
-        accountSid: "AC123",
-        authToken: "secret",
-        fromNumber: "+15557654321",
-        messagingServiceSid: "MG123",
-        defaultTo: "",
-        webhookPath: "/webhooks/sms",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms",
-        dangerouslyDisableSignatureValidation: false,
-        dmPolicy: "pairing",
-        allowFrom: [],
-        textChunkLimit: 1500,
-      },
+      account: createAccount({ fromNumber: "+15557654321", messagingServiceSid: "MG123" }),
       to: "+15551234567",
       text: "hello",
       fetchImpl,
@@ -790,15 +788,14 @@ describe("Twilio SMS helpers", () => {
   });
 
   it("throws structured Twilio errors from JSON error bodies", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () =>
-        new Response(
-          JSON.stringify({
-            code: 21610,
-            message: "The message From/To pair violates a blacklist rule.",
-          }),
-          { status: 400, headers: { "content-type": "application/json" } },
-        ),
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      Response.json(
+        {
+          code: 21610,
+          message: "The message From/To pair violates a blacklist rule.",
+        },
+        { status: 400 },
+      ),
     );
 
     await expect(

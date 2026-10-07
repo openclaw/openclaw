@@ -2,18 +2,25 @@
 // model-aware service-tier helper. A transport-local flat table previously
 // drifted (2x while gpt-5.5 priority bills 2.5x) and understated UI cost.
 import type { Model } from "@openclaw/llm-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { streamSimpleOpenAIResponses } from "../providers/openai-responses.js";
+import {
+  responsesServiceTierObserver,
+  type ResponsesServiceTierObservation,
+} from "./openai-responses-contracts.js";
 
 type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const sseState = vi.hoisted(() => ({
   outcomes: [] as Array<Error | SdkResponse>,
+  requests: [] as Array<Record<string, unknown>>,
 }));
 
 vi.mock("openai", () => {
   class MockOpenAI {
     responses = {
-      create: () => {
+      create: (request: Record<string, unknown>) => {
+        sseState.requests.push(request);
         const outcome = sseState.outcomes.shift() ?? new Error("Unexpected SSE request");
         return {
           withResponse: async () => {
@@ -52,7 +59,7 @@ const model = {
   maxTokens: 8192,
 } satisfies Model<"openai-responses">;
 
-function completedResponse(serviceTier: string): SdkResponse {
+function completedResponse(serviceTier: string | null | undefined): SdkResponse {
   return {
     data: (async function* () {
       yield {
@@ -79,6 +86,11 @@ function completedResponse(serviceTier: string): SdkResponse {
 }
 
 describe("managed Responses transport service-tier pricing", () => {
+  afterEach(() => {
+    sseState.outcomes.length = 0;
+    sseState.requests.length = 0;
+  });
+
   it("applies the canonical 2.5x gpt-5.5 priority multiplier to usage cost", async () => {
     sseState.outcomes.push(completedResponse("priority"));
     const stream = await createOpenAIResponsesTransportStreamFn()(
@@ -90,4 +102,41 @@ describe("managed Responses transport service-tier pricing", () => {
     // Base cost 2 + 10 = 12; gpt-5.5 priority is 2.5x = 30 (flat 2x would be 24).
     expect(result.usage.cost.total).toBeCloseTo(30, 6);
   });
+
+  describe.each(["managed", "simple"] as const)(
+    "%s Responses service-tier observations",
+    (route) => {
+      it.each(["ultrafast", "default", null, undefined, "x".repeat(65)])(
+        "observes raw terminal tier %s against the final payload",
+        async (responseTier) => {
+          sseState.outcomes.push(completedResponse(responseTier));
+          const observations: ResponsesServiceTierObservation[] = [];
+          const options = {
+            apiKey: "test-key",
+            transport: "sse" as const,
+            serviceTier: "priority" as const,
+            onPayload: (payload: unknown) => ({
+              ...(payload as Record<string, unknown>),
+              service_tier: "ultrafast",
+            }),
+          };
+          responsesServiceTierObserver.set(options, (observation) =>
+            observations.push(observation),
+          );
+          const streamFn =
+            route === "managed"
+              ? createOpenAIResponsesTransportStreamFn()
+              : streamSimpleOpenAIResponses;
+          const stream = await streamFn(model, { messages: [], tools: [] }, { ...options });
+          expect((await stream.result()).stopReason).toBe("stop");
+          expect(sseState.requests[0]?.service_tier).toBe("ultrafast");
+          expect(observations).toEqual(
+            responseTier === "ultrafast" || responseTier === "default"
+              ? [{ requestedTier: "ultrafast", responseTier }]
+              : [],
+          );
+        },
+      );
+    },
+  );
 });

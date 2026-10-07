@@ -20,18 +20,40 @@ import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target
 
 const transactionInjection = vi.hoisted(() => ({ run: null as (() => void) | null }));
 
-vi.mock("../../state/openclaw-agent-db.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof agentDatabase>();
+vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    runOpenClawAgentWriteTransaction: <T>(
-      run: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[0],
-      options: Parameters<typeof actual.runOpenClawAgentWriteTransaction<T>>[1],
-    ) => {
-      const inject = transactionInjection.run;
-      transactionInjection.run = null;
-      inject?.();
-      return actual.runOpenClawAgentWriteTransaction(run, options);
+    captureOpenClawAgentDatabaseExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
+      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
+      return {
+        ...owner,
+        get fileIdentity() {
+          return owner.fileIdentity;
+        },
+        runExisting: (source, operation, options) =>
+          owner.runExisting(
+            source,
+            (worker) =>
+              operation({
+                execute: (command, commandOptions) => {
+                  if (
+                    command.type === "session.lifecycle.reset" ||
+                    command.type === "session.lifecycle.project"
+                  ) {
+                    // The snapshot is prepared, but the worker has not begun its transaction.
+                    const inject = transactionInjection.run;
+                    transactionInjection.run = null;
+                    inject?.();
+                  }
+                  return worker.execute(command, commandOptions);
+                },
+              }),
+            options,
+          ),
+      };
     },
   };
 });
@@ -46,8 +68,9 @@ describe("reset boundary concurrency", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     transactionInjection.run = null;
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     cleanupTempDirs(tempDirs);
   });
@@ -85,7 +108,7 @@ describe("reset boundary concurrency", () => {
       reset: async (scope: { sessionId: string; sessionKey: string; storePath: string }) =>
         resetSessionEntryLifecycle({
           buildNextEntry: () => ({ sessionId: "next-single", updatedAt: 20 }),
-          resetBoundary: { context: "preserve-tail", reason: "reset" },
+          resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
           storePath: scope.storePath,
           target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
         }),
@@ -99,13 +122,13 @@ describe("reset boundary concurrency", () => {
           upserts: [
             {
               entry: { sessionId: "next-bulk", updatedAt: 20 },
-              resetBoundary: { context: "preserve-tail", reason: "reset" },
+              resetBoundary: { context: "preserve-tail", reason: "reset", cwd: "/tmp/workspace" },
               sessionKey: scope.sessionKey,
             },
           ],
         }),
     },
-  ])("parents the $name boundary without hydrating prior message bodies", async ({ reset }) => {
+  ])("parents the $name boundary without hydrating caller message bodies", async ({ reset }) => {
     const scope = {
       sessionId: "current-session",
       sessionKey: "agent:main:reset-race",
@@ -173,6 +196,7 @@ describe("reset boundary concurrency", () => {
       ),
     ).toContain("concurrent");
 
+    await agentDatabase.closeOpenClawAgentDatabasesAsync();
     agentDatabase.closeOpenClawAgentDatabasesForTest();
     await waitForSessionTranscriptProjection(scope);
     expect(

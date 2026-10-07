@@ -3,9 +3,15 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../../infra/sqlite-schema-sql.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
 import { normalizeCronRuntimeAuthority } from "../runtime-authority.js";
 import { normalizeCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { cronJobUsesToolRuntime } from "../tools-allow.js";
@@ -14,24 +20,10 @@ import type { CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 const CRON_RUNTIME_AUTHORITY_TABLE = "cron_job_runtime_authorities";
 const CRON_RUNTIME_AUTHORITY_FINGERPRINT_VERSION = 1;
 
-const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS cron_job_runtime_authorities (
-  store_key TEXT NOT NULL,
-  job_id TEXT NOT NULL,
-  authority_json TEXT,
-  authority_input_fingerprint TEXT,
-  recovery_required INTEGER NOT NULL,
-  PRIMARY KEY (store_key, job_id),
-  FOREIGN KEY (store_key, job_id)
-    REFERENCES cron_jobs(store_key, job_id) ON DELETE CASCADE,
-  CHECK (recovery_required IN (0, 1)),
-  CHECK (
-    (recovery_required = 0 AND authority_json IS NOT NULL AND authority_input_fingerprint IS NOT NULL)
-    OR
-    (recovery_required = 1 AND authority_json IS NULL AND authority_input_fingerprint IS NULL)
-  )
-) STRICT;
-`;
+const CRON_RUNTIME_AUTHORITY_SCHEMA_SQL = extractSqliteTableSchema(
+  OPENCLAW_STATE_SCHEMA_SQL,
+  CRON_RUNTIME_AUTHORITY_TABLE,
+);
 
 type CronAuthorityDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -87,6 +79,7 @@ function ensureCronRuntimeAuthorityTable(db: DatabaseSync): void {
 function loadCronRuntimeAuthorityRows(
   db: DatabaseSync,
   storeKey: string,
+  jobIds: Iterable<string>,
 ): CronRuntimeAuthorityRow[] {
   if (!tableExists(db, CRON_RUNTIME_AUTHORITY_TABLE)) {
     return [];
@@ -96,7 +89,8 @@ function loadCronRuntimeAuthorityRows(
     getCronAuthorityKysely(db)
       .selectFrom("cron_job_runtime_authorities")
       .selectAll()
-      .where("store_key", "=", storeKey),
+      .where("store_key", "=", storeKey)
+      .where("job_id", "in", sqliteStringSet([...jobIds])),
   ).rows;
 }
 
@@ -127,7 +121,7 @@ export function loadCronRuntimeAuthorities(params: {
 }): CronRuntimeAuthorityLoadResult {
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   const repairJobIds: string[] = [];
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, jobsById.keys())) {
     const job = jobsById.get(row.job_id);
     if (!job) {
       continue;
@@ -174,7 +168,7 @@ export function repairCronRuntimeAuthorityRows(params: {
   const requested = new Set(params.jobIds);
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   let repaired = false;
-  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey)) {
+  for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, requested)) {
     if (!requested.has(row.job_id)) {
       continue;
     }
@@ -208,7 +202,11 @@ export function replaceCronRuntimeAuthorityRows(params: {
   const database = getCronAuthorityKysely(params.db);
   const existingRowsByJobId = params.preserveExistingForJobIds
     ? new Map(
-        loadCronRuntimeAuthorityRows(params.db, params.storeKey).map((row) => [row.job_id, row]),
+        loadCronRuntimeAuthorityRows(
+          params.db,
+          params.storeKey,
+          params.jobs.map((job) => job.id),
+        ).map((row) => [row.job_id, row]),
       )
     : undefined;
   for (const job of params.jobs) {

@@ -16,11 +16,10 @@ import {
   type CodexAppServerPendingSupervisionBranch,
   type CodexAppServerThreadBinding,
 } from "./app-server/session-binding.js";
-import { createImportedCodexSession } from "./app-server/session-history-import.js";
+import type { createImportedCodexSession } from "./app-server/session-history-import.js";
 import {
   adoptionSessionKeyRest,
-  continueOperations,
-  runSessionActionExclusive,
+  catalogSessionActions,
   type AdoptedSessionEntry,
   type CodexSessionDisposition,
 } from "./session-catalog-node-adoption.js";
@@ -39,6 +38,10 @@ import {
 } from "./session-upstream-marker.js";
 
 const CODEX_SUPERVISION_SESSION_KEY_PREFIX = "harness:codex:supervision:";
+const continueOperations = new Map<
+  string,
+  Promise<{ sessionKey: string; disposition: CodexSessionDisposition }>
+>();
 
 const boundCatalogSessionId = (value: unknown) =>
   boundedCatalogString(value, MAX_SESSION_ID_LENGTH);
@@ -77,6 +80,21 @@ export function isAdoptionSessionKeyForThread(
 
 type CodexSupervisionMarker = { sourceThreadId: string; sourceHomeId?: string };
 
+type AdoptionCandidate = {
+  agentId: string;
+  sessionKey: string;
+  sessionKeyRest: string;
+  sessionId: string;
+  marker: CodexSupervisionMarker;
+  identity: ReturnType<typeof sessionBindingIdentity>;
+};
+
+// The snapshot revision retires derived facts; binding authority stays live below.
+const adoptionCandidatesByRevision = new WeakMap<
+  object,
+  { config?: OpenClawConfig; agentId?: string; candidates: AdoptionCandidate[] }
+>();
+
 function readCodexSupervisionMarker(entry: {
   pluginExtensions?: Record<string, unknown>;
 }): CodexSupervisionMarker | undefined {
@@ -104,13 +122,11 @@ export async function listAdoptedSessionEntries(params: {
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
 }): Promise<Map<string, AdoptedSessionEntry>> {
-  const adopted = new Map<string, AdoptedSessionEntry>();
-  for (const { agentId, entry, sessionKey } of listSessionCatalogEntries({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    config: params.config ?? {},
-    runtime: params.runtime,
-    sessionEntries: params.sessionEntries,
-  })) {
+  const candidateForEntry = ({
+    agentId,
+    entry,
+    sessionKey,
+  }: ReturnType<typeof listSessionCatalogEntries>[number]): AdoptionCandidate | undefined => {
     const sessionKeyRest = adoptionSessionKeyRest(sessionKey);
     const marker = readCodexSupervisionMarker(entry);
     if (
@@ -120,37 +136,99 @@ export async function listAdoptedSessionEntries(params: {
       entry.agentHarnessId !== "codex" ||
       entry.modelSelectionLocked !== true
     ) {
-      continue;
+      return undefined;
     }
     const sessionId = entry.sessionId?.trim();
     if (!sessionId) {
-      continue;
+      return undefined;
     }
-    const binding = params.bindingStore.read(
-      sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
-    );
-    const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
-    const boundThreadId = binding?.threadId.trim();
-    if (
-      binding?.connectionScope !== "supervision" ||
-      !sourceThreadId ||
-      !boundThreadId ||
-      sessionKeyRest !== adoptionSessionKey(sourceThreadId, marker.sourceHomeId)
-    ) {
-      continue;
+    return {
+      agentId,
+      sessionKey,
+      sessionKeyRest,
+      sessionId,
+      marker,
+      identity: sessionBindingIdentity({ sessionId, sessionKey, config: params.config }),
+    };
+  };
+  function* candidates() {
+    for (const entry of listSessionCatalogEntries({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      config: params.config ?? {},
+      runtime: params.runtime,
+      sessionEntries: params.sessionEntries,
+    })) {
+      const candidate = candidateForEntry(entry);
+      if (candidate) {
+        yield candidate;
+      }
     }
-    const sourceKey = sessionCatalogAdoptedSourceKey(
-      marker.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
-      sourceThreadId,
-    );
-    if (adopted.has(sourceKey)) {
-      throw new Error(
-        `multiple OpenClaw sessions adopt Codex thread ${sourceThreadId} from the same home`,
-      );
-    }
-    adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
   }
-  return adopted;
+  const collect = async (
+    selected: Iterable<AdoptionCandidate>,
+    readBinding: (
+      identity: AdoptionCandidate["identity"],
+    ) => Promise<ReturnType<CodexAppServerBindingStore["read"]>> = async (identity) => {
+      const bindings = params.bindingStore.readMany([identity]);
+      try {
+        return (await bindings.next()).value;
+      } finally {
+        await bindings.return(undefined);
+      }
+    },
+  ) => {
+    const adopted = new Map<string, AdoptedSessionEntry>();
+    for (const { agentId, sessionKey, sessionKeyRest, sessionId, marker, identity } of selected) {
+      const binding = await readBinding(identity);
+      const sourceThreadId = binding?.supervisionSourceThreadId?.trim();
+      const boundThreadId = binding?.threadId.trim();
+      if (
+        binding?.connectionScope !== "supervision" ||
+        !sourceThreadId ||
+        !boundThreadId ||
+        sessionKeyRest !== adoptionSessionKey(sourceThreadId, marker.sourceHomeId)
+      ) {
+        continue;
+      }
+      const sourceKey = sessionCatalogAdoptedSourceKey(
+        marker.sourceHomeId ?? CODEX_LOCAL_SESSION_HOST_ID,
+        sourceThreadId,
+      );
+      if (adopted.has(sourceKey)) {
+        throw new Error(
+          `multiple OpenClaw sessions adopt Codex thread ${sourceThreadId} from the same home`,
+        );
+      }
+      adopted.set(sourceKey, { key: sessionKey, sessionId, agentId, boundThreadId });
+    }
+    return adopted;
+  };
+  const revision = params.sessionEntries?.revision;
+  const cached = revision ? adoptionCandidatesByRevision.get(revision) : undefined;
+  let prepared: AdoptionCandidate[];
+  try {
+    if (cached && cached.config === params.config && cached.agentId === params.agentId) {
+      prepared = cached.candidates;
+    } else {
+      prepared = [...candidates()];
+      if (revision) {
+        adoptionCandidatesByRevision.set(revision, {
+          config: params.config,
+          agentId: params.agentId,
+          candidates: prepared,
+        });
+      }
+    }
+  } catch {
+    // Replay validation in row order so earlier row failures still win.
+    return collect(candidates());
+  }
+  const bindings = params.bindingStore.readMany(prepared.map(({ identity }) => identity));
+  try {
+    return await collect(prepared, async () => (await bindings.next()).value);
+  } finally {
+    await bindings.return(undefined);
+  }
 }
 
 async function findAdoptedSessionEntry(params: {
@@ -272,6 +350,7 @@ async function createOrReuseAdoptedSession(params: {
       sourceThreadId: params.sourceThread.id,
       ...(params.sourceHomeId ? { sourceHomeId: params.sourceHomeId } : {}),
     };
+    const { createImportedCodexSession } = await import("./app-server/session-history-import.js");
     const created = await createImportedCodexSession({
       runtime: params.api.runtime,
       bindingStore: params.bindingStore,
@@ -443,7 +522,7 @@ export async function continueLocalCodexSession(params: ContinueLocalCodexSessio
   }
   const run = async (control: CodexSessionCatalogControl) =>
     await continueLocalCodexSessionInner({ ...params, control });
-  const operation = runSessionActionExclusive(sourceKey, async () =>
+  const operation = catalogSessionActions.enqueue(sourceKey, async () =>
     params.control.withPinnedConnection(run),
   );
   continueOperations.set(operationKey, operation);

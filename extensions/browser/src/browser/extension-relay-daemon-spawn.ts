@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import net from "node:net";
-import type { OpenClawConfig } from "../sdk-config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import type { BrowserNativeRelayEnsureStatus } from "./extension-native-protocol.js";
 import { readExtensionRelayToken } from "./extension-relay/relay-auth.js";

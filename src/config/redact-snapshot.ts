@@ -12,11 +12,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
 import { containsEnvVarReference } from "./env-substitution.js";
+import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import {
   replaceSensitiveValuesInRaw,
   shouldFallbackToStructuredRawRedaction,
 } from "./redact-snapshot.raw.js";
-import { isSecretRefShape, redactSecretRefId } from "./redact-snapshot.secret-ref.js";
+import { isSecretRefShape } from "./redact-snapshot.secret-ref.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
@@ -41,10 +42,7 @@ function isWholeObjectSensitivePath(path: string): boolean {
 }
 
 function hasSensitiveUrlHintPath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
-  if (!hints) {
-    return false;
-  }
-  return paths.some((path) => hasSensitiveUrlHintTag(hints[path]));
+  return paths.some((path) => hasSensitiveUrlHintTag(hints?.[path]));
 }
 
 function collectSensitiveStrings(value: unknown, values: string[]): void {
@@ -75,10 +73,7 @@ function collectSensitiveStrings(value: unknown, values: string[]): void {
 }
 
 function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: string[]): boolean {
-  if (!hints) {
-    return false;
-  }
-  return paths.some((path) => hints[path]?.sensitive === false);
+  return paths.some((path) => hints?.[path]?.sensitive === false);
 }
 
 /**
@@ -87,7 +82,7 @@ function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: s
  * sentinel and restore the original value from the on-disk config, so a
  * round-trip through the Web UI does not corrupt credentials.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export { REDACTED_SENTINEL } from "./redact-sentinel.js";
 
 function isSecretRefWithProvider(
   value: Record<string, unknown>,
@@ -148,7 +143,6 @@ function withoutRedactionLookup(context: RedactionContext): RedactionContext {
   return context.lookup ? { ...context, lookup: undefined } : context;
 }
 
-/** Deep-walk an object and replace values at sensitive paths with the redaction sentinel. */
 function redactObject<T>(obj: T, context: RedactionContext, values: string[] = []): T {
   return redactValue(obj, "", values, context) as T;
 }
@@ -206,12 +200,12 @@ function redactValue(
         if (context.hints?.[candidate]?.sensitive === true && !Array.isArray(value)) {
           const objectValue = asNonArrayRecord(value);
           if (isSecretRefShape(objectValue)) {
-            result[key] = redactSecretRefId({
-              value: objectValue,
-              values,
-              redactedSentinel: REDACTED_SENTINEL,
-              isConcreteSensitiveString,
-            });
+            const redacted = { ...objectValue };
+            if (isConcreteSensitiveString(objectValue.id)) {
+              values.push(objectValue.id);
+              redacted.id = REDACTED_SENTINEL;
+            }
+            result[key] = redacted;
           } else {
             collectSensitiveStrings(objectValue, values);
             result[key] = REDACTED_SENTINEL;
@@ -290,9 +284,10 @@ export function redactConfigObject<T>(value: T, uiHints?: ConfigUiHints): T {
 export function redactConfigSnapshot(
   snapshot: ConfigFileSnapshot,
   uiHints?: ConfigUiHints,
-): ConfigFileSnapshot {
+): Omit<ConfigFileSnapshot, "authoredConfig" | "sourceConfigBeforeMigrations"> {
   // Internal migration inputs can contain resolved secrets; never expose them in public snapshots.
   const {
+    authoredConfig: _authoredConfig,
     sourceConfigBeforeMigrations: _sourceConfigBeforeMigrations,
     pluginMetadataSnapshot: _pluginMetadataSnapshot,
     ...publicSnapshot
@@ -340,7 +335,6 @@ export function redactConfigSnapshot(
   ) {
     redactedRaw = null;
   }
-  // Also redact the resolved config (contains values after ${ENV} substitution)
   const redactedResolved = redactObject(snapshot.resolved, context);
   return {
     ...publicSnapshot,
@@ -397,17 +391,15 @@ function restoreRedactedValuesWithContext(
         humanReadableMessage: err.humanReadableMessage,
       };
     }
-    throw err; // some coding error, pass through
+    throw err;
   }
 }
 
 class RedactionError extends Error {
-  public readonly key: string;
   public readonly humanReadableMessage: string;
 
   constructor(key: string, humanReadableMessage?: string) {
     super("internal error class---should never escape");
-    this.key = key;
     this.humanReadableMessage =
       humanReadableMessage ??
       `Sentinel value "${REDACTED_SENTINEL}" in key ${key} is not valid as real data`;
@@ -540,45 +532,6 @@ function indexRedactedArrayItemsById(items: unknown[]): Map<string, RedactedArra
   return itemsById;
 }
 
-function mapRedactedArray(params: {
-  incoming: unknown[];
-  original: unknown;
-  path: string;
-  mapItem: (item: unknown, originalItem: unknown) => unknown;
-}): unknown[] {
-  const originalArray = Array.isArray(params.original) ? params.original : [];
-  if (params.incoming.length < originalArray.length) {
-    log.warn(`Redacted config array key ${params.path} has been truncated`);
-  }
-  const originalById = indexRedactedArrayItemsById(originalArray);
-  const incomingById = indexRedactedArrayItemsById(params.incoming);
-  const reservedOriginalIndexes = new Set<number>();
-  for (const [id, incomingIdentity] of incomingById) {
-    const originalIdentity = originalById.get(id);
-    if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
-      reservedOriginalIndexes.add(originalIdentity.index);
-    }
-  }
-  const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
-    (identity) => identity.count === 1,
-  );
-
-  return params.incoming.map((item, index) => {
-    const id = readRedactedArrayItemId(item);
-    const originalIdentity = id === undefined ? undefined : originalById.get(id);
-    const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
-    if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
-      return params.mapItem(item, originalIdentity.item);
-    }
-    if (incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity) {
-      return params.mapItem(item, undefined);
-    }
-    // Positional fallback must not reuse a secret already reserved for another identified entry.
-    const originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
-    return params.mapItem(item, originalItem);
-  });
-}
-
 function restoreRedactedValue(
   incoming: unknown,
   original: unknown,
@@ -595,14 +548,38 @@ function restoreRedactedValue(
     const fallbackContext = schemaMatched ? context : withoutRedactionLookup(context);
     const heuristicSensitive =
       !isExplicitlyNonSensitivePath(context.hints, [path]) && isSensitivePath(path);
-    return mapRedactedArray({
-      incoming,
-      original,
-      path,
-      mapItem: (item, originalItem) =>
-        item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
-          ? originalItem
-          : restoreRedactedValue(item, originalItem, path, fallbackContext),
+    const originalArray = Array.isArray(original) ? original : [];
+    if (incoming.length < originalArray.length) {
+      log.warn(`Redacted config array key ${path} has been truncated`);
+    }
+    const originalById = indexRedactedArrayItemsById(originalArray);
+    const incomingById = indexRedactedArrayItemsById(incoming);
+    const reservedOriginalIndexes = new Set<number>();
+    for (const [id, incomingIdentity] of incomingById) {
+      const originalIdentity = originalById.get(id);
+      if (incomingIdentity.count === 1 && originalIdentity?.count === 1) {
+        reservedOriginalIndexes.add(originalIdentity.index);
+      }
+    }
+    const hasUniqueOriginalIdentity = Array.from(originalById.values()).some(
+      (identity) => identity.count === 1,
+    );
+    return incoming.map((item, index) => {
+      const id = readRedactedArrayItemId(item);
+      const originalIdentity = id === undefined ? undefined : originalById.get(id);
+      const incomingIdentity = id === undefined ? undefined : incomingById.get(id);
+      let originalItem: unknown;
+      if (incomingIdentity?.count === 1 && originalIdentity?.count === 1) {
+        originalItem = originalIdentity.item;
+      } else if (
+        !(incomingIdentity?.count === 1 && !originalIdentity && hasUniqueOriginalIdentity)
+      ) {
+        // Positional fallback must not reuse a secret already reserved for another identified entry.
+        originalItem = reservedOriginalIndexes.has(index) ? undefined : originalArray[index];
+      }
+      return item === REDACTED_SENTINEL && (schemaMatched || heuristicSensitive)
+        ? originalItem
+        : restoreRedactedValue(item, originalItem, path, fallbackContext);
     });
   }
 
@@ -615,44 +592,29 @@ function restoreRedactedValue(
     const candidate = context.lookup
       ? [path, wildcardPath].find((entry) => context.lookup?.has(entry))
       : undefined;
-    if (candidate) {
-      if (
-        value === REDACTED_SENTINEL &&
-        (context.hints?.[candidate]?.sensitive === true ||
-          hasSensitiveUrlHintPath(context.hints, [candidate, path, wildcardPath]) ||
-          isSensitiveUrlConfigPath(path))
-      ) {
-        result[key] = restoreOriginalValueOrThrow(orig, key, candidate, context);
-      } else if (typeof value === "object" && value !== null) {
-        const restoredSecretRef = maybeRestoreSecretRefId({
-          incoming: value,
-          original: orig[key],
-          path,
-        });
-        result[key] = restoredSecretRef.handled
-          ? restoredSecretRef.value
-          : restoreRedactedValue(value, orig[key], candidate, context);
-      } else {
-        result[key] = value;
-      }
-      continue;
-    }
-
     const hintPaths = [path, wildcardPath];
+    // Match redaction: explicit false disables name guessing, not URL credential protection.
     const canRestore =
-      !isExplicitlyNonSensitivePath(context.hints, hintPaths) &&
-      (isSensitivePath(path) ||
-        hasSensitiveUrlHintPath(context.hints, hintPaths) ||
-        isSensitiveUrlConfigPath(path));
+      (candidate
+        ? context.hints?.[candidate]?.sensitive === true
+        : !isExplicitlyNonSensitivePath(context.hints, hintPaths) && isSensitivePath(path)) ||
+      hasSensitiveUrlHintPath(context.hints, hintPaths) ||
+      isSensitiveUrlConfigPath(path);
     if (value === REDACTED_SENTINEL && canRestore) {
-      result[key] = restoreOriginalValueOrThrow(orig, key, path, context);
+      result[key] = restoreOriginalValueOrThrow(orig, key, candidate ?? path, context);
     } else if (typeof value === "object" && value !== null) {
-      const restoredSecretRef = canRestore
-        ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })
-        : { handled: false as const };
+      const restoredSecretRef =
+        candidate || canRestore
+          ? maybeRestoreSecretRefId({ incoming: value, original: orig[key], path })
+          : { handled: false as const };
       result[key] = restoredSecretRef.handled
         ? restoredSecretRef.value
-        : restoreRedactedValue(value, orig[key], path, fallbackContext);
+        : restoreRedactedValue(
+            value,
+            orig[key],
+            candidate ?? path,
+            candidate ? context : fallbackContext,
+          );
     } else {
       result[key] = value;
     }

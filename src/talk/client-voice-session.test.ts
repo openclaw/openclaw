@@ -1,32 +1,32 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
-import {
-  emitTrustedDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
-import {
-  normalizeSessionDeliveryState,
-  type DeliveryContext,
-} from "../utils/delivery-context.shared.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import {
   authorizeClientVoiceConfirmation,
   checkClientVoiceToolConfirmationPolicy,
-  noteClientVoiceConfirmationUtterance,
 } from "./client-voice-confirmation.js";
-import { resetClientVoiceConfirmationStateForTest } from "./client-voice-confirmation.test-support.js";
 import {
+  noteClientVoiceConfirmationUtteranceForTest as noteClientVoiceConfirmationUtterance,
+  resetClientVoiceConfirmationStateForTest,
+} from "./client-voice-confirmation.test-support.js";
+import {
+  completeRun,
+  recordMutation,
+  seedSession,
+} from "./client-voice-session.fixture.test-support.js";
+import {
+  assertClientVoiceSessionOpen,
   appendClientVoiceTranscript,
   appendRelayVoiceTranscript,
   closeClientVoiceSession,
   closeRelayVoiceSessionRecord,
-  closeStaleClientVoiceSessions,
   createOrResumeClientVoiceSession,
   isClientVoiceSessionConfirmable,
   registerClientVoiceConsultRun,
@@ -58,50 +58,6 @@ vi.mock("../channels/message/runtime.js", () => ({
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
 
-async function seedSession(sessionKey: string, context: DeliveryContext = {}): Promise<void> {
-  await replaceSessionEntry(
-    { agentId: "main", sessionKey },
-    {
-      sessionId: `session-${sessionKey.replaceAll(":", "-")}`,
-      updatedAt: Date.now(),
-      delivery: normalizeSessionDeliveryState({ context }),
-    },
-  );
-}
-
-function recordMutation(voiceSessionId: string, runId = `run-${voiceSessionId}`): void {
-  registerClientVoiceConsultRun({
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    voiceSessionId,
-    runId,
-  });
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.started",
-    runId,
-    toolCallId: `call-${runId}`,
-    toolName: "message",
-    mutatingAction: true,
-  });
-  emitTrustedDiagnosticEvent({
-    type: "tool.execution.completed",
-    runId,
-    toolCallId: `call-${runId}`,
-    toolName: "message",
-    durationMs: 5,
-  });
-}
-
-async function completeRun(runId: string): Promise<void> {
-  emitTrustedDiagnosticEvent({
-    type: "run.completed",
-    runId,
-    durationMs: 5,
-    outcome: "completed",
-  });
-  await waitForDiagnosticEventsDrained();
-}
-
 describe("client voice session", () => {
   beforeEach(async () => {
     tempDir = await fs.realpath(
@@ -123,8 +79,7 @@ describe("client voice session", () => {
   afterEach(async () => {
     clientVoiceSessionTesting.reset();
     resetClientVoiceConfirmationStateForTest();
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await cleanupSessionStateForTest({ stateDir: tempDir });
     envSnapshot.restore();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
@@ -179,6 +134,30 @@ describe("client voice session", () => {
         voiceSessionId,
       }),
     ).toThrow("already closed");
+  });
+
+  it("reuses tool facts until the call changes and rejects a cached call after close", async () => {
+    const target = { agentId: "main", sessionKey: "agent:main:main" };
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      ...target,
+      origin: "client",
+      transcriptCapable: true,
+    });
+    const binding = { ...target, voiceSessionId };
+    expect(assertClientVoiceSessionOpen(binding)).toBe("client");
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(assertClientVoiceSessionOpen(binding)).toBe("client");
+      expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
+      expect(
+        observation.queries.filter((query) => /select.*value_json.*cache_entries/is.test(query)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
+    await closeClientVoiceSession({ ...binding, config: {} });
+    expect(() => assertClientVoiceSessionOpen(binding)).toThrow("voice session is closed");
+    expect(isClientVoiceSessionConfirmable(binding)).toBe(true);
   });
 
   it("marks confirmability by declared capability, relay origin, or observed transcript", () => {
@@ -892,18 +871,38 @@ describe("client voice session", () => {
     expect(resolveClientVoiceRunBinding("run-active")).toMatchObject({ voiceSessionId });
   });
 
-  it("resolves the open client record for legacy tool calls", () => {
+  it("resolves the open client record for legacy tool calls", async () => {
     const voiceSessionId = createOrResumeClientVoiceSession({
       agentId: "main",
       sessionKey: "agent:main:main",
       origin: "client",
     });
 
+    const closed = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      origin: "client",
+      voiceSessionId: "discarded-closed",
+    });
+    await closeClientVoiceSession({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      voiceSessionId: closed,
+      config: {},
+    });
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      expect(
+        await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
+      ).toBe(voiceSessionId);
+      expect(
+        observation.queries.filter((query) => /select.*value_json.*cache_entries/is.test(query)),
+      ).toEqual([]);
+    } finally {
+      observation.restore();
+    }
     expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
-    ).toBe(voiceSessionId);
-    expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
+      await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:other" }),
     ).toBeUndefined();
     createOrResumeClientVoiceSession({
       agentId: "main",
@@ -911,7 +910,7 @@ describe("client voice session", () => {
       origin: "client",
     });
     expect(
-      resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
+      await resolveOpenClientVoiceSessionId({ agentId: "main", sessionKey: "agent:main:main" }),
     ).toBeUndefined();
   });
 
@@ -938,31 +937,6 @@ describe("client voice session", () => {
     }
 
     expect(clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.effects).toHaveLength(2);
-  });
-
-  it("closes stale records and leaves recent records open", async () => {
-    const stale = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:stale",
-      origin: "client",
-      now: 1,
-    });
-    const recent = createOrResumeClientVoiceSession({
-      agentId: "main",
-      sessionKey: "agent:main:recent",
-      origin: "client",
-      now: 6 * 60 * 60_000,
-    });
-
-    expect(
-      await closeStaleClientVoiceSessions({
-        agentId: "main",
-        config: {},
-        now: 6 * 60 * 60_000 + 2,
-      }),
-    ).toBe(1);
-    expect(clientVoiceSessionTesting.readRecord("main", stale)?.status).toBe("closed");
-    expect(clientVoiceSessionTesting.readRecord("main", recent)?.status).toBe("open");
   });
 
   it("records only mutating started effects and updates their terminal status", () => {

@@ -7,9 +7,11 @@ import type {
   SessionsCatalogReadParams,
   SessionsCatalogReadResult,
 } from "../../packages/gateway-protocol/src/schema/sessions-catalog.js";
+import type { TerminalUploadPathStyle } from "../../packages/gateway-protocol/src/schema/terminal.js";
 import { listAgentIds, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 export type SessionCatalogListProviderParams = {
@@ -22,12 +24,18 @@ export type SessionCatalogListProviderParams = {
   limitPerHost?: number;
   hostIds?: string[];
   cursors?: Record<string, string>;
-  /** Request-owned shared entries. Providers must not mutate or retain them past `list`. */
+  /** Never mutate these entries; release after `list` settles or the list operation closes. */
   sessionEntries?: SessionCatalogEntrySnapshot;
-  /** Lazily lists Gateway nodes once per catalog request. Providers must not retain this past `list`. */
+  /** Lazily lists nodes once; release after `list` settles or the list operation closes. */
   listNodes?: () => ReturnType<PluginRuntime["nodes"]["list"]>;
   /** Publishes completed hosts without waiting for slower machines in the same list. */
   onHost?: (host: SessionCatalogHost) => void;
+  /** True when the caller accepts retained/pending hosts and later authoritative onHost updates. */
+  allowPartialResults?: boolean;
+  /** Register host publication before the logical list settles; includes the onHost callback. */
+  waitUntil?: (completion: Promise<void>) => void;
+  /** Catalog owner retirement, independent of the requesting connection's lifetime. */
+  signal?: AbortSignal;
 };
 export type SessionCatalogReadProviderParams = Omit<SessionsCatalogReadParams, "catalogId"> & {
   /** Gateway always supplies this; optional only for pre-existing external provider types. */
@@ -86,6 +94,8 @@ export type SessionCatalogTerminalPlan =
       paramsJSON: string;
       cwd?: string;
       title?: string;
+      /** Opt in only for native CLI text input, never for a shell receiver. */
+      uploadPathStyle?: TerminalUploadPathStyle;
     };
 
 export type SessionCatalogCreateTarget = {
@@ -101,6 +111,9 @@ export interface SessionCatalogEntrySummary {
 
 /** Shared, logically frozen store state for one request; copy locally before mutating. */
 export type SessionCatalogEntrySnapshot = {
+  /** Opaque immutable-entry revision, including config and selection scope. Cache only derived
+   * facts by this token; release entry references when the list closes. Not live authority. */
+  revision?: object;
   entriesForAgent: (agentId: string) => readonly SessionCatalogEntrySummary[];
   /** Request-wide flatten; optional for compatibility with pre-flatten plugin hosts. */
   entriesForCatalog?: () => SessionCatalogAgentEntry[];
@@ -167,30 +180,27 @@ export type SessionCatalogContinueProviderResult = {
   };
 };
 
-type SessionCatalogGatewayCopy = {
-  displayName?: string;
-  preferredModel?: string;
-};
-
-type SessionCatalogCreateParams = {
-  /** Agent whose model/runtime policy must authorize the catalog target. */
-  agentId?: string;
-};
-
 export type SessionCatalogProvider = {
   id: string;
   label: string;
-  /** Provider rows are Gateway-hosted artifacts visible to authenticated operators. */
-  audience?: "gateway-operators";
+  /** Gateway artifacts are shared with all operators; remote publications follow session-viewing roles. */
+  audience?: "gateway-operators" | "session-viewers";
   /** Closed plugin-owned route contract; invalid or colliding declarations are not projected. */
   shareRoute?: SessionCatalogShareRoute;
   /** Declares that every HOME-sensitive action honors the host isolation policy. */
   supportsProcessHomeIsolation?: true;
   /** Config-derived target; the Gateway memoizes it for one runtime-config object identity. */
-  resolveCreateSession?: (
-    params: SessionCatalogCreateParams,
-  ) => SessionCatalogCreateTarget | undefined;
+  resolveCreateSession?: (params: {
+    /** Agent whose model/runtime policy must authorize the catalog target. */
+    agentId?: string;
+  }) => SessionCatalogCreateTarget | undefined;
   list: (params: SessionCatalogListProviderParams) => Promise<SessionCatalogHost[]>;
+  /** Optional inert factory; each settled step leaves no foreground work running. */
+  createListOperation?: (params: SessionCatalogListProviderParams) => {
+    next: () => Promise<{ done: false } | { done: true; hosts: SessionCatalogHost[] }>;
+    /** Synchronous cleanup, called once after the last active step settles. */
+    close: () => void;
+  };
   /** Items are newest-first by source order; nextCursor continues to older items. */
   read: (params: SessionCatalogReadProviderParams) => Promise<SessionsCatalogReadResult>;
   continueSession?: (
@@ -199,7 +209,7 @@ export type SessionCatalogProvider = {
   /** Copy catalog history into a new ordinary Gateway-owned session. */
   copyToGatewaySession?: (
     params: SessionCatalogContinueProviderParams,
-  ) => Promise<SessionCatalogGatewayCopy>;
+  ) => Promise<{ displayName?: string; preferredModel?: string }>;
   checkUpstreamActivity?: (
     probes: SessionUpstreamProbe[],
     policy?: { allowProcessHomeFallback?: boolean },
@@ -211,14 +221,12 @@ export type SessionCatalogProvider = {
     agentId?: string;
     hostId: string;
     threadId: string;
+    sourceHomeId?: string;
   }) => Promise<SessionCatalogTerminalPlan>;
   startTerminalSession?: (
     request: SessionCatalogStartTerminalProviderParams,
   ) => Promise<SessionCatalogTerminalPlan>;
 };
-
-type SessionCatalogAdoptedSource = { hostId: string; threadId: string };
-type SessionCatalogEntry = SessionCatalogEntrySummary["entry"];
 
 export function listSessionCatalogEntries(params: {
   agentId?: string;
@@ -272,7 +280,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   pluginId: string;
   runtime: PluginRuntime;
   sessionEntries?: SessionCatalogEntrySnapshot;
-  sourceFromEntry: (entry: SessionCatalogEntry) => SessionCatalogAdoptedSource | undefined;
+  sourceFromEntry: (entry: SessionEntry) => { hostId: string; threadId: string } | undefined;
 }): Map<string, string> {
   const adopted = new Map<string, string>();
   for (const { sessionKey, entry } of listSessionCatalogEntries(params)) {
@@ -284,10 +292,7 @@ export function listAdoptedSessionCatalogSessions(params: {
   return adopted;
 }
 
-// `complete` is intentionally required, not optional-with-fallback: adoption and its
-// upstream baseline must share one single-flight operation, or concurrent continues
-// race to baseline the same thread. This helper shipped in no release tag yet
-// (added #113718), so no external plugin can depend on the older 3-field shape.
+// Adoption and its upstream baseline share one single-flight operation.
 export function createSessionCatalogAdoptionCoordinator<TResult extends { sessionKey: string }>() {
   const operations = new Map<string, Promise<TResult>>();
   return async (params: {
@@ -296,33 +301,24 @@ export function createSessionCatalogAdoptionCoordinator<TResult extends { sessio
     create: () => Promise<{ sessionKey: string }>;
     complete: (continued: { sessionKey: string }) => Promise<TResult>;
   }): Promise<TResult> => {
-    const pending = operations.get(params.sourceKey);
-    if (pending) {
-      return await pending;
-    }
-    const operation = (async () => {
-      const existing = await params.findExisting();
-      if (existing) {
-        // The gateway's same-source link upsert preserves its active marker. Re-running
-        // completion only supplies a new baseline after that link was removed.
-        return await params.complete({ sessionKey: existing });
-      }
-      const continued = await params.create().catch(async (error: unknown) => {
-        const raced = await params.findExisting();
-        if (raced) {
-          return { sessionKey: raced };
-        }
-        throw error;
-      });
-      return await params.complete(continued);
-    })();
-    operations.set(params.sourceKey, operation);
-    try {
-      return await operation;
-    } finally {
-      if (operations.get(params.sourceKey) === operation) {
-        operations.delete(params.sourceKey);
-      }
-    }
+    return await getOrCreatePromise(
+      operations,
+      params.sourceKey,
+      async () => {
+        const existing = await params.findExisting();
+        // Completion preserves an existing link's marker, or supplies a baseline after removal.
+        const continued = existing
+          ? { sessionKey: existing }
+          : await params.create().catch(async (error: unknown) => {
+              const raced = await params.findExisting();
+              if (raced) {
+                return { sessionKey: raced };
+              }
+              throw error;
+            });
+        return await params.complete(continued);
+      },
+      { evictOnSettled: true },
+    );
   };
 }

@@ -1,6 +1,5 @@
-import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { maybeSendBindingMessage } from "./monitor/thread-bindings.discord-api.js";
@@ -20,48 +19,53 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 async function withWebhookServer(
   reply: (content: string, index: number) => { status?: number; body: unknown },
-  run: (contents: string[]) => Promise<void>,
+  run: (contents: string[], references: Array<string | undefined>) => Promise<void>,
 ) {
   const contents: string[] = [];
-  const server = createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (part: string) => {
-      body += part;
-    });
-    request.on("end", () => {
-      const { content } = JSON.parse(body) as { content: string };
-      contents.push(content);
-      const next = reply(content, contents.length);
-      response.writeHead(next.status ?? 200, { "content-type": "application/json" });
-      response.end(JSON.stringify(next.body));
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
-  const realFetch = globalThis.fetch.bind(globalThis);
-  const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const original =
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const target = new URL(original);
-    target.protocol = "http:";
-    target.host = `127.0.0.1:${address.port}`;
-    return realFetch(target, init);
-  });
-  try {
-    await run(contents);
-  } finally {
-    fetchSpy.mockRestore();
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+  const references: Array<string | undefined> = [];
+  await withServer(
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (part: string) => {
+        body += part;
+      });
+      request.on("end", () => {
+        const { content, message_reference } = JSON.parse(body) as {
+          content: string;
+          message_reference?: { message_id: string };
+        };
+        references.push(message_reference?.message_id);
+        contents.push(content);
+        const next = reply(content, contents.length);
+        response.writeHead(next.status ?? 200, { "content-type": "application/json" });
+        response.end(JSON.stringify(next.body));
+      });
+    },
+    async (baseUrl) => {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+        const original =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const target = new URL(original);
+        target.protocol = "http:";
+        target.host = new URL(baseUrl).host;
+        return realFetch(target, init);
+      });
+      try {
+        await run(contents, references);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    },
+  );
 }
 
 const cfg: OpenClawConfig = { channels: { discord: { token: "Bot test-token" } } };
+const webhookOpts = { cfg, webhookId: "fixture", webhookToken: "fixture-token" };
+const accepted = (_content: string, index: number) => ({
+  body: { id: String(index), channel_id: "thread-1" },
+});
 
 describe("Discord webhook delivery", () => {
   beforeEach(() => {
@@ -69,6 +73,68 @@ describe("Discord webhook delivery", () => {
     hoisted.sendWebhookMessageDiscordMock.mockImplementation((...args) =>
       realWebhookSend(...(args as Parameters<typeof realWebhookSend>)),
     );
+  });
+
+  it("leaves already-planned tall webhook text intact when chunk options are omitted", async () => {
+    const text = Array.from({ length: 20 }, (_, index) => `line-${index}`).join("\n");
+    await withWebhookServer(accepted, async (contents, references) => {
+      await realWebhookSend(text, { ...webhookOpts, replyTo: "legacy-reply" });
+      expect(contents).toEqual([text]);
+      expect(references).toEqual(["legacy-reply"]);
+    });
+  });
+
+  it("records a first-only physical reply reference in each receipt", async () => {
+    const expected = ["fixture-reply", undefined];
+    await withWebhookServer(accepted, async (contents, references) => {
+      const delivered: Array<Awaited<ReturnType<typeof realWebhookSend>>> = [];
+      const result = await realWebhookSend("first\nsecond", {
+        ...webhookOpts,
+        replyTo: { messageId: "fixture-reply", scope: "first" },
+        chunking: { maxLines: 1 },
+        onDeliveryResult: (part) => {
+          delivered.push(part);
+        },
+      });
+      expect(contents).toEqual(["first", "second"]);
+      expect(references).toEqual(expected);
+      expect(result.receipt?.parts.map((part) => part.replyToId)).toEqual(expected);
+      expect(
+        delivered.flatMap((part) => part.receipt?.parts.map((entry) => entry.replyToId)),
+      ).toEqual(expected);
+    });
+  });
+
+  it.each([
+    {
+      label: "CommonMark bold",
+      text: "`__literal__` __Important__",
+      expected: "`__literal__` **Important**",
+    },
+    {
+      label: "mentions outside multiline and unterminated code",
+      text: "Example: `first\n@alice`\nPlease review @alice then `notify @alice",
+      expected: "Example: `first\n@alice`\nPlease review <@123456789> then `notify @alice",
+    },
+  ])("preserves $label through bound-thread persona delivery", async ({ text, expected }) => {
+    mockDiscordBoundThreadManager(hoisted);
+    await withWebhookServer(accepted, async (contents) => {
+      await discordOutbound.sendText?.({
+        cfg: {
+          channels: {
+            discord: {
+              token: "Bot test-token",
+              mentionAliases: { alice: "123456789" },
+            },
+          },
+        },
+        to: "channel:parent-1",
+        threadId: "thread-1",
+        text,
+      });
+      expect(contents).toEqual([expected]);
+      expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
@@ -119,47 +185,29 @@ describe("Discord webhook delivery", () => {
     },
   );
 
-  it.each(["adapter", "adapter with dispatch hook", "binding notification"] as const)(
-    "does not send a second message after an ambiguous webhook result through %s",
-    async (caller) => {
-      await withWebhookServer(
-        () => ({ status: 503, body: { message: "response lost after commit" } }),
-        async (contents) => {
-          if (caller === "binding notification") {
-            const record = {
-              accountId: "default",
-              channelId: "parent-1",
-              threadId: "thread-1",
-              targetKind: "subagent",
-              targetSessionKey: "agent:main:subagent:fixture",
-              agentId: "main",
-              boundBy: "fixture",
-              boundAt: 1,
-              lastActivityAt: 1,
-              webhookId: "wh-1",
-              webhookToken: "synthetic-token",
-            } satisfies ThreadBindingRecord;
-            await maybeSendBindingMessage({ cfg, record, text: "send once" });
-          } else {
-            mockDiscordBoundThreadManager(hoisted);
-            await expect(
-              discordOutbound.sendText?.({
-                cfg,
-                to: "channel:parent-1",
-                threadId: "thread-1",
-                text: "send once",
-                ...(caller === "adapter with dispatch hook"
-                  ? { onPlatformSendDispatch: async () => {} }
-                  : {}),
-              }),
-            ).rejects.toThrow("response lost after commit");
-          }
-          expect(contents).toEqual(["send once"]);
-          expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
+  it("does not replay an ambiguous binding notification", async () => {
+    await withWebhookServer(
+      () => ({ status: 503, body: { message: "response lost after commit" } }),
+      async (contents) => {
+        const record = {
+          accountId: "default",
+          channelId: "parent-1",
+          threadId: "thread-1",
+          targetKind: "subagent",
+          targetSessionKey: "agent:main:subagent:fixture",
+          agentId: "main",
+          boundBy: "fixture",
+          boundAt: 1,
+          lastActivityAt: 1,
+          webhookId: "wh-1",
+          webhookToken: "synthetic-token",
+        } satisfies ThreadBindingRecord;
+        await maybeSendBindingMessage({ cfg, record, text: "send once" });
+        expect(contents).toEqual(["send once"]);
+        expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   it("retains an accepted chunk without replaying it when a later webhook chunk is rejected", async () => {
     mockDiscordBoundThreadManager(hoisted);
@@ -177,6 +225,7 @@ describe("Discord webhook delivery", () => {
             threadId: "thread-1",
             text: "x".repeat(2001),
             onDeliveryResult,
+            onPlatformSendDispatch: async () => {},
           }),
         ).rejects.toThrow("Unknown Webhook");
         expect(contents.map((content) => content.length)).toEqual([2000, 1]);

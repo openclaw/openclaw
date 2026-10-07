@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
+import { hasSessionTranscriptMessageInDatabase } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { replaceTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
@@ -22,6 +23,7 @@ it("checks bootstrap history without decoding canonical message payloads", async
       { type: "message", id: "user", message: { role: "user", content: payload } },
       { type: "reset", id: "reset", parentId: null, reason: "new" },
     ]);
+    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
     const parse = JSON.parse;
     let parsedPayloadBytes = 0;
     const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
@@ -31,6 +33,8 @@ it("checks bootstrap history without decoding canonical message payloads", async
       return parse(text, reviver);
     });
     try {
+      // The history worker uses this query; caller-only spies cannot observe its decoding.
+      expect(hasSessionTranscriptMessageInDatabase(database, sessionTarget.sessionId)).toBe(true);
       expect(
         await resolveExistingAttemptTranscriptState({
           ...sessionTarget,
@@ -72,19 +76,31 @@ it("keeps one presence snapshot while another connection classifies a message", 
       ) {
         return statement;
       }
+      const classify = () => {
+        // Commit classification after the index probe finishes, while the
+        // physical message remains present throughout both connections.
+        writer
+          .prepare(
+            "UPDATE transcript_event_identities SET event_type = 'message' WHERE session_id = ?",
+          )
+          .run(sessionTarget.sessionId);
+        classified = true;
+      };
       return new Proxy(statement, {
         get(target, property) {
+          if (property === "get") {
+            return new Proxy(target.get.bind(target), {
+              apply(get, _receiver, params) {
+                const row = get(...params);
+                classify();
+                return row;
+              },
+            });
+          }
           if (property === "iterate") {
             return (...params: Parameters<typeof target.iterate>) => {
               const rows = [...target.iterate(...params)];
-              // Commit classification after the index probe finishes, while the
-              // physical message remains present throughout both connections.
-              writer
-                .prepare(
-                  "UPDATE transcript_event_identities SET event_type = 'message' WHERE session_id = ?",
-                )
-                .run(sessionTarget.sessionId);
-              classified = true;
+              classify();
               return rows.values();
             };
           }
@@ -94,6 +110,8 @@ it("keeps one presence snapshot while another connection classifies a message", 
       });
     });
     try {
+      // Inject the concurrent classification into the query that the history worker executes.
+      expect(hasSessionTranscriptMessageInDatabase(database, sessionTarget.sessionId)).toBe(true);
       expect(
         await resolveExistingAttemptTranscriptState({
           ...sessionTarget,

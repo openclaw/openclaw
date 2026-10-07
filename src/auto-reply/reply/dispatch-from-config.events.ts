@@ -1,17 +1,5 @@
 import type { PluginHookReplyDispatchEvent } from "../../plugins/hook-types.js";
-import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
-import type {
-  InternalGetReplyOptions,
-  PendingContinuationSettlement,
-  ReplySessionBinding,
-} from "./get-reply.types.js";
-
-export type InternalReplyResolverOptions = {
-  onDeliberateSilentTerminalReply?: () => void;
-  onPendingContinuation?: (settlement?: PendingContinuationSettlement) => void;
-  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
-  onSessionPrepared?: (binding: ReplySessionBinding) => void;
-};
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 export type PluginBindingTranscriptOwner = {
   agentId: string;
@@ -32,6 +20,8 @@ export function admittedSessionSettingsRestrictRuntime(
 export function createReplyDispatchEvent(
   params: Omit<PluginHookReplyDispatchEvent, "shouldSendToolSummaries"> & {
     shouldSendToolSummaries: () => boolean;
+    shouldSendToolSummariesAsync: () => Promise<boolean>;
+    shouldSendFullToolDetailsAsync: () => Promise<boolean>;
   },
 ): PluginHookReplyDispatchEvent {
   const { shouldSendToolSummaries, ...event } = params;

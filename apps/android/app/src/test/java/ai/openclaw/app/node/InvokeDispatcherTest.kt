@@ -13,6 +13,7 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.Location
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -340,7 +341,7 @@ internal fun newInvokeDispatcher(
   return InvokeDispatcher(
     cameraHandler = newCameraHandler(appContext),
     locationHandler =
-      LocationHandler.forTesting(
+      LocationHandler(
         appContext = appContext,
         dataSource = InvokeDispatcherFakeLocationDataSource(),
       ),
@@ -358,7 +359,7 @@ internal fun newInvokeDispatcher(
     motionHandler = MotionHandler(appContext, InvokeDispatcherFakeMotionDataSource()),
     smsHandler = SmsHandler(SmsManager(appContext)),
     debugHandler = DebugHandler(appContext, testDeviceIdentityStore(appContext)),
-    callLogHandler = CallLogHandler.forTesting(appContext, InvokeDispatcherFakeCallLogDataSource()),
+    callLogHandler = CallLogHandler(appContext),
     mobileUiHandler = MobileUiHandler(),
     isForeground = isForeground,
     cameraEnabled = cameraEnabled,
@@ -382,7 +383,6 @@ private fun newCameraHandler(appContext: Context): CameraHandler =
     appContext = appContext,
     camera = CameraCaptureManager(appContext),
     setCameraAudioCaptureActive = { true },
-    invokeErrorFromThrowable = { err -> "UNAVAILABLE" to (err.message ?: "camera failed") },
   )
 
 private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
@@ -396,8 +396,7 @@ private class InvokeDispatcherFakeLocationDataSource : LocationDataSource {
     desiredProviders: List<String>,
     maxAgeMs: Long?,
     timeoutMs: Long,
-    isPrecise: Boolean,
-  ): LocationCaptureManager.Payload {
+  ): Location {
     error("unused in InvokeDispatcherTest")
   }
 }
@@ -499,24 +498,15 @@ private class InvokeDispatcherFakeMotionDataSource : MotionDataSource {
 
   override suspend fun activity(
     context: Context,
-    request: MotionActivityRequest,
+    request: MotionRangeRequest,
   ): MotionActivityRecord {
     error("unused in InvokeDispatcherTest")
   }
 
   override suspend fun pedometer(
     context: Context,
-    request: MotionPedometerRequest,
+    request: MotionRangeRequest,
   ): PedometerRecord {
     error("unused in InvokeDispatcherTest")
   }
-}
-
-private class InvokeDispatcherFakeCallLogDataSource : CallLogDataSource {
-  override fun hasReadPermission(context: Context): Boolean = true
-
-  override fun search(
-    context: Context,
-    request: CallLogSearchRequest,
-  ): List<CallLogRecord> = emptyList()
 }

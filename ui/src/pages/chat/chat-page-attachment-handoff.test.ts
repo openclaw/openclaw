@@ -2,6 +2,7 @@
 /* @vitest-environment-options {"url":"http://chat-page-attachment-handoff.test/"} */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 
 vi.mock("./chat-pane.ts", () => ({}));
 vi.mock("../../app/native-gateways.runtime.ts", () => ({
@@ -10,6 +11,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { ApplicationContext } from "../../app/context.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createChatPageSessions } from "./chat-page.test-support.ts";
 import { ChatPage } from "./chat-page.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { insertPane } from "./split-layout.ts";
@@ -22,14 +24,6 @@ type RenderedPane = HTMLElement & {
   resumeStagedAttachments?: () => void;
 };
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
-
 function splitLayout(sessionKey: string): ChatSplitLayout {
   const layout: ChatSplitLayout = {
     columns: [{ id: "c1", panes: [{ id: "p1", sessionKey }], paneWeights: [1] }],
@@ -41,7 +35,8 @@ function splitLayout(sessionKey: string): ChatSplitLayout {
 
 function configure(page: ChatPage) {
   const context = {
-    sessions: { state: { result: null }, subscribe: () => () => undefined, patch: vi.fn() },
+    sessions: { ...createChatPageSessions(), patch: vi.fn() },
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },
@@ -99,7 +94,7 @@ describe("chat page staged attachment rebound", () => {
     const resume = vi.fn();
     closingPane.discardStagedAttachments = discard;
     closingPane.resumeStagedAttachments = resume;
-    const teardown = deferred<void>();
+    const teardown = deferred();
     const mcpApp = document.createElement("mcp-app-view");
     const restartAfterTeardown = vi.fn();
     mcpApp.restartAfterTeardown = restartAfterTeardown;

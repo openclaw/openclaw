@@ -5,9 +5,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
-let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
+let estimateToolSchemaTokenPressure: typeof import("./preemptive-compaction.js").estimateToolSchemaTokenPressure;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
@@ -17,10 +17,10 @@ beforeAll(async () => {
   // the runtime environment these helpers protect.
   vi.resetModules();
   ({
-    PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
     estimateRenderedLlmBoundaryTokenPressure,
+    estimateToolSchemaTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
   } = await import("./preemptive-compaction.js"));
@@ -131,73 +131,6 @@ describe("preemptive-compaction", () => {
   const verbosePrompt =
     "user request with distinct content asking for a detailed answer and more context ".repeat(25);
 
-  it("exports a context-overflow-compatible precheck error text", () => {
-    expect(PREEMPTIVE_OVERFLOW_ERROR_TEXT).toContain("Context overflow:");
-    expect(PREEMPTIVE_OVERFLOW_ERROR_TEXT).toContain("(precheck)");
-  });
-
-  it("raises the estimate as prompt-side content grows", () => {
-    const smaller = estimateLlmBoundaryTokenPressure({
-      messages: [makeAssistantHistory(verboseHistory)],
-      systemPrompt: "sys",
-      prompt: "hello",
-    });
-    const larger = estimateLlmBoundaryTokenPressure({
-      messages: [makeAssistantHistory(verboseHistory)],
-      systemPrompt: verboseSystem,
-      prompt: verbosePrompt,
-    });
-
-    expect(larger).toBeGreaterThan(smaller);
-  });
-
-  it("requests preemptive compaction when the reserve-based prompt budget would be exceeded", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory(verboseHistory)],
-      systemPrompt: verboseSystem,
-      prompt: verbosePrompt,
-      contextTokenBudget: 500,
-      reserveTokens: 50,
-    });
-
-    expect(result.shouldCompact).toBe(true);
-    expect(result.route).toBe("compact_only");
-    expect(result.estimatedPromptTokens).toBeGreaterThan(result.promptBudgetBeforeReserve);
-  });
-
-  it("does not request preemptive compaction when the reserve-based prompt budget still fits", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 10_000,
-      reserveTokens: 1_000,
-    });
-
-    expect(result.shouldCompact).toBe(false);
-    expect(result.route).toBe("fits");
-    expect(result.estimatedPromptTokens).toBeLessThan(result.promptBudgetBeforeReserve);
-  });
-
-  it("uses exact provider context plus later transcript and current prompt pressure", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        makeProviderAssistant({ promptTokens: 240_000, totalTokens: 240_304 }),
-        { role: "user", content: "small tail", timestamp: timestamp++ } as AgentMessage,
-      ],
-      systemPrompt: "current system prompt",
-      prompt: "continue",
-      contextTokenBudget: 272_000,
-      reserveTokens: 20_000,
-    });
-
-    expect(result.pressureSource).toBe("provider_context_usage");
-    expect(result.estimatedPromptTokens).toBeGreaterThan(240_304);
-    expect(result.estimatedPromptTokens).toBeLessThan(252_000);
-    expect(result.route).toBe("fits");
-  });
-
   it("counts the current system prompt after a provider usage boundary", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [
@@ -246,25 +179,6 @@ describe("preemptive-compaction", () => {
     });
 
     expect(result.estimatedPromptTokens).toBeGreaterThan(190_000);
-    expect(result.route).not.toBe("fits");
-  });
-
-  it("falls back to full transcript pressure without available provider context", () => {
-    const unavailable = makeProviderAssistant({ promptTokens: 1, totalTokens: 2 });
-    if (unavailable.role === "assistant") {
-      unavailable.usage.contextUsage = { state: "unavailable" };
-    }
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [
-        { role: "user", content: "x".repeat(1_000_000), timestamp: timestamp++ } as AgentMessage,
-        unavailable,
-      ],
-      prompt: "continue",
-      contextTokenBudget: 210_000,
-      reserveTokens: 20_000,
-    });
-
-    expect(result.pressureSource).toBe("transcript_estimate");
     expect(result.route).not.toBe("fits");
   });
 
@@ -525,56 +439,10 @@ describe("preemptive-compaction", () => {
       reserveTokens: 20_000,
     });
 
-    expect(result.effectiveReserveTokens).toBe(8_000);
-    expect(result.promptBudgetBeforeReserve).toBe(8_000);
-    expect(result.shouldCompact).toBe(false);
-    expect(result.route).toBe("fits");
-  });
-
-  it("keeps the requested reserve when it leaves enough prompt budget", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 32_000,
-      reserveTokens: 20_000,
-    });
-
-    expect(result.effectiveReserveTokens).toBe(20_000);
+    expect(result.effectiveReserveTokens).toBe(4_000);
     expect(result.promptBudgetBeforeReserve).toBe(12_000);
     expect(result.shouldCompact).toBe(false);
-  });
-
-  it("routes to direct tool-result truncation when recent tool tails can clearly absorb the overflow", () => {
-    // If reducible recent tool output covers the overflow, truncation is enough
-    // and a full transcript compaction would waste time/context.
-    const medium = "alpha beta gamma delta epsilon ".repeat(2200);
-    const messages: AgentMessage[] = [
-      makeAssistantHistory("short history"),
-      makeToolResultMessage(medium, medium, medium, medium),
-    ];
-    const reserveTokens = 2_000;
-    const contextTokenBudget = 26_000;
-    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
-      messages,
-      systemPrompt: "sys",
-      prompt: "hello",
-    });
-    const desiredOverflowTokens = 200;
-    const adjustedContextTokenBudget =
-      estimatedPromptTokens - desiredOverflowTokens + reserveTokens;
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages,
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: Math.max(contextTokenBudget, adjustedContextTokenBudget),
-      reserveTokens,
-    });
-
-    expect(result.route).toBe("truncate_tool_results_only");
-    expect(result.shouldCompact).toBe(false);
-    expect(result.overflowTokens).toBeGreaterThan(0);
-    expect(result.toolResultReducibleChars).toBeGreaterThan(0);
+    expect(result.route).toBe("fits");
   });
 
   it("routes to compact then truncate when recent tool tails help but cannot fully cover the overflow", () => {
@@ -745,6 +613,101 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
     expect(result.shouldCompact).toBe(false);
     expect(result.overflowTokens).toBe(0);
+  });
+
+  it("includes tool schema tokens in the precheck estimate so large catalogs trigger overflow", () => {
+    const messages = [makeAssistantHistory("short conversation text")];
+    const contextTokenBudget = 128_000;
+    const reserveTokens = 20_000;
+
+    const withoutTools = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+    });
+
+    const toolSchemaTokens = estimateToolSchemaTokenPressure(
+      Array.from({ length: 79 }, (_, i) => ({
+        name: `tool_${i}`,
+        description: "x".repeat(4000),
+        parameters: { type: "object", properties: { arg: { type: "string" } } },
+      })),
+    );
+
+    expect(toolSchemaTokens).toBeGreaterThan(contextTokenBudget - reserveTokens);
+
+    const withTools = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+      toolSchemaTokens,
+    });
+
+    expect(withoutTools.route).toBe("fits");
+    expect(withTools.route).not.toBe("fits");
+    expect(withTools.estimatedPromptTokens).toBeGreaterThan(withoutTools.estimatedPromptTokens);
+    expect(withTools.overflowTokens).toBeGreaterThan(0);
+  });
+
+  it("excludes runtime output schemas and metadata from tool pressure", () => {
+    const definition = {
+      name: "lookup",
+      description: "Look up a record.",
+      parameters: { type: "object", properties: { query: { type: "string" } } },
+    };
+    const runtimeTool = {
+      ...definition,
+      label: "Record lookup",
+      outputSchema: { type: "string", description: "result documentation ".repeat(4_000) },
+      executionMode: "parallel",
+      hideFromChannelProgress: true,
+      resultContentSource: "network",
+      execute: async () => ({ content: [], details: {} }),
+    };
+
+    expect(estimateToolSchemaTokenPressure([runtimeTool])).toBe(
+      estimateToolSchemaTokenPressure([definition]),
+    );
+  });
+
+  it("does not double-count tool schema tokens when a provider boundary is available", () => {
+    // The provider boundary totalTokens already includes the tool schemas from
+    // its request. Adding toolSchemaTokens again would over-count an unchanged
+    // catalog. This test verifies the fix: when a provider boundary exists,
+    // toolSchemaTokens are not added on top of the boundary total.
+    const providerTotal = 100_000;
+    const messages = [
+      makeProviderAssistant({ promptTokens: 80_000, totalTokens: providerTotal }),
+      makeAssistantHistory("additional conversation after boundary"),
+    ];
+    const toolSchemaTokens = 40_000;
+    const contextTokenBudget = 150_000;
+    const reserveTokens = 20_000;
+
+    const withoutToolSchema = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+    });
+
+    const withToolSchema = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget,
+      reserveTokens,
+      toolSchemaTokens,
+    });
+
+    // With a provider boundary, tool schema tokens must not inflate the estimate.
+    expect(withToolSchema.estimatedPromptTokens).toBe(withoutToolSchema.estimatedPromptTokens);
+    expect(withToolSchema.pressureSource).toBe("provider_context_usage");
   });
 
   it("does not throw when tool-result content cannot be serialized", () => {

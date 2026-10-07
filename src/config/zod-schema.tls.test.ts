@@ -1,47 +1,28 @@
-// Schema-level tests for gateway.tls certPath and keyPath validation.
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./validation.js";
+import { validateConfigObject } from "./validation-core.js";
 
 describe("gateway.tls schema", () => {
-  it("rejects empty certPath", () => {
-    const res = validateConfigObject({ gateway: { tls: { enabled: true, certPath: "" } } });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toMatch(/certPath/);
+  it.each([
+    ["certPath", ""],
+    ["keyPath", "   "],
+  ])("rejects blank %s", (key, value) => {
+    const result = validateConfigObject({ gateway: { tls: { enabled: true, [key]: value } } });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.issues[0]?.path).toContain(key);
     }
   });
 
-  it("rejects whitespace-only keyPath", () => {
-    const res = validateConfigObject({ gateway: { tls: { enabled: true, keyPath: "   " } } });
-    expect(res.ok).toBe(false);
-  });
-
-  it("accepts a non-empty certPath", () => {
-    const res = validateConfigObject({
-      gateway: { tls: { enabled: true, certPath: "/etc/ssl/cert.pem" } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it("preserves exact bytes of a non-empty certPath (no silent trim)", () => {
-    const res = validateConfigObject({
-      gateway: { tls: { enabled: true, certPath: "  /etc/ssl/cert.pem  " } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      // Schema must validate without transforming the string; runtime path
-      // resolution owns normalization, so leading/trailing spaces are preserved.
-      expect(res.config.gateway?.tls?.certPath).toBe("  /etc/ssl/cert.pem  ");
-    }
-  });
-
-  it("preserves exact bytes of a non-empty keyPath (no silent trim)", () => {
-    const res = validateConfigObject({
-      gateway: { tls: { enabled: true, keyPath: "  /etc/ssl/private/server.key  " } },
-    });
-    expect(res.ok).toBe(true);
-    if (res.ok) {
-      expect(res.config.gateway?.tls?.keyPath).toBe("  /etc/ssl/private/server.key  ");
+  it("preserves exact non-empty cert and key path bytes", () => {
+    const tls = {
+      enabled: true,
+      certPath: "  /etc/ssl/cert.pem  ",
+      keyPath: "  /etc/ssl/private/server.key  ",
+    };
+    const result = validateConfigObject({ gateway: { tls } });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.gateway?.tls).toEqual(tls);
     }
   });
 });

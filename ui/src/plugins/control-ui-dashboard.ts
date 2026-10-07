@@ -9,20 +9,12 @@ import {
   acquireBoardProviderForSession,
   boardExists,
   boardProviderCacheKey,
-  hasLoadedBoardSnapshot,
   type BoardProvider,
   type BoardProviderLease,
   type BoardViewCallbacks,
 } from "../lib/board/provider.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import "./control-ui-dashboard.css";
-
-function ensureBoardViewElement(): Promise<void> {
-  return ensureCustomElementDefined(
-    "openclaw-board-view",
-    () => import("../components/board/board-view.ts"),
-  );
-}
 
 class PluginSessionDashboard extends OpenClawLightDomElement {
   @property({ attribute: false }) session: BoardGetParams | null = null;
@@ -53,7 +45,10 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
   }
 
   override updated(): void {
-    this.viewLoad ??= ensureBoardViewElement().catch((error: unknown) => {
+    this.viewLoad ??= ensureCustomElementDefined(
+      "openclaw-board-view",
+      () => import("../components/board/board-view.ts"),
+    ).catch((error: unknown) => {
       this.viewError = error instanceof Error ? error.message : String(error);
     });
     this.synchronizeProvider();
@@ -127,7 +122,7 @@ class PluginSessionDashboard extends OpenClawLightDomElement {
     if (!snapshot.tabs.some((tab) => tab.tabId === this.activeTabId)) {
       this.activeTabId = firstTabId;
     }
-    if (!this.expansionInitialized && hasLoadedBoardSnapshot(provider)) {
+    if (!this.expansionInitialized && provider.hasLoadedSnapshot) {
       this.expansionInitialized = true;
       this.expanded = boardExists(snapshot);
     }

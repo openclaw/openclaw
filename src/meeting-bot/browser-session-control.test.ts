@@ -137,7 +137,7 @@ describe("meeting browser leave ownership", () => {
     await deleteStarted;
     let concurrentStarted = false;
     const concurrent = runMeetingBrowserAct({
-      deadline: Date.now() + 1_000,
+      deadline: performance.now() + 1_000,
       targetId: "target-1",
       operation: async () => {
         concurrentStarted = true;

@@ -1,7 +1,6 @@
-// Mattermost plugin module orchestrates monitor setup, ingress, and teardown.
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
-import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   normalizeOptionalString,
   normalizeTrimmedStringList,
@@ -84,6 +83,12 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       },
     } satisfies RuntimeEnv);
   const cfg = (opts.config ?? core.config.current()) as OpenClawConfig;
+  const readConfig = createRuntimeConfigReader(cfg);
+  const resolveDebounceMs = () =>
+    core.channel.debounce.resolveInboundDebounceMs({
+      cfg: readConfig(),
+      channel: "mattermost",
+    });
   const account = resolveMattermostAccount({ cfg, accountId: opts.accountId });
   const pairing = createChannelPairingController({
     core,
@@ -106,7 +111,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    allowPrivateNetwork: isPrivateNetworkOptInEnabled(account.config),
+    allowPrivateNetwork: account.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 
   // Wait for the Mattermost API to accept our bot token before proceeding.
@@ -121,7 +126,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     {
       abortSignal: opts.abortSignal,
       jitterRatio: 0.2,
-      shouldReconnect: ({ outcome }) => outcome === "rejected",
+      reconnectAfterClose: false,
       onError: (err) => {
         runtime.error?.(`mattermost: API auth failed: ${String(err)}`);
         publishMattermostRecoveringStatus(opts.statusSink, err);
@@ -245,10 +250,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     payload: MattermostEventPayload;
     turnAdoptionLifecycle: MattermostIngressLifecycle;
   }>({
-    debounceMs: core.channel.debounce.resolveInboundDebounceMs({
-      cfg,
-      channel: "mattermost",
-    }),
+    debounceMs: resolveDebounceMs(),
+    resolveDebounceMs,
     buildKey: (entry) => {
       const channelId =
         entry.post.channel_id ??

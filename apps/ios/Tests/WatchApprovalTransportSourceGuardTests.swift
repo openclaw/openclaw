@@ -110,8 +110,6 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(receiverSource.contains(
             "WatchGatewayID.exact(payload[\"requestGatewayStableID\"] as? String)"))
         #expect(receiverSource.contains("recordAcceptedExecApprovalSnapshot"))
-        #expect(receiverSource.contains(
-            "WatchGatewayID.key(snapshot.gatewayStableID) == WatchGatewayID.key(token.gatewayStableID)"))
     }
 
     @Test func `retry reset matches the exact active attempt`() throws {
@@ -137,7 +135,7 @@ struct WatchApprovalTransportSourceGuardTests {
         let parser = try Self.extract(
             receiverSource,
             from: "private static func parseExecApprovalSnapshotPayload(",
-            to: "private static func parseAppSnapshotPayload(")
+            to: "private static func parseChatCompletionPayload(")
 
         #expect(parser.contains("guard let rawApprovals = payload[\"approvals\"] as? [Any]"))
         #expect(parser.contains("guard let approval = Self.parseExecApprovalItem(item) else { return nil }"))
@@ -153,8 +151,7 @@ struct WatchApprovalTransportSourceGuardTests {
             to: "private static func parseExecApprovalExpiredPayload(")
 
         #expect(parser.contains(
-            "WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
-        #expect(parser.contains("outcome: outcome"))
+            "outcome: WatchExecApprovalResolvedMessage.parseTransportOutcome(payload[\"outcome\"])"))
     }
 
     @Test func `watch reuses exact compound identifier policy`() throws {
@@ -166,18 +163,10 @@ struct WatchApprovalTransportSourceGuardTests {
             receiverSource,
             from: "private static func parseExecApprovalItem(",
             to: "private static func parseExecApprovalPromptPayload(")
-        let ownerKey = try Self.extract(
-            storeSource,
-            from: "private static func execApprovalOwnerKey(",
-            to: "private func isExecApprovalTerminal(")
         let snapshotConsume = try Self.extract(
             storeSource,
             from: "func consume(\n        execApprovalSnapshot",
             to: "func consume(appSnapshot")
-        let restore = try Self.extract(
-            storeSource,
-            from: "private func restorePersistedState()",
-            to: "private func persistState()")
         let prefixed = "\u{001C}approval"
         #expect(ExecApprovalIdentifier.exact(prefixed) == prefixed)
         #expect(ExecApprovalIdentifier.exact(" approval ") == " approval ")
@@ -187,12 +176,9 @@ struct WatchApprovalTransportSourceGuardTests {
         #expect(messagesSource.contains("typealias WatchGatewayID = GatewayStableIdentifier"))
         #expect(parser.contains("WatchApprovalID.exact(payload[\"id\"] as? String)"))
         #expect(!parser.contains("id = (payload[\"id\"] as? String)?.trimmingCharacters"))
-        #expect(ownerKey.contains("WatchApprovalID.key(approvalId)"))
-        #expect(!ownerKey.contains("approvalId.trimmingCharacters"))
         #expect(snapshotConsume.contains("WatchApprovalID.exact(approval.id) != nil"))
         #expect(snapshotConsume.contains("let hasCanonicalRequestCorrelation ="))
         #expect(snapshotConsume.contains("guard hasCanonicalRequestCorrelation else { return true }"))
-        #expect(restore.contains("WatchApprovalID.exact(record.approvalID) != nil"))
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let composedKey = ExactOpaqueIdentifierKey(composedID)

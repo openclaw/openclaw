@@ -1,25 +1,23 @@
-/**
- * Installs replay, tool-call, timeout, and diagnostic guards around an embedded stream.
- */
 import type { OpenAIResponsesCompactionRejection } from "@openclaw/ai/transports";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
-import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
-import type { resolveProviderTextTransforms } from "../../../plugins/provider-runtime.js";
-import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
-import { createCacheTrace } from "../../cache-trace.js";
+import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import {
+  assertOperatorModelAllowed,
+  readRunOperatorAuthority,
+} from "../../admitted-run-context.js";
+import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import type { StreamFn } from "../../runtime/index.js";
-import type { AgentSession, SessionManager } from "../../sessions/index.js";
+import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { wrapStreamFnCodeModeSource } from "../../transcript-code-mode-source.js";
-import type { TranscriptPolicy } from "../../transcript-policy.js";
-import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
+import type { NormalizedUsage } from "../../usage.js";
 import { log } from "../logger.js";
-import { collectPromptCacheTools } from "../prompt-cache-observability.js";
+import { createPromptCacheRequestObserver } from "../prompt-cache-request-observer.js";
 import {
   repairRejectedCompactionReplayInSessionManager,
   repairRejectedThinkingReplayInSessionManager,
@@ -29,6 +27,8 @@ import {
   dropThinkingBlocks,
   wrapAnthropicStreamWithRecovery,
 } from "../thinking.js";
+import { createHtmlEntityToolCallArgumentDecodingWrapper } from "../tool-call-argument-decoding.js";
+import type { EmbeddedAttemptExecutionPhaseInput } from "./attempt-execution-types.js";
 import {
   createYieldAbortedResponse,
   isSessionsYieldAbortReason,
@@ -45,7 +45,6 @@ import { wrapStreamFnPromoteStandaloneTextToolCalls } from "./attempt-tool-call-
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
 import {
   shouldRepairMalformedToolCallArguments,
-  wrapStreamFnDecodeXaiToolCallArguments,
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
@@ -54,98 +53,130 @@ import {
   streamWithIdleTimeout,
 } from "./llm-idle-timeout.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
-import type { EmbeddedRunAttemptParams } from "./types.js";
+import { wrapStreamObjectSettlement } from "./stream-wrapper.js";
 
-type CacheTrace = ReturnType<typeof createCacheTrace>;
-type AnthropicPayloadLogger = ReturnType<typeof createAnthropicPayloadLogger>;
 type CompactionReplayStreamOptions = NonNullable<Parameters<StreamFn>[2]> & {
   onCompactionRejected?: (checkpoint: OpenAIResponsesCompactionRejection) => void;
 };
 
 function wrapStreamFnWithCompactionReplayRepair(
   streamFn: StreamFn,
-  onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => void,
+  onRejected: (checkpoint: OpenAIResponsesCompactionRejection) => Promise<void>,
 ): StreamFn {
-  return (model, context, options) => {
+  return async (model, context, options) => {
+    const trackRepair = captureAsyncWorkTracker();
+    const repairs: Promise<void>[] = [];
+    const joinRepairs = async () => {
+      let joined = 0;
+      while (joined !== repairs.length) {
+        joined = repairs.length;
+        const settled = await Promise.allSettled(repairs);
+        const rejected = settled.find((result) => result.status === "rejected");
+        if (rejected?.status === "rejected") {
+          throw rejected.reason;
+        }
+      }
+    };
     const replayOptions = options as CompactionReplayStreamOptions | undefined;
     const nextOptions: CompactionReplayStreamOptions = {
       ...options,
       onCompactionRejected: (checkpoint) => {
-        onRejected(checkpoint);
-        if (replayOptions?.onCompactionRejected) {
-          replayOptions.onCompactionRejected(checkpoint);
-        }
+        const repair = trackRepair(() => onRejected(checkpoint));
+        repairs.push(repair);
+        void repair.catch(() => {});
+        replayOptions?.onCompactionRejected?.(checkpoint);
       },
     };
-    return streamFn(model, context, nextOptions);
+    let response: Awaited<ReturnType<StreamFn>>;
+    try {
+      response = await streamFn(model, context, nextOptions);
+    } catch (error) {
+      await joinRepairs();
+      throw error;
+    }
+    return wrapStreamObjectSettlement(response, joinRepairs);
   };
 }
 
-export function installEmbeddedAttemptStreamGuards(input: {
-  attempt: EmbeddedRunAttemptParams;
-  session: AgentSession;
-  sessionAgentId: string;
-  cacheTrace: CacheTrace;
-  allCustomTools: Array<{ name?: string; description?: string; parameters?: unknown }>;
-  systemPromptText: string;
-  transcriptPolicy: TranscriptPolicy;
-  sessionManager: SessionManager | undefined;
-  isOpenAIResponsesApi: boolean;
-  replayAllowedToolNames: Set<string>;
-  liveAllowedToolNames: Set<string>;
-  codeModeExecToolNames?: ReadonlySet<string>;
-  isYieldDetected: () => boolean;
-  anthropicPayloadLogger: AnthropicPayloadLogger;
-  onRejectedProviderReplayRepaired: () => void;
-  onIdleTimeout: (error: Error) => void;
-  effectiveAgentTransport: AgentSession["agent"]["transport"];
-  providerTextTransforms: ReturnType<typeof resolveProviderTextTransforms>;
-  abortSignal: AbortSignal;
-  runTrace: DiagnosticTraceContext;
-  diagnosticOwner: DiagnosticEmbeddedRunOwner;
-}) {
-  const attempt = input.attempt;
-  const session = input.session;
-  const repairRejectedReplay = (
+export function installEmbeddedAttemptStreamGuards(
+  input: EmbeddedAttemptExecutionPhaseInput,
+  callbacks: {
+    onRejectedProviderReplayRepaired: () => void;
+    onIdleTimeout: (error: Error) => void;
+    diagnosticOwner: DiagnosticEmbeddedRunOwner;
+  },
+) {
+  const { attempt } = input;
+  const {
+    agentSession: { activeSession: session, codeModeExecToolNames },
+    anthropicPayloadLogger,
+    cacheTrace,
+    contextGuards,
+    isOpenAIResponsesApi,
+    sessionManager,
+    state: { systemPromptText },
+    transcriptPolicy,
+    transport: {
+      effectiveAgentTransport,
+      effectivePromptCacheRetention,
+      streamStrategy,
+      providerTextTransforms,
+    },
+  } = input.prepared.sessionRuntime;
+  const { liveAllowedToolNames, replayAllowedToolNames } =
+    input.prepared.toolCatalog.toolSearchRunPlan;
+  const { sessionAgentId } = input.setup;
+  const { signal: abortSignal } = input.runAbortController;
+  const operatorAuthority = readRunOperatorAuthority(attempt);
+  if (operatorAuthority) {
+    const providerStream = session.agent.streamFn;
+    session.agent.streamFn = (model, context, options) => {
+      assertOperatorModelAllowed(operatorAuthority, {
+        provider: attempt.provider,
+        model: attempt.modelId,
+      });
+      return providerStream(model, context, options);
+    };
+  }
+  const repairRejectedReplay = async (
     kind: "compaction" | "thinking",
     checkpoint?: OpenAIResponsesCompactionRejection,
-  ) => {
+  ): Promise<void> => {
     try {
-      if (!input.sessionManager) {
-        log.warn(
-          `[session-recovery] unable to repair rejected ${kind} replay: ` +
-            `session manager unavailable sessionId=${session.sessionId}`,
-        );
-        return;
-      }
       const repairParams = {
-        sessionManager: input.sessionManager,
+        sessionManager,
         sessionFile: attempt.sessionFile,
         sessionId: attempt.sessionId,
         sessionKey: attempt.sessionKey,
-        agentId: input.sessionAgentId,
+        agentId: sessionAgentId,
       };
-      let repair;
-      if (kind === "compaction") {
-        if (!checkpoint) {
-          log.warn(
-            `[session-recovery] unable to repair rejected compaction replay: ` +
-              `checkpoint identity unavailable sessionId=${session.sessionId}`,
-          );
+      await withSessionManagerWrite(sessionManager, async () => {
+        abortSignal.throwIfAborted();
+        let repair;
+        if (kind === "compaction") {
+          if (!checkpoint) {
+            log.warn(
+              `[session-recovery] unable to repair rejected compaction replay: ` +
+                `checkpoint identity unavailable sessionId=${session.sessionId}`,
+            );
+            return;
+          }
+          repair = await repairRejectedCompactionReplayInSessionManager({
+            ...repairParams,
+            checkpoint,
+          });
+        } else {
+          repair = await repairRejectedThinkingReplayInSessionManager(repairParams);
+        }
+        if (repair.repaired) {
+          callbacks.onRejectedProviderReplayRepaired();
           return;
         }
-        repair = repairRejectedCompactionReplayInSessionManager({ ...repairParams, checkpoint });
-      } else {
-        repair = repairRejectedThinkingReplayInSessionManager(repairParams);
-      }
-      if (repair.repaired) {
-        input.onRejectedProviderReplayRepaired();
-        return;
-      }
-      log.warn(
-        `[session-recovery] provider rejected ${kind} replay but transcript repair made no changes: ` +
-          `sessionId=${session.sessionId} reason=${repair.reason ?? "unknown"}`,
-      );
+        log.warn(
+          `[session-recovery] provider rejected ${kind} replay but transcript repair made no changes: ` +
+            `sessionId=${session.sessionId} reason=${repair.reason ?? "unknown"}`,
+        );
+      });
     } catch (error) {
       log.warn(
         `[session-recovery] unable to repair rejected ${kind} replay: ` +
@@ -153,43 +184,63 @@ export function installEmbeddedAttemptStreamGuards(input: {
       );
     }
   };
-  const cacheObservabilityEnabled = Boolean(input.cacheTrace) || log.isEnabled("debug");
-  const promptCacheTools = cacheObservabilityEnabled
-    ? collectPromptCacheTools(input.allCustomTools)
-    : [];
-  if (input.cacheTrace) {
-    input.cacheTrace.recordStage("session:loaded", {
+  const cacheObserver = createPromptCacheRequestObserver(
+    {
+      sessionId: attempt.sessionId,
+      sessionKey: attempt.sessionKey,
+      promptCacheKey: attempt.promptCacheKey,
+      cacheRetention: effectivePromptCacheRetention,
+      streamStrategy,
+      transport: effectiveAgentTransport,
+    },
+    (observation, snapshot) => {
+      if (observation.broke) {
+        const changes =
+          observation.changes?.map((change) => `${change.code}(${change.detail})`).join(", ") ??
+          "no tracked cache input change";
+        log.warn(
+          `[prompt-cache] cache read dropped ${observation.previousCacheRead} -> ${observation.cacheRead} ` +
+            `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}`,
+        );
+      }
+      cacheTrace?.recordStage("cache:result", { options: { ...observation } });
+    },
+    (request) => {
+      cacheTrace?.recordStage("cache:state", {
+        options: { ...request, previousCacheRead: request.previousCacheRead ?? undefined },
+      });
+    },
+  );
+  if (cacheTrace) {
+    cacheTrace.recordStage("session:loaded", {
       messages: session.messages,
-      system: input.systemPromptText,
+      system: systemPromptText,
       note: "after session create",
     });
-    session.agent.streamFn = input.cacheTrace.wrapStreamFn(session.agent.streamFn);
+    session.agent.streamFn = cacheTrace.wrapStreamFn(session.agent.streamFn);
   }
 
   // Anthropic Claude endpoints can reject replayed `thinking` blocks on
   // any follow-up provider call, including tool continuations. Sanitize
   // outbound messages where policy allows rewriting; otherwise preserve
   // latest thinking and let the recovery wrapper retry once without it.
-  if (
-    input.transcriptPolicy.dropThinkingBlocks ||
-    input.transcriptPolicy.dropReasoningFromHistory
-  ) {
+  if (transcriptPolicy.dropThinkingBlocks || transcriptPolicy.dropReasoningFromHistory) {
     session.agent.streamFn = wrapStreamFnWithMessageTransform(
       session.agent.streamFn,
       (messages) => {
-        const reasoningSanitized = input.transcriptPolicy.dropReasoningFromHistory
+        const reasoningSanitized = transcriptPolicy.dropReasoningFromHistory
           ? dropReasoningFromHistory(messages)
           : messages;
-        return input.transcriptPolicy.dropThinkingBlocks
+        return transcriptPolicy.dropThinkingBlocks
           ? dropThinkingBlocks(reasoningSanitized)
           : reasoningSanitized;
       },
     );
   }
   if (
-    input.transcriptPolicy.preserveSignatures ||
-    input.transcriptPolicy.dropThinkingBlocks ||
-    input.transcriptPolicy.dropReasoningFromHistory
+    transcriptPolicy.preserveSignatures ||
+    transcriptPolicy.dropThinkingBlocks ||
+    transcriptPolicy.dropReasoningFromHistory
   ) {
     session.agent.streamFn = wrapAnthropicStreamWithRecovery(session.agent.streamFn, {
       id: session.sessionId,
@@ -197,15 +248,12 @@ export function installEmbeddedAttemptStreamGuards(input: {
     });
   }
 
-  // Mistral (and other strict providers) reject tool call IDs that don't match their
-  // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
-  // historical messages at attempt start, but the agent loop's internal tool call →
-  // tool result cycles bypass that path. Wrap streamFn so every outbound request
-  // sees sanitized tool call IDs.
+  // Tool continuations bypass startup history sanitization; each request must
+  // satisfy the provider's tool-call ID format and pairing rules.
   const replayToolCallIdSanitizerDecision = {
-    sanitizeToolCallIds: input.transcriptPolicy.sanitizeToolCallIds,
-    toolCallIdMode: input.transcriptPolicy.toolCallIdMode,
-    isOpenAIResponsesApi: input.isOpenAIResponsesApi,
+    sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
+    toolCallIdMode: transcriptPolicy.toolCallIdMode,
+    isOpenAIResponsesApi,
   };
   if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
     const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
@@ -215,55 +263,55 @@ export function installEmbeddedAttemptStreamGuards(input: {
         sanitizeReplayToolCallIdsForStream({
           messages,
           mode,
-          allowedToolNames: input.replayAllowedToolNames,
-          preserveNativeAnthropicToolUseIds:
-            input.transcriptPolicy.preserveNativeAnthropicToolUseIds,
-          duplicateToolCallIdStyle: input.transcriptPolicy.duplicateToolCallIdStyle,
+          allowedToolNames: replayAllowedToolNames,
+          preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: transcriptPolicy.duplicateToolCallIdStyle,
           preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
-            modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+            modelApi: model.api,
             provider: attempt.provider,
-            policy: input.transcriptPolicy,
+            policy: transcriptPolicy,
           }),
-          repairToolUseResultPairing: input.transcriptPolicy.repairToolUseResultPairing,
+          repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,
         }),
     );
   }
 
-  if (input.isOpenAIResponsesApi) {
+  if (isOpenAIResponsesApi) {
     session.agent.streamFn = wrapStreamFnWithCompactionReplayRepair(
       session.agent.streamFn,
       (checkpoint) => repairRejectedReplay("compaction", checkpoint),
     );
-    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
-      sanitizeOpenAIResponsesReplayForStream(messages),
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(
+      session.agent.streamFn,
+      sanitizeOpenAIResponsesReplayForStream,
     );
   }
 
   const innerStreamFn = session.agent.streamFn;
   session.agent.streamFn = (model, context, options) => {
-    const signal = input.abortSignal as AbortSignal & { reason?: unknown };
-    if (input.isYieldDetected() && signal.aborted && isSessionsYieldAbortReason(signal.reason)) {
+    if (
+      input.lifecycle.readYieldState().yieldDetected &&
+      abortSignal.aborted &&
+      isSessionsYieldAbortReason(abortSignal.reason)
+    ) {
       return createYieldAbortedResponse(model);
     }
     return innerStreamFn(model, context, options);
   };
 
-  // Some models emit tool names with surrounding whitespace (e.g. " read ").
-  // agent runtime dispatches tool calls with exact string matching, so normalize
-  // names on the live response stream before tool execution.
   session.agent.streamFn = wrapStreamFnSanitizeMalformedToolCalls(
     session.agent.streamFn,
-    input.replayAllowedToolNames,
-    input.transcriptPolicy,
+    replayAllowedToolNames,
+    transcriptPolicy,
     attempt.provider,
   );
   session.agent.streamFn = wrapStreamFnPromoteStandaloneTextToolCalls(
     session.agent.streamFn,
-    input.liveAllowedToolNames,
+    liveAllowedToolNames,
   );
   session.agent.streamFn = wrapStreamFnTrimToolCallNames(
     session.agent.streamFn,
-    input.liveAllowedToolNames,
+    liveAllowedToolNames,
     {
       // Unknown-tool recovery stays active even when configurable loop detection is disabled.
       unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
@@ -280,76 +328,54 @@ export function installEmbeddedAttemptStreamGuards(input: {
   }
 
   if (resolveToolCallArgumentsEncoding(attempt.model) === "html-entities") {
-    session.agent.streamFn = wrapStreamFnDecodeXaiToolCallArguments(session.agent.streamFn);
+    session.agent.streamFn = createHtmlEntityToolCallArgumentDecodingWrapper(
+      session.agent.streamFn,
+    );
   }
 
   // Tool-call repair can replace structured arguments from fragmented deltas.
   // Restore provider-masked text afterward so executable args stay canonical.
-  if (input.providerTextTransforms?.output?.length) {
+  if (providerTextTransforms?.output?.length) {
     session.agent.streamFn = wrapStreamFnTextTransforms({
       streamFn: session.agent.streamFn,
-      output: input.providerTextTransforms.output,
+      output: providerTextTransforms.output,
     });
   }
 
-  if (input.anthropicPayloadLogger) {
-    session.agent.streamFn = input.anthropicPayloadLogger.wrapStreamFn(session.agent.streamFn);
+  if (anthropicPayloadLogger) {
+    session.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(session.agent.streamFn);
   }
   // Anthropic-compatible providers can add new stop reasons before shared model runtime maps them.
   // Recover the known "sensitive" stop reason here so a model refusal does not
   // bubble out as an uncaught runner error and stall channel polling.
   session.agent.streamFn = wrapStreamFnHandleSensitiveStopReason(session.agent.streamFn);
 
-  // Wrap stream with idle timeout detection.
-  //
-  // Prefer the caller's explicit `runTimeoutOverrideMs` when provided —
-  // it carries the "this run was launched with a deliberate per-run
-  // timeout" signal without losing it when the value numerically equals
-  // `agents.defaults.timeoutSeconds`. Fall back to the value-equality
-  // heuristic for callers that haven't been migrated to plumb the flag.
+  // An explicit override remains intentional even when it equals the default.
+  // Older callers only communicate the override through a different value.
   const configuredRunTimeoutMs = resolveAgentTimeoutMs({
     cfg: attempt.config,
   });
   const resolvedRunTimeoutMs =
     attempt.runTimeoutOverrideMs ??
     (attempt.timeoutMs !== configuredRunTimeoutMs ? attempt.timeoutMs : undefined);
-  const idleTimeoutMs = resolveLlmIdleTimeoutMs({
-    cfg: attempt.config,
-    trigger: attempt.trigger,
-    runTimeoutMs: resolvedRunTimeoutMs,
-    modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-    model: {
-      baseUrl: attempt.model.baseUrl,
-      id: attempt.modelId,
-      provider: attempt.provider,
-    },
-  });
-  const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
+  const timeoutOptions = {
     cfg: attempt.config,
     runTimeoutMs: resolvedRunTimeoutMs,
     modelRequestTimeoutMs: (attempt.model as { requestTimeoutMs?: number }).requestTimeoutMs,
-    model: {
-      baseUrl: attempt.model.baseUrl,
-      id: attempt.modelId,
-      provider: attempt.provider,
-    },
-  });
-  if (idleTimeoutMs > 0) {
+    model: { baseUrl: attempt.model.baseUrl, id: attempt.modelId, provider: attempt.provider },
+  };
+  const idleTimeoutMs = resolveLlmIdleTimeoutMs({ ...timeoutOptions, trigger: attempt.trigger });
+  const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs(timeoutOptions);
+  if (idleTimeoutMs > 0 || firstEventTimeoutMs > 0) {
+    // Local providers opt out of gap policing, but stream creation still needs
+    // a deadline when response headers never arrive.
     session.agent.streamFn = streamWithIdleTimeout(
       session.agent.streamFn,
-      idleTimeoutMs,
-      (error) => input.onIdleTimeout(error),
-      { runId: attempt.runId },
-    );
-  } else if (firstEventTimeoutMs > 0) {
-    // Local providers opt out of gap policing, but the transport first-event
-    // guard only arms after stream creation. A request whose headers never
-    // arrive would otherwise wedge until the run budget with no watchdog.
-    session.agent.streamFn = streamWithIdleTimeout(
-      session.agent.streamFn,
-      firstEventTimeoutMs,
-      (error) => input.onIdleTimeout(error),
-      { runId: attempt.runId, scope: "creation-only" },
+      idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
+      (error) => callbacks.onIdleTimeout(error),
+      idleTimeoutMs > 0
+        ? { runId: attempt.runId }
+        : { runId: attempt.runId, scope: "creation-only" },
     );
   }
   if (firstEventTimeoutMs > 0) {
@@ -363,19 +389,22 @@ export function installEmbeddedAttemptStreamGuards(input: {
       return baseStreamFn(model, context, {
         ...options,
         firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-        onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? input.onIdleTimeout,
+        onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? callbacks.onIdleTimeout,
       } as typeof options);
     };
   }
   let diagnosticModelCallSeq = 0;
+  let modelResponseTerminal = false;
   session.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(session.agent.streamFn, {
+    config: attempt.config,
     runId: attempt.runId,
+    agentId: sessionAgentId,
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
     model: attempt.modelId,
     api: attempt.model.api,
-    transport: input.effectiveAgentTransport,
+    transport: effectiveAgentTransport,
     // No-gap local inference remains recoverable at its existing transport deadline.
     requestTimeoutMs:
       idleTimeoutMs || Math.min(attempt.timeoutMs, DEFAULT_UNDICI_STREAM_TIMEOUT_MS),
@@ -388,11 +417,16 @@ export function installEmbeddedAttemptStreamGuards(input: {
     ...(attempt.contextWindowInfo?.referenceTokens
       ? { contextWindowReferenceTokens: attempt.contextWindowInfo.referenceTokens }
       : {}),
-    trace: input.runTrace,
+    trace: input.diagnostics.runTrace,
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(diagnosticModelCallSeq += 1)}`,
-    ownerGeneration: input.diagnosticOwner.generation,
+    ownerGeneration: callbacks.diagnosticOwner.generation,
+    onSucceeded: contextGuards.recordCacheTouch,
+    onTerminal: () => {
+      modelResponseTerminal = true;
+    },
     onStarted: () => {
+      modelResponseTerminal = false;
       attempt.onExecutionPhase?.({
         phase: "model_call_started",
         provider: attempt.provider,
@@ -402,14 +436,22 @@ export function installEmbeddedAttemptStreamGuards(input: {
     },
     suppressPluginHooks: attempt.operation === "settled-tool-finalization",
   });
-  if (input.codeModeExecToolNames?.size) {
+  if (codeModeExecToolNames?.size) {
     session.agent.streamFn = wrapStreamFnCodeModeSource(
       session.agent.streamFn,
-      input.codeModeExecToolNames,
+      codeModeExecToolNames,
     );
   }
   return {
-    cacheObservabilityEnabled,
-    promptCacheTools,
+    onModelRequest: cacheObserver.onModelRequest,
+    onModelUsage: (usage: NormalizedUsage | undefined) => {
+      // Async-tool fragments also end messages. result() marks the terminal
+      // response before core commits its final fragment with normalized usage.
+      if (modelResponseTerminal) {
+        modelResponseTerminal = false;
+        cacheObserver.onModelUsage(usage);
+      }
+    },
+    getPromptCacheObservation: cacheObserver.getObservation,
   };
 }

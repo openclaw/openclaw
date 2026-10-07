@@ -1,4 +1,3 @@
-/** Shared command implementation for text and image model fallback lists. */
 import { formatCliCommand } from "../../cli/command-format.js";
 import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
@@ -12,6 +11,7 @@ import {
   modelKey,
   resolveModelTarget,
   resolveModelKeysFromEntries,
+  resolveModelRefsFromEntries,
   upsertCanonicalModelConfigEntry,
   updateConfig,
 } from "./shared.js";
@@ -28,7 +28,11 @@ function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
 
 function patchDefaultsFallbacks(
   cfg: OpenClawConfig,
-  params: { key: DefaultsFallbackKey; fallbacks: string[]; models?: Record<string, unknown> },
+  params: {
+    key: DefaultsFallbackKey;
+    fallbacks: string[];
+    models?: Record<string, AgentModelEntryConfig>;
+  },
 ): OpenClawConfig {
   const existing = toAgentModelListLike(cfg.agents?.defaults?.[params.key]);
   return {
@@ -38,13 +42,12 @@ function patchDefaultsFallbacks(
       defaults: {
         ...cfg.agents?.defaults,
         [params.key]: mergePrimaryFallbackConfig(existing, { fallbacks: params.fallbacks }),
-        ...(params.models ? { models: params.models as never } : undefined),
+        ...(params.models ? { models: params.models } : undefined),
       },
     },
   };
 }
 
-/** Lists fallback model refs for the selected defaults key. */
 export async function listFallbacksCommand(
   params: { label: string; key: DefaultsFallbackKey },
   opts: { json?: boolean; plain?: boolean },
@@ -78,7 +81,6 @@ export async function listFallbacksCommand(
   }
 }
 
-/** Adds a fallback model, creating the canonical model entry when needed. */
 export async function addFallbackCommand(
   params: {
     label: string;
@@ -87,30 +89,36 @@ export async function addFallbackCommand(
   modelRaw: string,
   runtime: RuntimeEnv,
 ) {
-  const updated = await updateConfig((cfg) => {
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const nextModels = {
-      ...cfg.agents?.defaults?.models,
-    } as Record<string, AgentModelEntryConfig>;
-    const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved);
-    const existing = getFallbacks(cfg, params.key);
-    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
-    if (existingKeys.includes(targetKey)) {
-      return cfg;
-    }
-
-    return patchDefaultsFallbacks(cfg, {
-      key: params.key,
-      fallbacks: [...existing, targetKey],
-      models: nextModels,
-    });
-  });
+  const updated = await updateConfig(
+    (cfg, context) => {
+      const { runtimeConfig } = context;
+      const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
+      const nextModels = { ...cfg.agents?.defaults?.models };
+      const targetKey = upsertCanonicalModelConfigEntry(nextModels, resolved, context);
+      const existing = getFallbacks(cfg, params.key);
+      const existingKeys = resolveModelKeysFromEntries({
+        cfg: runtimeConfig,
+        entries: getFallbacks(runtimeConfig, params.key),
+      });
+      return patchDefaultsFallbacks(cfg, {
+        key: params.key,
+        fallbacks: existingKeys.includes(targetKey) ? existing : [...existing, targetKey],
+        models: nextModels,
+      });
+    },
+    (_, { runtimeConfig }) => [
+      resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig }),
+      ...resolveModelRefsFromEntries({
+        cfg: runtimeConfig,
+        entries: getFallbacks(runtimeConfig, params.key),
+      }),
+    ],
+  );
 
   logConfigUpdated(runtime);
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Removes a fallback model by resolving aliases to the canonical provider/model key. */
 export async function removeFallbackCommand(
   params: {
     label: string;
@@ -120,29 +128,40 @@ export async function removeFallbackCommand(
   modelRaw: string,
   runtime: RuntimeEnv,
 ) {
-  const updated = await updateConfig((cfg) => {
-    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const targetKey = modelKey(resolved.provider, resolved.model);
-    const existing = getFallbacks(cfg, params.key);
-    const existingKeys = resolveModelKeysFromEntries({ cfg, entries: existing });
-    // Fallback entries may be aliases or provider/model refs. Resolve each entry
-    // before comparison so removing an alias removes the canonical target.
-    const filtered = existing.filter((_, index) => existingKeys[index] !== targetKey);
+  const updated = await updateConfig(
+    (cfg, { runtimeConfig }) => {
+      const resolved = resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig });
+      const targetKey = modelKey(resolved.provider, resolved.model);
+      const existing = getFallbacks(cfg, params.key);
+      const existingKeys = resolveModelKeysFromEntries({
+        cfg: runtimeConfig,
+        entries: getFallbacks(runtimeConfig, params.key),
+      });
+      // Compare effective refs, but filter their source positions so unrelated
+      // placeholders and source-authored values survive the config write.
+      const filtered = existing.filter((_, index) => existingKeys[index] !== targetKey);
 
-    if (filtered.length === existing.length) {
-      throw new Error(
-        `${params.notFoundLabel} not found: ${targetKey}. Run ${formatCliCommand(`openclaw ${listCommandForFallbackKey(params.key)}`)} to see configured fallbacks.`,
-      );
-    }
+      if (filtered.length === existing.length) {
+        throw new Error(
+          `${params.notFoundLabel} not found: ${targetKey}. Run ${formatCliCommand(`openclaw ${listCommandForFallbackKey(params.key)}`)} to see configured fallbacks.`,
+        );
+      }
 
-    return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: filtered });
-  });
+      return patchDefaultsFallbacks(cfg, { key: params.key, fallbacks: filtered });
+    },
+    (_, { runtimeConfig }) => [
+      resolveModelTarget({ raw: modelRaw, cfg: runtimeConfig }),
+      ...resolveModelRefsFromEntries({
+        cfg: runtimeConfig,
+        entries: getFallbacks(runtimeConfig, params.key),
+      }),
+    ],
+  );
 
   logConfigUpdated(runtime);
   runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
-/** Clears all fallback model refs for the selected defaults key. */
 export async function clearFallbacksCommand(
   params: { key: DefaultsFallbackKey; clearedMessage: string },
   runtime: RuntimeEnv,

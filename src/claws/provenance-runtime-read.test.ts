@@ -1,7 +1,9 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -12,7 +14,10 @@ import {
 } from "./provenance-runtime-read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => {
+  vi.restoreAllMocks();
+  closeOpenClawStateDatabaseForTest();
+});
 
 describe("Claw runtime provenance cache", () => {
   it("treats an absent first-run state database as empty ownership", () => {
@@ -94,5 +99,26 @@ describe("Claw runtime provenance cache", () => {
       knownAgentIds: new Set(["worker"]),
       ownershipUnknown: true,
     });
+  });
+
+  it("does not create WAL/SHM sidecar files when reading schema versions", () => {
+    const root = tempDirs.make("openclaw-claw-runtime-provenance-sidecar-");
+    const options = { env: { OPENCLAW_STATE_DIR: root } };
+    const database = openOpenClawStateDatabase(options);
+    closeOpenClawStateDatabaseForTest();
+    const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
+
+    initializeCachedClawInstallSchemaVersions(options);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(readCachedClawInstallSchemaVersions(options)).toMatchObject({
+      kind: "ready",
+      schemaVersions: new Map(),
+    });
+
+    const stateDir = join(root, "state");
+    expect(existsSync(join(stateDir, "openclaw.sqlite-wal"))).toBe(false);
+    expect(existsSync(join(stateDir, "openclaw.sqlite-shm"))).toBe(false);
+
+    rmSync(database.path);
   });
 });

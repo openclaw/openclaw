@@ -164,7 +164,11 @@ final class GatewayOperatorFleet {
         GatewayConnectOptions(
             role: "operator",
             scopes: ["operator.read", "operator.write", "operator.talk.secrets"],
-            caps: [OpenClawGatewayClientCapability.inlineWidgets],
+            caps: [
+                OpenClawGatewayClientCapability.inlineWidgets,
+                OpenClawGatewayClientCapability.modelSelectionPolicy,
+                OpenClawGatewayClientCapability.ultrafast,
+            ],
             commands: [],
             permissions: [:],
             clientId: nodeOptions.clientId,

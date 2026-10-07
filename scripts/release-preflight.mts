@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Checks or refreshes generated release artifacts before a release publish.
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { coerceErrorMessage as formatError } from "./lib/error-format.mts";
@@ -29,8 +28,14 @@ function isScope(value: string): value is Scope {
   return SCOPES.some((scope) => scope === value);
 }
 const parsedArgs = parseArgs(process.argv.slice(2));
-const fix = parsedArgs.fix;
 const releaseTasks: ReleaseTask[] = [
+  {
+    id: "update-compatibility",
+    name: "previous updater compatibility",
+    scopes: ["version"],
+    // Registry freshness belongs to release preparation; read-only source checks stay offline.
+    fix: pnpmCommand("update:compat:check"),
+  },
   {
     id: "root-dependency-ownership",
     name: "root dependency ownership",
@@ -116,7 +121,10 @@ const releaseTasks: ReleaseTask[] = [
     check: pnpmCommand("native:i18n:check"),
   },
 ];
-const selectedTasks = releaseTasks.filter((task) => taskMatchesScopes(task, parsedArgs.scopes));
+const selectedTasks = releaseTasks.filter(
+  (task) =>
+    parsedArgs.scopes.has("all") || task.scopes.some((scope) => parsedArgs.scopes.has(scope)),
+);
 const shouldCheckMacosVersions = parsedArgs.scopes.has("all") || parsedArgs.scopes.has("version");
 
 // Release-evidence reuse validates version-stamp targets without running any
@@ -133,7 +141,7 @@ if (parsedArgs.macosVersionsOnly) {
   process.exit(0);
 }
 
-if (fix) {
+if (parsedArgs.fix) {
   console.log(
     `[release-preflight] refreshing generated release artifacts (${formatScopes(parsedArgs.scopes)}, jobs=${parsedArgs.jobs})`,
   );
@@ -143,7 +151,8 @@ if (fix) {
     tasks: selectedTasks,
   });
   if (fixResult.failed.length !== 0 || fixResult.skipped.length !== 0) {
-    printFailures("release preflight refresh failed", fixResult.failed);
+    console.error("\nrelease preflight refresh failed:");
+    printCommandFailures(fixResult.failed);
     printSkipped(fixResult.skipped);
     process.exit(1);
   }
@@ -274,7 +283,8 @@ async function runTaskGraph({
   const taskFailures: FailedTask[] = [];
   const skipped: SkippedTask[] = [];
 
-  while (pending.size > 0) {
+  const running = new Map<string, Promise<{ task: RunnableTask; status: number }>>();
+  while (pending.size > 0 || running.size > 0) {
     for (const [taskId, task] of pending) {
       const failedDependency = task.after.find(
         (dependencyId) => selectedIds.has(dependencyId) && failedIds.has(dependencyId),
@@ -287,32 +297,38 @@ async function runTaskGraph({
       pending.delete(taskId);
     }
 
-    const ready = [...pending.values()].filter((task) =>
-      task.after.every(
-        (dependencyId) => !selectedIds.has(dependencyId) || completed.has(dependencyId),
-      ),
-    );
-    if (ready.length === 0) {
+    for (const [taskId, task] of pending) {
+      if (running.size >= jobs) {
+        break;
+      }
+      if (
+        !task.after.every(
+          (dependencyId) => !selectedIds.has(dependencyId) || completed.has(dependencyId),
+        )
+      ) {
+        continue;
+      }
+      pending.delete(taskId);
+      running.set(
+        taskId,
+        runCommand(task).then((status) => ({ task, status })),
+      );
+    }
+    if (running.size === 0) {
       if (pending.size === 0) {
         break;
       }
       throw new Error(`release preflight task graph is blocked: ${[...pending.keys()].join(", ")}`);
     }
 
-    for (let index = 0; index < ready.length; index += jobs) {
-      const batch = ready.slice(index, index + jobs);
-      const results = await Promise.all(
-        batch.map(async (task) => ({ task, status: await runCommand(task) })),
-      );
-      for (const { task, status } of results) {
-        pending.delete(task.id);
-        if (status === 0) {
-          completed.add(task.id);
-        } else {
-          failedIds.add(task.id);
-          taskFailures.push({ ...task, status });
-        }
-      }
+    // Refill each freed worker and release dependents without waiting for an unrelated batch.
+    const { task, status } = await Promise.race(running.values());
+    running.delete(task.id);
+    if (status === 0) {
+      completed.add(task.id);
+    } else {
+      failedIds.add(task.id);
+      taskFailures.push({ ...task, status });
     }
   }
 
@@ -330,11 +346,6 @@ async function runCommand(command: RunnableTask): Promise<number> {
     console.error(error);
     return 1;
   }
-}
-
-function printFailures(title: string, failures: FailedTask[]): void {
-  console.error(`\n${title}:`);
-  printCommandFailures(failures);
 }
 
 function printCommandFailures(failures: FailedTask[]): void {
@@ -447,10 +458,6 @@ function parseJobs(raw: string): number {
     process.exit(1);
   }
   return jobs;
-}
-
-function taskMatchesScopes(task: ReleaseTask, scopes: Set<Scope>): boolean {
-  return scopes.has("all") || task.scopes.some((scope) => scopes.has(scope));
 }
 
 function formatScopes(scopes: Set<Scope>): string {

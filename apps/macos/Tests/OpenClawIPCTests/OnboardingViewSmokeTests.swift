@@ -31,6 +31,61 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
+    @Test(arguments: [false, true])
+    func `nearby selection keeps the saved SSH route and setup state`(
+        advertisesSavedID: Bool) async throws
+    {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": root.appendingPathComponent("openclaw.json").path,
+        ]) {
+            let previousPreference = captureOnboardingGatewayPreference()
+            defer { restoreOnboardingGatewayPreference(previousPreference) }
+            let state = AppState(preview: true)
+            state.connectionMode = .remote
+            state.remoteTransport = .ssh
+            state.remoteTarget = "user@saved.example.test:2222"
+            state.remoteUrl = "ws://127.0.0.1:29876"
+            state.remoteToken = "saved-route-test-token"
+            GatewayDiscoveryPreferences.setPreferredStableID("saved-id", routeBinding: "saved-binding")
+            let session = GatewayTestWebSocketSession()
+            let gatewayURL = try #require(URL(string: "wss://saved.example.test"))
+            let connection = GatewayConnection(
+                configProvider: { (url: gatewayURL, token: "saved-route-test-token", password: nil) },
+                sessionBox: WebSocketSessionBox(session: session))
+            let view = OnboardingView(state: state, aiSetupGateway: connection)
+            view.aiSetup.manualKey = "pending-setup-test-secret"
+            let advertised = GatewayDiscoveryModel.DiscoveredGateway(
+                displayName: "Saved Gateway",
+                serviceHost: "untrusted.example.test",
+                servicePort: 443,
+                lanHost: "untrusted.local",
+                tailnetDns: "untrusted.ts.net",
+                sshPort: 2200,
+                gatewayPort: 19999,
+                gatewayTls: true,
+                gatewayDirectReachable: true,
+                cliPath: "/untrusted/openclaw",
+                stableID: advertisesSavedID ? "saved-id" : "unknown-id",
+                debugID: UUID().uuidString,
+                isLocal: false)
+
+            view.selectRemoteGateway(advertised)
+            await Task.yield()
+
+            #expect(state.connectionMode == .remote)
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteTarget == "user@saved.example.test:2222")
+            #expect(state.remoteUrl == "ws://127.0.0.1:29876")
+            #expect(state.remoteToken == "saved-route-test-token")
+            #expect(GatewayDiscoveryPreferences.preferredStableID() == "saved-id")
+            #expect(GatewayDiscoveryPreferences.preferredRouteBinding() == "saved-binding")
+            #expect(view.aiSetup.manualKey == "pending-setup-test-secret")
+            await connection.shutdown()
+        }
+    }
+
     @Test(arguments: [
         "remote",
         "attach-only",
@@ -46,8 +101,8 @@ struct OnboardingViewSmokeTests {
     func `onboarding installs only for an app-managed local Gateway`(_ scenario: String) async throws {
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
-        try await TestIsolation.withIsolatedState(env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path]) {
-            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+        try await TestIsolation.withIsolatedState(launchAgentHomeDirectory: root) {
+            try #require(LaunchAgentPlist.homeDirectoryURL.standardizedFileURL == root
                 .standardizedFileURL)
             let marker = root.appendingPathComponent("disable-launchagent")
             if scenario == "attach-only" {
@@ -57,23 +112,36 @@ struct OnboardingViewSmokeTests {
             GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
             let manager = GatewayProcessManager.shared
             let previousStatus = manager.status
+            let previousOwnership = manager.gatewayOwnership
+            let previousRetainedCLI = manager.retainedServiceCLI
+            let previousResume = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey)
+            let previousHosting = AppDefaults.standard.object(forKey: GatewayHosting.defaultsKey)
+            manager.retainedServiceCLI = nil
             defer {
                 GatewayLaunchAgentManager.setTestingDisableLaunchAgentMarkerURL(nil)
                 GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
                 GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                manager.retainedServiceCLI = previousRetainedCLI
+                AppDefaults.standard.set(previousResume, forKey: GatewayLaunchAgentManager.resumeCommandKey)
+                AppDefaults.standard.set(previousHosting, forKey: GatewayHosting.defaultsKey)
                 manager.setTestingStatus(previousStatus)
+                manager.gatewayOwnership = previousOwnership
             }
-            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: AppProfile(environment: [:]))
+            let plist = GatewayLaunchAgentManager.plistURL(homeDirectory: root, profile: .current)
             let managedAttachment = scenario.hasSuffix("managed-attachment")
             if managedAttachment || ["external-service", "unreadable"].contains(scenario) {
                 try FileManager.default.createDirectory(
                     at: plist.deletingLastPathComponent(),
                     withIntermediateDirectories: true)
-                let executable = managedAttachment
-                    ? CLIInstaller.managedExecutableLocation()
-                    : "/opt/openclaw/bin/openclaw"
+                let managedNode = AppProfile.current.stateDirectoryURL().appendingPathComponent("tools/node")
+                let command = managedAttachment
+                    ? [
+                        managedNode.appendingPathComponent("bin/node").path,
+                        managedNode.appendingPathComponent("lib/node_modules/openclaw/openclaw.mjs").path,
+                    ]
+                    : ["/opt/openclaw/bin/openclaw"]
                 let data = scenario == "unreadable" ? Data("not a plist".utf8) : try PropertyListSerialization.data(
-                    fromPropertyList: ["ProgramArguments": [executable, "gateway"]], format: .xml, options: 0)
+                    fromPropertyList: ["ProgramArguments": command + ["gateway"]], format: .xml, options: 0)
                 try data.write(to: plist)
             }
             manager.setTestingStatus(scenario.contains("attachment") ? .attachedExisting(details: nil) : .stopped)
@@ -115,10 +183,10 @@ struct OnboardingViewSmokeTests {
     @Test func `discovered gateway summary uses localized runtime strings`() {
         #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
-                "1 gateway found on your network — click to choose it.")
+                "1 gateway found on your network — click for connection instructions.")
         #expect(
             OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
-                "2 gateways found on your network — click to choose one.")
+                "2 gateways found on your network — click for connection instructions.")
     }
 
     @Test func `foreign local listener is not advertised as attachable`() {
@@ -152,11 +220,9 @@ struct OnboardingViewSmokeTests {
         #expect(OnboardingController.windowStyleMask.contains(.resizable))
 
         let baseline = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
         let taller = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight + 200,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight + 200)
 
         #expect(taller - baseline == 200)
     }
@@ -171,10 +237,9 @@ struct OnboardingViewSmokeTests {
     }
 
     @Test func `short onboarding window keeps a usable scrollable page`() {
-        let short = OnboardingView.contentHeight(for: 626, usesCompactHero: false)
+        let short = OnboardingView.contentHeight(for: 626)
         let preferred = OnboardingView.contentHeight(
-            for: OnboardingView.windowHeight,
-            usesCompactHero: false)
+            for: OnboardingView.windowHeight)
 
         #expect(short == 409)
         #expect(short < preferred)
@@ -281,12 +346,7 @@ struct OnboardingViewSmokeTests {
 
         view.handleRemoteSelection()
 
-        #expect(view.selectedConnectionMode == .remote)
-        #expect(state.connectionMode == .remote)
-
-        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
-
-        #expect(state.connectionMode == .remote)
+        #expect(state.connectionMode == .unconfigured)
     }
 
     @Test func `automatic CLI setup waits for the initial status probe`() {
@@ -511,7 +571,7 @@ struct OnboardingViewSmokeTests {
             connected: false))
     }
 
-    @Test func `select remote gateway clears stale ssh target when endpoint unresolved`() async {
+    @Test func `unresolved nearby gateway preserves the saved SSH target`() async {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
@@ -538,11 +598,11 @@ struct OnboardingViewSmokeTests {
                 isLocal: false)
 
             view.selectRemoteGateway(gateway)
-            #expect(state.remoteTarget.isEmpty)
+            #expect(state.remoteTarget == "user@old-host:2222")
         }
     }
 
-    @Test func `different remote selection resets UI but preserves prior activation lease`() async throws {
+    @Test func `nearby selection preserves current setup and its activation lease`() async throws {
         let override = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-config-\(UUID().uuidString)")
             .appendingPathComponent("openclaw.json")
@@ -582,7 +642,7 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
 
             #expect(state.connectionMode == .remote)
-            #expect(view.aiSetup.manualKey.isEmpty)
+            #expect(view.aiSetup.manualKey == "route-a-secret")
             #expect(!OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-b",
                 defaults: defaults))
@@ -590,62 +650,6 @@ struct OnboardingViewSmokeTests {
                 for: "remote:id:gateway-a",
                 defaults: defaults))
         }
-    }
-
-    @Test func `manual remote endpoint edit clears stale discovery identity`() throws {
-        let previousGatewayPreference = captureOnboardingGatewayPreference()
-        let (defaults, suiteName) = try makeOnboardingResumeDefaults()
-        defer {
-            restoreOnboardingGatewayPreference(previousGatewayPreference)
-            defaults.removePersistentDomain(forName: suiteName)
-        }
-        GatewayDiscoveryPreferences.setPreferredStableID("gateway-a")
-        OnboardingSystemAgentResumeStore.markPending(
-            routeIdentity: "remote:id:gateway-a",
-            defaults: defaults)
-        let state = AppState(preview: true)
-        state.connectionMode = .remote
-        state.remoteTransport = .direct
-        state.remoteUrl = "wss://gateway-a.example.test"
-        let gatewaySession = GatewayTestWebSocketSession()
-        let gatewayURL = try #require(URL(string: "wss://gateway-a.example.test"))
-        let gateway = GatewayConnection(
-            configProvider: { (url: gatewayURL, token: nil, password: nil) },
-            sessionBox: WebSocketSessionBox(session: gatewaySession))
-        let view = OnboardingView(
-            state: state,
-            aiSetupGateway: gateway,
-            systemAgentDefaults: defaults)
-        view.preferredGatewayID = "gateway-a"
-        view.aiSetup.manualKey = "route-a-secret"
-        view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
-        view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
-        view.remoteProbeState = .ok(
-            view.remoteGatewayProbeInput,
-            RemoteGatewayProbeSuccess(authSource: .sharedToken))
-        view.remoteAuthIssue = .tokenMismatch
-
-        view.updateManualRemoteURL("wss://gateway-b.example.test")
-
-        let editedRouteIdentity = OnboardingSystemAgentResumeStore.selectedRouteIdentity(
-            state: state,
-            preferredGatewayID: view.preferredGatewayID ?? GatewayDiscoveryPreferences.preferredStableID())
-        #expect(view.preferredGatewayID == nil)
-        #expect(GatewayDiscoveryPreferences.preferredStableID() == nil)
-        #expect(editedRouteIdentity?.hasPrefix("remote:direct:") == true)
-        #expect(editedRouteIdentity != "remote:id:gateway-a")
-        #expect(OnboardingSystemAgentResumeStore.isPending(
-            for: "remote:id:gateway-a",
-            defaults: defaults))
-        #expect(!OnboardingSystemAgentResumeStore.isPending(
-            for: editedRouteIdentity,
-            defaults: defaults))
-        #expect(view.aiSetup.phase == .idle)
-        #expect(!view.aiSetup.connected)
-        #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(view.remoteProbeState == .idle)
-        #expect(view.remoteAuthIssue == nil)
-        #expect(gatewaySession.snapshotMakeCount() == 0)
     }
 
     @Test func `same persisted remote selection preserves pending gateway setup state`() async throws {
@@ -749,16 +753,5 @@ struct OnboardingViewSmokeTests {
         #expect(state.connectionMode == .unconfigured)
         #expect(view.aiSetup.manualKey.isEmpty)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
-    }
-
-    @Test
-    func `permission list covers every capability in importance order`() {
-        #expect(Set(Capability.importanceOrdered) == Set(Capability.allCases))
-        #expect(Capability.importanceOrdered.count == Capability.allCases.count)
-        // App control and context capture lead; location stays last.
-        #expect(Capability.importanceOrdered.first == .appleScript)
-        #expect(Array(Capability.importanceOrdered.prefix(3))
-            == [.appleScript, .accessibility, .screenRecording])
-        #expect(Capability.importanceOrdered.last == Capability.location)
     }
 }

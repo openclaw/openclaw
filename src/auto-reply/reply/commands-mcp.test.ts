@@ -3,14 +3,31 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { REDACTED_SENTINEL } from "../../config/redact-snapshot.js";
-import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const mcpServers = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 const privateRouteMocks = vi.hoisted(() => ({
-  deliverPrivateCommandReply: vi.fn(),
-  resolvePrivateCommandRouteTargets: vi.fn(),
+  resolvePrivateCommandRouteTargets:
+    vi.fn<typeof import("./commands-private-route.js").resolvePrivateCommandRouteTargets>(),
+}));
+const deliverOutboundPayloads = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/outbound/deliver.js").deliverOutboundPayloadsInternal>(),
+);
+
+vi.mock("../../infra/outbound/deliver.js", () => ({
+  deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloads,
+}));
+vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
+  deliverOutboundPayloads,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloads,
 }));
 
 vi.mock("../../config/mcp-config.js", () => ({
@@ -50,12 +67,9 @@ vi.mock("./commands-private-route.js", async () => {
   );
   return {
     ...actual,
-    deliverPrivateCommandReply: privateRouteMocks.deliverPrivateCommandReply,
     resolvePrivateCommandRouteTargets: privateRouteMocks.resolvePrivateCommandRouteTargets,
   };
 });
-
-const workspaceHarness = createCommandWorkspaceHarness("openclaw-command-mcp-");
 
 function expectMcpResult<T>(result: T | null): T {
   if (result === null) {
@@ -73,31 +87,38 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
+async function showGroupMcpConfig() {
+  privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
+    { channel: "telegram", to: "owner-1" },
+    { channel: "signal", to: "owner-2" },
+  ]);
+  mcpServers.set("billing-server", { command: "uvx", args: ["private-billing-mcp"] });
+  const params = buildCommandTestParams("/mcp show", buildCfg());
+  params.command.senderIsOwner = true;
+  params.isGroup = true;
+  return expectMcpResult(await handleMcpCommand(params, true));
+}
+
 describe("handleCommands /mcp", () => {
-  afterEach(async () => {
+  afterEach(() => {
     mcpServers.clear();
-    privateRouteMocks.deliverPrivateCommandReply.mockReset();
     privateRouteMocks.resolvePrivateCommandRouteTargets.mockReset();
-    await workspaceHarness.cleanupWorkspaces();
+    deliverOutboundPayloads.mockReset();
+    resetPluginRuntimeStateForTest();
   });
 
   it("writes MCP config and shows it back", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const setParams = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
-        undefined,
-        { workspaceDir },
       );
       setParams.command.senderIsOwner = true;
 
       const setResult = expectMcpResult(await handleMcpCommand(setParams, true));
       expect(setResult.reply?.text).toContain('MCP server "context7" saved');
 
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
       showParams.command.senderIsOwner = true;
       const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
       expect(showResult.reply?.text).toContain('"command": "uvx"');
@@ -107,13 +128,10 @@ describe("handleCommands /mcp", () => {
 
   it("blocks authorized non-owner senders from writing MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("existing", { command: "uvx", args: ["existing-mcp"] });
       const setParams = buildCommandTestParams(
         '/mcp set evil={"command":"/bin/sh","args":["-c","id > /tmp/pwned"]}',
         buildCfg(),
-        undefined,
-        { workspaceDir },
       );
       setParams.command.senderIsOwner = false;
 
@@ -124,9 +142,7 @@ describe("handleCommands /mcp", () => {
       });
       expect(mcpServers.has("evil")).toBe(false);
 
-      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const unsetParams = buildCommandTestParams("/mcp unset existing", buildCfg());
       unsetParams.command.senderIsOwner = false;
       const unsetResult = expectMcpResult(await handleMcpCommand(unsetParams, true));
       expect(unsetResult).toEqual({
@@ -139,11 +155,8 @@ describe("handleCommands /mcp", () => {
 
   it("blocks authorized non-owner senders from reading MCP config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
-      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg());
       showParams.command.senderIsOwner = false;
 
       const showResult = expectMcpResult(await handleMcpCommand(showParams, true));
@@ -159,7 +172,6 @@ describe("handleCommands /mcp", () => {
 
   it("rejects internal writes without operator.admin", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildCommandTestParams(
         '/mcp set context7={"command":"uvx","args":["context7-mcp"]}',
         buildCfg(),
@@ -168,7 +180,6 @@ describe("handleCommands /mcp", () => {
           Surface: "webchat",
           GatewayClientScopes: ["operator.write"],
         },
-        { workspaceDir },
       );
       params.command.senderIsOwner = true;
 
@@ -179,12 +190,9 @@ describe("handleCommands /mcp", () => {
 
   it("accepts non-stdio MCP config at the config layer", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const params = buildCommandTestParams(
         '/mcp set remote={"url":"https://example.com/mcp"}',
         buildCfg(),
-        undefined,
-        { workspaceDir },
       );
       params.command.senderIsOwner = true;
 
@@ -195,17 +203,14 @@ describe("handleCommands /mcp", () => {
 
   it("routes group /mcp show privately and redacts the delivered config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const privateReplies: string[] = [];
       privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
         { channel: "telegram", to: "owner-1" },
       ]);
-      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(
-        async ({ reply }: { reply: { text?: string } }) => {
-          privateReplies.push(reply.text ?? "");
-          return true;
-        },
-      );
+      deliverOutboundPayloads.mockImplementation(async ({ payloads }) => {
+        privateReplies.push(payloads[0]?.text ?? "");
+        return [{ channel: "telegram", messageId: "private-config" }];
+      });
       const headerSecret = "Bearer sk-test-secret-value";
       const envSecret = "stdio-process-token-value";
       const separateArgSecret = "plain-separate-arg-secret";
@@ -250,14 +255,7 @@ describe("handleCommands /mcp", () => {
         },
       });
 
-      const namedParams = buildCommandTestParams(
-        "/mcp show billing-server",
-        buildCfg(),
-        undefined,
-        {
-          workspaceDir,
-        },
-      );
+      const namedParams = buildCommandTestParams("/mcp show billing-server", buildCfg());
       namedParams.command.senderIsOwner = true;
       namedParams.isGroup = true;
       const namedResult = expectMcpResult(await handleMcpCommand(namedParams, true));
@@ -290,9 +288,7 @@ describe("handleCommands /mcp", () => {
       expect(namedText).not.toContain(pluralCredentialsArg);
       expect(namedText).not.toContain("sk-test-secret-value");
 
-      const allParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      const allParams = buildCommandTestParams("/mcp show", buildCfg());
       allParams.command.senderIsOwner = true;
       allParams.isGroup = true;
       const allResult = expectMcpResult(await handleMcpCommand(allParams, true));
@@ -322,16 +318,13 @@ describe("handleCommands /mcp", () => {
     {
       name: "no private owner target",
       resolvePrivateMcpTargets: async () => [],
-      deliverPrivateMcpReply: async () => true,
     },
     {
       name: "private delivery failure",
       resolvePrivateMcpTargets: async () => [{ channel: "telegram", to: "owner-1" }],
-      deliverPrivateMcpReply: async () => false,
     },
   ])("fails closed for group /mcp show with $name", async (route) => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
       const secret = "group-route-secret-value";
       mcpServers.set("billing-server", {
         command: "uvx",
@@ -340,10 +333,8 @@ describe("handleCommands /mcp", () => {
       privateRouteMocks.resolvePrivateCommandRouteTargets.mockImplementation(
         route.resolvePrivateMcpTargets,
       );
-      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(route.deliverPrivateMcpReply);
-      const params = buildCommandTestParams("/mcp show billing-server", buildCfg(), undefined, {
-        workspaceDir,
-      });
+      deliverOutboundPayloads.mockRejectedValue(new Error("private route unavailable"));
+      const params = buildCommandTestParams("/mcp show billing-server", buildCfg());
       params.command.senderIsOwner = true;
       params.isGroup = true;
 
@@ -356,37 +347,144 @@ describe("handleCommands /mcp", () => {
     });
   });
 
-  it("tries later private owner routes without exposing config to the group", async () => {
-    await withTempHome("openclaw-command-mcp-home-", async () => {
-      const workspaceDir = await workspaceHarness.createWorkspace();
-      const attemptedTargets: string[] = [];
-      mcpServers.set("billing-server", {
-        command: "uvx",
-        args: ["billing-mcp", "--api-key", "private-route-secret"],
-      });
-      privateRouteMocks.resolvePrivateCommandRouteTargets.mockResolvedValue([
-        { channel: "telegram", to: "stale-owner-route" },
-        { channel: "signal", to: "working-owner-route" },
-      ]);
-      privateRouteMocks.deliverPrivateCommandReply.mockImplementation(
-        async ({ targets }: { targets: Array<{ to: string }> }) => {
-          const target = targets[0]?.to ?? "";
-          attemptedTargets.push(target);
-          return target === "working-owner-route";
-        },
-      );
-      const params = buildCommandTestParams("/mcp show billing-server", buildCfg(), undefined, {
-        workspaceDir,
-      });
-      params.command.senderIsOwner = true;
-      params.isGroup = true;
+  it.each([
+    { name: "released", custody: "released" },
+    { name: "unowned", custody: undefined },
+  ] as const)("tries later private routes after a $name failure", async ({ custody }) => {
+    const error = new OutboundDeliveryError("private route unavailable", { cause: undefined });
+    error.queueCustody = custody;
+    deliverOutboundPayloads
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce([{ channel: "signal", messageId: "fallback-send" }]);
+    const result = await showGroupMcpConfig();
 
-      const result = expectMcpResult(await handleMcpCommand(params, true));
-      const groupText = result.reply?.text ?? "";
-      expect(attemptedTargets).toEqual(["stale-owner-route", "working-owner-route"]);
-      expect(groupText).toContain("sent the details to the owner privately");
-      expect(groupText).not.toContain("billing-server");
-      expect(groupText).not.toContain("private-route-secret");
-    });
+    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
+      "owner-1",
+      "owner-2",
+    ]);
+    expect(result.reply?.text).toContain("sent the details to the owner privately");
+    expect(result.reply?.text).not.toContain("billing-server");
+    expect(result.reply?.text).not.toContain("private-billing-mcp");
   });
+
+  it("keeps identityless first acceptance pending without sending to another private target", async () => {
+    deliverOutboundPayloads
+      .mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
+        onPayloadDeliveryOutcome?.({
+          index: 0,
+          status: "suppressed",
+          reason: "adapter_returned_no_identity",
+        });
+        return [];
+      })
+      .mockResolvedValueOnce([{ channel: "signal", messageId: "second-send" }]);
+    const result = await showGroupMcpConfig();
+
+    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual(["owner-1"]);
+    expect(result.reply?.text).toContain("pending");
+    expect(result.reply?.text).not.toContain("sent the details");
+    expect(result.reply?.text).not.toContain("billing-server");
+    expect(result.reply?.text).not.toContain("/tmp/openclaw.json");
+  });
+
+  it("tries another private route when channel preparation throws before dispatch", async () => {
+    const transformReplyPayload = vi.fn(() => {
+      throw new Error("channel preparation failed");
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            messaging: { transformReplyPayload },
+          },
+        },
+        {
+          pluginId: "signal",
+          source: "test",
+          plugin: createChannelTestPluginBase({ id: "signal", label: "Signal" }),
+        },
+      ]),
+    );
+    deliverOutboundPayloads.mockResolvedValueOnce([
+      { channel: "signal", messageId: "fallback-send" },
+    ]);
+
+    const result = await showGroupMcpConfig();
+
+    expect(transformReplyPayload).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual(["owner-2"]);
+    expect(result.reply?.text).toContain("sent the details to the owner privately");
+    expect(result.reply?.text).not.toContain("billing-server");
+  });
+
+  it.each([
+    { name: "held custody", custody: "held", ambiguous: false, visible: false },
+    { name: "held partial delivery", custody: "held", ambiguous: false, visible: true },
+    { name: "released ambiguity", custody: "released", ambiguous: true, visible: false },
+  ] as const)(
+    "keeps $name pending without sending to another private target",
+    async ({ custody, ambiguous, visible }) => {
+      const error = new OutboundDeliveryError("private delivery interrupted", {
+        cause: undefined,
+        results: visible ? [{ channel: "telegram", messageId: "first-chunk" }] : [],
+        payloadOutcomes: [
+          {
+            index: 0,
+            status: "failed",
+            error: new Error("interrupted"),
+            sentBeforeError: ambiguous,
+            stage: "platform_send",
+          },
+        ],
+      });
+      error.queueCustody = custody;
+      deliverOutboundPayloads.mockRejectedValueOnce(error);
+      const result = await showGroupMcpConfig();
+
+      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
+        "owner-1",
+      ]);
+      expect(result.reply?.text).toContain("pending");
+      expect(result.reply?.text).not.toContain("sent the details");
+      expect(result.reply?.text).not.toContain("billing-server");
+    },
+  );
+
+  it.each([
+    {
+      name: "confirmed delivery",
+      suppressed: false,
+      acknowledgement: "sent the details to the owner privately",
+    },
+    {
+      name: "intentional suppression",
+      suppressed: true,
+      acknowledgement: "Private delivery was suppressed; no details were sent",
+    },
+  ])(
+    "stops after $name with an honest acknowledgement",
+    async ({ suppressed, acknowledgement }) => {
+      deliverOutboundPayloads.mockImplementationOnce(async ({ onPayloadDeliveryOutcome }) => {
+        if (suppressed) {
+          onPayloadDeliveryOutcome?.({
+            index: 0,
+            status: "suppressed",
+            reason: "cancelled_by_reply_payload_sending_hook",
+          });
+          return [];
+        }
+        return [{ channel: "telegram", messageId: "confirmed-send" }];
+      });
+      const result = await showGroupMcpConfig();
+
+      expect(deliverOutboundPayloads.mock.calls.map(([request]) => request.to)).toEqual([
+        "owner-1",
+      ]);
+      expect(result.reply?.text).toContain(acknowledgement);
+      expect(result.reply?.text).not.toContain("billing-server");
+    },
+  );
 });

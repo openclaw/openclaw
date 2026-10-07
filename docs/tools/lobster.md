@@ -1,16 +1,14 @@
 ---
-summary: "Typed workflow runtime for OpenClaw with resumable approval gates."
+summary: "Typed workflow runtime for OpenClaw with resumable approval and input gates."
 title: Lobster
 read_when:
-  - You want deterministic multi-step workflows with explicit approvals
+  - You want deterministic multi-step workflows with approvals or structured questions
   - You need to resume a workflow without re-running earlier steps
 ---
 
 Lobster runs multi-step tool pipelines as one deterministic tool call, with
-explicit approval checkpoints and resume tokens. It sits one layer above
-detached background work: for orchestrating flows across many detached tasks,
-see [Task Flow](/automation/taskflow) (`openclaw tasks flow`); for the task
-activity ledger, see [Background Tasks](/automation/tasks).
+explicit approval/input checkpoints and resume tokens. Checkpoints belong
+to the Lobster runner, not a separate orchestration registry.
 
 ## Why
 
@@ -68,16 +66,27 @@ With Lobster, the same job is one call that halts for approval and resumes:
 
 ## How it works
 
-OpenClaw runs Lobster workflows **in-process** using the bundled
-`@clawdbot/lobster` package as an embedded runner. No external `lobster`
-subprocess is spawned; the tool call returns a JSON envelope directly. If the
-pipeline halts for approval, the envelope carries a resume token (or a short
-approval ID) so you can continue later.
+The separately installed official `@openclaw/lobster` plugin runs Lobster
+workflows **in-process** using its embedded `@clawdbot/lobster` runtime. No
+external `lobster` subprocess is spawned; the tool call returns a JSON envelope
+directly. If the pipeline halts for approval or input, Lobster saves its
+continuation and returns a resume token. Approval requests can also carry a
+short approval ID. The call ends at the checkpoint; no process waits for the
+user's answer.
 
 ## Enable
 
-Lobster is an **optional** plugin tool, not enabled by default. It ships
-bundled, so no separate install step is required - just allow the tool:
+Lobster is an **optional** plugin tool, not installed or enabled by default.
+Install the official plugin:
+
+```bash
+openclaw plugins install @openclaw/lobster
+```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
+Then allow the tool globally:
 
 ```json
 {
@@ -94,7 +103,6 @@ Or per-agent:
   "agents": {
     "entries": {
       "main": {
-        "default": true,
         "tools": {
           "alsoAllow": ["lobster"]
         }
@@ -168,7 +176,6 @@ For a **structured LLM step** inside a workflow, enable the optional
   "agents": {
     "entries": {
       "main": {
-        "default": true,
         "tools": { "alsoAllow": ["llm-task"] }
       }
     }
@@ -178,7 +185,7 @@ For a **structured LLM step** inside a workflow, enable the optional
 
 ### Important limitation: embedded Lobster vs `openclaw.invoke`
 
-The bundled Lobster plugin runs workflows **in-process** inside the gateway.
+The installed Lobster plugin runs workflows **in-process** inside the gateway.
 In that embedded mode, `openclaw.invoke` does **not** automatically inherit a
 gateway URL/auth context for nested OpenClaw CLI tool calls.
 
@@ -191,6 +198,16 @@ openclaw.invoke --tool llm-task --action json --args-json '{ ... }'
 Use the example below only when running the **standalone Lobster CLI** in an
 environment where `openclaw.invoke` is already configured with the correct
 gateway/auth context.
+
+For `openclaw.invoke` and `clawd.invoke`, ambient `OPENCLAW_TOKEN` or
+`CLAWD_TOKEN` credentials are accepted only for `localhost`, `127.0.0.1`, or
+`[::1]` destinations. To send credentials to another HTTP(S) endpoint, pass
+`--token` explicitly. This rule also applies to embedded workflows that
+explicitly configure a remote connection. This command argument is the remote
+Gateway credential, not the Lobster tool's approval-resume `token` parameter.
+If an invocation times out or fails after dispatch,
+Lobster does not retry it automatically, because the Gateway may already have
+performed the action.
 
 ```lobster
 openclaw.invoke --tool llm-task --action json --args-json '{
@@ -310,28 +327,58 @@ Run a workflow file with args:
 }
 ```
 
-`resume` accepts either `token` (the full resume token from `requiresApproval`)
-or `approvalId` (the short id from the same object) - use whichever the halted
-run returned. `approve` is required.
+For approvals, use `token` or `approvalId` from `requiresApproval` and a boolean
+`approve`. For input, use `token` from `requiresInput` and `responseJson`.
+To cancel either kind of checkpoint, use `cancel: true` instead of a decision.
+Supply exactly one of `approve`, `responseJson`, or `cancel: true`.
 
-### Managed Task Flow mode
+### Structured input
 
-Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
-`flowExpectedRevision` on `resume`) drives the call through the plugin
-runtime's managed [Task Flow](/automation/taskflow) API instead of returning
-a bare envelope: OpenClaw creates or resumes a durable flow record, applies the
-Lobster envelope to it (`waiting` on approval, `succeeded`/`failed`/`cancelled` on
-completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
-a bound Task Flow runtime and is intended for plugin/controller code that needs
-durable flow state across gateway restarts, not typical ad hoc agent use.
+A workflow `input` step or an inline `ask` stage returns `needs_input` with the
+question, a JSON Schema and a resume token. Optional `defaults` and `subject`
+provide suggested values and material to review. For example:
+
+```json
+{
+  "status": "needs_input",
+  "requiresInput": {
+    "type": "input_request",
+    "prompt": "What feedback should be included?",
+    "responseSchema": { "type": "string" },
+    "resumeToken": "<resumeToken>"
+  }
+}
+```
+
+The agent presents the question in chat, then sends the user's answer as JSON:
+
+```json
+{
+  "action": "resume",
+  "token": "<resumeToken>",
+  "responseJson": "\"Please shorten the introduction.\""
+}
+```
+
+`responseJson` can encode any value allowed by the returned schema, not just an
+object. Lobster validates the answer before continuing. Invalid JSON or an
+answer that does not match the schema leaves the checkpoint available for
+correction. A resume can return another question or approval request.
+
+This is a chat/tool interaction, not an Inbox card or form. The plugin does not
+list pending checkpoints; retain the returned token to resume later. As with
+approval tokens, possession of an input token permits resume by a caller allowed
+to use the tool; tokens are not bound to an OpenClaw user or session.
 
 ## Output envelope
 
-Lobster returns a JSON envelope with one of three statuses:
+Lobster returns a JSON envelope with one of four statuses:
 
 - `ok` - finished successfully
 - `needs_approval` - paused; `requiresApproval` carries a `resumeToken` and a
   short `approvalId`, either of which can resume the run
+- `needs_input` - paused; `requiresInput` carries the question, answer schema
+  and `resumeToken`
 - `cancelled` - explicitly denied or cancelled
 
 The tool surfaces the envelope in both `content` (pretty JSON) and `details`
@@ -391,3 +438,4 @@ not.
 
 - [Automation](/automation) - all automation mechanisms
 - [Tools Overview](/tools) - all available agent tools
+- [Lobster plugin reference](/plugins/reference/lobster) - manifest, config, and tool reference for the plugin

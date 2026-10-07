@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   isSessionTranscriptLeafControl,
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
-  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptLeafControlledPath,
   selectSessionTranscriptTreePathNodes,
@@ -25,22 +24,6 @@ describe("session transcript tree helpers", () => {
         parentId: "old-tail",
       }),
     ).toBe(false);
-  });
-
-  it("treats leaf controls as navigation to their target", () => {
-    const leaf = {
-      type: "leaf",
-      id: "leaf-control",
-      parentId: "inactive-tail",
-      targetId: "active-tail",
-    };
-
-    expect(parseSessionTranscriptTreeEntry(leaf)).toEqual({
-      id: "leaf-control",
-      parentId: "active-tail",
-      leafId: "active-tail",
-      appendParentId: "active-tail",
-    });
   });
 
   it("resolves a distinct opaque append parent from a leaf control", () => {
@@ -80,21 +63,6 @@ describe("session transcript tree helpers", () => {
       appendParentId: "plugin-metadata",
     });
     expect(selectSessionTranscriptLeafControlledPath(entries)).toEqual([activeRoot]);
-  });
-
-  it("resolves the last valid leaf update in file order", () => {
-    expect(
-      scanSessionTranscriptTree([
-        { type: "message", id: "active-tail", parentId: null },
-        { type: "message", id: "inactive-tail", parentId: "active-tail" },
-        {
-          type: "leaf",
-          id: "leaf-control",
-          parentId: "inactive-tail",
-          targetId: "active-tail",
-        },
-      ]).leafId,
-    ).toBe("active-tail");
   });
 
   it("supports explicit navigation to an empty branch", () => {
@@ -371,12 +339,13 @@ describe("session transcript tree helpers", () => {
       { type: "custom", id: "visible", parentId: null },
       { type: "custom", id: "inactive", parentId: null },
       { type: "metadata", id: "append-metadata", parentId: "inactive" },
+      { type: "metadata", id: "append-tail", parentId: "append-metadata" },
       {
         type: "leaf",
         id: "active-leaf",
         parentId: "inactive",
         targetId: "visible",
-        appendParentId: "append-metadata",
+        appendParentId: "append-tail",
       },
     ];
     const tree = scanSessionTranscriptTree(entries);
@@ -389,8 +358,9 @@ describe("session transcript tree helpers", () => {
     expect(merged.nodes.map((node) => [node.id, node.selectedParentId])).toEqual([
       ["visible", null],
       ["append-metadata", "visible"],
+      ["append-tail", "append-metadata"],
     ]);
-    expect(merged.appendParentId).toBe("append-metadata");
+    expect(merged.appendParentId).toBe("append-tail");
   });
 
   it("ignores leaf controls with dangling references", () => {

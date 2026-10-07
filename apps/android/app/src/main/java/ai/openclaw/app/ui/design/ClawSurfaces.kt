@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+  verticalArrangement: Arrangement.Vertical = Arrangement.Top,
   content: @Composable () -> Unit,
 ) {
   Surface(
@@ -34,15 +35,12 @@ internal fun ClawPanel(
     contentColor = ClawTheme.colors.text,
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
+    Column(modifier = Modifier.padding(contentPadding), verticalArrangement = verticalArrangement) {
       content()
     }
   }
 }
 
-/**
- * Shared empty state used when a screen has no records but can still offer an action.
- */
 @Composable
 internal fun ClawEmptyState(
   title: String,
@@ -63,9 +61,6 @@ internal fun ClawEmptyState(
   }
 }
 
-/**
- * Shared loading placeholder that keeps async screen states visually consistent.
- */
 @Composable
 internal fun ClawLoadingState(
   title: String,

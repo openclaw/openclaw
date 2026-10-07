@@ -17,6 +17,7 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
@@ -24,10 +25,97 @@ import {
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
 
+describe("buildEmbeddedRunPayloads tool-error silence", () => {
+  it.each([
+    { text: "NO_REPLY", mutatingAction: false },
+    { text: "NO_REPLY", mutatingAction: true },
+    { text: "NO_REPLY", mutatingAction: undefined },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
+    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
+  ])(
+    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
+    ({ text, mutatingAction }) => {
+      expect(
+        buildPayloads({
+          assistantTexts: [text],
+          lastToolError: {
+            toolName: "codex_apps.slack.slack_read_thread",
+            error: "429 RATE_LIMITED",
+            mutatingAction,
+          },
+        }),
+      ).toHaveLength(0);
+    },
+  );
+
+  it("does not append a bash warning after the agent edits its Slack answer and finishes silently", () => {
+    const assistant = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "NO_REPLY" }],
+    });
+    expect(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        didSendViaMessagingTool: true,
+        lastToolError: {
+          toolName: "bash",
+          error: "rg: src/optional-panel: No such file or directory",
+          // Native command execution conservatively marks even searches as mutating.
+          mutatingAction: true,
+        },
+      }),
+    ).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
+    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
+    { name: "an aborted run", mutatingAction: false, runAborted: true },
+  ])(
+    "keeps failure reporting for $name despite NO_REPLY",
+    ({ name: _name, mutatingAction, ...run }) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          ...run,
+          assistantTexts: ["NO_REPLY"],
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+
+  it("does not treat an earlier silent steered input as the current answer", () => {
+    const prior = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+    expectSingleToolErrorPayload(
+      buildPayloads({
+        assistantTexts: ["NO_REPLY"],
+        answerSegments: [{ textEnd: 1, messageEnd: 2, finalMessageStart: 2, lastAssistant: prior }],
+        lastToolError: { toolName: "read", error: "failed", mutatingAction: false },
+      }),
+      { title: "Read" },
+    );
+  });
+
+  it.each([false, true, undefined])(
+    "still warns without an answer (mutatingAction=%s)",
+    (mutatingAction) => {
+      expectSingleToolErrorPayload(
+        buildPayloads({
+          lastToolError: { toolName: "read", error: "failed", mutatingAction },
+        }),
+        { title: "Read" },
+      );
+    },
+  );
+});
+
 describe("buildEmbeddedRunPayloads", () => {
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
-  const REDACTED_TEST_MODEL_FAILURE_TEXT = "⚠️ openai/test-model request failed.";
+  const REDACTED_TEST_MODEL_FAILURE_TEXT =
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -117,37 +205,6 @@ describe("buildEmbeddedRunPayloads", () => {
     ]);
   });
 
-  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
-    const payloads = buildPayloads({
-      provider: "openai",
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
-        content: [],
-      }),
-    });
-
-    expect(payloads).toEqual([
-      {
-        text: expect.stringContaining("/login codex"),
-        isError: true,
-        presentation: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [
-                {
-                  label: "Log in to Codex",
-                  action: { type: "command", command: "/login codex" },
-                },
-              ],
-            },
-          ],
-        },
-      },
-    ]);
-  });
-
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
@@ -162,20 +219,33 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "missing");
   });
 
-  it("keeps mutating tool warnings when assistant error artifacts are not user-facing", () => {
-    const payloads = buildPayloads({
-      assistantTexts: [errorJson],
-      lastAssistant: makeAssistant({}),
-      lastToolError: { toolName: "edit", error: "file missing" },
-      didSendDeterministicApprovalPrompt: true,
-      sessionKey: "agent:main:telegram:direct:u123",
-    });
+  it.each([false, true])(
+    "keeps approval-time tool warnings private (progress=%s)",
+    (sentProgress) => {
+      const payloads = buildPayloads({
+        assistantTexts: [errorJson],
+        lastAssistant: makeAssistant({}),
+        lastToolError: { toolName: "edit", error: "file missing" },
+        didSendDeterministicApprovalPrompt: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        didDeliverSourceReplyViaMessageTool: sentProgress,
+        messagingToolSentTargets: sentProgress
+          ? [{ tool: "message", provider: "telegram", to: "group:123", sourceReplyFinal: false }]
+          : [],
+        sessionKey: "agent:main:telegram:direct:u123",
+      });
 
-    expectSingleToolErrorPayload(payloads, {
-      title: "Edit",
-      absentDetail: "missing",
-    });
-  });
+      expectSingleToolErrorPayload(payloads, {
+        title: "Edit",
+        absentDetail: "missing",
+      });
+      expect(
+        payloads.some(
+          (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("suppresses pretty-printed error JSON that differs from the errorMessage", () => {
     const payloads = buildPayloads({
@@ -255,23 +325,18 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
   });
 
-  it("surfaces a terminal error after only a message-tool progress update", () => {
+  it.each([false, true])("surfaces a terminal error with a progress send: %s", (sentProgress) => {
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "error",
         errorMessage: "SECRET_PROGRESS_FAILURE",
         content: [],
       }),
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: false,
-        },
-      ],
+      didSendViaMessagingTool: sentProgress,
+      didDeliverSourceReplyViaMessageTool: sentProgress,
+      messagingToolSentTargets: sentProgress
+        ? [{ tool: "message", provider: "discord", to: "channel:C1", sourceReplyFinal: false }]
+        : [],
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
@@ -279,38 +344,45 @@ describe("buildEmbeddedRunPayloads", () => {
       text: REDACTED_TEST_MODEL_FAILURE_TEXT,
       isError: true,
     });
-    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+    const payload = payloads[0];
+    if (!payload) {
+      throw new Error("Expected a terminal error reply");
+    }
+    expect(getReplyPayloadMetadata(payload)).toMatchObject({
       deliverDespiteSourceReplySuppression: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it("keeps terminal errors suppressed after an explicit final message-tool reply", () => {
-    const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "error",
-        errorMessage: "SECRET_POST_FINAL_FAILURE",
-        content: [],
-      }),
-      didSendViaMessagingTool: true,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [
-        {
-          tool: "message",
-          provider: "discord",
-          to: "channel:C1",
-          sourceReplyFinal: true,
-        },
-      ],
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+  it.each([true, undefined])(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
+    (sourceReplyFinal) => {
+      const payloads = buildPayloads({
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          errorMessage: "SECRET_POST_FINAL_FAILURE",
+          content: [],
+        }),
+        didSendViaMessagingTool: true,
+        didDeliverSourceReplyViaMessageTool: true,
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "discord",
+            to: "channel:C1",
+            sourceReplyFinal,
+          },
+        ],
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
 
-    expect(payloads).toEqual([]);
-  });
+      expect(payloads).toEqual([]);
+    },
+  );
 
-  it("suppresses structured provider error messages in user-facing reply payloads", () => {
+  it("preserves the rejection message without the response envelope", () => {
     const rawError =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET_CANARY_69737"}}';
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Invalid service_tier argument"},"private":"SECRET_CANARY_69737"}';
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
         stopReason: "error",
@@ -320,11 +392,11 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: String.raw`LLM request rejected: Invalid service\_tier argument`,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
-    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+    expectNoPayloadTextContaining(payloads, "invalid_request_error");
   });
 
   it("surfaces actionable numeric provider limits without replaying the raw error", () => {
@@ -339,13 +411,13 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
+      text: "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");
   });
 
-  it("keeps numeric limits generic for non-token parameters", () => {
+  it("preserves numeric limits for non-token parameters", () => {
     const rawError = "400 account_id (1234567890123456) exceeds maximum length (8)";
     const payloads = buildPayloads({
       lastAssistant: makeAssistant({
@@ -356,10 +428,10 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: String.raw`LLM request rejected: account\_id \(1234567890123456\) exceeds maximum length \(8\)`,
       isError: true,
     });
-    expectNoPayloadTextContaining(payloads, "1234567890123456");
+    expectNoPayloadTextContaining(payloads, "provider maximum");
   });
 
   it("does not infer a token maximum from unrelated trailing digits", () => {
@@ -373,7 +445,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: String.raw`LLM request rejected: max\_tokens 384000 exceeds maximum for model gpt\-5`,
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "provider maximum of 5");
@@ -409,14 +481,14 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "The selected model was not found by the provider. Check the model id or choose a different model.",
+      text: "This model was not found. Choose another model in the Control UI.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "some-model-id");
     expectNoPayloadTextContaining(payloads, "Param Incorrect");
   });
 
-  it("suppresses escaped structured provider error messages in user-facing reply payloads", () => {
+  it("normalizes escaped structured rejection messages", () => {
     const rawError =
       '{"type":"error","error":{"type":"invalid_request_error","message":"SECRET\\nCANARY_69737"}}';
     const payloads = buildPayloads({
@@ -428,12 +500,10 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request failed: provider rejected the request schema or tool payload.",
+      text: String.raw`LLM request rejected: SECRET CANARY\_69737`,
       isError: true,
     });
-    expectNoPayloadTextContaining(payloads, "SECRET");
-    expectNoPayloadTextContaining(payloads, "CANARY_69737");
-    expectNoPayloadTextContaining(payloads, "LLM request rejected");
+    expectNoPayloadTextContaining(payloads, "invalid_request_error");
   });
 
   it("surfaces OpenAI model capacity errors instead of generic empty-response copy", () => {
@@ -503,13 +573,13 @@ describe("buildEmbeddedRunPayloads", () => {
     {
       label: "connection failures",
       rawError: "connect ECONNREFUSED 127.0.0.1:443",
-      visibleError: "connection refused",
+      visibleError: "Couldn't connect to the AI service",
     },
     {
       label: "authentication refresh timeouts",
       rawError:
         'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
-      visibleError: "Authentication refresh timed out",
+      visibleError: "Signing in took too long",
     },
   ])(
     "preserves $label while terminal timeout handling is deferred",

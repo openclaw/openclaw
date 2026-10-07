@@ -1,327 +1,72 @@
-// ClawHub lifecycle tests cover registry metadata lookup and error handling.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ClawHubSkillSecurityVerdictItem,
-  ClawHubSkillVerificationResponse,
-} from "../../infra/clawhub-skills.js";
-import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-
-const fetchClawHubSkillDetailMock = vi.fn();
-const fetchClawHubSkillInstallResolutionMock = vi.fn();
-const fetchClawHubSkillVerificationMock = vi.fn();
-const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
-const downloadClawHubSkillArchiveMock = vi.fn();
-const downloadClawHubSkillArchiveUrlMock = vi.fn();
-const downloadClawHubGitHubSkillArchiveMock = vi.fn();
-const reportClawHubSkillInstallTelemetryMock = vi.fn();
-const resolveClawHubBaseUrlMock = vi.fn(() => "https://clawhub.ai");
-const isDefaultClawHubBaseUrlMock = vi.fn((baseUrl?: string) => !baseUrl);
-const searchClawHubSkillsMock = vi.fn();
-const archiveCleanupMock = vi.fn();
-const withExtractedArchiveRootMock = vi.fn();
-const installPackageDirMock = vi.fn();
-const evaluateSkillInstallPolicyMock = vi.fn();
-const pathExistsMock = vi.fn();
-const digestClawHubSkillTreeMock = vi.fn(async () => `sha256:${"a".repeat(64)}`);
-const markClawPackageIndependentlyOwnedMock = vi.fn();
-const tempDirs = createTrackedTempDirs();
-
-vi.mock("../../infra/clawhub-skills.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/clawhub-skills.js")>()),
-  fetchClawHubSkillDetail: fetchClawHubSkillDetailMock,
-  fetchClawHubSkillInstallResolution: fetchClawHubSkillInstallResolutionMock,
-  fetchClawHubSkillVerification: fetchClawHubSkillVerificationMock,
-  fetchClawHubSkillSecurityVerdicts: fetchClawHubSkillSecurityVerdictsMock,
-  reportClawHubSkillInstallTelemetry: reportClawHubSkillInstallTelemetryMock,
-  searchClawHubSkills: searchClawHubSkillsMock,
-}));
-
-vi.mock("../../infra/clawhub-artifacts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/clawhub-artifacts.js")>()),
-  downloadClawHubSkillArchive: downloadClawHubSkillArchiveMock,
-  downloadClawHubSkillArchiveUrl: downloadClawHubSkillArchiveUrlMock,
-  downloadClawHubGitHubSkillArchive: downloadClawHubGitHubSkillArchiveMock,
-}));
-
-vi.mock("../../infra/clawhub-client.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/clawhub-client.js")>()),
-  isDefaultClawHubBaseUrl: isDefaultClawHubBaseUrlMock,
-  resolveClawHubBaseUrl: resolveClawHubBaseUrlMock,
-}));
-
-vi.mock("../../infra/install-flow.js", () => ({
-  withExtractedArchiveRoot: withExtractedArchiveRootMock,
-}));
-
-vi.mock("../../infra/install-package-dir.js", () => ({
-  installPackageDir: installPackageDirMock,
-}));
-
-vi.mock("../../plugins/install-security-scan.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/install-security-scan.js")>();
-  return {
-    ...actual,
-    evaluateSkillInstallPolicy: (...args: unknown[]) => evaluateSkillInstallPolicyMock(...args),
-  };
-});
-
-vi.mock("../../infra/fs-safe.js", () => ({
-  pathExists: pathExistsMock,
-}));
-
-vi.mock("./skill-tree-digest.js", () => ({
-  digestClawHubSkillTree: digestClawHubSkillTreeMock,
-}));
-
-vi.mock("../../state/claw-package-adoption.js", () => ({
-  markClawPackageIndependentlyOwned: markClawPackageIndependentlyOwnedMock,
-}));
-
-const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
-
-const {
-  installSkillFromClawHub,
+import { hasErrnoCode } from "../../infra/errno.js";
+import { withTempDir } from "../../test-utils/temp-dir.js";
+import { registerRemoteClawHubTests } from "./clawhub.remote.test-support.js";
+import {
+  fetchClawHubSkillDetailMock,
+  fetchClawHubSkillInstallResolutionMock,
+  fetchClawHubSkillVerificationMock,
+  fetchClawHubSkillSecurityVerdictsMock,
+  downloadClawHubSkillArchiveMock,
+  downloadClawHubSkillArchiveUrlMock,
+  downloadClawHubGitHubSkillArchiveMock,
+  reportClawHubSkillInstallTelemetryMock,
+  resolveClawHubBaseUrlMock,
+  isDefaultClawHubBaseUrlMock,
+  searchClawHubSkillsMock,
+  archiveCleanupMock,
+  withExtractedArchiveRootMock,
+  installPackageDirMock,
+  evaluateSkillInstallPolicyMock,
+  pathExistsMock,
+  markClawPackageIndependentlyOwnedMock,
+  tempDirs,
+  expectInstallPackageSourceDir,
+  installPolicyInput,
+  expectInstalledSkill,
+  expectInvalidSlug,
+  installTestSkill,
+  updateTestSkill,
+  mockArchiveInstallResolution,
+  mockDefaultPackageInstall,
+  mockGitHubInstallResolution,
+  mockSkillSecurityVerdict,
+  mockSkillVerification,
+  mockInstalledSkillFile,
+  readJson,
+  writeTrackedSkill,
+  ClawHubRequestError,
+  untrackClawHubSkill,
   preflightSkillFromClawHub,
+  readClawHubSkillsLockfileStatusSync,
+  readTrackedClawHubSkillSlugs,
   readVerifiedClawHubSkillSourceUrl,
   resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
-  searchSkillsFromClawHub,
-  updateSkillsFromClawHub,
-} = await import("./clawhub.js");
+} from "./clawhub.test-support.js";
 
-function expectInstallPackageSourceDir(sourceDir: string) {
-  const call = installPackageDirMock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected installPackageDir call");
-  }
-  expect(call[0]?.sourceDir).toBe(sourceDir);
-}
-
-function installPolicyInput() {
-  const call = evaluateSkillInstallPolicyMock.mock.calls.at(0);
-  if (!call) {
-    throw new Error("expected evaluateSkillInstallPolicy call");
-  }
-  return call[0] as
-    | {
-        origin?: { registry?: string; slug?: string; ownerHandle?: string };
-        requestedSpecifier?: string;
-        source?: { kind?: string; authority?: string; mutable?: boolean; network?: boolean };
-      }
-    | undefined;
-}
-
-function expectInstalledSkill(
-  result: Awaited<ReturnType<typeof installSkillFromClawHub>>,
-  expected: { slug?: string; version?: string; targetDir?: string } = {},
-) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error(`expected skill install success, got ${result.error}`);
-  }
-  if (expected.slug) {
-    expect(result.slug).toBe(expected.slug);
-  }
-  if (expected.version) {
-    expect(result.version).toBe(expected.version);
-  }
-  if (expected.targetDir) {
-    expect(result.targetDir).toBe(expected.targetDir);
-  }
-}
-
-function expectInvalidSlug(result: Awaited<ReturnType<typeof installSkillFromClawHub>>) {
+function expectFailure<T extends { ok: true } | { ok: false; error: string }>(
+  result: T,
+): asserts result is Extract<T, { ok: false }> {
   expect(result.ok).toBe(false);
   if (result.ok) {
-    throw new Error("expected invalid slug failure");
+    throw new Error("expected failure");
   }
-  expect(result.error).toContain("Invalid skill slug");
-}
-
-function installTestSkill(
-  workspaceDir: string,
-  slug: string,
-  params: Omit<Parameters<typeof installSkillFromClawHub>[0], "workspaceDir" | "slug"> = {},
-) {
-  return installSkillFromClawHub({ workspaceDir, slug, ...params });
-}
-
-function updateTestSkill(
-  workspaceDir: string,
-  slug?: string,
-  params: Omit<Parameters<typeof updateSkillsFromClawHub>[0], "workspaceDir" | "slug"> = {},
-) {
-  return updateSkillsFromClawHub({ workspaceDir, ...(slug ? { slug } : {}), ...params });
-}
-
-function mockArchiveInstallResolution(slug: string, version: string, downloadUrl: string) {
-  fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-    ok: true,
-    slug,
-    installKind: "archive",
-    archive: { version, downloadUrl },
-  });
-}
-
-function mockGitHubInstallResolution(params: {
-  slug: string;
-  repo: string;
-  path: string;
-  commit: string;
-  contentHash: string;
-  sourceUrl: string;
-}) {
-  fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-    ok: true,
-    slug: params.slug,
-    installKind: "github",
-    github: {
-      repo: params.repo,
-      path: params.path,
-      commit: params.commit,
-      contentHash: params.contentHash,
-      sourceUrl: params.sourceUrl,
-    },
-  });
-}
-
-function mockSkillSecurityVerdict(item: ClawHubSkillSecurityVerdictItem) {
-  fetchClawHubSkillSecurityVerdictsMock.mockResolvedValueOnce({
-    schema: "clawhub.skill.security-verdicts.v1",
-    items: [
-      {
-        ...item,
-        overview: item.overview ?? "No security analysis has been recorded yet.",
-        securityAuditUrl:
-          item.securityAuditUrl ??
-          `${item.skillUrl ?? `https://clawhub.ai/${item.publisherHandle ?? "openclaw"}/skills/${item.requestedSlug}`}/security-audit?version=${item.requestedVersion}`,
-      },
-    ],
-  });
-}
-
-function mockSkillVerification(response: ClawHubSkillVerificationResponse) {
-  fetchClawHubSkillVerificationMock.mockResolvedValueOnce(response);
-}
-
-function mockInstalledSkillFile(content: string) {
-  installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
-    await fs.mkdir(params.targetDir, { recursive: true });
-    await fs.writeFile(path.join(params.targetDir, "SKILL.md"), content, "utf8");
-    return { ok: true, targetDir: params.targetDir };
-  });
-}
-
-async function readJson<T>(filePath: string): Promise<T> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as T;
-}
-
-async function writeClawHubOriginFixture(params: {
-  workspaceDir: string;
-  slug: string;
-  originSlug?: string;
-  ownerHandle?: string;
-  requestedReference?: string;
-  trustState?: string;
-  registry?: string;
-  installedVersion?: string;
-  installedAt?: number;
-  writeLock?: boolean;
-  skillMd?: string;
-  skillFile?: { path: string; sha256: string };
-  fileTreeSha256?: string;
-}) {
-  const skillDir = path.join(params.workspaceDir, "skills", params.slug);
-  const registry = params.registry ?? "https://private.example.com/clawhub";
-  const installedVersion = params.installedVersion ?? "1.2.3";
-  const installedAt = params.installedAt ?? 123;
-  const skillFile =
-    params.skillFile ??
-    (params.skillMd !== undefined
-      ? {
-          path: "SKILL.md",
-          sha256: createHash("sha256").update(params.skillMd).digest("hex"),
-        }
-      : undefined);
-  const fileTreeSha256 =
-    params.fileTreeSha256 ??
-    (params.skillMd !== undefined ? `sha256:${"a".repeat(64)}` : undefined);
-  const digests = {
-    ...(skillFile ? { skillFile } : {}),
-    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
-  };
-  await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
-  if (params.skillMd !== undefined) {
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), params.skillMd, "utf8");
-  }
-  await fs.writeFile(
-    path.join(skillDir, ".clawhub", "origin.json"),
-    `${JSON.stringify(
-      {
-        version: 1,
-        registry,
-        slug: params.originSlug ?? params.slug,
-        ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-        ...(params.requestedReference ? { requestedReference: params.requestedReference } : {}),
-        ...(params.trustState ? { trustState: params.trustState } : {}),
-        installedVersion,
-        installedAt,
-        ...digests,
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
-  if (params.writeLock !== false) {
-    await fs.mkdir(path.join(params.workspaceDir, ".clawhub"), { recursive: true });
-    await fs.writeFile(
-      path.join(params.workspaceDir, ".clawhub", "lock.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          skills: {
-            [params.slug]: {
-              version: installedVersion,
-              installedAt,
-              registry,
-              ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
-              ...(params.requestedReference
-                ? { requestedReference: params.requestedReference }
-                : {}),
-              ...(params.trustState ? { trustState: params.trustState } : {}),
-              ...digests,
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
-  }
-  return skillDir;
-}
-
-function writeTrackedSkill(
-  workspaceDir: string,
-  slug: string,
-  params: Omit<Parameters<typeof writeClawHubOriginFixture>[0], "workspaceDir" | "slug"> = {},
-) {
-  return writeClawHubOriginFixture({ workspaceDir, slug, ...params });
 }
 
 describe("skills-clawhub", () => {
+  let testWorkspaceDir: string;
+
   afterEach(async () => {
     await tempDirs.cleanup();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    testWorkspaceDir = await tempDirs.make("openclaw-clawhub-workspace-");
     fetchClawHubSkillDetailMock.mockReset();
     fetchClawHubSkillInstallResolutionMock.mockReset();
     fetchClawHubSkillVerificationMock.mockReset();
@@ -403,26 +148,20 @@ describe("skills-clawhub", () => {
         })),
       }),
     );
-    downloadClawHubSkillArchiveMock.mockResolvedValue({
+    const archive = {
       archivePath: "/tmp/agentreceipt.zip",
       integrity: "sha256-test",
       sha256Hex: "a".repeat(64),
       artifact: "archive",
       cleanup: archiveCleanupMock,
-    });
-    downloadClawHubSkillArchiveUrlMock.mockResolvedValue({
-      archivePath: "/tmp/agentreceipt.zip",
-      integrity: "sha256-test",
-      sha256Hex: "a".repeat(64),
-      artifact: "archive",
-      cleanup: archiveCleanupMock,
-    });
+    };
+    downloadClawHubSkillArchiveMock.mockResolvedValue(archive);
+    downloadClawHubSkillArchiveUrlMock.mockResolvedValue(archive);
     downloadClawHubGitHubSkillArchiveMock.mockResolvedValue({
+      ...archive,
       archivePath: "/tmp/github-agentreceipt.zip",
       integrity: "sha256-github-test",
       sha256Hex: "b".repeat(64),
-      artifact: "archive",
-      cleanup: archiveCleanupMock,
     });
     reportClawHubSkillInstallTelemetryMock.mockResolvedValue(undefined);
     archiveCleanupMock.mockResolvedValue(undefined);
@@ -431,201 +170,80 @@ describe("skills-clawhub", () => {
       expect(params.rootMarkers).toEqual(["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]);
       return await params.onExtracted("/tmp/extracted-skill");
     });
-    installPackageDirMock.mockImplementation(
-      async (params: {
-        targetDir: string;
-        afterBackup?: (
-          backupDir: string,
-        ) => Promise<{ ok: boolean; error?: string; code?: string }>;
-      }) => {
-        const backup = await params.afterBackup?.(params.targetDir);
-        if (backup && !backup.ok) {
-          return backup;
-        }
-        return { ok: true, targetDir: "/tmp/workspace/skills/agentreceipt" };
-      },
-    );
+    mockDefaultPackageInstall(testWorkspaceDir);
     evaluateSkillInstallPolicyMock.mockResolvedValue(undefined);
   });
 
-  it("installs ClawHub skills from flat-root archives", async () => {
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+  registerRemoteClawHubTests(() => testWorkspaceDir);
 
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "agentreceipt",
-      baseUrl: undefined,
-    });
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
-      url: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
-      baseUrl: undefined,
-    });
-    expectInstallPackageSourceDir("/tmp/extracted-skill");
-    expect(installPolicyInput()).toMatchObject({
-      origin: { registry: "https://clawhub.ai" },
-      source: { kind: "clawhub", authority: "openclaw", mutable: false, network: true },
-    });
-    expectInstalledSkill(result, {
+  function mockSecurity(overrides: Partial<Parameters<typeof mockSkillSecurityVerdict>[0]>) {
+    mockSkillSecurityVerdict({
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      requestedSlug: "agentreceipt",
+      requestedVersion: "1.0.0",
       slug: "agentreceipt",
       version: "1.0.0",
-      targetDir: "/tmp/workspace/skills/agentreceipt",
+      ...overrides,
     });
-    expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
-    expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
-      baseUrl: undefined,
-      slug: "agentreceipt",
-      version: "1.0.0",
+  }
+
+  function mockVerification(overrides: Partial<Parameters<typeof mockSkillVerification>[0]>) {
+    mockSkillVerification({
+      schema: "clawhub.skill.verify.v1",
+      ok: true,
+      decision: "pass",
+      reasons: [],
+      skill: null,
+      publisher: null,
+      version: null,
+      card: { available: true, sha256: "card-sha" },
+      artifact: { sourceFingerprint: "source-fp" },
+      provenance: { source: "unavailable" },
+      security: { status: "clean" },
+      signature: { status: "unsigned" },
+      ...overrides,
     });
-  });
+  }
 
   it.each([
-    {
-      name: "maps missing install resolutions to the skills-info recovery message",
-      lookup: "install",
-      status: 404,
-      path: "/api/v1/skills/missing-skill/install",
-      body: "remote not-found detail",
-      expected:
-        'Skill "missing-skill" not found on ClawHub. Run `openclaw skills search missing-skill` to find the right skill reference.',
+    { lookup: "install", status: 404, path: "/api/v1/skills/missing-skill/install" },
+    { lookup: "detail", status: 404, path: "/custom-clawhub/api/v1/skills/missing-skill" },
+    { lookup: "install", status: 500, path: "/api/v1/skills/missing-skill/install" },
+  ])(
+    "sanitizes $lookup errors with status $status",
+    async ({ lookup, status, path: requestPath }) => {
+      const body = "remote-controlled failure";
+      const requestError = new ClawHubRequestError({ path: requestPath, status, body });
+      const lookupMock =
+        lookup === "detail" ? fetchClawHubSkillDetailMock : fetchClawHubSkillInstallResolutionMock;
+      lookupMock.mockRejectedValueOnce(requestError);
+      const result = await installTestSkill(
+        testWorkspaceDir,
+        "missing-skill",
+        lookup === "detail" ? { version: "1.2.3" } : {},
+      );
+      expect(result).toEqual({
+        ok: false,
+        error:
+          status === 404
+            ? 'Skill "missing-skill" not found on ClawHub. Run `openclaw skills search missing-skill` to find the right skill reference.'
+            : 'ClawHub is temporarily unavailable while installing skill "missing-skill". Try again later.',
+      });
+      expectFailure(result);
+      expect(result.error).not.toContain("/api/v1/");
+      expect(result.error).not.toContain(body);
     },
-    {
-      name: "maps missing versioned skills to the skills-info recovery message",
-      lookup: "detail",
-      status: 404,
-      path: "/custom-clawhub/api/v1/skills/missing-skill",
-      body: "remote versioned not-found detail",
-      expected:
-        'Skill "missing-skill" not found on ClawHub. Run `openclaw skills search missing-skill` to find the right skill reference.',
-    },
-    {
-      name: "keeps server failures distinct from missing skills",
-      lookup: "install",
-      status: 500,
-      path: "/api/v1/skills/missing-skill/install",
-      body: "remote-controlled server failure",
-      expected:
-        'ClawHub is temporarily unavailable while installing skill "missing-skill". Try again later.',
-    },
-  ] as const)("$name", async ({ lookup, status, path: requestPath, body, expected }) => {
-    const requestError = new ClawHubRequestError({ path: requestPath, status, body });
-    if (lookup === "detail") {
-      fetchClawHubSkillDetailMock.mockRejectedValueOnce(requestError);
-    } else {
-      fetchClawHubSkillInstallResolutionMock.mockRejectedValueOnce(requestError);
-    }
-
-    const result = await installTestSkill(
-      "/tmp/workspace",
-      "missing-skill",
-      lookup === "detail" ? { version: "1.2.3" } : {},
-    );
-
-    expect(result).toEqual({ ok: false, error: expected });
-    expect(result.ok ? "" : result.error).not.toContain("/api/v1/");
-    expect(result.ok ? "" : result.error).not.toContain(body);
-  });
-
-  it("installs skills-sh references via a ClawHub-approved pinned GitHub commit", async () => {
-    const commit = "a".repeat(40);
-    const reference = "skills-sh:openclaw/skills/weather";
-    const trustState = "not-scanned-by-clawhub";
-    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-      ok: true,
-      slug: "weather",
-      installKind: "github",
-      trust: { state: trustState },
-      github: {
-        repo: "openclaw/skills",
-        path: "skills/weather",
-        commit,
-        trustState,
-        contentHash: "sha256:approved",
-        sourceUrl: `https://github.com/openclaw/skills/tree/${commit}/skills/weather`,
-      },
-    });
-    withExtractedArchiveRootMock.mockImplementationOnce(async (params) => {
-      expect(params.rootMarkers).toBeUndefined();
-      return await params.onExtracted("/tmp/extracted-github-repo");
-    });
-    installPackageDirMock.mockResolvedValueOnce({
-      ok: true,
-      targetDir: "/tmp/workspace/skills/weather",
-    });
-
-    const result = await installTestSkill("/tmp/workspace", reference);
-
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "weather",
-      baseUrl: undefined,
-      requestedReference: reference,
-    });
-    expect(downloadClawHubGitHubSkillArchiveMock).toHaveBeenCalledWith({
-      repo: "openclaw/skills",
-      commit,
-    });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
-      slug: "weather",
-      requestedReference: reference,
-      version: undefined,
-      baseUrl: undefined,
-    });
-    expect(installPolicyInput()).toMatchObject({
-      requestedSpecifier: reference,
-      origin: {
-        slug: "weather",
-        version: commit,
-        repo: "openclaw/skills",
-        path: "skills/weather",
-        commit,
-      },
-    });
-    expectInstalledSkill(result, {
-      slug: "weather",
-      version: commit,
-      targetDir: "/tmp/workspace/skills/weather",
-    });
-    expect(result.warning).toBe("Not scanned by ClawHub");
-    expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
-      baseUrl: undefined,
-      slug: "weather",
-      version: commit,
-      requestedReference: reference,
-      trustState,
-    });
-  });
-
-  it("rejects a mutable GitHub ref for a skills-sh resolution before downloading", async () => {
-    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-      ok: true,
-      slug: "weather",
-      installKind: "github",
-      trust: { state: "not-scanned-by-clawhub" },
-      github: {
-        repo: "openclaw/skills",
-        path: "skills/weather",
-        commit: "main",
-        contentHash: "sha256:approved",
-        sourceUrl: "https://github.com/openclaw/skills/tree/main/skills/weather",
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "skills-sh:openclaw/skills/weather");
-
-    expect(result.ok).toBe(false);
-    expect(result.ok ? "" : result.error).toContain("expected a full 40-character commit SHA");
-    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
-    expect(withExtractedArchiveRootMock).not.toHaveBeenCalled();
-    expect(installPackageDirMock).not.toHaveBeenCalled();
-  });
+  );
 
   it.each([
     "skills-sh:",
     "skills-sh/owner/repo/slug",
-    "skills-sh:owner/repo",
-    "skills-sh:owner/repo/slug/extra",
     "skills-sh:-owner/repo/slug",
     "skills-sh:owner/../slug",
   ])("rejects invalid skills-sh reference %s before network access", async (reference) => {
-    const result = await installTestSkill("/tmp/workspace", reference);
+    const result = await installTestSkill(testWorkspaceDir, reference);
 
     expect(result).toMatchObject({
       ok: false,
@@ -636,7 +254,7 @@ describe("skills-clawhub", () => {
   });
 
   it("rejects versions for skills-sh references before network access", async () => {
-    const result = await installTestSkill("/tmp/workspace", "skills-sh:openclaw/skills/weather", {
+    const result = await installTestSkill(testWorkspaceDir, "skills-sh:openclaw/skills/weather", {
       version: "1.2.3",
     });
 
@@ -660,7 +278,7 @@ describe("skills-clawhub", () => {
       },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "skills-sh:openclaw/skills/weather");
+    const result = await installTestSkill(testWorkspaceDir, "skills-sh:openclaw/skills/weather");
 
     expect(result).toEqual({
       ok: false,
@@ -670,7 +288,7 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
-  it.each([undefined, { state: "scanned-by-clawhub" }])(
+  it.each([{ state: "scanned-by-clawhub" }])(
     "rejects skills-sh resolutions without the external unscanned trust state",
     async (trust) => {
       fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
@@ -687,7 +305,7 @@ describe("skills-clawhub", () => {
         },
       });
 
-      const result = await installTestSkill("/tmp/workspace", "skills-sh:openclaw/skills/weather");
+      const result = await installTestSkill(testWorkspaceDir, "skills-sh:openclaw/skills/weather");
 
       expect(result).toEqual({
         ok: false,
@@ -708,7 +326,7 @@ describe("skills-clawhub", () => {
     });
 
     const result = await preflightSkillFromClawHub({
-      workspaceDir: "/tmp/workspace",
+      workspaceDir: testWorkspaceDir,
       slug: "agentreceipt",
       version: "1.0.0",
     });
@@ -730,7 +348,7 @@ describe("skills-clawhub", () => {
       cleanup: archiveCleanupMock,
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
       version: "1.0.0",
       expectedIntegrity: `sha256:${"a".repeat(64)}`,
     });
@@ -757,110 +375,26 @@ describe("skills-clawhub", () => {
     });
     fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(new Error("should not be called"));
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
 
     expectInstalledSkill(result, {
       slug: "agentreceipt",
       version: "1.0.0",
-      targetDir: "/tmp/workspace/skills/agentreceipt",
+      targetDir: path.join(testWorkspaceDir, "skills", "agentreceipt"),
     });
     expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
     expect(installPolicyInput()).toMatchObject({
       origin: { registry: "https://clawhub.ai" },
       source: { kind: "clawhub", authority: "official", mutable: false, network: true },
     });
-  });
-
-  it("bypasses ClawHub trust checks when skill detail has an official owner", async () => {
-    fetchClawHubSkillDetailMock.mockResolvedValueOnce({
-      skill: {
-        slug: "tao-setup-nvidia-gpu-host",
-        displayName: "TAO Setup NVIDIA GPU Host",
-        createdAt: 1,
-        updatedAt: 2,
-      },
-      owner: {
-        handle: "nvidia",
-        displayName: "NVIDIA",
-        official: true,
-      },
-      latestVersion: {
-        version: "1.0.0",
-        createdAt: 3,
-      },
-    });
-    fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(new Error("should not be called"));
-
-    const result = await installTestSkill("/tmp/workspace", "tao-setup-nvidia-gpu-host");
-
-    expectInstalledSkill(result, {
-      slug: "tao-setup-nvidia-gpu-host",
-      version: "1.0.0",
-      targetDir: "/tmp/workspace/skills/tao-setup-nvidia-gpu-host",
-    });
-    expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
-      slug: "tao-setup-nvidia-gpu-host",
-      baseUrl: undefined,
-    });
-    expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
-    expect(installPolicyInput()).toMatchObject({
-      origin: { registry: "https://clawhub.ai" },
-      source: { kind: "clawhub", authority: "official", mutable: false, network: true },
-    });
-  });
-
-  it("blocks ClawHub skill installs when release trust is malicious", async () => {
-    const warnings: string[] = [];
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: ["scan:malicious"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
-      publisherHandle: "acme",
-      overview: "ClawHub found malicious behavior in this release.",
-      securityAuditUrl: "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
-      security: {
-        status: "malicious",
-        passed: false,
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "@acme/agentreceipt", {
-      logger: {
-        warn: (message) => warnings.push(message),
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected malicious skill install failure");
-    }
-    expect(result.error).toBe("ClawHub blocked this release; install was not started.");
-    expect(result.code).toBe("clawhub_download_blocked");
-    expect(result.warning).toContain("Blocked");
-    expect(result.warning).toContain("ClawHub found malicious behavior in this release.");
-    expect(result.warning).toContain(
-      "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
-    );
-    expect(result.warning).not.toContain('replying "Install"');
-    expect(warnings.join("\n")).toContain("Blocked");
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
-    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
   });
 
   it("prints the ClawHub audit and installs releases with a Review outcome", async () => {
     const warnings: string[] = [];
-    mockSkillSecurityVerdict({
+    mockSecurity({
       ok: false,
       decision: "fail",
       reasons: ["security.status_not_clean"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
       skillUrl: "https://clawhub.ai/acme/skills/agentreceipt",
       securityAuditUrl: "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
       overview:
@@ -871,16 +405,13 @@ describe("skills-clawhub", () => {
       },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
       logger: {
         warn: (message) => warnings.push(message),
       },
     });
 
     expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
-    if (!result.ok) {
-      throw new Error("expected Review skill install success");
-    }
     const warning = result.warning;
     if (!warning) {
       throw new Error("expected Review skill audit output");
@@ -905,45 +436,14 @@ describe("skills-clawhub", () => {
     expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
   });
 
-  it("returns review-recommended warnings with successful ClawHub skill installs", async () => {
-    mockSkillSecurityVerdict({
-      ok: true,
-      decision: "pass",
-      reasons: ["scan:pending"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
-      security: {
-        status: "pending",
-        passed: true,
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
-
-    expectInstalledSkill(result, {
-      slug: "agentreceipt",
-      version: "1.0.0",
-    });
-    if (!result.ok) {
-      throw new Error("expected review-recommended skill install success");
-    }
-    expect(result.warning).toContain("Review");
-    expect(result.warning).toContain("Overview:");
-  });
-
   it("fails closed when ClawHub skill trust checks are unavailable", async () => {
     fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(
       new Error("security verdicts unavailable"),
     );
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected unavailable skill trust failure");
-    }
+    expectFailure(result);
     expect(result.code).toBe("clawhub_security_unavailable");
     expect(result.error).toContain("ClawHub release trust check failed");
     expect(result.error).toContain("security verdicts unavailable");
@@ -957,12 +457,9 @@ describe("skills-clawhub", () => {
       items: [],
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected missing skill trust verdict failure");
-    }
+    expectFailure(result);
     expect(result.code).toBe("clawhub_security_unavailable");
     expect(result.error).toContain("returned 0 verdicts");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
@@ -974,28 +471,17 @@ describe("skills-clawhub", () => {
       name: "omitted security",
       verdict: {},
     },
-    {
-      name: "null security",
-      verdict: { security: null },
-    },
   ])("fails closed when a passing skill verdict has $name", async ({ verdict }) => {
-    mockSkillSecurityVerdict({
+    mockSecurity({
       ok: true,
       decision: "pass",
       reasons: [],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
       ...verdict,
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected unusable skill trust verdict failure");
-    }
+    expectFailure(result);
     expect(result.code).toBe("clawhub_security_unavailable");
     expect(result.error).toContain("did not return a usable security verdict");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
@@ -1004,129 +490,32 @@ describe("skills-clawhub", () => {
 
   it("blocks ClawHub skill installs when moderation marks the release as malware-blocked", async () => {
     const warnings: string[] = [];
-    mockSkillSecurityVerdict({
+    mockSecurity({
       ok: false,
       decision: "fail",
       reasons: ["moderation.malware_blocked"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
       security: {
         status: "clean",
         passed: false,
       },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
+    const result = await installTestSkill(testWorkspaceDir, "agentreceipt", {
       logger: {
         warn: (message) => warnings.push(message),
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected moderation-blocked skill install failure");
-    }
+    expectFailure(result);
     expect(result.error).toBe("ClawHub blocked this release; install was not started.");
     expect(result.code).toBe("clawhub_download_blocked");
     expect(warnings.join("\n")).toContain("Blocked");
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
   });
 
-  it("treats a failed verdict with clean nested scan status as Review", async () => {
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: [],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
-      security: {
-        status: "clean",
-        passed: false,
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
-
-    expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
-    if (!result.ok) {
-      throw new Error("expected Review skill install success");
-    }
-    expect(result.warning).toContain("Outcome: Review");
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
-  });
-
-  it("uses the owner-qualified skill name in Review audits", async () => {
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: ["security.status_not_clean"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
-      publisherHandle: "acme",
-      security: {
-        status: "suspicious",
-        passed: false,
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "@acme/agentreceipt");
-
-    expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
-    if (!result.ok) {
-      throw new Error("expected owner-qualified Review install success");
-    }
-    expect(result.warning).toContain("@acme/agentreceipt@1.0.0");
-    expect(result.warning).toContain("https://clawhub.ai/acme/skills/agentreceipt");
-    expect(result.warning).toContain(
-      "https://clawhub.ai/acme/skills/agentreceipt/security-audit?version=1.0.0",
-    );
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
-  });
-
-  it("installs suspicious ClawHub skill releases after printing Review", async () => {
-    mockSkillSecurityVerdict({
-      ok: false,
-      decision: "fail",
-      reasons: ["security.status_not_clean"],
-      requestedSlug: "agentreceipt",
-      requestedVersion: "1.0.0",
-      slug: "agentreceipt",
-      version: "1.0.0",
-      security: {
-        status: "suspicious",
-        passed: false,
-      },
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
-
-    expectInstalledSkill(result, {
-      slug: "agentreceipt",
-      version: "1.0.0",
-    });
-    if (!result.ok) {
-      throw new Error("expected Review skill install success");
-    }
-    expect(result.warning).toContain("Outcome: Review");
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
-      url: "https://clawhub.ai/api/v1/download?slug=agentreceipt&version=1.0.0",
-      baseUrl: undefined,
-    });
-  });
-
   it("installs owner-qualified ClawHub skills without using owner as a local path", async () => {
     const workspaceDir = await tempDirs.make("openclaw-owner-skill-");
-    mockSkillVerification({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
+    mockVerification({
       slug: "weather",
       displayName: "Weather",
       pageUrl: "https://clawhub.ai/demo-owner/skills/weather",
@@ -1136,53 +525,30 @@ describe("skills-clawhub", () => {
       createdAt: 123,
       skill: { slug: "weather", displayName: "Weather" },
       publisher: { handle: "demo-owner", displayName: "Demo Owner" },
-      card: { available: true, sha256: "card-sha" },
-      artifact: { sourceFingerprint: "source-fp" },
-      provenance: { source: "unavailable" },
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
+      provenance: {
+        source: "unavailable",
+        url: "https://github.com/openclaw/skills/tree/unverified/weather",
+      },
     });
     mockInstalledSkillFile("# Weather\n");
 
-    const result = await installTestSkill(workspaceDir, "@demo-owner/weather");
+    const result = await installTestSkill(workspaceDir, "@demo-owner/weather", {
+      baseUrl: "https://clawhub.internal.example",
+    });
 
     if (!result.ok) {
       throw new Error(result.error);
     }
 
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "weather",
-      ownerHandle: "demo-owner",
-      baseUrl: undefined,
-    });
-    expect(fetchClawHubSkillSecurityVerdictsMock).toHaveBeenCalledWith({
-      items: [
-        {
-          slug: "weather",
-          ownerHandle: "demo-owner",
-          version: "1.0.0",
-        },
-      ],
-      baseUrl: undefined,
-      token: undefined,
-      timeoutMs: undefined,
-    });
-    expect(fetchClawHubSkillVerificationMock).toHaveBeenNthCalledWith(1, {
-      slug: "weather",
-      ownerHandle: "demo-owner",
-      version: "1.0.0",
-      baseUrl: undefined,
-      token: undefined,
-      timeoutMs: undefined,
-    });
     expectInstallPackageSourceDir("/tmp/extracted-skill");
     expect(installPolicyInput()).toMatchObject({
       origin: {
-        registry: "https://clawhub.ai",
+        registry: "https://clawhub.internal.example",
         slug: "weather",
         ownerHandle: "demo-owner",
       },
       requestedSpecifier: "clawhub:@demo-owner/weather@1.0.0",
+      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
     });
     expectInstalledSkill(result, {
       slug: "weather",
@@ -1196,7 +562,7 @@ describe("skills-clawhub", () => {
     );
     expect(lock.skills.weather).toMatchObject({
       version: "1.0.0",
-      registry: "https://clawhub.ai",
+      registry: "https://clawhub.internal.example",
       ownerHandle: "demo-owner",
     });
     const origin = await readJson<Record<string, unknown>>(
@@ -1204,11 +570,13 @@ describe("skills-clawhub", () => {
     );
     expect(origin).toMatchObject({
       version: 1,
-      registry: "https://clawhub.ai",
+      registry: "https://clawhub.internal.example",
       slug: "weather",
       ownerHandle: "demo-owner",
       installedVersion: "1.0.0",
     });
+    expect(lock.skills.weather?.sourceUrl).toBeUndefined();
+    expect(origin.sourceUrl).toBeUndefined();
     expect(markClawPackageIndependentlyOwnedMock).toHaveBeenCalledWith({
       kind: "skill",
       source: "clawhub",
@@ -1217,57 +585,19 @@ describe("skills-clawhub", () => {
       workspace: workspaceDir,
     });
     expect(reportClawHubSkillInstallTelemetryMock).toHaveBeenCalledWith({
-      baseUrl: undefined,
+      baseUrl: "https://clawhub.internal.example",
       slug: "weather",
       ownerHandle: "demo-owner",
       version: "1.0.0",
     });
   });
 
-  it("installs owner-qualified clean skills missing only cards", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-owner-card-missing-");
-    mockSkillVerification({
-      schema: "clawhub.skill.verify.v1",
-      ok: false,
-      decision: "fail",
-      reasons: ["card.missing"],
-      slug: "weather",
-      displayName: "Weather",
-      pageUrl: "https://clawhub.ai/demo-owner/skills/weather",
-      publisherHandle: "demo-owner",
-      publisherDisplayName: "Demo Owner",
-      version: "1.0.0",
-      createdAt: 123,
-      skill: { slug: "weather", displayName: "Weather" },
-      publisher: { handle: "demo-owner", displayName: "Demo Owner" },
-      card: { available: false },
-      artifact: { sourceFingerprint: "source-fp" },
-      provenance: { source: "unavailable" },
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
-    });
-    mockInstalledSkillFile("# Weather\n");
-
-    const result = await installTestSkill(workspaceDir, "@demo-owner/weather");
-
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-    expectInstalledSkill(result, {
-      slug: "weather",
-      version: "1.0.0",
-      targetDir: path.join(workspaceDir, "skills", "weather"),
-    });
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalled();
-  });
-
   it("does not let owner-qualified fallback mask missing exact versions", async () => {
-    mockSkillSecurityVerdict({
+    mockSecurity({
       ok: false,
       decision: "fail",
       reasons: ["skill.not_found"],
       requestedSlug: "weather",
-      requestedVersion: "1.0.0",
       slug: "weather",
       version: null,
       security: null,
@@ -1276,8 +606,7 @@ describe("skills-clawhub", () => {
         message: "Skill not found",
       },
     });
-    mockSkillVerification({
-      schema: "clawhub.skill.verify.v1",
+    mockVerification({
       ok: false,
       decision: "fail",
       reasons: ["version.not_found"],
@@ -1290,19 +619,11 @@ describe("skills-clawhub", () => {
       createdAt: 123,
       skill: { slug: "weather", displayName: "Weather" },
       publisher: { handle: "demo-owner", displayName: "Demo Owner" },
-      card: { available: true, sha256: "card-sha" },
-      artifact: { sourceFingerprint: "source-fp" },
-      provenance: { source: "unavailable" },
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
     });
 
-    const result = await installTestSkill("/tmp/workspace", "@demo-owner/weather");
+    const result = await installTestSkill(testWorkspaceDir, "@demo-owner/weather");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected owner-qualified missing version failure");
-    }
+    expectFailure(result);
     expect(result.code).toBe("clawhub_security_unavailable");
     expect(result.error).toContain('returned version "unknown"');
     expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
@@ -1318,94 +639,166 @@ describe("skills-clawhub", () => {
       status: 409,
     });
 
-    const result = await installTestSkill("/tmp/workspace", "weather");
+    const result = await installTestSkill(testWorkspaceDir, "weather");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected ambiguous slug failure");
-    }
+    expectFailure(result);
     expect(result.error).toContain('Skill "weather" is ambiguous on ClawHub.');
     expect(result.error).toContain("openclaw skills install @owner/weather");
     expect(result.error).toContain("Multiple ClawHub publishers provide weather.");
   });
 
   it("rejects malformed owner-qualified ClawHub install refs", async () => {
-    const result = await installTestSkill("/tmp/workspace", "@@demo-owner/weather");
+    const result = await installTestSkill(testWorkspaceDir, "@@demo-owner/weather");
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("expected invalid owner-qualified failure");
-    }
+    expectFailure(result);
     expect(result.error).toContain("Invalid ClawHub owner handle");
     expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
   });
 
-  it("persists install artifact and verification provenance in the ClawHub lockfile", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
-    const warn = vi.fn();
-    const skillContent = "---\nname: agentreceipt\ndescription: Receipt helper\n---\n";
-    const skillSha256 = createHash("sha256").update(skillContent).digest("hex");
-    mockInstalledSkillFile(skillContent);
+  it.each([["JSON null", "null"]])(
+    "preserves a shared lock with %s instead of installing over it",
+    async (_label, damaged) => {
+      const workspaceDir = await tempDirs.make("openclaw-skills-damaged-lock-");
+      const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
+        skillMd: "---\nname: weather\n---\n",
+      });
+      const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+      await fs.writeFile(lockPath, damaged);
+      const originalSkill = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
+      mockInstalledSkillFile("---\nname: agentreceipt\n---\n");
+      mockInstalledSkillFile("---\nname: replacement\n---\n");
 
+      for (const slug of ["agentreceipt", "weather"]) {
+        const result = await installTestSkill(workspaceDir, slug, { force: slug === "weather" });
+        expect(result).toMatchObject({
+          ok: false,
+          error: expect.stringContaining("Malformed workspace ClawHub lockfile"),
+        });
+      }
+      expect(installPackageDirMock).not.toHaveBeenCalled();
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toBe(damaged);
+      await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toBe(
+        originalSkill,
+      );
+      await expect(
+        fs.stat(path.join(workspaceDir, "skills", "agentreceipt")),
+      ).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    },
+  );
+
+  it.each([".clawhub"])(
+    "rejects damaged %s tracking in update, untracking, status and verification",
+    async (directory) => {
+      const workspaceDir = await tempDirs.make("openclaw-skills-damaged-tracking-");
+      const lockPath = path.join(workspaceDir, directory, "lock.json");
+      const damaged = '{"version":1,"skills":{"weather":';
+      await fs.mkdir(path.dirname(lockPath));
+      await fs.writeFile(lockPath, damaged);
+
+      await expect(readTrackedClawHubSkillSlugs(workspaceDir)).rejects.toThrow(
+        "Malformed workspace ClawHub lockfile",
+      );
+      await expect(untrackClawHubSkill(workspaceDir, "weather")).rejects.toThrow(
+        "Malformed workspace ClawHub lockfile",
+      );
+      await expect(updateTestSkill(workspaceDir)).rejects.toThrow(
+        "Malformed workspace ClawHub lockfile",
+      );
+      expect(readClawHubSkillsLockfileStatusSync(workspaceDir)).toMatchObject({
+        kind: "malformed",
+        path: lockPath,
+      });
+      await expect(
+        resolveClawHubSkillVerificationTarget({ workspaceDir, slug: "weather" }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: expect.stringContaining("Malformed workspace ClawHub lockfile"),
+      });
+      await expect(fs.readFile(lockPath, "utf8")).resolves.toBe(damaged);
+    },
+  );
+
+  it("preserves tracking added while a skill is downloading", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-install-tracking-");
+    await writeTrackedSkill(workspaceDir, "weather");
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const existing = await readJson<{ skills: Record<string, unknown> }>(lockPath);
+    const added = { version: "3.0.0", installedAt: 456, verification: { decision: "pass" } };
+    mockInstalledSkillFile("---\nname: agentreceipt\n---\n");
+    downloadClawHubSkillArchiveUrlMock.mockImplementationOnce(async () => {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({ ...existing, skills: { ...existing.skills, calendar: added } }),
+      );
+      return {
+        archivePath: "/tmp/agentreceipt.zip",
+        integrity: "sha256-test",
+        sha256Hex: "a".repeat(64),
+        artifact: "archive",
+        cleanup: archiveCleanupMock,
+      };
+    });
+
+    expectInstalledSkill(await installTestSkill(workspaceDir, "agentreceipt"));
+    const installed = await readJson<{ skills: Record<string, unknown> }>(lockPath);
+    expect(installed.skills.weather).toEqual(existing.skills.weather);
+    expect(installed.skills.calendar).toEqual(added);
+    expect(installed.skills.agentreceipt).toMatchObject({ version: "1.0.0" });
+  });
+
+  it.for([".clawhub"])(
+    "rejects symlinked %s tracking without changing the link or its target",
+    async (directory, context) => {
+      const workspaceDir = await tempDirs.make("openclaw-skills-linked-tracking-");
+      const target = path.join(workspaceDir, "original.json");
+      const content = JSON.stringify({ version: 1, skills: {} });
+      const lockPath = path.join(workspaceDir, directory, "lock.json");
+      await fs.writeFile(target, content);
+      await fs.mkdir(path.dirname(lockPath));
+      try {
+        await fs.symlink(target, lockPath);
+      } catch (error) {
+        if (process.platform === "win32" && hasErrnoCode(error, "EPERM")) {
+          // Windows file symlinks require a host-granted capability.
+          context.skip();
+          return;
+        }
+        throw error;
+      }
+
+      await expect(readTrackedClawHubSkillSlugs(workspaceDir)).rejects.toThrow(
+        "Malformed workspace ClawHub lockfile",
+      );
+      expect((await fs.lstat(lockPath)).isSymbolicLink()).toBe(true);
+      expect(await fs.readFile(target, "utf8")).toBe(content);
+    },
+  );
+
+  it("reads the replacement tracking when an existing lock changes before open", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skills-replaced-tracking-");
+    await writeTrackedSkill(workspaceDir, "weather");
+    const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
+    const replacement = path.join(workspaceDir, "replacement.json");
+    await fs.writeFile(
+      replacement,
+      JSON.stringify({ version: 1, skills: { calendar: { version: "2.0.0", installedAt: 123 } } }),
+    );
+    const open = fs.open.bind(fs);
+    let replaced = false;
+    const spy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      if (!replaced && args[0] === lockPath) {
+        replaced = true;
+        await fs.rename(replacement, lockPath);
+      }
+      return await open(...args);
+    });
     try {
-      const result = await installTestSkill(workspaceDir, "agentreceipt", {
-        logger: { warn },
-      });
-
-      expectInstalledSkill(result, {
-        slug: "agentreceipt",
-        version: "1.0.0",
-        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
-      });
-      expect(fetchClawHubSkillVerificationMock).toHaveBeenCalledWith({
-        slug: "agentreceipt",
-        version: "1.0.0",
-        baseUrl: undefined,
-      });
-      expect(warn).not.toHaveBeenCalled();
-      const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-      );
-      expect(lock.skills.agentreceipt).toMatchObject({
-        version: "1.0.0",
-        registry: "https://clawhub.ai",
-        artifact: {
-          kind: "archive",
-          sha256: "a".repeat(64),
-          integrity: "sha256-test",
-        },
-        skillFile: {
-          path: "SKILL.md",
-          sha256: skillSha256,
-        },
-        verification: {
-          schema: "clawhub.skill.verify.v1",
-          ok: true,
-          decision: "pass",
-          reasons: [],
-          provenance: { source: "unavailable" },
-          security: { status: "clean", signals: { staticScan: { engineVersion: "v2.4.24" } } },
-        },
-      });
-      const origin = await readJson<Record<string, unknown>>(
-        path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
-      );
-      expect(origin).toMatchObject({
-        version: 1,
-        slug: "agentreceipt",
-        installedVersion: "1.0.0",
-        artifact: {
-          kind: "archive",
-          sha256: "a".repeat(64),
-          integrity: "sha256-test",
-        },
-        skillFile: {
-          path: "SKILL.md",
-          sha256: skillSha256,
-        },
-      });
+      await expect(readTrackedClawHubSkillSlugs(workspaceDir)).resolves.toEqual(["calendar"]);
+      expect(replaced).toBe(true);
     } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
+      spy.mockRestore();
     }
   });
 
@@ -1414,18 +807,6 @@ describe("skills-clawhub", () => {
     const sourceUrl = "https://github.com/openclaw/skills/tree/main/agentreceipt";
     const verifiedSourceUrl =
       "https://github.com/openclaw/skills/tree/0123456789abcdef0123456789abcdef01234567/agentreceipt";
-    fetchClawHubSkillDetailMock.mockResolvedValueOnce({
-      skill: {
-        slug: "agentreceipt",
-        displayName: "AgentReceipt",
-        createdAt: 1,
-        updatedAt: 2,
-      },
-      latestVersion: {
-        version: "1.0.0",
-        createdAt: 3,
-      },
-    });
     fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
       schema: "clawhub.skill.verify.v1",
       ok: true,
@@ -1446,43 +827,56 @@ describe("skills-clawhub", () => {
       security: { status: "clean" },
       signature: { status: "unsigned" },
     });
-    mockInstalledSkillFile("# AgentReceipt\n");
+    const skillContent = "# AgentReceipt\n";
+    const artifact = { kind: "archive", sha256: "a".repeat(64), integrity: "sha256-test" };
+    const skillFile = {
+      path: "SKILL.md",
+      sha256: createHash("sha256").update(skillContent).digest("hex"),
+    };
+    mockInstalledSkillFile(skillContent);
 
-    try {
-      const result = await installTestSkill(workspaceDir, "agentreceipt", {
-        version: "1.0.0",
-      });
+    const result = await installTestSkill(workspaceDir, "agentreceipt", {
+      version: "1.0.0",
+    });
 
-      expectInstalledSkill(result, {
-        slug: "agentreceipt",
-        version: "1.0.0",
-        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
-      });
-      const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-      );
-      expect(lock.skills.agentreceipt).toMatchObject({
-        sourceUrl: verifiedSourceUrl,
-        verification: {
-          provenance: {
-            source: "server-resolved-github-import",
-            kind: "github",
-            url: sourceUrl,
-            repo: "openclaw/skills",
-            ref: "main",
-            commit: "0123456789abcdef0123456789abcdef01234567",
-            path: "agentreceipt",
-            importedAt: 4,
-          },
+    expectInstalledSkill(result, {
+      slug: "agentreceipt",
+      version: "1.0.0",
+      targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+    });
+    const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
+      path.join(workspaceDir, ".clawhub", "lock.json"),
+    );
+    expect(lock.skills.agentreceipt).toMatchObject({
+      version: "1.0.0",
+      registry: "https://clawhub.ai",
+      artifact,
+      skillFile,
+      sourceUrl: verifiedSourceUrl,
+      verification: {
+        provenance: {
+          source: "server-resolved-github-import",
+          kind: "github",
+          url: sourceUrl,
+          repo: "openclaw/skills",
+          ref: "main",
+          commit: "0123456789abcdef0123456789abcdef01234567",
+          path: "agentreceipt",
+          importedAt: 4,
         },
-      });
-      const origin = await readJson<Record<string, unknown>>(
-        path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
-      );
-      expect(origin.sourceUrl).toBe(verifiedSourceUrl);
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+      },
+    });
+    const origin = await readJson<Record<string, unknown>>(
+      path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+    );
+    expect(origin).toMatchObject({
+      version: 1,
+      slug: "agentreceipt",
+      installedVersion: "1.0.0",
+      artifact,
+      skillFile,
+      sourceUrl: verifiedSourceUrl,
+    });
   });
 
   it("requires a full commit SHA before promoting verified source provenance", () => {
@@ -1515,6 +909,7 @@ describe("skills-clawhub", () => {
   });
 
   it("does not treat detail metadata as verified source provenance", async () => {
+    const warn = vi.fn();
     const workspaceDir = await tempDirs.make("openclaw-skills-source-");
     fetchClawHubSkillDetailMock.mockResolvedValueOnce({
       skill: {
@@ -1533,104 +928,28 @@ describe("skills-clawhub", () => {
     fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
     mockInstalledSkillFile("# AgentReceipt\n");
 
-    try {
-      const result = await installTestSkill(workspaceDir, "agentreceipt", {
-        version: "1.0.0",
-      });
-
-      expectInstalledSkill(result, {
-        slug: "agentreceipt",
-        version: "1.0.0",
-        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
-      });
-      const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-      );
-      expect(lock.skills.agentreceipt?.sourceUrl).toBeUndefined();
-      const origin = await readJson<Record<string, unknown>>(
-        path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
-      );
-      expect(origin.sourceUrl).toBeUndefined();
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not trust URLs from unavailable verification provenance", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skills-source-");
-    fetchClawHubSkillVerificationMock.mockResolvedValueOnce({
-      schema: "clawhub.skill.verify.v1",
-      ok: true,
-      decision: "pass",
-      reasons: [],
-      card: { available: true },
-      artifact: { sourceFingerprint: "source-fp" },
-      provenance: {
-        source: "unavailable",
-        url: "https://github.com/openclaw/skills/tree/unverified/agentreceipt",
-      },
-      security: { status: "clean" },
-      signature: { status: "unsigned" },
-    });
-    mockInstalledSkillFile("# AgentReceipt\n");
-
-    try {
-      const result = await installTestSkill(workspaceDir, "agentreceipt", {
-        version: "1.0.0",
-      });
-
-      expectInstalledSkill(result, {
-        slug: "agentreceipt",
-        version: "1.0.0",
-        targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
-      });
-      const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-      );
-      expect(lock.skills.agentreceipt?.sourceUrl).toBeUndefined();
-      const origin = JSON.parse(
-        await fs.readFile(
-          path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
-          "utf8",
-        ),
-      ) as Record<string, unknown>;
-      expect(origin.sourceUrl).toBeUndefined();
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
-  });
-
-  it("keeps installing when the ClawHub verification snapshot is unavailable", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-skills-lock-");
-    const warn = vi.fn();
-    fetchClawHubSkillVerificationMock.mockRejectedValueOnce(new Error("verification down"));
-    installPackageDirMock.mockImplementationOnce(async (params: { targetDir: string }) => {
-      await fs.mkdir(params.targetDir, { recursive: true });
-      await fs.writeFile(path.join(params.targetDir, "SKILL.md"), "# AgentReceipt\n", "utf8");
-      return { ok: true, targetDir: params.targetDir };
+    const result = await installTestSkill(workspaceDir, "agentreceipt", {
+      version: "1.0.0",
+      logger: { warn },
     });
 
-    try {
-      const result = await installTestSkill(workspaceDir, "agentreceipt", {
-        logger: { warn },
-      });
-
-      expectInstalledSkill(result, { slug: "agentreceipt", version: "1.0.0" });
-      expect(warn).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledWith(
-        "Skill verification for agentreceipt failed: verification down",
-      );
-      const lock = JSON.parse(
-        await fs.readFile(path.join(workspaceDir, ".clawhub", "lock.json"), "utf8"),
-      ) as { skills: Record<string, Record<string, unknown>> };
-      expect(lock.skills.agentreceipt?.verification).toBeUndefined();
-      expect(lock.skills.agentreceipt?.artifact).toMatchObject({
-        sha256: "a".repeat(64),
-        integrity: "sha256-test",
-      });
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    expectInstalledSkill(result, {
+      slug: "agentreceipt",
+      version: "1.0.0",
+      targetDir: path.join(workspaceDir, "skills", "agentreceipt"),
+    });
+    const lock = await readJson<{ skills: Record<string, Record<string, unknown>> }>(
+      path.join(workspaceDir, ".clawhub", "lock.json"),
+    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Skill verification for agentreceipt failed: verification down",
+    );
+    expect(lock.skills.agentreceipt?.verification).toBeUndefined();
+    expect(lock.skills.agentreceipt?.sourceUrl).toBeUndefined();
+    const origin = await readJson<Record<string, unknown>>(
+      path.join(workspaceDir, "skills", "agentreceipt", ".clawhub", "origin.json"),
+    );
+    expect(origin.sourceUrl).toBeUndefined();
   });
 
   it("installs GitHub-backed ClawHub skills from the pinned resolver source path", async () => {
@@ -1650,14 +969,15 @@ describe("skills-clawhub", () => {
     });
     installPackageDirMock.mockResolvedValueOnce({
       ok: true,
-      targetDir: "/tmp/workspace/skills/aiq-deploy",
+      targetDir: path.join(testWorkspaceDir, "skills", "aiq-deploy"),
     });
 
-    const result = await installTestSkill("/tmp/workspace", "aiq-deploy");
+    const result = await installTestSkill(testWorkspaceDir, "aiq-deploy", { forceInstall: true });
 
     expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
       slug: "aiq-deploy",
       baseUrl: undefined,
+      forceInstall: true,
     });
     // GitHub-backed skills are approved by the install resolver before it
     // returns this pinned commit; they do not have a ClawHub release version.
@@ -1679,7 +999,7 @@ describe("skills-clawhub", () => {
     expectInstalledSkill(result, {
       slug: "aiq-deploy",
       version: commit,
-      targetDir: "/tmp/workspace/skills/aiq-deploy",
+      targetDir: path.join(testWorkspaceDir, "skills", "aiq-deploy"),
     });
   });
 
@@ -1693,7 +1013,7 @@ describe("skills-clawhub", () => {
       sourceUrl: "https://github.com/NVIDIA/skills/tree/main/skills/aiq-deploy",
     });
 
-    const result = await installTestSkill("/tmp/workspace", "aiq-deploy");
+    const result = await installTestSkill(testWorkspaceDir, "aiq-deploy");
 
     expect(result.ok).toBe(false);
     expect(result.ok ? "" : result.error).toContain("expected a full 40-character commit SHA");
@@ -1702,74 +1022,12 @@ describe("skills-clawhub", () => {
     expect(installPackageDirMock).not.toHaveBeenCalled();
   });
 
-  it("passes forceInstall to the ClawHub install resolver", async () => {
-    const commit = "b".repeat(40);
-    mockGitHubInstallResolution({
-      slug: "aiq-deploy",
-      repo: "NVIDIA/skills",
-      path: "skills/aiq-deploy",
-      commit,
-      contentHash: "hash-aiq-deploy",
-      sourceUrl: `https://github.com/NVIDIA/skills/tree/${commit}/skills/aiq-deploy`,
-    });
-    withExtractedArchiveRootMock.mockImplementationOnce(async (params) => {
-      return await params.onExtracted("/tmp/extracted-github-repo");
-    });
-    installPackageDirMock.mockResolvedValueOnce({
-      ok: true,
-      targetDir: "/tmp/workspace/skills/aiq-deploy",
-    });
-
-    const result = await installTestSkill("/tmp/workspace", "aiq-deploy", {
-      forceInstall: true,
-    });
-
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "aiq-deploy",
-      baseUrl: undefined,
-      forceInstall: true,
-    });
-    // forceInstall is a resolver policy input for GitHub-backed skills.
-    expect(fetchClawHubSkillSecurityVerdictsMock).not.toHaveBeenCalled();
-    expectInstalledSkill(result, {
-      slug: "aiq-deploy",
-      version: commit,
-      targetDir: "/tmp/workspace/skills/aiq-deploy",
-    });
-  });
-
-  it("keeps ClawHub install telemetry best-effort", async () => {
-    reportClawHubSkillInstallTelemetryMock.mockRejectedValueOnce(new Error("telemetry down"));
-
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt");
-
-    expectInstalledSkill(result, {
-      slug: "agentreceipt",
-      version: "1.0.0",
-    });
-  });
-
-  it("marks custom ClawHub skill registries as third-party install policy authority", async () => {
-    const result = await installTestSkill("/tmp/workspace", "agentreceipt", {
-      baseUrl: "https://clawhub.internal.example",
-    });
-
-    expectInstalledSkill(result, {
-      slug: "agentreceipt",
-      version: "1.0.0",
-    });
-    expect(installPolicyInput()).toMatchObject({
-      origin: { registry: "https://clawhub.internal.example" },
-      source: { kind: "clawhub", authority: "third-party", mutable: false, network: true },
-    });
-  });
-
-  it.each(["skill.md", "skills.md", "SKILL.MD"])(
+  it.each(["SKILL.MD"])(
     "installs ClawHub archives whose packed root uses legacy marker %s",
     async (marker) => {
       pathExistsMock.mockImplementation(async (input: string) => input.endsWith(marker));
 
-      const result = await installTestSkill("/tmp/workspace", "agentreceipt");
+      const result = await installTestSkill(testWorkspaceDir, "agentreceipt");
 
       expectInstalledSkill(result);
       expectInstallPackageSourceDir("/tmp/extracted-skill");
@@ -1837,33 +1095,6 @@ describe("skills-clawhub", () => {
     });
   });
 
-  it("reports a tracked skill removed from ClawHub with the same recovery message", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-missing-update-");
-    await writeTrackedSkill(workspaceDir, "missing-skill", {
-      installedVersion: "0.9.0",
-      skillMd: "# Missing skill\n",
-    });
-    const body = "remote update not-found detail";
-    fetchClawHubSkillInstallResolutionMock.mockRejectedValueOnce(
-      new ClawHubRequestError({
-        path: "/clawhub/api/v1/skills/missing-skill/install",
-        status: 404,
-        body,
-      }),
-    );
-
-    const results = await updateTestSkill(workspaceDir, "missing-skill");
-
-    expect(results).toEqual([
-      {
-        ok: false,
-        error:
-          'Skill "missing-skill" not found on ClawHub. Run `openclaw skills search missing-skill` to find the right skill reference.',
-      },
-    ]);
-    expect(results[0]?.ok ? "" : results[0]?.error).not.toContain(body);
-  });
-
   it("updates official publisher ClawHub skills without fetching security verdicts", async () => {
     const workspaceDir = await tempDirs.make("openclaw-official-owner-update-");
     await writeTrackedSkill(workspaceDir, "tao-setup-nvidia-gpu-host", {
@@ -1897,7 +1128,7 @@ describe("skills-clawhub", () => {
     fetchClawHubSkillSecurityVerdictsMock.mockRejectedValueOnce(new Error("should not be called"));
     mockInstalledSkillFile("# NVIDIA\n");
 
-    const results = await updateTestSkill(workspaceDir, "tao-setup-nvidia-gpu-host");
+    const results = await updateTestSkill(workspaceDir, "@nvidia/tao-setup-nvidia-gpu-host");
 
     expect(fetchClawHubSkillDetailMock).toHaveBeenCalledWith({
       slug: "tao-setup-nvidia-gpu-host",
@@ -1923,43 +1154,8 @@ describe("skills-clawhub", () => {
 
   it.each([
     {
-      ownerHandle: undefined,
-      skillRef: "agentreceipt",
-      workspaceName: "agent-workspace",
-    },
-    {
       ownerHandle: "acme",
       skillRef: "@acme/agentreceipt",
-      workspaceName: "different agent workspace",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "agentreceipt",
-      workspaceName: ".openclaw",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "a;printf X",
-      workspaceName: "shared state;printf PWN",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "b$(printf X)",
-      workspaceName: "agent$(printf PWN)",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "c`printf X`",
-      workspaceName: "agent`printf PWN`",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "white space",
-      workspaceName: "custom state directory",
-    },
-    {
-      ownerHandle: undefined,
-      skillRef: "d'$(printf X)",
       workspaceName: "agent's $(printf PWN) state",
     },
   ])(
@@ -1974,14 +1170,12 @@ describe("skills-clawhub", () => {
         installedVersion: "0.9.0",
         skillMd: "# Fixture\n",
       });
-      mockSkillSecurityVerdict({
+      mockSecurity({
         ok: false,
         decision: "fail",
         reasons: ["scan:malicious"],
         requestedSlug: slug,
-        requestedVersion: "1.0.0",
         slug,
-        version: "1.0.0",
         ...(ownerHandle ? { publisherHandle: ownerHandle } : {}),
         security: {
           status: "malicious",
@@ -2011,70 +1205,6 @@ describe("skills-clawhub", () => {
     },
   );
 
-  it("updates owner-qualified ClawHub skills when the requested owner matches tracking", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-owner-update-request-");
-    await writeTrackedSkill(workspaceDir, "weather", {
-      ownerHandle: "demo-owner",
-      installedVersion: "0.9.0",
-      skillMd: "# Fixture\n",
-    });
-    mockArchiveInstallResolution(
-      "weather",
-      "1.0.0",
-      "https://clawhub.ai/api/v1/download?slug=weather&ownerHandle=demo-owner&version=1.0.0",
-    );
-    mockInstalledSkillFile("# Weather\n");
-
-    const results = await updateTestSkill(workspaceDir, "@demo-owner/weather");
-
-    expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-      slug: "weather",
-      ownerHandle: "demo-owner",
-      baseUrl: "https://private.example.com/clawhub",
-    });
-    expect(results).toEqual([
-      expect.objectContaining({
-        ok: true,
-        slug: "weather",
-        previousVersion: "0.9.0",
-        version: "1.0.0",
-      }),
-    ]);
-  });
-
-  it("refuses to update a ClawHub skill with local changes unless forced", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-local-changes-update-");
-    const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
-      installedVersion: "0.9.0",
-      skillFile: {
-        path: "SKILL.md",
-        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
-      },
-      fileTreeSha256: `sha256:${"a".repeat(64)}`,
-    });
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather with local edits\n", "utf8");
-    pathExistsMock.mockImplementation(
-      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
-    );
-
-    const results = await updateTestSkill(workspaceDir, "weather");
-
-    expect(results).toEqual([
-      {
-        ok: false,
-        code: "force_required",
-        error:
-          'Skill "weather" has local SKILL.md changes. Updating replaces the installed skill directory.',
-      },
-    ]);
-    expect(installPackageDirMock).not.toHaveBeenCalled();
-    expect(downloadClawHubSkillArchiveMock).not.toHaveBeenCalled();
-    expect(downloadClawHubSkillArchiveUrlMock).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
-      "# Weather with local edits\n",
-    );
-  });
-
   it("refuses to update a ClawHub skill whose SKILL.md is unreadable unless forced", async () => {
     const workspaceDir = await tempDirs.make("openclaw-unreadable-update-");
     const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
@@ -2103,88 +1233,6 @@ describe("skills-clawhub", () => {
     expect(await fs.readFile(path.join(skillDir, "SKILL.md", "notes.txt"), "utf8")).toBe(
       "local content\n",
     );
-  });
-
-  it("refuses to replace a ClawHub skill edited while the update was downloading", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-concurrent-edit-update-");
-    const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
-      installedVersion: "0.9.0",
-      skillMd: "# Weather\n",
-    });
-    pathExistsMock.mockImplementation(
-      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
-    );
-    mockArchiveInstallResolution(
-      "weather",
-      "1.0.0",
-      "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
-    );
-    downloadClawHubSkillArchiveUrlMock.mockImplementationOnce(async () => {
-      await fs.writeFile(
-        path.join(skillDir, "SKILL.md"),
-        "# Weather edited during download\n",
-        "utf8",
-      );
-      return {
-        archivePath: "/tmp/weather.zip",
-        integrity: "sha256-test",
-        sha256Hex: "a".repeat(64),
-        artifact: "archive",
-        cleanup: archiveCleanupMock,
-      };
-    });
-
-    const results = await updateTestSkill(workspaceDir, "weather");
-
-    expect(results).toEqual([
-      {
-        ok: false,
-        code: "force_required",
-        error:
-          'Skill "weather" changed during update. Updating replaces the installed skill directory.',
-      },
-    ]);
-    expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledTimes(1);
-    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
-    expect(await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).toBe(
-      "# Weather edited during download\n",
-    );
-  });
-
-  it("updates a ClawHub skill with local changes when forced", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-local-changes-forced-update-");
-    const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
-      installedVersion: "0.9.0",
-      skillFile: {
-        path: "SKILL.md",
-        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
-      },
-      fileTreeSha256: `sha256:${"a".repeat(64)}`,
-    });
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather with local edits\n", "utf8");
-    pathExistsMock.mockImplementation(
-      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
-    );
-    mockArchiveInstallResolution(
-      "weather",
-      "1.0.0",
-      "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
-    );
-    mockInstalledSkillFile("# Weather\n");
-
-    const results = await updateTestSkill(workspaceDir, "weather", {
-      force: true,
-    });
-
-    expect(results).toEqual([
-      expect.objectContaining({
-        ok: true,
-        slug: "weather",
-        previousVersion: "0.9.0",
-        version: "1.0.0",
-      }),
-    ]);
-    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
   });
 
   it("requires a one-time force for tracked skills without recorded digests, then verifies digests", async () => {
@@ -2238,107 +1286,18 @@ describe("skills-clawhub", () => {
     expect(installPackageDirMock).toHaveBeenCalledTimes(2);
   });
 
-  it("updates an unmodified ClawHub skill without requiring force", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-clean-update-");
-    const skillDir = await writeTrackedSkill(workspaceDir, "weather", {
-      installedVersion: "0.9.0",
-      skillFile: {
-        path: "SKILL.md",
-        sha256: createHash("sha256").update("# Weather\n").digest("hex"),
-      },
-      fileTreeSha256: `sha256:${"a".repeat(64)}`,
-    });
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Weather\n", "utf8");
-    pathExistsMock.mockImplementation(
-      async (input: string) => input === skillDir || input.endsWith("SKILL.md"),
-    );
-    mockArchiveInstallResolution(
-      "weather",
-      "1.0.0",
-      "https://clawhub.ai/api/v1/download?slug=weather&version=1.0.0",
-    );
-    mockInstalledSkillFile("# Weather\n");
-
-    const results = await updateTestSkill(workspaceDir, "weather");
-
-    expect(results).toEqual([
-      expect.objectContaining({
-        ok: true,
-        slug: "weather",
-        previousVersion: "0.9.0",
-        version: "1.0.0",
-      }),
-    ]);
-    expect(installPackageDirMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("rejects owner-qualified ClawHub updates when the requested owner does not match tracking", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-owner-update-mismatch-");
-    await writeTrackedSkill(workspaceDir, "weather", {
-      ownerHandle: "other-owner",
-      installedVersion: "0.9.0",
-    });
-
-    await expect(
-      updateSkillsFromClawHub({
-        workspaceDir,
-        slug: "@demo-owner/weather",
-      }),
-    ).rejects.toThrow(
-      'Skill "weather" is tracked as @other-owner/weather, not @demo-owner/weather.',
-    );
-    expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
-  });
-
   describe("legacy tracked slugs remain updatable", () => {
     async function createLegacyTrackedSkillFixture(slug: string) {
-      const workspaceDir = await tempDirs.make("openclaw-skills-clawhub-");
-      const skillDir = path.join(workspaceDir, "skills", slug);
-      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
-      await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
+      const workspaceDir = testWorkspaceDir;
+      const skillDir = await writeTrackedSkill(workspaceDir, slug, {
+        registry: "https://legacy.clawhub.ai",
+        installedVersion: "0.9.0",
+      });
       await fs.writeFile(
-        path.join(skillDir, ".clawhub", "origin.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            registry: "https://legacy.clawhub.ai",
-            slug,
-            installedVersion: "0.9.0",
-            installedAt: 123,
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      await fs.writeFile(
-        path.join(workspaceDir, ".clawhub", "lock.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            skills: {
-              [slug]: {
-                version: "0.9.0",
-                installedAt: 123,
-              },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+        path.join(workspaceDir, ".clawhub/lock.json"),
+        JSON.stringify({ version: 1, skills: { [slug]: { version: "0.9.0", installedAt: 123 } } }),
       );
       return { workspaceDir, skillDir };
-    }
-
-    function expectLegacyUpdateSuccess(results: unknown, workspaceDir: string, slug: string) {
-      expect(Array.isArray(results)).toBe(true);
-      const first = (results as Array<Record<string, unknown>>)[0];
-      expect(first?.ok).toBe(true);
-      expect(first?.slug).toBe(slug);
-      expect(first?.previousVersion).toBe("0.9.0");
-      expect(first?.version).toBe("1.0.0");
-      expect(first?.targetDir).toBe(path.join(workspaceDir, "skills", slug));
     }
 
     it("updates all tracked legacy Unicode slugs in place", async () => {
@@ -2358,74 +1317,29 @@ describe("skills-clawhub", () => {
         targetDir: path.join(workspaceDir, "skills", slug),
       });
 
-      try {
-        const results = await updateTestSkill(workspaceDir, undefined, {
-          force: true,
-        });
-
-        expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-          slug,
-          baseUrl: "https://legacy.clawhub.ai",
-        });
-        expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
-          url: `https://legacy.clawhub.ai/api/v1/download?slug=${encodeURIComponent(slug)}&version=1.0.0`,
-          baseUrl: "https://legacy.clawhub.ai",
-        });
-        expectLegacyUpdateSuccess(results, workspaceDir, slug);
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("passes forceInstall to resolver for tracked updates", async () => {
-      const slug = "agentreceipt";
-      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
-      fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
-        ok: true,
-        slug,
-        installKind: "archive",
-        archive: {
-          version: "1.0.0",
-          downloadUrl: `https://legacy.clawhub.ai/api/v1/download?slug=${encodeURIComponent(slug)}&version=1.0.0`,
-        },
-      });
-      installPackageDirMock.mockResolvedValueOnce({
-        ok: true,
-        targetDir: path.join(workspaceDir, "skills", slug),
-      });
-
-      try {
-        const results = await updateTestSkill(workspaceDir, undefined, {
-          force: true,
-          forceInstall: true,
-        });
-
-        expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
-          slug,
-          baseUrl: "https://legacy.clawhub.ai",
-          forceInstall: true,
-        });
-        expectLegacyUpdateSuccess(results, workspaceDir, slug);
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("does not install configured skills during update all without ClawHub tracking", async () => {
-      const workspaceDir = await tempDirs.make("openclaw-configured-update-");
       const results = await updateTestSkill(workspaceDir, undefined, {
-        config: {
-          agents: {
-            defaults: {
-              skills: ["apple-notes", "sherpa-onnx-tts"],
-            },
-          },
-        },
+        force: true,
+        forceInstall: true,
       });
 
-      expect(results).toEqual([]);
-      expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
-      expect(installPackageDirMock).not.toHaveBeenCalled();
+      expect(fetchClawHubSkillInstallResolutionMock).toHaveBeenCalledWith({
+        slug,
+        baseUrl: "https://legacy.clawhub.ai",
+        forceInstall: true,
+      });
+      expect(downloadClawHubSkillArchiveUrlMock).toHaveBeenCalledWith({
+        url: `https://legacy.clawhub.ai/api/v1/download?slug=${encodeURIComponent(slug)}&version=1.0.0`,
+        baseUrl: "https://legacy.clawhub.ai",
+      });
+      expect(results).toEqual([
+        expect.objectContaining({
+          ok: true,
+          slug,
+          previousVersion: "0.9.0",
+          version: "1.0.0",
+          targetDir: path.join(workspaceDir, "skills", slug),
+        }),
+      ]);
     });
 
     it("rejects untracked requested updates instead of installing by slug", async () => {
@@ -2442,130 +1356,47 @@ describe("skills-clawhub", () => {
       expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
       expect(installPackageDirMock).not.toHaveBeenCalled();
     });
-
-    it("updates a legacy Unicode slug when requested explicitly", async () => {
-      const slug = "re\u0430ct";
-      const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
-      installPackageDirMock.mockResolvedValueOnce({
-        ok: true,
-        targetDir: path.join(workspaceDir, "skills", slug),
-      });
-
-      try {
-        const results = await updateTestSkill(workspaceDir, slug, {
-          force: true,
-        });
-
-        expectLegacyUpdateSuccess(results, workspaceDir, slug);
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("still rejects an untracked Unicode slug passed to update", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-clawhub-"));
-
-      try {
-        await expect(
-          updateSkillsFromClawHub({
-            workspaceDir,
-            slug: "re\u0430ct",
-          }),
-        ).rejects.toThrow("Invalid skill slug");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
   });
 
   describe("normalizeSlug rejects non-ASCII homograph slugs", () => {
-    it("rejects Cyrillic homograph 'а' (U+0430) in slug", async () => {
-      const result = await installTestSkill("/tmp/workspace", "re\u0430ct");
-      expectInvalidSlug(result);
-    });
-
-    it("rejects Cyrillic homograph 'е' (U+0435) in slug", async () => {
-      const result = await installTestSkill("/tmp/workspace", "r\u0435act");
-      expectInvalidSlug(result);
-    });
-
-    it("rejects Cyrillic homograph 'о' (U+043E) in slug", async () => {
-      const result = await installTestSkill("/tmp/workspace", "t\u043Edo");
-      expectInvalidSlug(result);
-    });
-
-    it("rejects slug with mixed Unicode and ASCII", async () => {
-      const result = await installTestSkill("/tmp/workspace", "cаlеndаr");
-      expectInvalidSlug(result);
-    });
-
-    it("rejects slug with non-Latin scripts", async () => {
-      const result = await installTestSkill("/tmp/workspace", "技能");
-      expectInvalidSlug(result);
-    });
-
     it("rejects Unicode that case-folds to ASCII (Kelvin sign U+212A)", async () => {
       // "\u212A" (Kelvin sign) lowercases to "k" — must be caught before lowercasing
-      const result = await installTestSkill("/tmp/workspace", "\u212Aalendar");
+      const result = await installTestSkill(testWorkspaceDir, "\u212Aalendar");
       expectInvalidSlug(result);
-    });
-
-    it("rejects slug starting with a hyphen", async () => {
-      const result = await installTestSkill("/tmp/workspace", "-calendar");
-      expectInvalidSlug(result);
-    });
-
-    it("rejects slug ending with a hyphen", async () => {
-      const result = await installTestSkill("/tmp/workspace", "calendar-");
-      expectInvalidSlug(result);
-    });
-
-    it("accepts uppercase ASCII slugs (preserves original casing behavior)", async () => {
-      const result = await installTestSkill("/tmp/workspace", "React");
-      expectInstalledSkill(result);
-    });
-
-    it("accepts valid lowercase ASCII slugs", async () => {
-      const result = await installTestSkill("/tmp/workspace", "calendar-2");
-      expectInstalledSkill(result);
     });
   });
 
   describe("verification target resolution", () => {
     it("preserves installed skills.sh references for verification", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        const skillDir = await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          requestedReference: "skills-sh:openclaw/skills/agentreceipt",
-          trustState: "not-scanned-by-clawhub",
-          registry: "https://private.example.com/clawhub/",
-          installedVersion: "2.0.0",
-        });
+      const workspaceDir = testWorkspaceDir;
+      const skillDir = await writeTrackedSkill(workspaceDir, "agentreceipt", {
+        requestedReference: "skills-sh:openclaw/skills/agentreceipt",
+        trustState: "not-scanned-by-clawhub",
+        registry: "https://private.example.com/clawhub/",
+        installedVersion: "2.0.0",
+      });
 
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "skills-sh:openclaw/skills/agentreceipt",
-          }),
-        ).resolves.toEqual({
-          ok: true,
-          slug: "agentreceipt",
-          requestedReference: "skills-sh:openclaw/skills/agentreceipt",
-          trustState: "not-scanned-by-clawhub",
-          baseUrl: "https://private.example.com/clawhub",
-          version: undefined,
-          tag: undefined,
-          resolution: {
-            source: "installed",
-            selector: "installed-version",
-            registry: "https://private.example.com/clawhub",
-            skillDir,
-            installedVersion: "2.0.0",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+      await expect(
+        resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "skills-sh:openclaw/skills/agentreceipt",
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        slug: "agentreceipt",
+        requestedReference: "skills-sh:openclaw/skills/agentreceipt",
+        trustState: "not-scanned-by-clawhub",
+        baseUrl: "https://private.example.com/clawhub",
+        version: undefined,
+        tag: undefined,
+        resolution: {
+          source: "installed",
+          selector: "installed-version",
+          registry: "https://private.example.com/clawhub",
+          skillDir,
+          installedVersion: "2.0.0",
+        },
+      });
     });
 
     it("rejects a different installed skills.sh reference before verification", async () => {
@@ -2588,15 +1419,12 @@ describe("skills-clawhub", () => {
       expect(fetchClawHubSkillVerificationMock).not.toHaveBeenCalled();
     });
 
-    it.each([
-      { version: "2.0.0", tag: undefined },
-      { version: undefined, tag: "latest" },
-    ])(
+    it.each([{ version: "2.0.0", tag: undefined }])(
       "rejects selectors for exact skills.sh verification references",
       async ({ version, tag }) => {
         await expect(
           resolveClawHubSkillVerificationTarget({
-            workspaceDir: "/tmp/workspace",
+            workspaceDir: testWorkspaceDir,
             slug: "skills-sh:openclaw/skills/agentreceipt",
             version,
             tag,
@@ -2608,10 +1436,7 @@ describe("skills-clawhub", () => {
       },
     );
 
-    it.each([
-      { version: "2.0.0", tag: undefined },
-      { version: undefined, tag: "latest" },
-    ])(
+    it.each([{ version: undefined, tag: "latest" }])(
       "rejects selectors when an installed skill is tracked from skills.sh",
       async ({ version, tag }) => {
         const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
@@ -2635,487 +1460,174 @@ describe("skills-clawhub", () => {
       },
     );
 
-    it("uses installed owner namespace when resolving owner-qualified verification targets", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "weather", {
-          ownerHandle: "demo-owner",
-          registry: "https://private.example.com/clawhub",
-          installedVersion: "2.0.0",
-        });
-
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "weather",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "weather",
-          ownerHandle: "demo-owner",
-          baseUrl: "https://private.example.com/clawhub",
-          version: "2.0.0",
-          tag: undefined,
-          resolution: {
-            source: "installed",
-            selector: "installed-version",
-            registry: "https://private.example.com/clawhub",
-            installedVersion: "2.0.0",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("accepts owner-qualified installed verification targets", async () => {
-      const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
-      try {
-        await writeTrackedSkill(workspaceDir, "weather", {
-          ownerHandle: "demo-owner",
-          registry: "https://private.example.com/clawhub",
-          installedVersion: "2.0.0",
-        });
-
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "@demo-owner/weather",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "weather",
-          ownerHandle: "demo-owner",
-          baseUrl: "https://private.example.com/clawhub",
-          version: "2.0.0",
-          tag: undefined,
-          resolution: {
-            source: "installed",
-            selector: "installed-version",
-            registry: "https://private.example.com/clawhub",
-            installedVersion: "2.0.0",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
     it("rejects owner-qualified installed verification when the owner differs", async () => {
       const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
-      try {
-        await writeTrackedSkill(workspaceDir, "weather", {
-          ownerHandle: "demo-owner",
-        });
+      await writeTrackedSkill(workspaceDir, "weather", {
+        ownerHandle: "demo-owner",
+      });
 
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "@other-owner/weather",
-        });
+      const result = await resolveClawHubSkillVerificationTarget({
+        workspaceDir,
+        slug: "@other-owner/weather",
+      });
 
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected owner mismatch failure");
-        }
-        expect(result.error).toContain("is tracked as @demo-owner/weather");
-        expect(result.error).toContain("not @other-owner/weather");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("keeps the installed registry when an explicit version overrides the installed version", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          registry: "https://private.example.com/clawhub",
-          installedVersion: "2.0.0",
-        });
-
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "agentreceipt",
-            version: "2.1.0",
-            baseUrl: "https://clawhub.ai",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "agentreceipt",
-          baseUrl: "https://private.example.com/clawhub",
-          version: "2.1.0",
-          tag: undefined,
-          resolution: {
-            source: "installed",
-            selector: "version",
-            registry: "https://private.example.com/clawhub",
-            installedVersion: "2.0.0",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+      expectFailure(result);
+      expect(result.error).toContain("is tracked as @demo-owner/weather");
+      expect(result.error).toContain("not @other-owner/weather");
     });
 
     it("keeps the installed registry when an explicit tag is provided", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
+      const workspaceDir = testWorkspaceDir;
+      await writeTrackedSkill(workspaceDir, "agentreceipt", {
+        registry: "https://private.example.com/clawhub",
+        installedVersion: "2.0.0",
+      });
+
+      await expect(
+        resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "agentreceipt",
+          tag: "beta",
+          baseUrl: "https://clawhub.ai",
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        slug: "agentreceipt",
+        baseUrl: "https://private.example.com/clawhub",
+        version: undefined,
+        tag: "beta",
+        resolution: {
+          source: "installed",
+          selector: "tag",
           registry: "https://private.example.com/clawhub",
           installedVersion: "2.0.0",
-        });
-
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "agentreceipt",
-            tag: "beta",
-            baseUrl: "https://clawhub.ai",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "agentreceipt",
-          baseUrl: "https://private.example.com/clawhub",
-          version: undefined,
-          tag: "beta",
-          resolution: {
-            source: "installed",
-            selector: "tag",
-            registry: "https://private.example.com/clawhub",
-            installedVersion: "2.0.0",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+        },
+      });
     });
 
-    it("rejects installed owner namespace metadata that does not match lock tracking", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "weather", {
-          ownerHandle: "demo-owner",
-        });
-        const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
-        const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
-          skills: Record<string, { ownerHandle?: string }>;
-        };
-        expectDefined(lock.skills.weather, "lock.skills.weather test invariant").ownerHandle =
-          "other-owner";
-        await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "weather",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected owner mismatch failure");
-        }
-        expect(result.error).toContain("origin metadata does not match");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
+    it.each([
+      {
+        name: "untracked origin",
+        fixture: { writeLock: false },
+        error: "not tracked by the workspace ClawHub lockfile",
+      },
+      {
+        name: "different slug",
+        fixture: { originSlug: "trusted-skill" },
+        error: 'origin metadata for "trusted-skill"',
+      },
+      {
+        name: "different registry",
+        fixture: {},
+        error: "does not match the workspace ClawHub lockfile",
+      },
+      { name: "missing origin", fixture: {}, error: "missing ClawHub origin metadata" },
+    ])("rejects $name", async ({ name, fixture, error }) => {
+      const workspaceDir = testWorkspaceDir;
+      const skillDir = await writeTrackedSkill(workspaceDir, "agentreceipt", fixture);
+      if (name === "different registry") {
+        const lockPath = path.join(workspaceDir, ".clawhub/lock.json");
+        const lock = await readJson<{ skills: Record<string, { registry: string }> }>(lockPath);
+        expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry").registry =
+          "https://other.example.com/clawhub";
+        await fs.writeFile(lockPath, JSON.stringify(lock));
       }
-    });
-
-    it("rejects installed origin metadata without workspace lock tracking", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          writeLock: false,
-        });
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected untracked origin failure");
-        }
-        expect(result.error).toContain("not tracked by the workspace ClawHub lockfile");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
+      if (name === "missing origin") {
+        await fs.unlink(path.join(skillDir, ".clawhub/origin.json"));
       }
-    });
-
-    it("rejects installed origin metadata for a different skill slug", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          originSlug: "trusted-skill",
-        });
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected slug mismatch failure");
-        }
-        expect(result.error).toContain('origin metadata for "trusted-skill"');
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects installed origin metadata that does not match lock tracking", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          installedVersion: "2.0.0",
-          installedAt: 123,
-        });
-        const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
-        const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
-          skills: Record<string, { version: string; installedAt: number; registry: string }>;
-        };
-        lock.skills.agentreceipt = {
-          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
-          version: "1.0.0",
-        };
-        await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected lock mismatch failure");
-        }
-        expect(result.error).toContain("does not match the workspace ClawHub lockfile");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects installed origin metadata when lock registry disagrees", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await writeTrackedSkill(workspaceDir, "agentreceipt", {
-          registry: "https://origin.example.com/clawhub",
-          installedVersion: "2.0.0",
-          installedAt: 123,
-        });
-        const lockPath = path.join(workspaceDir, ".clawhub", "lock.json");
-        const lock = JSON.parse(await fs.readFile(lockPath, "utf8")) as {
-          skills: Record<string, { version: string; installedAt: number; registry: string }>;
-        };
-        lock.skills.agentreceipt = {
-          ...expectDefined(lock.skills.agentreceipt, "agentreceipt lock entry"),
-          registry: "https://other.example.com/clawhub",
-        };
-        await fs.writeFile(lockPath, `${JSON.stringify(lock, null, 2)}\n`, "utf8");
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected registry mismatch failure");
-        }
-        expect(result.error).toContain("does not match the workspace ClawHub lockfile");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects lock-tracked installed skills without origin metadata", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
-        await fs.writeFile(
-          path.join(workspaceDir, ".clawhub", "lock.json"),
-          `${JSON.stringify(
-            {
-              version: 1,
-              skills: {
-                agentreceipt: {
-                  version: "2.0.0",
-                  installedAt: 123,
-                  registry: "https://private.example.com/clawhub",
-                },
-              },
-            },
-            null,
-            2,
-          )}\n`,
-          "utf8",
-        );
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected missing origin failure");
-        }
-        expect(result.error).toContain("missing ClawHub origin metadata");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("rejects malformed workspace locks before registry fallback", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        await fs.mkdir(path.join(workspaceDir, ".clawhub"), { recursive: true });
-        await fs.writeFile(path.join(workspaceDir, ".clawhub", "lock.json"), "{not json", "utf8");
-
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
-
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected malformed lock failure");
-        }
-        expect(result.error).toContain("Malformed workspace ClawHub lockfile");
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
-    });
-
-    it("uses the configured registry and latest selector for uninstalled skills", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      resolveClawHubBaseUrlMock.mockReturnValueOnce("https://configured.example.com/clawhub");
-      try {
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "agentreceipt",
-            baseUrl: "https://configured.example.com/clawhub/",
-          }),
-        ).resolves.toEqual({
-          ok: true,
-          slug: "agentreceipt",
-          baseUrl: "https://configured.example.com/clawhub",
-          version: undefined,
-          tag: undefined,
-          resolution: {
-            source: "registry",
-            selector: "latest",
-            registry: "https://configured.example.com/clawhub",
-            skillDir: undefined,
-            installedVersion: undefined,
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+      const result = await resolveClawHubSkillVerificationTarget({
+        workspaceDir,
+        slug: "agentreceipt",
+      });
+      expectFailure(result);
+      expect(result.error).toContain(error);
     });
 
     it("uses owner-qualified registry verification targets", async () => {
       const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
       resolveClawHubBaseUrlMock.mockReturnValueOnce("https://configured.example.com/clawhub");
-      try {
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "@demo-owner/weather",
-            baseUrl: "https://configured.example.com/clawhub/",
-          }),
-        ).resolves.toEqual({
-          ok: true,
-          slug: "weather",
-          ownerHandle: "demo-owner",
-          baseUrl: "https://configured.example.com/clawhub",
-          version: undefined,
-          tag: undefined,
-          resolution: {
-            source: "registry",
-            selector: "latest",
-            registry: "https://configured.example.com/clawhub",
-            skillDir: undefined,
-            installedVersion: undefined,
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+      await expect(
+        resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "@demo-owner/weather",
+          baseUrl: "https://configured.example.com/clawhub/",
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        baseUrl: "https://configured.example.com/clawhub",
+        version: undefined,
+        tag: undefined,
+        resolution: {
+          source: "registry",
+          selector: "latest",
+          registry: "https://configured.example.com/clawhub",
+          skillDir: undefined,
+          installedVersion: undefined,
+        },
+      });
     });
 
     it("keeps owner-qualified registry selectors for explicit versions and tags", async () => {
       const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
-      try {
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "@demo-owner/weather",
-            version: "2.0.0",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "weather",
-          ownerHandle: "demo-owner",
+      await expect(
+        resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "@demo-owner/weather",
           version: "2.0.0",
-          tag: undefined,
-          resolution: {
-            source: "registry",
-            selector: "version",
-          },
-        });
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        version: "2.0.0",
+        tag: undefined,
+        resolution: {
+          source: "registry",
+          selector: "version",
+        },
+      });
 
-        await expect(
-          resolveClawHubSkillVerificationTarget({
-            workspaceDir,
-            slug: "@demo-owner/weather",
-            tag: "beta",
-          }),
-        ).resolves.toMatchObject({
-          ok: true,
-          slug: "weather",
-          ownerHandle: "demo-owner",
-          version: undefined,
+      await expect(
+        resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "@demo-owner/weather",
           tag: "beta",
-          resolution: {
-            source: "registry",
-            selector: "tag",
-          },
-        });
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+        }),
+      ).resolves.toMatchObject({
+        ok: true,
+        slug: "weather",
+        ownerHandle: "demo-owner",
+        version: undefined,
+        tag: "beta",
+        resolution: {
+          source: "registry",
+          selector: "tag",
+        },
+      });
     });
 
     it("fails clearly when installed origin metadata is malformed", async () => {
-      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
-      try {
-        const skillDir = path.join(workspaceDir, "skills", "agentreceipt");
-        await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
-        await fs.writeFile(path.join(skillDir, ".clawhub", "origin.json"), "{not json", "utf8");
+      const workspaceDir = testWorkspaceDir;
+      const skillDir = path.join(workspaceDir, "skills", "agentreceipt");
+      await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
+      await fs.writeFile(path.join(skillDir, ".clawhub", "origin.json"), "{not json", "utf8");
 
-        const result = await resolveClawHubSkillVerificationTarget({
-          workspaceDir,
-          slug: "agentreceipt",
-        });
+      const result = await resolveClawHubSkillVerificationTarget({
+        workspaceDir,
+        slug: "agentreceipt",
+      });
 
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("expected malformed origin failure");
-        }
-        expect(result.error).toContain("Malformed ClawHub origin metadata");
-        expect(result.error).toContain(path.join(skillDir, ".clawhub", "origin.json"));
-      } finally {
-        await fs.rm(workspaceDir, { recursive: true, force: true });
-      }
+      expectFailure(result);
+      expect(result.error).toContain("Malformed ClawHub origin metadata");
+      expect(result.error).toContain(path.join(skillDir, ".clawhub", "origin.json"));
     });
 
     it("fails clearly for invalid slugs and conflicting selectors", async () => {
       await expect(
         resolveClawHubSkillVerificationTarget({
-          workspaceDir: "/tmp/workspace",
+          workspaceDir: testWorkspaceDir,
           slug: "bad/slug",
         }),
       ).resolves.toMatchObject({
@@ -3125,7 +1637,7 @@ describe("skills-clawhub", () => {
 
       await expect(
         resolveClawHubSkillVerificationTarget({
-          workspaceDir: "/tmp/workspace",
+          workspaceDir: testWorkspaceDir,
           slug: "agentreceipt",
           version: "1.0.0",
           tag: "latest",
@@ -3134,35 +1646,6 @@ describe("skills-clawhub", () => {
         ok: false,
         error: "Use either --version or --tag.",
       });
-    });
-  });
-
-  it("uses search for browse-all skill discovery", async () => {
-    searchClawHubSkillsMock.mockResolvedValueOnce([
-      {
-        score: 1,
-        slug: "calendar",
-        displayName: "Calendar",
-        summary: "Calendar skill",
-        version: "1.2.3",
-        updatedAt: 123,
-      },
-    ]);
-
-    await expect(searchSkillsFromClawHub({ limit: 20 })).resolves.toEqual([
-      {
-        score: 1,
-        slug: "calendar",
-        displayName: "Calendar",
-        summary: "Calendar skill",
-        version: "1.2.3",
-        updatedAt: 123,
-      },
-    ]);
-    expect(searchClawHubSkillsMock).toHaveBeenCalledWith({
-      query: "*",
-      limit: 20,
-      baseUrl: undefined,
     });
   });
 });
@@ -3174,39 +1657,26 @@ describe("ClawHub origin provenance readback", () => {
     origin: Record<string, unknown>;
     lockSkill?: Record<string, unknown>;
   }) {
-    const skillDir = path.join(params.workspaceDir, "skills", params.slug);
-    await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
-    await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Skill\n", "utf8");
-    await fs.writeFile(
-      path.join(skillDir, ".clawhub", "origin.json"),
-      `${JSON.stringify(params.origin, null, 2)}\n`,
-      "utf8",
-    );
-    await fs.mkdir(path.join(params.workspaceDir, ".clawhub"), { recursive: true });
-    await fs.writeFile(
-      path.join(params.workspaceDir, ".clawhub", "lock.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          skills: {
-            [params.slug]: params.lockSkill ?? {
-              version: params.origin.installedVersion,
-              installedAt: params.origin.installedAt,
-              registry: params.origin.registry,
-            },
-          },
+    const skillDir = await writeTrackedSkill(params.workspaceDir, params.slug, {
+      skillMd: "# Skill\n",
+    });
+    const lock = {
+      version: 1,
+      skills: {
+        [params.slug]: params.lockSkill ?? {
+          version: params.origin.installedVersion,
+          installedAt: params.origin.installedAt,
+          registry: params.origin.registry,
         },
-        null,
-        2,
-      )}\n`,
-      "utf8",
-    );
+      },
+    };
+    await fs.writeFile(path.join(skillDir, ".clawhub/origin.json"), JSON.stringify(params.origin));
+    await fs.writeFile(path.join(params.workspaceDir, ".clawhub/lock.json"), JSON.stringify(lock));
     return skillDir;
   }
 
   it("restores matching provenance and rejects one-sided origin edits", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-origin-prov-"));
-    try {
+    await withTempDir("openclaw-origin-prov-", async (workspaceDir) => {
       const artifact = {
         kind: "clawpack" as const,
         sha256: "a".repeat(64),
@@ -3285,14 +1755,11 @@ describe("ClawHub origin provenance readback", () => {
           reason: expect.stringContaining("does not match the workspace ClawHub lockfile"),
         });
       }
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("drops malformed provenance fields while keeping the link valid", async () => {
-    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-origin-prov-"));
-    try {
+    await withTempDir("openclaw-origin-prov-", async (workspaceDir) => {
       const skillDir = await writeOriginWithProvenance({
         workspaceDir,
         slug: "agentreceipt",
@@ -3321,9 +1788,7 @@ describe("ClawHub origin provenance readback", () => {
       expect(link.artifact).toBeUndefined();
       expect(link.skillFile).toBeUndefined();
       expect(link.sourceUrl).toBeUndefined();
-    } finally {
-      await fs.rm(workspaceDir, { recursive: true, force: true });
-    }
+    });
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,38 +1,15 @@
-// Openai plugin module implements shared behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createLazyRuntimeModule,
   createLazyRuntimeSurface,
 } from "openclaw/plugin-sdk/lazy-runtime";
-import { findCatalogTemplate } from "openclaw/plugin-sdk/provider-catalog-shared";
-import {
-  cloneFirstTemplateModel,
-  matchesExactOrPrefix,
-  type ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-metadata";
+import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { classifyOpenAIBaseUrl, isOpenAICodexBaseUrl, OPENAI_API_BASE_URL } from "./base-url.js";
 import { buildOpenAIReplayPolicy } from "./replay-policy.js";
+import { TOKEN_SHARING_AUTH_FLOW } from "./token-sharing.js";
 import { resolveOpenAITransportTurnState } from "./transport-policy.js";
-
-type SyntheticOpenAIModelCatalogCost = {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-};
-
-type SyntheticOpenAIModelCatalogEntry = {
-  provider: string;
-  id: string;
-  name: string;
-  reasoning?: boolean;
-  input?: ("text" | "image")[];
-  contextWindow?: number;
-  contextTokens?: number;
-  cost?: SyntheticOpenAIModelCatalogCost;
-};
-
-const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
 
 export const OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS = 272_000;
 
@@ -40,41 +17,15 @@ export function resolveConfiguredOpenAIBaseUrl(cfg: OpenClawConfig | undefined):
   return normalizeOptionalString(cfg?.models?.providers?.openai?.baseUrl) ?? OPENAI_API_BASE_URL;
 }
 
-function hasSupportedOpenAIResponsesTransport(
-  transport: unknown,
-): transport is "auto" | "sse" | "websocket" | "websocket-cached" {
-  return (
-    transport === "auto" ||
-    transport === "sse" ||
-    transport === "websocket" ||
-    transport === "websocket-cached"
-  );
-}
-
-function defaultOpenAIResponsesExtraParams(
-  extraParams: Record<string, unknown> | undefined,
-  options?: { transport?: "auto" | "sse" | "websocket" | "websocket-cached" },
-): Record<string, unknown> | undefined {
-  const hasSupportedTransport = hasSupportedOpenAIResponsesTransport(extraParams?.transport);
-  const defaultTransport = options?.transport ?? "auto";
-  if (hasSupportedTransport) {
-    return extraParams;
-  }
-
-  return {
-    ...extraParams,
-    transport: defaultTransport,
-  };
-}
-
 type OpenAIResponsesProviderHooks = Pick<
   ProviderPlugin,
-  "buildReplayPolicy" | "prepareExtraParams" | "wrapStreamFn" | "resolveTransportTurnState"
+  | "buildReplayPolicy"
+  | "prepareExtraParams"
+  | "wrapStreamFn"
+  | "wrapSimpleCompletionStreamFn"
+  | "resolveTransportTurnState"
+  | "isCacheTtlEligible"
 >;
-
-const resolveOpenAIResponsesTransportTurnState: NonNullable<
-  OpenAIResponsesProviderHooks["resolveTransportTurnState"]
-> = (ctx) => resolveOpenAITransportTurnState(ctx);
 
 const loadResponsesStream = createLazyRuntimeModule(() => import("./responses-stream.runtime.js"));
 const wrapOpenAIResponsesProviderStreamFn: NonNullable<
@@ -92,37 +43,29 @@ export function buildOpenAIResponsesProviderHooks(options?: {
   transport?: "auto" | "sse" | "websocket" | "websocket-cached";
 }): OpenAIResponsesProviderHooks {
   return {
+    // Native OpenAI caching is automatic; custom routes must explicitly opt in.
+    isCacheTtlEligible: ({ provider, baseUrl, supportsPromptCacheKey }) =>
+      normalizeProviderId(provider) === "openai" &&
+      (supportsPromptCacheKey ??
+        (classifyOpenAIBaseUrl(baseUrl) === "platform" || isOpenAICodexBaseUrl(baseUrl))),
     buildReplayPolicy: buildOpenAIReplayPolicy,
-    prepareExtraParams: (ctx) => defaultOpenAIResponsesExtraParams(ctx.extraParams, options),
+    prepareExtraParams: ({ extraParams }) => {
+      const transport = extraParams?.transport;
+      return ["auto", "sse", "websocket", "websocket-cached"].some(
+        (candidate) => candidate === transport,
+      )
+        ? extraParams
+        : { ...extraParams, transport: options?.transport ?? "auto" };
+    },
     wrapStreamFn: wrapOpenAIResponsesProviderStreamFn,
-    resolveTransportTurnState: resolveOpenAIResponsesTransportTurnState,
+    wrapSimpleCompletionStreamFn: (ctx) =>
+      ctx.auth?.mode === "oauth" && ctx.auth.authFlow === TOKEN_SHARING_AUTH_FLOW
+        ? wrapOpenAIResponsesProviderStreamFn({
+            ...ctx,
+            // Isolated completions share credential policy but must remain tool-free.
+            nativeWebSearchAllowedByToolPolicy: false,
+          })
+        : undefined,
+    resolveTransportTurnState: resolveOpenAITransportTurnState,
   };
 }
-
-export function buildOpenAISyntheticCatalogEntry(
-  template: ReturnType<typeof findCatalogTemplate>,
-  entry: {
-    id: string;
-    reasoning: boolean;
-    input: readonly ("text" | "image")[];
-    contextWindow: number;
-    contextTokens?: number;
-    cost?: SyntheticOpenAIModelCatalogCost;
-  },
-): SyntheticOpenAIModelCatalogEntry | undefined {
-  if (!template) {
-    return undefined;
-  }
-  return {
-    ...template,
-    id: entry.id,
-    name: entry.id,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    contextWindow: entry.contextWindow,
-    ...(entry.contextTokens === undefined ? {} : { contextTokens: entry.contextTokens }),
-    ...(entry.cost === undefined ? {} : { cost: entry.cost }),
-  };
-}
-
-export { cloneFirstTemplateModel, findCatalogTemplate, matchesExactOrPrefix };

@@ -1,4 +1,4 @@
-import { appendAttachmentUrlSearchParam } from "./chat-message-local-media.ts";
+import { raceWithTimeout, sleepWithAbort } from "@openclaw/retry";
 
 export type ChatMediaPlaybackMode = "native" | "transcode";
 
@@ -17,7 +17,18 @@ function playbackAbortError(signal: AbortSignal): Error {
 }
 
 export function appendChatMediaPlaybackParam(source: string): string {
-  return appendAttachmentUrlSearchParam(source, "playback", "1");
+  const trimmed = source.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const hashIndex = trimmed.indexOf("#");
+  const hash = hashIndex === -1 ? "" : trimmed.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf("?");
+  const path = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  const params = new URLSearchParams(queryIndex === -1 ? "" : withoutHash.slice(queryIndex + 1));
+  params.set("playback", "1");
+  return `${path}?${params.toString()}${hash}`;
 }
 
 export function buildChatMediaFetchHeaders(authToken: string | null | undefined): Headers {
@@ -29,79 +40,43 @@ export function buildChatMediaFetchHeaders(authToken: string | null | undefined)
   return headers;
 }
 
-function waitForRetry(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return Promise.reject(playbackAbortError(signal));
-  }
-  return new Promise((resolve, reject) => {
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(playbackAbortError(signal));
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
 async function fetchPlaybackHead(params: {
   source: string;
   headers: Headers;
   signal: AbortSignal;
   timeoutMs: number;
-  fetchImpl: typeof fetch;
 }): Promise<Response> {
-  const { fetchImpl } = params;
   const controller = new AbortController();
-  let rejectDeadline: ((error: Error) => void) | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    rejectDeadline = reject;
-  });
-  const onAbort = () => {
-    const error = playbackAbortError(params.signal);
-    controller.abort(error);
-    rejectDeadline?.(error);
-  };
-  params.signal.addEventListener("abort", onAbort, { once: true });
-  if (params.signal.aborted) {
-    onAbort();
-  }
-  const timer = setTimeout(() => {
-    const error = new DOMException("playback readiness request timed out", "TimeoutError");
-    controller.abort(error);
-    rejectDeadline?.(error);
-  }, params.timeoutMs);
-  try {
-    return await Promise.race([
-      fetchImpl(params.source, {
+  return await raceWithTimeout(
+    () =>
+      fetch(params.source, {
         method: "HEAD",
         headers: params.headers,
         credentials: "same-origin",
         signal: controller.signal,
       }),
-      deadline,
-    ]);
-  } finally {
-    clearTimeout(timer);
-    params.signal.removeEventListener("abort", onAbort);
-  }
+    params.timeoutMs,
+    () => {
+      const error = new DOMException("playback readiness request timed out", "TimeoutError");
+      controller.abort(error);
+      throw error;
+    },
+    {
+      signal: params.signal,
+      onAbort: (signal) => {
+        const error = playbackAbortError(signal);
+        controller.abort(error);
+        throw error;
+      },
+    },
+  );
 }
 
 export async function waitForChatMediaPlayback(params: {
   source: string;
   authToken?: string | null;
   signal: AbortSignal;
-  onPreparing?: () => void;
-  fetchImpl?: typeof fetch;
-  retryDelaysMs?: readonly number[];
-  waitImpl?: (delayMs: number, signal: AbortSignal) => Promise<void>;
-  requestTimeoutMs?: number;
 }): Promise<ChatMediaPlaybackReadiness> {
-  const fetchImpl = params.fetchImpl ?? fetch;
-  const retryDelaysMs = params.retryDelaysMs ?? CHAT_MEDIA_PLAYBACK_RETRY_DELAYS_MS;
-  const waitImpl = params.waitImpl ?? waitForRetry;
   const headers = buildChatMediaFetchHeaders(params.authToken);
   headers.set("Accept", "audio/*, video/*");
   const deadline = Date.now() + CHAT_MEDIA_PLAYBACK_MAX_WAIT_MS;
@@ -119,17 +94,12 @@ export async function waitForChatMediaPlayback(params: {
         source: params.source,
         headers,
         signal: params.signal,
-        timeoutMs: Math.min(
-          params.requestTimeoutMs ?? CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS,
-          remainingMs,
-        ),
-        fetchImpl,
+        timeoutMs: Math.min(CHAT_MEDIA_PLAYBACK_REQUEST_TIMEOUT_MS, remainingMs),
       });
       if (response.status !== 202) {
         return response.ok ? "ready" : "unavailable";
       }
-      params.onPreparing?.();
-      const retryDelay = retryDelaysMs[attempt];
+      const retryDelay = CHAT_MEDIA_PLAYBACK_RETRY_DELAYS_MS[attempt];
       if (retryDelay === undefined) {
         return "unavailable";
       }
@@ -137,7 +107,7 @@ export async function waitForChatMediaPlayback(params: {
       if (remainingAfterResponseMs <= 0) {
         return "unavailable";
       }
-      await waitImpl(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
+      await sleepWithAbort(Math.min(retryDelay, remainingAfterResponseMs), params.signal);
     } catch {
       return params.signal.aborted ? "aborted" : "unavailable";
     }

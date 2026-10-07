@@ -32,14 +32,14 @@ describe("scheduled show_widget", () => {
     expect(schema.required).toContain("pin");
     expect(schema.properties?.pin?.const).toBe(true);
     expect(schema.properties?.presentation?.properties).not.toHaveProperty("target");
-    expect(tool.description).toContain("This scheduled surface is pinned-only");
+    expect(tool.description).toContain("This surface is pinned-only");
 
     await expect(
       tool.execute("scheduled-unpinned", {
         title: "Scheduled status",
         widget_code: "<main>ready</main>",
       }),
-    ).rejects.toThrow("pin=true is required for this scheduled widget surface");
+    ).rejects.toThrow("pin=true is required for this pinned-only widget surface");
     await expect(
       tool.execute("scheduled-target", {
         title: "Scheduled status",
@@ -47,13 +47,11 @@ describe("scheduled show_widget", () => {
         pin: true,
         presentation: { target: "assistant_message" },
       }),
-    ).rejects.toThrow(
-      "presentation.target is unavailable for this pinned-only scheduled widget surface",
-    );
+    ).rejects.toThrow("presentation.target is unavailable for this pinned-only widget surface");
 
     const result = await tool.execute("scheduled-pinned", {
       title: "Scheduled status",
-      widget_code: "<main>ready</main>",
+      widget_code: "<button onclick=\"this.textContent='updated'\">Update</button>",
       name: "scheduled-status",
       pin: true,
     });
@@ -62,14 +60,17 @@ describe("scheduled show_widget", () => {
       status: "pinned",
       boardWidgetName: "scheduled-status",
       capabilityState: "none",
-      text: "Widget pinned to dashboard tab main as scheduled-status",
+      text: "Widget pinned to dashboard tab main as scheduled-status. Open this dashboard tab in Control UI to view it.",
     });
     expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
       "board.widget.put",
       expect.objectContaining({
         sessionKey: "agent:main:dashboard:scheduled",
         name: "scheduled-status",
-        content: { kind: "html", html: "<main>ready</main>" },
+        content: {
+          kind: "html",
+          html: "<button onclick=\"this.textContent='updated'\">Update</button>",
+        },
       }),
     );
     await expect(access(resolveCanvasDocumentsDir(stateDir))).rejects.toThrow();

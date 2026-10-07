@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { configureRuntimeActionDecisionSink } from "../audit/runtime-action-decision.js";
@@ -7,6 +8,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
+import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { applyPluginNodeInvokePolicy } from "./node-invoke-plugin-policy.js";
 import type { NodeInvokeResult, NodeSession } from "./node-registry.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -87,9 +89,8 @@ function createContext(node: NodeSession) {
   };
 }
 
-async function runPolicy(node = createNode()) {
+async function runPolicy(node = createNode(), receipts: DecisionReceiptV1[] = []) {
   const { context, invoke } = createContext(node);
-  const receipts: DecisionReceiptV1[] = [];
   const clear = configureRuntimeActionDecisionSink((receipt) => {
     receipts.push(receipt);
     return true;
@@ -158,14 +159,21 @@ describe("plugin node action receipts", () => {
     ]);
   });
 
+  it("does not turn a closed approval observation into a denied policy receipt", async () => {
+    const closed = new ApprovalObserverClosedError();
+    registerPolicy(async () => {
+      throw closed;
+    });
+    const receipts: DecisionReceiptV1[] = [];
+    await expect(runPolicy(createNode(), receipts)).rejects.toBe(closed);
+    expect(receipts).toEqual([]);
+  });
+
   it.each(["allowed", "denied", "throws"] as const)(
     "does not attribute a late %s policy result after runtime authority closes",
     async (outcome) => {
       let releasePolicy: (() => void) | undefined;
-      let markPolicyStarted: (() => void) | undefined;
-      const policyStarted = new Promise<void>((resolve) => {
-        markPolicyStarted = resolve;
-      });
+      const { promise: policyStarted, resolve: markPolicyStarted } = createDeferred();
       const policyWait = new Promise<void>((resolve) => {
         releasePolicy = resolve;
       });

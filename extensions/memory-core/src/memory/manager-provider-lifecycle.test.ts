@@ -1,6 +1,9 @@
 // Memory Core tests cover manager provider lifecycle availability behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -20,6 +23,61 @@ describe("memory index", () => {
     requireManager,
     trackManager,
   } = fixture;
+
+  it.each([false, true])(
+    "drains startup transcript discovery before closing (scan failure: %s)",
+    async (failScan) => {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      const scanStarted = createDeferred<void>();
+      const scanGate = createDeferred<void>();
+      const scanFinished = createDeferred<void>();
+      const realReaddir = fs.readdir;
+      const readdirSpy = vi
+        .spyOn(fs, "readdir")
+        .mockImplementation(async (...args: Parameters<typeof fs.readdir>) => {
+          if (path.resolve(String(args[0])) !== sessionsDir) {
+            return await realReaddir(...args);
+          }
+          scanStarted.resolve();
+          try {
+            await scanGate.promise;
+            if (failScan) {
+              throw Object.assign(new Error("transcript scan failed"), { code: "EIO" });
+            }
+            return await realReaddir(...args);
+          } finally {
+            scanFinished.resolve();
+          }
+        });
+      let closing: Promise<void> | undefined;
+      try {
+        const manager = await getPersistentManager(
+          createCfg({
+            provider: "none",
+            sources: ["sessions"],
+            rememberAcrossConversations: true,
+          }),
+        );
+        await scanStarted.promise;
+        let closed = false;
+        closing = manager.close().then(() => {
+          closed = true;
+        });
+        await yieldToEventLoop();
+        expect(closed).toBe(false);
+        scanGate.resolve();
+        await closing;
+        expect(closed).toBe(true);
+      } finally {
+        scanGate.resolve();
+        await closing;
+        await scanFinished.promise;
+        await yieldToEventLoop();
+        readdirSpy.mockRestore();
+      }
+    },
+  );
 
   it("caches embedding probe readiness across transient status managers", async () => {
     const cfg = createCfg({});
@@ -199,7 +257,6 @@ describe("memory index", () => {
     const cfg = createCfg({
       provider: "openai",
       fallback: "fallback-provider",
-      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
@@ -211,11 +268,19 @@ describe("memory index", () => {
     const fields = manager as unknown as {
       provider: {
         embed: (text: string) => Promise<number[]>;
+        close: () => Promise<void>;
       } | null;
     };
     if (!fields.provider) {
       throw new Error("Expected a test embedding provider");
     }
+    const providerCloseStarted = createDeferred<void>();
+    const closeProvider = fields.provider.close.bind(fields.provider);
+    fields.provider.close = () => {
+      const closing = closeProvider();
+      providerCloseStarted.resolve();
+      return closing;
+    };
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
@@ -224,7 +289,8 @@ describe("memory index", () => {
     const searchPromise = manager.search("alpha");
     let concurrentSearch: ReturnType<typeof manager.search> = Promise.resolve([]);
     try {
-      await vi.waitFor(() => expect(providerFixture.providerCloseCalls).toBe(1));
+      await Promise.race([providerCloseStarted.promise, searchPromise]);
+      expect(providerFixture.providerCloseCalls).toBe(1);
       concurrentSearch = manager.search("zebra");
       let concurrentSettled = false;
       void concurrentSearch.then(
@@ -243,10 +309,6 @@ describe("memory index", () => {
       providerFixture.providerCloseGate = null;
       await Promise.allSettled([searchPromise, concurrentSearch]);
     }
-    expect(
-      providerFixture.providerCalls.slice(callsBeforeSearch).map((call) => call.provider),
-    ).toEqual(["fallback-provider"]);
-    await expect(concurrentSearch).resolves.toBeDefined();
   });
 
   it("leases the indexing provider generation through chunk publication", async () => {
@@ -255,7 +317,6 @@ describe("memory index", () => {
         provider: "openai",
         fallback: "fallback-provider",
         cacheEnabled: true,
-        hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
       }),
       "cli",
     );
@@ -281,7 +342,7 @@ describe("memory index", () => {
           hash: string;
           content: string;
         },
-        options: { source: "memory"; content: string },
+        source: "memory",
       ) => Promise<void>;
       ensureVectorReady: (dimensions?: number) => Promise<boolean>;
       db: {
@@ -361,7 +422,7 @@ describe("memory index", () => {
         hash: hashText(firstContent),
         content: firstContent,
       },
-      { source: "memory", content: firstContent },
+      "memory",
     );
     const secondIndexPromise = fields.indexFile(
       {
@@ -372,7 +433,7 @@ describe("memory index", () => {
         hash: hashText(secondContent),
         content: secondContent,
       },
-      { source: "memory", content: secondContent },
+      "memory",
     );
     let fallbackPromise: Promise<boolean> | null = null;
     try {

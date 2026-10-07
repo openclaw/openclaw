@@ -10,10 +10,11 @@ import {
 } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { listAgentEntries } from "../agents/agent-scope-config.js";
+import { listAgentEntries, listAgentIds } from "../agents/agent-scope-config.js";
 import { resolveConfiguredTalkRealtimeProviderId } from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import type {
@@ -24,19 +25,6 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-re
 import { CORE_BUILT_IN_MODEL_APIS } from "./provider-config-owner.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-export function manifestOwnsConfiguredSpeechProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredSpeechProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredSpeechProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.speechProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredSpeechProviderIds.has(normalized) : false;
-  });
-}
-
 export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
   const search = config.tools?.web?.search;
   if (search?.enabled === false || typeof search?.provider !== "string") {
@@ -44,26 +32,6 @@ export function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): R
   }
   const providerId = normalizeOptionalLowercaseString(search.provider);
   return providerId ? new Set([providerId]) : new Set();
-}
-
-export function manifestOwnsConfiguredWebSearchProvider(params: {
-  manifest: PluginManifestRecord | undefined;
-  configuredWebSearchProviderIds: ReadonlySet<string>;
-}): boolean {
-  if (params.configuredWebSearchProviderIds.size === 0) {
-    return false;
-  }
-  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
-    const normalized = normalizeOptionalLowercaseString(providerId);
-    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
-  });
-}
-
-function listModelProviderRefParts(value: unknown): Array<{ providerId: string; modelId: string }> {
-  return listModelRefsFromConfigValue(value)
-    .map(parseModelCatalogRef)
-    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
-    .map(({ provider, modelId }) => ({ providerId: provider, modelId }));
 }
 
 function collectModelProviderIds(value: unknown): ReadonlySet<string> {
@@ -80,6 +48,7 @@ function collectModelProviderIds(value: unknown): ReadonlySet<string> {
 type ManifestModelProviderLookup = {
   modelApis: ReadonlyMap<string, string>;
   providerIds: ReadonlySet<string>;
+  cliBackendIds: ReadonlySet<string>;
 };
 
 function buildManifestModelProviderLookup(
@@ -103,6 +72,9 @@ function buildManifestModelProviderLookup(
   );
   return {
     modelApis,
+    cliBackendIds: new Set(
+      manifestRegistry.plugins.flatMap((plugin) => plugin.cliBackends.map(normalizeProviderId)),
+    ),
     providerIds: new Set(
       manifestRegistry.plugins.flatMap((plugin) => plugin.providers.map(normalizeProviderId)),
     ),
@@ -115,10 +87,14 @@ export function collectConfiguredAgentModelProviderIds(
 ): ReadonlySet<string> {
   const modelIdsByProvider = new Map<string, Set<string>>();
   const addModelProviderRefs = (value: unknown) => {
-    for (const { providerId, modelId } of listModelProviderRefParts(value)) {
-      const modelIds = modelIdsByProvider.get(providerId) ?? new Set<string>();
-      modelIds.add(modelId);
-      modelIdsByProvider.set(providerId, modelIds);
+    for (const ref of listModelRefsFromConfigValue(value)) {
+      const parsed = parseModelCatalogRef(ref);
+      if (!parsed) {
+        continue;
+      }
+      const modelIds = modelIdsByProvider.get(parsed.provider) ?? new Set<string>();
+      modelIds.add(parsed.modelId);
+      modelIdsByProvider.set(parsed.provider, modelIds);
     }
   };
   const addModelMapProviderIds = (models: unknown) => {
@@ -154,17 +130,17 @@ export function collectConfiguredAgentModelProviderIds(
   );
 
   return new Set(
-    [...modelIdsByProvider.entries()]
-      .filter(([providerId, modelIds]) => {
-        return [...modelIds].some((modelId) =>
+    [...modelIdsByProvider]
+      .filter(([providerId, modelIds]) =>
+        [...modelIds].some((modelId) =>
           configuredModelProviderNeedsRuntimePlugin({
             config,
             manifestModelProviders,
             providerId,
             modelId,
           }),
-        );
-      })
+        ),
+      )
       .map(([providerId]) => providerId),
   );
 }
@@ -175,6 +151,10 @@ function configuredModelProviderNeedsRuntimePlugin(params: {
   providerId: string;
   modelId: string;
 }): boolean {
+  // A model API hint cannot replace the runtime registration of a selected CLI backend.
+  if (params.manifestModelProviders.cliBackendIds.has(params.providerId)) {
+    return true;
+  }
   const providerConfig = params.config.models?.providers?.[params.providerId];
   const configuredModel = providerConfig?.models?.find((model) => model.id === params.modelId);
   const modelApi =
@@ -196,9 +176,9 @@ export function manifestOwnsConfiguredModelProvider(params: {
   if (params.configuredModelProviderIds.size === 0) {
     return false;
   }
-  return (params.manifest?.providers ?? []).some((providerId) => {
-    return params.configuredModelProviderIds.has(normalizeProviderId(providerId));
-  });
+  return [...(params.manifest?.providers ?? []), ...(params.manifest?.cliBackends ?? [])].some(
+    (providerId) => params.configuredModelProviderIds.has(normalizeProviderId(providerId)),
+  );
 }
 
 export function collectConfiguredGenerationProviderIds(
@@ -232,16 +212,8 @@ export function collectConfiguredVoiceProviderIds(
 // boot. Missing/"auto" stays lazy, and "none" disables provider-backed embeddings.
 const MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS: ReadonlySet<string> = new Set(["auto", "none"]);
 
-function normalizeMemoryEmbeddingProviderIdValue(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  return normalized || undefined;
-}
-
 function normalizeExplicitMemoryEmbeddingProviderId(value: unknown): string | undefined {
-  const normalized = normalizeMemoryEmbeddingProviderIdValue(value);
+  const normalized = normalizeOptionalLowercaseString(value);
   return normalized && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(normalized)
     ? normalized
     : undefined;
@@ -254,10 +226,6 @@ function readMemorySearchEnabled(
   return typeof enabled === "boolean" ? enabled : undefined;
 }
 
-function isMemorySlotExplicitlyDisabled(config: OpenClawConfig): boolean {
-  return normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none";
-}
-
 type MemoryEmbeddingStartupProviderSource = "provider" | "fallback";
 
 type ConfiguredMemoryEmbeddingStartupProviderOwner = {
@@ -268,6 +236,7 @@ type ConfiguredMemoryEmbeddingStartupProviderOwner = {
    * `models.providers.<id>.api` owner when a custom provider maps to one.
    */
   ownerIds: ReadonlySet<string>;
+  agentIds: Set<string>;
   source: MemoryEmbeddingStartupProviderSource;
 };
 
@@ -311,9 +280,7 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
   if (!enabled) {
     return [];
   }
-  const rawProvider = normalizeMemoryEmbeddingProviderIdValue(
-    override?.provider ?? defaults?.provider,
-  );
+  const rawProvider = normalizeOptionalLowercaseString(override?.provider ?? defaults?.provider);
   const effectiveProvider = rawProvider === "auto" || !rawProvider ? "openai" : rawProvider;
   if (effectiveProvider === "none") {
     return [];
@@ -322,10 +289,7 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
     configuredId: string;
     source: MemoryEmbeddingStartupProviderSource;
   }> = [];
-  const provider =
-    rawProvider && !MEMORY_EMBEDDING_PROVIDER_STARTUP_SKIP_IDS.has(rawProvider)
-      ? rawProvider
-      : undefined;
+  const provider = normalizeExplicitMemoryEmbeddingProviderId(rawProvider);
   if (provider) {
     entries.push({ configuredId: provider, source: "provider" });
   }
@@ -347,55 +311,58 @@ function resolveEffectiveMemoryEmbeddingProviderEntries(
 export function collectConfiguredMemoryEmbeddingStartupProviderOwners(
   config: OpenClawConfig,
 ): ConfiguredMemoryEmbeddingStartupProviderOwner[] {
-  if (isMemorySlotExplicitlyDisabled(config)) {
+  if (normalizeOptionalLowercaseString(config.plugins?.slots?.memory) === "none") {
     return [];
   }
   const byConfiguredIdAndSource = new Map<string, ConfiguredMemoryEmbeddingStartupProviderOwner>();
   const defaultsBlock = config.memory?.search;
   const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
-  const addEffectiveProviders = (override: Record<string, unknown> | undefined) => {
+  const addEffectiveProviders = (
+    override: Record<string, unknown> | undefined,
+    agentId?: string,
+  ) => {
     for (const { configuredId, source } of resolveEffectiveMemoryEmbeddingProviderEntries(
       defaults,
       override,
     )) {
       const key = `${source}\0${configuredId}`;
-      if (byConfiguredIdAndSource.has(key)) {
+      const existing = byConfiguredIdAndSource.get(key);
+      if (existing) {
+        if (agentId) {
+          existing.agentIds.add(agentId);
+        }
         continue;
       }
       byConfiguredIdAndSource.set(key, {
         configuredId,
         ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
+        agentIds: new Set(agentId ? [agentId] : []),
         source,
       });
     }
   };
-  addEffectiveProviders(undefined);
   const agentEntries = listAgentEntries(config);
-  if (agentEntries.length === 0) {
-    return [...byConfiguredIdAndSource.values()];
-  }
+  addEffectiveProviders(undefined, agentEntries.length === 0 ? listAgentIds(config)[0] : undefined);
   for (const agent of agentEntries) {
     const memory = isRecord(agent.memory) ? agent.memory : undefined;
-    addEffectiveProviders(isRecord(memory?.search) ? memory.search : undefined);
+    addEffectiveProviders(
+      isRecord(memory?.search) ? memory.search : undefined,
+      normalizeAgentId(agent.id),
+    );
   }
   return [...byConfiguredIdAndSource.values()];
 }
 
-/**
- * Collect configured memory embedding provider ids that map to a plugin-owned
- * memory embedding provider contract, including the resolved `api` owner for
- * custom `models.providers` ids so the owning plugin loads at startup.
- */
 export function collectConfiguredMemoryEmbeddingProviderIds(
   config: OpenClawConfig,
 ): ReadonlySet<string> {
-  const providerIds = new Set<string>();
+  const ids = new Set<string>();
   for (const provider of collectConfiguredMemoryEmbeddingStartupProviderOwners(config)) {
     for (const ownerId of provider.ownerIds) {
-      providerIds.add(ownerId);
+      ids.add(ownerId);
     }
   }
-  return providerIds;
+  return ids;
 }
 
 /**
@@ -434,10 +401,8 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
 export function collectRegisteredEmbeddingProviderIds(
   registry: Partial<Pick<PluginRegistry, "embeddingProviders">>,
 ): Set<string> {
-  return new Set(
-    [
-      ...(registry.embeddingProviders ?? []),
-      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
-    ].map((entry) => entry.provider.id),
-  );
+  return new Set([
+    ...(registry.embeddingProviders ?? []).map((entry) => entry.provider.id),
+    ...listRegisteredEmbeddingProviders().map((entry) => entry.adapter.id),
+  ]);
 }

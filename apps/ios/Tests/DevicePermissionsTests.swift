@@ -9,7 +9,7 @@ struct DevicePermissionsTests {
     @Test func `contacts statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.contacts(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.contacts(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.contacts(.denied) == .denied)
         #expect(DevicePermissionStatusMap.contacts(.restricted) == .denied)
     }
@@ -17,7 +17,7 @@ struct DevicePermissionsTests {
     @Test func `photos statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.photos(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.photos(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.photos(.denied) == .denied)
     }
 
@@ -26,7 +26,7 @@ struct DevicePermissionsTests {
         #expect(DevicePermissionStatusMap.eventKitWrite(.writeOnly) == .granted)
         #expect(DevicePermissionStatusMap.eventKitRead(.fullAccess) == .granted)
         #expect(DevicePermissionStatusMap.eventKitWrite(.fullAccess) == .granted)
-        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.eventKitRead(.denied) == .denied)
     }
 
@@ -50,38 +50,10 @@ struct DevicePermissionsTests {
         #expect(!wizard.contains("navigate(to: .permissions)"))
     }
 
-    @Test func `settings first request says Continue and immediately requests permission`() throws {
-        let settings = try String(
-            contentsOf: Self.sourceRoot()
-                .appending(path: "Settings", directoryHint: .isDirectory)
-                .appending(path: "PrivacyAccessSectionView.swift"),
-            encoding: .utf8)
-        let actionTitles = try #require(Self.extract(
-            settings,
-            from: "    private func standardActionTitle(",
-            to: "    /// `limitedRequests`"))
-        let action = try #require(Self.extract(
-            settings,
-            from: "    private func standardAction(",
-            to: "    private func requestContacts()"))
-
-        #expect(actionTitles.contains("case .notRequested:\n            LocalizedStringResource(\"Continue\")"))
-        #expect(!actionTitles.contains("LocalizedStringResource(\"Allow\")"))
-        #expect(action.contains("await request()"))
-        #expect(action.contains("case .notRequested:\n            return run"))
-    }
-
     private static func sourceRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appending(path: "Sources", directoryHint: .isDirectory)
-    }
-
-    private static func extract(_ source: String, from start: String, to end: String) -> String? {
-        guard let startRange = source.range(of: start),
-              let endRange = source.range(of: end, range: startRange.upperBound..<source.endIndex)
-        else { return nil }
-        return String(source[startRange.lowerBound..<endRange.lowerBound])
     }
 }

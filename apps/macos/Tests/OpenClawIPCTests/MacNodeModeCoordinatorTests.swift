@@ -176,14 +176,6 @@ private final class CoordinatorRetrySleeperProbe: @unchecked Sendable {
     }
 }
 
-private struct CoordinatorWaitTimeout: Error, CustomStringConvertible {
-    let operation: String
-
-    var description: String {
-        "timed out waiting for \(self.operation)"
-    }
-}
-
 struct MacNodeModeCoordinatorDeviceAuthTests {
     @Test
     @MainActor
@@ -204,6 +196,7 @@ struct MacNodeModeCoordinatorDeviceAuthTests {
     }
 }
 
+@Suite(.testWaitLimit)
 struct MacNodeModeCoordinatorTests {
     private func nodeDeviceAuthBinding(
         deviceAuthGatewayID: String?) throws -> (allowStoredDeviceAuth: Bool, gatewayID: String?)
@@ -216,24 +209,6 @@ struct MacNodeModeCoordinatorTests {
             routeAuthority: nil,
             deviceAuthGatewayID: deviceAuthGatewayID)
         return MacNodeModeCoordinator.nodeDeviceAuthBinding(for: endpoint)
-    }
-
-    private func waitUntil(
-        _ description: String,
-        timeout: Duration = .seconds(2),
-        condition: @escaping @Sendable () async -> Bool) async throws
-    {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: timeout)
-        while clock.now < deadline {
-            if await condition() {
-                return
-            }
-            // Some callers run on MainActor; a real suspension lets the
-            // notification task make progress instead of polling it out.
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        throw CoordinatorWaitTimeout(operation: description)
     }
 
     @MainActor
@@ -252,15 +227,6 @@ struct MacNodeModeCoordinatorTests {
         }
         await gateway.disconnect()
         await coordinator.stopAndWait()
-    }
-
-    @Test func `stale endpoint attempt is rejected after a suspended permission query`() {
-        #expect(MacNodeModeCoordinator.endpointAttemptIsCurrent(
-            capturedGeneration: 7,
-            currentGeneration: 7))
-        #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
-            capturedGeneration: 7,
-            currentGeneration: 8))
     }
 
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {
@@ -487,8 +453,6 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test func `paused node state requires route disconnect`() {
-        #expect(MacNodeModeCoordinator.pausedStateRequiresDisconnect(true))
-        #expect(!MacNodeModeCoordinator.pausedStateRequiresDisconnect(false))
         #expect(MacNodeModeCoordinator.controlTransitionRequiresRouteInvalidation(
             previousPaused: false,
             nextPaused: true,
@@ -658,9 +622,7 @@ struct MacNodeModeCoordinatorTests {
         do {
             try await gateway.connect(
                 url: #require(URL(string: "ws://first.example.invalid")),
-                token: nil,
-                bootstrapToken: nil,
-                password: nil,
+                credentials: .init(),
                 connectOptions: options,
                 sessionBox: WebSocketSessionBox(session: webSocketSession),
                 onConnected: {},
@@ -683,7 +645,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ])
             task.emitReceiveSuccess(.data(invokeEvent))
-            try await self.waitUntil("computer invoke start") {
+            try await TestWait.state("computer invoke start") {
                 await lifecycle.state().started
             }
 
@@ -714,7 +676,7 @@ struct MacNodeModeCoordinatorTests {
             #expect(!coordinator.routeAuthorityAllowsInvokeForTesting(
                 generationsBeforeRefresh.routeAuthority,
                 isPaused: true))
-            try await self.waitUntil("route invalidation start") {
+            try await TestWait.state("route invalidation start") {
                 await lifecycle.state().invalidated
             }
 
@@ -724,9 +686,7 @@ struct MacNodeModeCoordinatorTests {
                     onPendingSnapshot: { await drainSnapshot.recordCapture() })
                 try await gateway.connect(
                     url: successorURL,
-                    token: nil,
-                    bootstrapToken: nil,
-                    password: nil,
+                    credentials: .init(),
                     connectOptions: options,
                     sessionBox: WebSocketSessionBox(session: webSocketSession),
                     onConnected: { await lifecycle.recordSuccessorConnected() },
@@ -734,7 +694,7 @@ struct MacNodeModeCoordinatorTests {
                     onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
             }
             successor = successorTask
-            try await self.waitUntil("successor captured first invalidation") {
+            try await TestWait.state("successor captured first invalidation") {
                 await drainSnapshot.hasCaptured()
             }
             coordinator.enqueueRouteInvalidationForTesting()
@@ -816,7 +776,9 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test @MainActor func `fresh node uses durable dedicated identity for local auto approval`() throws {
-        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"))
+        let suite = "MacNodeModeCoordinatorTests.fresh.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
 
         #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
             defaults: defaults,
@@ -827,7 +789,9 @@ struct MacNodeModeCoordinatorTests {
     }
 
     @Test @MainActor func `upgraded node durably preserves its shipped primary identity`() throws {
-        let defaults = try #require(UserDefaults(suiteName: "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"))
+        let suite = "MacNodeModeCoordinatorTests.upgrade.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
 
         #expect(MacNodeModeCoordinator.resolveNodeIdentityProfile(
             defaults: defaults,
@@ -839,7 +803,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `native manifest excludes CLI-owned node commands`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: true,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -860,7 +823,7 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `node permission metadata omits unknown authorization state`() {
         let permissions = MacNodeModeCoordinator.advertisedPermissions([
-            .appleScript: .unknown,
+            .camera: .unknown,
             .accessibility: .granted,
             .screenRecording: .notGranted,
         ])
@@ -873,7 +836,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local native manifest leaves browser proxy to the CLI worker`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: true,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -886,7 +848,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `local mode omits native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -905,7 +866,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `remote mode advertises native session catalogs`() {
         let caps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -943,7 +903,7 @@ struct MacNodeModeCoordinatorTests {
             catalogAdvertised: false))
     }
 
-    @Test func `Codex supervision activation respects the plugin flag and global policy`() {
+    @Test func `Codex catalog activation respects the plugin flag and global policy`() {
         let enabled: [String: Any] = [
             "plugins": [
                 "entries": [
@@ -954,10 +914,6 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: enabled))
         #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: enabled))
 
         let enabledByConfigPath: [String: Any] = [
@@ -984,10 +940,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericPluginEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
         let numericNestedEnable: [String: Any] = [
             "plugins": [
@@ -999,10 +952,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericNestedEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [
@@ -1015,10 +965,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: numericGlobalEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericGlobalEnable))
 
         for transport in ["websocket", "unix"] {
             let unsupported: [String: Any] = [
@@ -1052,20 +999,17 @@ struct MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: agentHome))
 
-        let supervisionDisabled: [String: Any] = [
+        let catalogDisabled: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["supervision": ["enabled": false]],
+                        "config": ["sessionCatalog": ["enabled": false], "supervision": ["enabled": true]],
                     ],
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: supervisionDisabled))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: catalogDisabled))
 
         let pluginDisabled: [String: Any] = [
             "plugins": [
@@ -1093,10 +1037,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: denied))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: denied))
 
         let omittedByAllowlist: [String: Any] = [
             "plugins": [
@@ -1125,10 +1066,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: paddedIds))
+        #expect(MacNodeCodexThreadCatalog.shouldAdvertise(root: paddedIds))
 
         let paddedDeny: [String: Any] = [
             "plugins": [
@@ -1141,10 +1079,7 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: paddedDeny))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: paddedDeny))
 
         let mixedCaseDeny: [String: Any] = [
             "plugins": [
@@ -1157,10 +1092,6 @@ struct MacNodeModeCoordinatorTests {
                 ],
             ],
         ]
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: mixedCaseDeny))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: mixedCaseDeny))
 
         let ambiguousEntryAliases: [String: Any] = [
@@ -1178,16 +1109,11 @@ struct MacNodeModeCoordinatorTests {
             ],
         ]
         #expect(OpenClawConfigFile.pluginEntry("codex", root: ambiguousEntryAliases) == nil)
-        #expect(!OpenClawConfigFile.explicitlyEnabledPluginConfigFlag(
-            "codex",
-            path: ["supervision", "enabled"],
-            root: ambiguousEntryAliases))
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: ambiguousEntryAliases))
     }
 
     @Test func `computer control cap gates the computer.act command`() {
         let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: true,
             locationMode: .off,
@@ -1197,7 +1123,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(enabledCommands.contains(OpenClawComputerCommand.act.rawValue))
 
         let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -1209,7 +1134,6 @@ struct MacNodeModeCoordinatorTests {
 
     @Test func `camera cap gates capture and PTZ commands`() {
         let enabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: true,
             computerControlEnabled: false,
             locationMode: .off,
@@ -1220,7 +1144,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(enabledCommands.contains(OpenClawCameraCommand.ptzControl.rawValue))
 
         let disabledCaps = MacNodeModeCoordinator.resolvedCaps(
-            browserControlEnabled: false,
             cameraEnabled: false,
             computerControlEnabled: false,
             locationMode: .off,
@@ -1376,8 +1299,18 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 8443)
 
+        let otherStore = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: "another-profile",
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedHost))
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: redirectedPort))
+        #expect(!route.permitsTrustedPinReplacement(url: url, failure: otherStore))
     }
 
     @Test func `does not auto repair untrusted remote pin mismatch`() throws {
@@ -1388,7 +1321,7 @@ struct MacNodeModeCoordinatorTests {
             storeKey: "gateway.example.com:443",
             expectedFingerprint: "old",
             observedFingerprint: "new",
-            systemTrustOk: true,
+            systemTrustOk: false,
             port: 443)
         let route = try #require(GatewayTLSRoute.resolve(
             url: url,
@@ -1418,7 +1351,7 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() throws {
         let url = try #require(URL(string: "wss://gateway.example.ts.net"))
         let storeKey = "test-stale-repair"
         GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
@@ -1445,11 +1378,11 @@ struct MacNodeModeCoordinatorTests {
             systemTrustOk: true,
             port: 443)
 
-        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let firstRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: firstFailure)
-        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+        let staleRepaired = GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
             route: route,
             url: url,
             failure: staleFailure)

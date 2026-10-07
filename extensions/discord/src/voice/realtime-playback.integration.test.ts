@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createRealtimeVoiceAudioPortSender } from "openclaw/plugin-sdk/realtime-voice";
 import { expect, it, vi } from "vitest";
 import { createRealtimePlaybackFixture } from "./realtime-playback.integration.test-support.js";
 
@@ -247,19 +248,27 @@ it("measures each native item relative to its own PCM inside one response", asyn
   }
 });
 
-it.each(["resumed", "next-item"])(
-  "retains native item order and progress after starvation before %s",
-  async (nextItemId) => {
+it.each(
+  ["resumed", "next-item"].flatMap((nextItemId) =>
+    [500, 510].map((firstMs) => ({ nextItemId, firstMs })),
+  ),
+)(
+  "retains native item order and progress after $firstMs ms starvation before $nextItemId",
+  async ({ nextItemId, firstMs }) => {
     const fixture = createRealtimePlaybackFixture();
     try {
-      fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: "resumed" });
+      fixture.callbacks.onAudio(Buffer.alloc(firstMs * 48), { itemId: "resumed" });
+      fixture.callbacks.onMark?.("first", () => fixture.acknowledgeMark("first"));
       await fixture.voiceSdk.entersState(
         fixture.player,
         fixture.voiceSdk.AudioPlayerStatus.Idle,
         4_000,
       );
+      expect(fixture.stopTerminally).not.toHaveBeenCalled();
+      expect(fixture.onTerminalError).not.toHaveBeenCalled();
+      expect(fixture.acknowledgeMark.mock.calls).toEqual([["first"]]);
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: "resumed", audioEndMs: 500 },
+        { itemId: "resumed", audioEndMs: firstMs },
       ]);
       expect(fixture.roomPlayer.isActive()).toBe(true);
       fixture.callbacks.onAudio(Buffer.alloc(24_000), { itemId: nextItemId });
@@ -274,12 +283,18 @@ it.each(["resumed", "next-item"])(
       }
       const resumed = nextItemId === "resumed";
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: "resumed", audioEndMs: 500 + (resumed ? state.resource.playbackDuration : 0) },
+        {
+          itemId: "resumed",
+          audioEndMs: firstMs + (resumed ? state.resource.playbackDuration : 0),
+        },
         ...(resumed ? [] : [{ itemId: nextItemId, audioEndMs: state.resource.playbackDuration }]),
       ]);
       fixture.callbacks.onResponseDone?.({ status: "completed" });
       expect(fixture.callbacks.getPlaybackState?.()).toEqual([
-        { itemId: nextItemId, audioEndMs: (resumed ? 500 : 0) + state.resource.playbackDuration },
+        {
+          itemId: nextItemId,
+          audioEndMs: (resumed ? firstMs : 0) + state.resource.playbackDuration,
+        },
       ]);
       await fixture.voiceSdk.entersState(
         fixture.player,
@@ -626,7 +641,10 @@ it("reports player startup failure and lets another speaker play", async () => {
   });
   try {
     expect(() => fixture.playback.sendOutputAudio(Buffer.alloc(24_000))).not.toThrow();
-    expect(fixture.onTerminalError).toHaveBeenCalledWith(failure);
+    expect(fixture.onTerminalError).toHaveBeenCalledWith(
+      expect.objectContaining({ name: failure.name, message: failure.message }),
+    );
+    expect(fixture.onTerminalError.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     expect(fixture.stopTerminally).toHaveBeenCalledOnce();
     next.playback.sendOutputAudio(Buffer.alloc(24_000));
     next.playback.handleResponseDone({ status: "completed" });
@@ -998,6 +1016,29 @@ it("plays overlapping speaker responses in order without replacing another lane'
     expect(second.playback.retainedExactSpeechTexts()).toEqual([]);
     expect(fixture.onPlayerError).not.toHaveBeenCalled();
   } finally {
+    fixture.close();
+  }
+});
+
+it("clears active direct output for room controls without muting continuous replies", async () => {
+  const fixture = createRealtimePlaybackFixture(undefined, { outputAudioMode: "continuous" });
+  const sender = createRealtimeVoiceAudioPortSender(fixture.playback.createOutputAudioPort());
+  try {
+    const tone = Buffer.alloc(9_600);
+    for (let offset = 0; offset < tone.length; offset += 2) {
+      tone.writeInt16LE(12_000, offset);
+    }
+    sender.sendAudio(tone);
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(true));
+    fixture.playback.speakControlResult("Stopped.");
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(false));
+    expect(fixture.sendUserMessage).toHaveBeenCalledWith("Stopped.");
+    // Continuous control speech has no response-created boundary. A local
+    // buffer clear must not mute the still-admitted provider stream.
+    sender.sendAudio(tone);
+    await vi.waitFor(() => expect(fixture.playback.isOutputAudioActive()).toBe(true));
+  } finally {
+    sender.close();
     fixture.close();
   }
 });

@@ -12,8 +12,7 @@ function migratedProvider(cfg: OpenClawConfig): Record<string, unknown> {
   return providers?.deepinfra ?? {};
 }
 
-// Credential-shaped fixture URLs are assembled from pieces so TruffleHog's URI
-// detector (security-fast CI gate) does not flag them as leaked secrets.
+// Assemble credential-shaped fixture URLs at runtime to avoid scanner false positives.
 function credentialUrl(rest: string): string {
   return ["https://user", `password@${rest}`].join(":");
 }

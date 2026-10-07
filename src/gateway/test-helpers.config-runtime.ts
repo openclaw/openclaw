@@ -2,20 +2,19 @@
 // Wraps config IO with mutable test runtime state for integration tests.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type {
   ReadConfigFileSnapshotForWriteResult,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
 import { writeJsonAtomic } from "../infra/json-files.js";
-import { writeConfigMachineState } from "../state/config-machine-state.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
@@ -54,21 +53,14 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
       : {};
   const defaults = {
     model: { primary: "anthropic/claude-opus-4-6" },
-    workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+    workspace: path.join(testConfigRoot.value, "workspace"),
     ...fileDefaults,
     ...testState.agentConfig,
   };
   const testAgents = testState.agentsConfig;
-  const retainedFileAgents = { ...fileAgents };
-  if (testAgents && Object.hasOwn(testAgents, "list")) {
-    delete retainedFileAgents.entries;
-  }
-  if (testAgents && Object.hasOwn(testAgents, "entries")) {
-    delete retainedFileAgents.list;
-  }
   const agents = testAgents
-    ? { ...retainedFileAgents, ...testAgents, defaults }
-    : { ...retainedFileAgents, defaults };
+    ? { ...fileAgents, ...testAgents, defaults }
+    : { ...fileAgents, defaults };
 
   const fileBindings = Array.isArray(baseConfig.bindings)
     ? (baseConfig.bindings as AgentBinding[])
@@ -169,7 +161,7 @@ const composeTestConfig = (baseConfig: Record<string, unknown>) => {
     hooks,
     cron,
   } as OpenClawConfig;
-  return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
+  return applyImplicitAgentRosterDefaults(composed) as OpenClawConfig;
 };
 
 export function loadGatewayTestConfig(): OpenClawConfig {

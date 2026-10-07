@@ -1,5 +1,7 @@
 {
   "id": "openrouter",
+  "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -21,8 +23,9 @@
     "providers": {
       "openrouter": {
         "openRouter": {
-          "passthroughProviderModel": true
+          "provider": "openrouter"
         },
+        "modelsDev": false,
         "liteLLM": false
       }
     }
@@ -68,7 +71,9 @@
       "provider": "openrouter",
       "method": "oauth",
       "choiceId": "openrouter-oauth",
+      "credentialOnly": true,
       "appGuidedAuth": "oauth",
+      "channelLogin": {},
       "choiceLabel": "OpenRouter OAuth",
       "choiceHint": "Browser sign-in",
       "groupId": "openrouter",

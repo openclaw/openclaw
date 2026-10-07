@@ -1,6 +1,9 @@
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
+import { resolveSessionAgentIdsStrict } from "../agent-scope.js";
 import { AgentHarnessPreflightError } from "./errors.js";
 import { getRegisteredAgentHarness } from "./registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "./types.js";
@@ -10,10 +13,13 @@ export function readSessionRuntimeOwnership(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  storePath?: string;
   sessionEntry?: Partial<
     Pick<SessionEntry, "sessionId" | "agentHarnessId" | "modelSelectionLocked" | "pluginOwnerId">
   >;
   assertCurrent?: () => void;
+  /** Caller retains the fresh row through this synchronous ownership invocation. */
+  readPreparedPreviousSessionId?: () => string | undefined;
 }): AgentHarnessSessionRuntimeOwnership | undefined {
   const entry = params.sessionEntry;
   const sessionId = entry?.sessionId;
@@ -25,9 +31,12 @@ export function readSessionRuntimeOwnership(params: {
   if (!harness?.resolveSessionRuntimeOwnership) {
     return undefined;
   }
+  const { config, agentId, sessionKey, storePath } = params;
   let active = true;
   const assertCurrent = () => {
-    params.assertCurrent?.();
+    if (active) {
+      params.assertCurrent?.();
+    }
     if (
       !active ||
       getRegisteredAgentHarness(harnessId)?.harness !== harness ||
@@ -42,10 +51,36 @@ export function readSessionRuntimeOwnership(params: {
   try {
     assertCurrent();
     const ownership = harness.resolveSessionRuntimeOwnership({
-      config: params.config,
-      agentId: params.agentId,
+      config,
+      agentId,
       sessionId,
-      sessionKey: params.sessionKey,
+      sessionKey,
+      storePath,
+      // Binding hits need no row read. A miss must observe lineage after any awaited metadata work.
+      readPreviousSessionId: () => {
+        assertCurrent();
+        if (params.readPreparedPreviousSessionId) {
+          const previousSessionId = params.readPreparedPreviousSessionId();
+          assertCurrent();
+          return previousSessionId;
+        }
+        const key = sessionKey?.trim();
+        if (!key) {
+          return undefined;
+        }
+        const { sessionAgentId } = resolveSessionAgentIdsStrict({ config, agentId, sessionKey });
+        const current = loadSessionEntryReadOnly({
+          agentId: sessionAgentId,
+          sessionKey: key,
+          storePath:
+            storePath?.trim() ||
+            resolveSessionStorePathCore(config?.session?.store, { agentId: sessionAgentId }),
+          hydrateSkillPromptRefs: false,
+          readConsistency: "latest",
+        });
+        assertCurrent();
+        return current?.sessionId === sessionId ? current.previousSessionId : undefined;
+      },
       assertCurrent,
     });
     assertCurrent();

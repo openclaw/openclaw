@@ -37,6 +37,8 @@ final class ComputerScreenActionExecutor {
     /// Tracks whether a left_mouse_down is outstanding so mouse_move emits
     /// drag events (state persists across invokes on the shared instance).
     private var leftButtonDown = false
+    private var heldButtonScopeId: UUID?
+    private let defaultInputScopeId = UUID()
     /// Bounded watchdog that releases a stuck left button if the matching
     /// left_mouse_up never arrives (arm expiry, disconnect, or a failed turn).
     private var buttonReleaseTask: Task<Void, Never>?
@@ -66,45 +68,22 @@ final class ComputerScreenActionExecutor {
     /// this bounded cleanup.
     private static let buttonHoldIdleTimeoutNanoseconds: UInt64 = 120 * 1_000_000_000
 
-    init() {
-        self.automation = UIAutomationService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
-    }
-
-    #if DEBUG
-    init(mouseButtonEventPoster: @escaping MouseButtonEventPoster) {
-        self.automation = UIAutomationService()
-        self.mouseButtonEventPoster = mouseButtonEventPoster
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
-    }
-
     init(
-        mouseEventFactory: @escaping MouseEventFactory,
-        mouseEventPoster: @escaping MouseEventPoster)
+        mouseButtonEventPoster: @escaping MouseButtonEventPoster = ComputerScreenActionExecutor.postMouseButtonEvent,
+        mouseEventFactory: @escaping MouseEventFactory = ComputerScreenActionExecutor.makeMouseEvent,
+        mouseEventPoster: @escaping MouseEventPoster = ComputerScreenActionExecutor.postMouseEvent,
+        textGraphemePoster: @escaping TextGraphemePoster = { try ComputerScreenActionExecutor.postTextGrapheme($0) })
     {
         self.automation = UIAutomationService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
+        self.mouseButtonEventPoster = mouseButtonEventPoster
         self.mouseEventFactory = mouseEventFactory
         self.mouseEventPoster = mouseEventPoster
-        self.textGraphemePoster = { try Self.postTextGrapheme($0) }
-    }
-
-    init(textGraphemePoster: @escaping TextGraphemePoster) {
-        self.automation = UIAutomationService()
-        self.mouseButtonEventPoster = Self.postMouseButtonEvent
-        self.mouseEventFactory = Self.makeMouseEvent
-        self.mouseEventPoster = Self.postMouseEvent
         self.textGraphemePoster = textGraphemePoster
     }
-    #endif
 
     func perform(
         _ params: OpenClawComputerActParams,
+        inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
         -> OpenClawComputerActResult
     {
@@ -114,6 +93,7 @@ final class ComputerScreenActionExecutor {
         try await self.dispatch(
             params,
             display: display,
+            inputScopeId: inputScopeId,
             checkExecutionAllowed: checkExecutionAllowed)
         try checkExecutionAllowed()
         return OpenClawComputerActResult(ok: true)
@@ -124,27 +104,29 @@ final class ComputerScreenActionExecutor {
     private func dispatch(
         _ params: OpenClawComputerActParams,
         display: ResolvedDisplay,
+        inputScopeId: UUID,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
         try checkExecutionAllowed()
         let modifiers = try ComputerModifiers.parse(params.modifiers)
+        if self.leftButtonDown, self.heldButtonScopeId != inputScopeId,
+           params.action == .leftMouseUp || params.action == .mouseMove
+        {
+            throw ComputerActionError.buttonAlreadyHeld
+        }
         try Self.validateHeldButtonTransition(action: params.action, leftButtonDown: self.leftButtonDown)
         switch params.action {
-        case .leftClick, .rightClick, .doubleClick:
+        case .leftClick, .rightClick, .doubleClick, .middleClick, .tripleClick:
             let point = try requiredPoint(params, display: display)
-            let button: ComputerMouseButton = params.action == .rightClick ? .right : .left
-            let count = params.action == .doubleClick ? 2 : 1
-            if modifiers.isEmpty {
-                try await self.peekabooClick(at: point, action: params.action)
+            if modifiers.isEmpty, params.action != .middleClick, params.action != .tripleClick {
+                try await self.automation.click(
+                    target: .coordinates(point), clickType: params.action.peekabooClickType, snapshotId: nil)
             } else {
-                try self.rawClick(at: point, button: button, count: count, flags: modifiers.flags)
+                let button: CGMouseButton = params.action == .middleClick ? .center :
+                    params.action == .rightClick ? .right : .left
+                let count = params.action == .tripleClick ? 3 : params.action == .doubleClick ? 2 : 1
+                try self.rawClick(at: point, button: button, count: count, flags: modifiers)
             }
-        case .middleClick:
-            let point = try requiredPoint(params, display: display)
-            try rawClick(at: point, button: .middle, count: 1, flags: modifiers.flags)
-        case .tripleClick:
-            let point = try requiredPoint(params, display: display)
-            try rawClick(at: point, button: .left, count: 3, flags: modifiers.flags)
         case .mouseMove:
             let point = try requiredPoint(params, display: display)
             if self.leftButtonDown {
@@ -168,7 +150,7 @@ final class ComputerScreenActionExecutor {
             let to = try requiredPoint(params, display: display)
             let from = try point(params.fromX, params.fromY, params: params, display: display)
                 ?? to
-            try await self.rawDrag(from: from, to: to, flags: modifiers.flags)
+            try await self.rawDrag(from: from, to: to, flags: modifiers)
         case .leftMouseDown, .leftMouseUp:
             // Coordinate is optional: press/release at the current cursor when omitted.
             let mappedPoint = try self.point(params.x, params.y, params: params, display: display)
@@ -182,13 +164,12 @@ final class ComputerScreenActionExecutor {
                 self.automation.currentMouseLocation() ?? CGPoint.zero
             }
             if params.action == .leftMouseDown {
-                try self.rawMouseButton(down: true, at: point, flags: modifiers.flags)
-                self.setLeftButtonDown(true, flags: modifiers.flags)
+                try self.pressLeftButton(at: point, flags: modifiers, inputScopeId: inputScopeId)
             } else {
                 // Release with the modifiers held since left_mouse_down (unioned
                 // with any the release turn resends) so modifier-held drops keep
                 // their copy/move semantics.
-                try self.releaseHeldButton(at: point, additionalFlags: modifiers.flags)
+                try self.releaseHeldButton(at: point, additionalFlags: modifiers)
             }
         case .scroll:
             try await self.performScroll(
@@ -199,25 +180,13 @@ final class ComputerScreenActionExecutor {
         case .type:
             guard let text = params.text, !text.isEmpty else { throw ComputerActionError.emptyText }
             try await self.typeText(text, checkExecutionAllowed: checkExecutionAllowed)
-        case .key:
+        case .key, .holdKey:
             let keys = try requireKeys(params.keys)
-            try await self.automation.hotkey(keys: keys, holdDuration: 0)
-        case .holdKey:
-            let keys = try requireKeys(params.keys)
-            let holdMs = min(Self.maxHoldMs, max(0, params.durationMs ?? 1000))
+            let holdMs = params.action == .key ? 0 : min(Self.maxHoldMs, max(0, params.durationMs ?? 1000))
             try await self.automation.hotkey(keys: keys, holdDuration: holdMs)
         default:
             throw ComputerActionError.unsupportedAction(params.action)
         }
-    }
-
-    private func peekabooClick(at point: CGPoint, action: OpenClawComputerAction) async throws {
-        let clickType: ClickType = switch action {
-        case .rightClick: .right
-        case .doubleClick: .double
-        default: .single
-        }
-        try await self.automation.click(target: .coordinates(point), clickType: clickType, snapshotId: nil)
     }
 
     func typeText(
@@ -241,7 +210,7 @@ final class ComputerScreenActionExecutor {
     private func performScroll(
         _ params: OpenClawComputerActParams,
         display: ResolvedDisplay,
-        modifiers: ComputerModifiers,
+        modifiers: CGEventFlags,
         checkExecutionAllowed: @MainActor () throws -> Void) async throws
     {
         guard let direction = params.scrollDirection else { throw ComputerActionError.invalidScroll }
@@ -258,11 +227,11 @@ final class ComputerScreenActionExecutor {
         try checkExecutionAllowed()
         if modifiers.isEmpty {
             try await self.automation.scroll(ScrollRequest(
-                direction: Self.scrollDirection(direction),
+                direction: direction.peekabooDirection,
                 amount: amount,
                 foreground: true))
         } else {
-            try self.rawScroll(direction: direction, amount: amount, flags: modifiers.flags)
+            try self.rawScroll(direction: direction, amount: amount, flags: modifiers)
         }
     }
 
@@ -366,10 +335,17 @@ final class ComputerScreenActionExecutor {
 
     // MARK: - Button-hold watchdog
 
-    private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = []) {
+    func pressLeftButton(at point: CGPoint, flags: CGEventFlags, inputScopeId: UUID) throws {
+        guard !self.leftButtonDown else { throw ComputerActionError.buttonAlreadyHeld }
+        try self.mouseButtonEventPoster(true, point, flags)
+        self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
+    }
+
+    private func setLeftButtonDown(_ down: Bool, flags: CGEventFlags = [], inputScopeId: UUID? = nil) {
         self.buttonReleaseTask?.cancel()
         self.buttonReleaseTask = nil
         self.leftButtonDown = down
+        self.heldButtonScopeId = down ? inputScopeId ?? self.defaultInputScopeId : nil
         self.heldButtonFlags = down ? flags : []
         guard down else { return }
         self.armButtonWatchdog()
@@ -398,7 +374,8 @@ final class ComputerScreenActionExecutor {
     /// execution queue owns epoch changes so a reordered duplicate release cannot
     /// cancel a fresh action that already adopted the same epoch.
     @discardableResult
-    func releaseCurrentHeldButton() -> Bool {
+    func releaseCurrentHeldButton(inputScopeId: UUID? = nil) -> Bool {
+        if let inputScopeId, self.heldButtonScopeId != inputScopeId { return true }
         guard self.leftButtonDown else {
             self.buttonReleaseTask?.cancel()
             self.buttonReleaseTask = nil
@@ -418,7 +395,7 @@ final class ComputerScreenActionExecutor {
     {
         let releaseFlags = self.heldButtonFlags.union(additionalFlags)
         do {
-            try self.rawMouseButton(down: false, at: point, flags: releaseFlags)
+            try self.mouseButtonEventPoster(false, point, releaseFlags)
         } catch {
             // Ownership authorizes the only safe follow-up mouse-up. Keep it and
             // its modifiers until synthesis succeeds, with a live watchdog retry.
@@ -442,8 +419,8 @@ final class ComputerScreenActionExecutor {
         self.buttonReleaseTask != nil
     }
 
-    func holdLeftButtonForTesting(flags: CGEventFlags) {
-        self.setLeftButtonDown(true, flags: flags)
+    func holdLeftButtonForTesting(flags: CGEventFlags, inputScopeId: UUID? = nil) {
+        self.setLeftButtonDown(true, flags: flags, inputScopeId: inputScopeId)
     }
 
     func fireButtonWatchdogForTesting() {
@@ -458,6 +435,12 @@ final class ComputerScreenActionExecutor {
     #endif
 
     private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ResolvedDisplay {
+        guard AppLaunchRuntimePlan.current.allowsActivation ||
+            PermissionManager.screenRecordingPermissions.checkScreenRecordingPermission()
+        else {
+            throw ComputerActionError.refused(
+                "Screen Recording permission required; relaunch without --no-activate and retry")
+        }
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
         let content = try await SCShareableContent.current
@@ -535,34 +518,26 @@ final class ComputerScreenActionExecutor {
         return keys
     }
 
-    private static func scrollDirection(
-        _ direction: OpenClawComputerScrollDirection) -> PeekabooFoundation.ScrollDirection
-    {
-        switch direction {
-        case .up: .up
-        case .down: .down
-        case .left: .left
-        case .right: .right
-        }
-    }
-
     // MARK: - Raw CoreGraphics primitives
 
-    private func rawClick(at point: CGPoint, button: ComputerMouseButton, count: Int, flags: CGEventFlags) throws {
+    private func rawClick(at point: CGPoint, button: CGMouseButton, count: Int, flags: CGEventFlags) throws {
+        let downType: CGEventType = button == .center ? .otherMouseDown : button == .right ? .rightMouseDown :
+            .leftMouseDown
+        let upType: CGEventType = button == .center ? .otherMouseUp : button == .right ? .rightMouseUp : .leftMouseUp
         // Build every down/up pair before posting the first down. Event creation
         // failure can then never strand a button between a successfully created
         // down and a missing up.
         let pairs = try (1...max(1, count)).map { click in
             let down = try self.mouseEventFactory(
-                button.downType,
+                downType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             let up = try self.mouseEventFactory(
-                button.upType,
+                upType,
                 point,
-                button.cgButton,
+                button,
                 click,
                 flags)
             return (down: down, up: up)
@@ -600,10 +575,6 @@ final class ComputerScreenActionExecutor {
         }
         try self.mouseEventPoster(up)
         needsRelease = false
-    }
-
-    private func rawMouseButton(down: Bool, at point: CGPoint, flags: CGEventFlags) throws {
-        try self.mouseButtonEventPoster(down, point, flags)
     }
 
     private static func postMouseButtonEvent(
@@ -720,47 +691,21 @@ final class ComputerScreenActionExecutor {
     }
 }
 
-/// Mouse button plus the CoreGraphics event types for the raw click path.
-private enum ComputerMouseButton {
-    case left
-    case right
-    case middle
-
-    var cgButton: CGMouseButton {
+extension OpenClawComputerScrollDirection {
+    var peekabooDirection: PeekabooFoundation.ScrollDirection {
         switch self {
+        case .up: .up
+        case .down: .down
         case .left: .left
         case .right: .right
-        case .middle: .center
-        }
-    }
-
-    var downType: CGEventType {
-        switch self {
-        case .left: .leftMouseDown
-        case .right: .rightMouseDown
-        case .middle: .otherMouseDown
-        }
-    }
-
-    var upType: CGEventType {
-        switch self {
-        case .left: .leftMouseUp
-        case .right: .rightMouseUp
-        case .middle: .otherMouseUp
         }
     }
 }
 
 /// Parses a portable modifier string ("shift", "cmd+alt") into CGEvent flags.
-struct ComputerModifiers {
-    var flags: CGEventFlags
-
-    var isEmpty: Bool {
-        self.flags.isEmpty
-    }
-
-    static func parse(_ raw: String?) throws -> ComputerModifiers {
-        guard let raw, !raw.isEmpty else { return ComputerModifiers(flags: []) }
+enum ComputerModifiers {
+    static func parse(_ raw: String?) throws -> CGEventFlags {
+        guard let raw, !raw.isEmpty else { return [] }
         var flags: CGEventFlags = []
         for piece in raw.split(whereSeparator: { $0 == "+" || $0 == "," || $0 == " " }) {
             let key = piece.lowercased()
@@ -782,6 +727,6 @@ struct ComputerModifiers {
                 throw ComputerActionService.ComputerActionError.invalidModifier(key)
             }
         }
-        return ComputerModifiers(flags: flags)
+        return flags
     }
 }

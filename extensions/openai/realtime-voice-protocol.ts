@@ -8,7 +8,8 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   realtimeVoiceAudioDurationMs,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
+import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
   AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
   OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS,
@@ -19,9 +20,6 @@ import {
   parsePlaybackMarkSequence,
   type OpenAIRealtimeUserMessageOptions,
   type OpenAIRealtimeVoiceBridgeConfig,
-  type RealtimeAzureDeploymentSessionUpdate,
-  type RealtimeGaSessionUpdate,
-  type RealtimeTurnDetectionConfig,
 } from "./realtime-voice-session-policy.js";
 
 export abstract class OpenAIRealtimeProtocol {
@@ -81,7 +79,10 @@ export abstract class OpenAIRealtimeProtocol {
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
-  constructor(protected readonly config: OpenAIRealtimeVoiceBridgeConfig) {
+  constructor(
+    protected readonly config: OpenAIRealtimeVoiceBridgeConfig,
+    protected readonly runtime: OpenAIRealtimeHost,
+  ) {
     this.audioFormat = config.audioFormat ?? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ;
   }
 
@@ -120,13 +121,9 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
 
-    this.sendEvent(this.buildGaSessionUpdate());
-  }
-
-  protected buildGaSessionUpdate(): RealtimeGaSessionUpdate {
     const cfg = this.config;
-    return {
-      type: "session.update",
+    this.sendEvent({
+      type: "session.update" as const,
       session:
         cfg.gaSessionPolicy ??
         buildOpenAIRealtimeGaSessionPolicy({
@@ -140,26 +137,27 @@ export abstract class OpenAIRealtimeProtocol {
           prefixPaddingMs: cfg.prefixPaddingMs,
           reasoningEffort: cfg.reasoningEffort,
           silenceDurationMs: cfg.silenceDurationMs,
-          tools: normalizeOpenAIRealtimeTools(cfg.tools),
+          tools: normalizeOpenAIRealtimeTools(cfg.tools, this.runtime.warn),
           vadThreshold: cfg.vadThreshold,
           voice: cfg.voice ?? "alloy",
         }),
-    };
+    });
   }
 
   protected usesAzureDeploymentRealtimeApi(): boolean {
     return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
   }
 
-  protected buildAzureDeploymentSessionUpdate(): RealtimeAzureDeploymentSessionUpdate {
+  protected buildAzureDeploymentSessionUpdate() {
     const cfg = this.config;
-    const format = this.resolveLegacyRealtimeAudioFormat();
+    const format = this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
     const tools = normalizeOpenAIRealtimeTools(
       cfg.tools,
+      this.runtime.warn,
       AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
     );
     return {
-      type: "session.update",
+      type: "session.update" as const,
       session: {
         modalities: ["text", "audio"],
         instructions: cfg.instructions,
@@ -170,7 +168,7 @@ export abstract class OpenAIRealtimeProtocol {
           model: "whisper-1",
           ...(cfg.language ? { language: cfg.language } : {}),
         },
-        turn_detection: this.buildTurnDetectionConfig(),
+        turn_detection: buildOpenAIRealtimeTurnDetectionConfig(cfg),
         temperature: cfg.temperature ?? 0.8,
         ...(tools
           ? {
@@ -182,24 +180,10 @@ export abstract class OpenAIRealtimeProtocol {
     };
   }
 
-  protected buildTurnDetectionConfig(options?: {
-    createResponse?: boolean;
-    includeInterruptResponse?: boolean;
-  }): RealtimeTurnDetectionConfig {
-    return buildOpenAIRealtimeTurnDetectionConfig({
-      autoRespondToAudio: this.config.autoRespondToAudio,
-      createResponse: options?.createResponse,
-      includeInterruptResponse: options?.includeInterruptResponse,
-      interruptResponseOnInputAudio: this.config.interruptResponseOnInputAudio,
-      prefixPaddingMs: this.config.prefixPaddingMs,
-      silenceDurationMs: this.config.silenceDurationMs,
-      vadThreshold: this.config.vadThreshold,
-    });
-  }
-
   protected sendAutoResponseSessionUpdate(createResponse: boolean): void {
     const azureDeployment = this.usesAzureDeploymentRealtimeApi();
-    const turnDetection = this.buildTurnDetectionConfig({
+    const turnDetection = buildOpenAIRealtimeTurnDetectionConfig({
+      ...this.config,
       createResponse,
       includeInterruptResponse: !azureDeployment,
     });
@@ -211,10 +195,6 @@ export abstract class OpenAIRealtimeProtocol {
       type: "session.update",
       session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
     });
-  }
-
-  protected resolveLegacyRealtimeAudioFormat(): "g711_ulaw" | "pcm16" {
-    return this.audioFormat.encoding === "pcm16" ? "pcm16" : "g711_ulaw";
   }
 
   protected releaseResponseState(options: { drain?: boolean } = {}): void {
@@ -232,13 +212,17 @@ export abstract class OpenAIRealtimeProtocol {
     }
   }
 
-  private drainResponseQueue(): void {
-    if (
+  protected get responseBusy(): boolean {
+    return (
       this.interruptingPlayback ||
       this.responseActive ||
       this.responseCreateState !== "idle" ||
       this.responseCancelInFlight
-    ) {
+    );
+  }
+
+  private drainResponseQueue(): void {
+    if (this.responseBusy) {
       return;
     }
     if (this.standaloneSpeechQueue.length > 0) {
@@ -341,10 +325,7 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected requestResponseCreate(options?: OpenAIRealtimeUserMessageOptions): void {
     if (
-      this.interruptingPlayback ||
-      this.responseActive ||
-      this.responseCreateState !== "idle" ||
-      this.responseCancelInFlight ||
+      this.responseBusy ||
       this.continuingToolCallIds.size > 0 ||
       this.pendingToolCallIds.size > 0
     ) {
@@ -372,13 +353,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected flushStandaloneSpeech(): void {
-    if (
-      this.interruptingPlayback ||
-      this.standaloneSpeechActive ||
-      this.responseActive ||
-      this.responseCreateState !== "idle" ||
-      this.responseCancelInFlight
-    ) {
+    if (this.responseBusy || this.standaloneSpeechActive) {
       return;
     }
     const text = this.standaloneSpeechQueue.shift();
@@ -472,5 +447,8 @@ export abstract class OpenAIRealtimeProtocol {
     options?: RealtimeVoiceToolResultOptions,
   ): void;
 
-  protected abstract sendEvent(event: unknown, detail?: string): void;
+  protected abstract sendEvent(
+    event: { type: string; [key: string]: unknown },
+    detail?: string,
+  ): void;
 }
