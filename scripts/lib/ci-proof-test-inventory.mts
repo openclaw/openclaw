@@ -2921,7 +2921,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server.node-result-close.test.ts",
   "src/gateway/server.node-shutdown.test.ts",
   "src/gateway/server.operator-observer-lifetime.test.ts",
-  "src/gateway/server.operator-presentation-lifetime.test.ts",
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.plugins-install-authority.test.ts",
   "src/gateway/server.portals.session.test.ts",
