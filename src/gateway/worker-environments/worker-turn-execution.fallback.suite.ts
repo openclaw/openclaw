@@ -73,7 +73,7 @@ export function registerWorkerTurnFallbackTests(): void {
       bundleHash: "a".repeat(64),
       sessionId: SESSION_ID,
       runId,
-      turnClaim: placement ? projectWorkerSessionTurnClaim(placement) : null,
+      turnClaim: placement ? (projectWorkerSessionTurnClaim(placement) ?? null) : null,
       ownerEpoch: OWNER_EPOCH,
       rpcSetVersion: 1,
       protocolFeatures: ["worker-transcript-commit-v1"],
@@ -155,7 +155,7 @@ export function registerWorkerTurnFallbackTests(): void {
         committedTailLeafId = committed.result.newLeafId;
         throw primaryFailure;
       }
-      relaunchedBaseLeafId = request.plan.assignment.transcript.baseLeafId;
+      relaunchedBaseLeafId = request.plan.assignment.transcript.baseLeafId ?? undefined;
       if (toolActivity) {
         // The relaunch must be refused before any new transport work; the
         // recorded stop terminates the candidate chain.
