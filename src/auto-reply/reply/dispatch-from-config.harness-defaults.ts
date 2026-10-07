@@ -15,7 +15,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
-import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
+import {
+  resolveModelParentSessionKey,
+  resolveStoredModelOverrideAsync,
+} from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
@@ -135,10 +138,7 @@ async function resolveHarnessSourceVisibleRepliesDefault(params: {
     const aliasIndex = buildModelAliasIndex(selectionContext);
     const resolveModelCandidate = (raw: string) =>
       resolveModelRefFromString({ ...selectionContext, raw, aliasIndex })?.ref;
-    const parentSessionKey =
-      params.entry?.parentSessionKey ??
-      params.ctx.ModelParentSessionKey ??
-      params.ctx.ParentSessionKey;
+    const parentSessionKey = resolveModelParentSessionKey(params.entry, params.ctx);
     const channelModelOverride = params.cfg.channels?.modelByChannel
       ? resolveChannelModelOverride({
           cfg: params.cfg,

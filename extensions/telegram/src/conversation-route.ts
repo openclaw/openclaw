@@ -267,12 +267,16 @@ export function resolveTelegramTargetSession(params: {
   senderId?: string | number | null;
   dmThreadId?: number;
   botHasTopicsEnabled?: boolean;
-}): string {
+}): { sessionKey: string; modelParentSessionKey?: null } {
   const baseSessionKey = resolveTelegramConversationBaseSessionKey(params);
+  // The thread suffix's base is the whole DM (or main) session, not a parent conversation.
   return shouldUseTelegramDmThreadSession(params) && params.dmThreadId != null
-    ? resolveThreadSessionKeys({
-        baseSessionKey,
-        threadId: `${params.chatId}:${params.dmThreadId}`,
-      }).sessionKey
-    : baseSessionKey;
+    ? {
+        sessionKey: resolveThreadSessionKeys({
+          baseSessionKey,
+          threadId: `${params.chatId}:${params.dmThreadId}`,
+        }).sessionKey,
+        modelParentSessionKey: null,
+      }
+    : { sessionKey: baseSessionKey };
 }

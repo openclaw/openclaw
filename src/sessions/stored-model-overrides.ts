@@ -75,8 +75,11 @@ export function resolveDirectStoredModelOverride(
 
 function resolveParentSessionKeyCandidate(params: {
   sessionKey?: string;
-  parentSessionKey?: string;
+  parentSessionKey?: string | null;
 }): string | null {
+  if (params.parentSessionKey === null) {
+    return null;
+  }
   const explicit = normalizeOptionalString(params.parentSessionKey);
   if (explicit && explicit !== params.sessionKey) {
     return explicit;
@@ -88,13 +91,27 @@ function resolveParentSessionKeyCandidate(params: {
   return null;
 }
 
+/** Persisted parents win; a channel's `null` model parent outranks the lifecycle parent. */
+export function resolveModelParentSessionKey(
+  entry: Pick<SessionEntry, "parentSessionKey"> | undefined,
+  ctx: { ModelParentSessionKey?: string | null; ParentSessionKey?: string },
+): string | null | undefined {
+  return (
+    entry?.parentSessionKey ??
+    (ctx.ModelParentSessionKey === null
+      ? null
+      : (ctx.ModelParentSessionKey ?? ctx.ParentSessionKey))
+  );
+}
+
 /** @deprecated Use resolveStoredModelOverrideAsync. Removed at the next Plugin SDK major. */
 export function resolveStoredModelOverride(params: {
   loadSessionEntry?: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
-  parentSessionKey?: string;
+  /** `null` means the channel declared no model parent, so none is derived from the key. */
+  parentSessionKey?: string | null;
   defaultProvider: string;
   allowPluginNormalization?: boolean;
 }): StoredModelOverride | null {

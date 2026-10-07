@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import { resolveModelParentSessionKey } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   expandExplicitSkillReferences,
@@ -371,8 +372,7 @@ export async function resolveReplyDirectives(params: {
       sessionEntry: targetSessionEntry,
       sessionStore,
       sessionKey,
-      parentSessionKey:
-        targetSessionEntry?.parentSessionKey ?? ctx.ModelParentSessionKey ?? ctx.ParentSessionKey,
+      parentSessionKey: resolveModelParentSessionKey(targetSessionEntry, ctx),
       storePath,
       defaultProvider,
       defaultModel,

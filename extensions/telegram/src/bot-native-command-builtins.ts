@@ -42,7 +42,12 @@ type TelegramCommandMenuModelContext = {
 };
 
 async function resolveTelegramCommandMenuModelContext(
-  params: { cfg: OpenClawConfig; agentId: string; sessionKey: string },
+  params: {
+    cfg: OpenClawConfig;
+    agentId: string;
+    sessionKey: string;
+    modelParentSessionKey?: null;
+  },
   mode: "menu" | "fast" = "menu",
 ): Promise<TelegramCommandMenuModelContext> {
   // Fast menus retain configured defaults even if session lookup fails.
@@ -68,6 +73,7 @@ async function resolveTelegramCommandMenuModelContext(
         sessionEntry: entry,
         loadSessionEntry: (sessionKey) => getSessionEntryAsync({ storePath, sessionKey }),
         sessionKey: params.sessionKey,
+        parentSessionKey: entry?.parentSessionKey ?? params.modelParentSessionKey,
         defaultProvider: defaultModel.provider,
       });
       if (mode === "fast") {
@@ -199,6 +205,7 @@ export async function executeTelegramBuiltinCommand(
           cfg: dispatch.runtimeCfg,
           agentId: dispatch.route.agentId,
           sessionKey: dispatch.targetSessionKey,
+          modelParentSessionKey: dispatch.modelParentSessionKey,
         })
       ).provider ??
       resolveDefaultModelForAgent({
@@ -223,6 +230,7 @@ export async function executeTelegramBuiltinCommand(
     cfg: dispatch.runtimeCfg,
     agentId: dispatch.route.agentId,
     sessionKey: menuNeedsModelContext ? dispatch.targetSessionKey : "",
+    modelParentSessionKey: dispatch.modelParentSessionKey,
   };
   const menuModelContext = menuNeedsModelContext
     ? await resolveTelegramCommandMenuModelContext(
