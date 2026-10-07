@@ -587,18 +587,6 @@ describe("sessions page new group", () => {
     return { page, sessions, connection, messages };
   }
 
-  it("captures identity before lazy loading and writes the catalog before assignment", async () => {
-    const { page, sessions } = await mount(async () => "completed");
-    const pending = page.requestNewCategory(key);
-    page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 1);
-    await pending;
-    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
-    expect(sessions.patch).toHaveBeenCalledExactlyOnceWith(...assignment);
-    expect(vi.mocked(sessions.patch).mock.invocationCallOrder[0]).toBeGreaterThan(
-      vi.mocked(sessions.groupsPut).mock.invocationCallOrder[0]!,
-    );
-  });
-
   it("keeps the live dialog abortable when a second open overlaps it", async () => {
     const { page, sessions } = await mount(async () => "completed");
     const signals: Array<AbortSignal | undefined> = [];
@@ -652,11 +640,15 @@ describe("sessions page new group", () => {
       return { ok: true, key, path: "", entry: { sessionId: "replacement-session" } };
     });
     const created = page.requestNewCategory(key);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
     page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
+    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]));
+    expect(sessions.patch).not.toHaveBeenCalled();
     pending.resolve("completed");
     await created;
-    expect(sessions.patch).toHaveBeenCalledWith(...assignment);
+    expect(sessions.patch).toHaveBeenCalledExactlyOnceWith(...assignment);
+    expect(vi.mocked(sessions.patch).mock.invocationCallOrder[0]).toBeGreaterThan(
+      vi.mocked(sessions.groupsPut).mock.invocationCallOrder[0]!,
+    );
     expect(messages).toEqual([failure]);
   });
 

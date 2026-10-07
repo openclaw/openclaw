@@ -10544,7 +10544,6 @@
 ["ui/src/pages/portals/portals-page.test.ts","./portal-reachability.ts","e1746fe571fdfe83366ec4999b7812ff3e4fabd7739892586b350b55f92a101c",1]
 ["ui/src/pages/sessions/sessions-page.archived.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/sessions/sessions-page.scope-race.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
-["ui/src/pages/sessions/sessions-page.selection.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/sessions/sessions-page.test.ts","../../components/confirm-dialog.ts","29010d4b48ecb6a8932036adcb5c2d910c9c76c242c0124481a10ac96470b5e9",1]
 ["ui/src/pages/sessions/sessions-page.test.ts","../../components/input-dialog.ts","fbfe3fd11c857de65c62af1111b77bb349318f86081123667530c611cec07487",1]
 ["ui/src/pages/skill-workshop/proposals.test.ts","../../lib/skill-workshop/diff-worker.ts","9e47ffd855b5620fe43264a4c229286d7b98b383512e8f64ddb3fecb271be354",1]

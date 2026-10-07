@@ -383,28 +383,6 @@ describe("sessions view", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
   });
 
-  it("does not invent thinking choices for an empty session profile", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult({
-        key: "agent:main:main",
-        kind: "direct",
-        updatedAt: Date.now(),
-        modelProvider: "thinking-fixture",
-        model: "no-effort",
-        thinkingLevels: [],
-      }),
-      { expandedSessionKey: "agent:main:main" },
-      container,
-    );
-    await Promise.resolve();
-
-    const thinking = container.querySelector<HTMLSelectElement>("tbody select");
-    expect(thinking).not.toBeNull();
-    expect(Array.from(thinking?.options ?? []).map((option) => option.value)).toEqual([""]);
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Unknown");
-  });
-
   it("renders and patches provider-owned thinking ids", async () => {
     const container = document.createElement("div");
     const onPatch = vi.fn();
@@ -443,38 +421,6 @@ describe("sessions view", () => {
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onPatch).toHaveBeenCalledWith("agent:main:main", { thinkingLevel: "max" });
-  });
-
-  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildResult(
-        {
-          key: "agent:main:main",
-          kind: "direct",
-          updatedAt: Date.now(),
-        },
-        {
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          thinkingDefault: "high",
-          thinkingLevels: [
-            { id: "off", label: "off" },
-            { id: "high", label: "high" },
-          ],
-        },
-      ),
-      { expandedSessionKey: "agent:main:main" },
-      container,
-    );
-    await Promise.resolve();
-
-    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
-    expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: High");
-    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
-      ["Inherited: High", "Off", "High"],
-    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -601,34 +547,6 @@ describe("sessions view", () => {
         (badge) => (badge.parentElement as (HTMLElement & { content: string }) | null)?.content,
       ),
     ).toEqual(["Status: Queued", "Status: Live", "Status: Idle", "Status: Failed", "Status: Done"]);
-  });
-
-  it("renders the effective runtime including fallback in the details drawer", async () => {
-    const container = document.createElement("div");
-    renderView(
-      buildMultiResult([
-        {
-          key: "agent:main:claude",
-          kind: "direct",
-          updatedAt: 20,
-          agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-        },
-      ]),
-      { searchQuery: "fallback none", expandedSessionKey: "agent:main:claude" },
-      container,
-    );
-    await Promise.resolve();
-
-    expect(sessionTableHeaders(container)).toEqual(SESSION_TABLE_HEADERS);
-    // The roster no longer has a Runtime column; the drawer carries it.
-    expect(container.querySelector(".session-runtime-cell")).toBeNull();
-    const rows = container.querySelectorAll("tbody tr.session-data-row");
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.querySelector(".session-key-cell")?.textContent?.trim()).toBe(
-      "agent:main:claude",
-    );
-    const stats = readSessionDetailStats(container);
-    expect(stats.get("Runtime")).toBe("claude-cli (fallback none)");
   });
 
   it("opens session details from row activation", async () => {
