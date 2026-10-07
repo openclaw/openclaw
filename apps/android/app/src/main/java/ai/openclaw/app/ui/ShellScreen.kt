@@ -164,6 +164,7 @@ fun ShellScreen(
 
       LaunchedEffect(requestedHomeDestination) {
         val destination = requestedHomeDestination ?: return@LaunchedEffect
+        commandOpen = false
         // HomeDestination is a one-shot command from launch intents and settings
         // actions; consume it after translating to local shell state.
         nav.selectTab(

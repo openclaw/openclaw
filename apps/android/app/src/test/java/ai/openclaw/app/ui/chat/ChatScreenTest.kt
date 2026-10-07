@@ -146,6 +146,18 @@ class ChatScreenTest {
   }
 
   @Test
+  fun repeatedTalkLaunchLeavesActiveTalkAloneEvenIfSetupChanged() {
+    assertEquals(
+      ChatRealtimeTalkLaunch.AlreadyStarted,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = false, requiresSetup = true, talkActive = true),
+    )
+    assertEquals(
+      ChatRealtimeTalkLaunch.AlreadyStarted,
+      resolveChatRealtimeTalkLaunch(hasMicPermission = true, requiresSetup = false, talkActive = true),
+    )
+  }
+
+  @Test
   fun composerPrimaryActionSendsDraftsDuringRunsAndKeepsTalkStopIndependent() {
     assertEquals(
       ChatComposerPrimaryAction.Stop,

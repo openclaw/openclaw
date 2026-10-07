@@ -37,6 +37,8 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   lives in the Chat composer rather than a separate Voice tab.
 - Tap the composer microphone for on-device dictation. Long-press it to record
   a voice-note attachment. Start continuous Talk from the Talk waveform.
+- With OpenClaw as the [default Android assistant](/platforms/android#assistant-entrypoints),
+  an empty system assistant invocation opens the current Chat and starts the same Talk flow.
 - While Talk is active, Chat shows its current status. Native Talk identifies
   device speech recognition and the configured Talk voice, and explains when
   the Gateway does not advertise GPT-Live relay support or explicitly rejects
