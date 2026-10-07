@@ -7,8 +7,10 @@ import {
 } from "../infra/exec-request-context.js";
 import type { ManagedRun, RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { captureExecRequestCancellation } from "./bash-process-control.js";
 import {
   acknowledgeNotifyOnExit,
+  deleteSession,
   getActiveBackgroundExecSessionCount,
   getFinishedSession,
   markBackgrounded,
@@ -68,28 +70,40 @@ it.each([
     reason: "manual-cancel" as const,
     cleanupFails: false,
     duringFinalize: false,
-    requestStop: false,
+    requestStop: "none" as const,
   },
   {
     reason: "overall-timeout" as const,
     cleanupFails: true,
     duringFinalize: false,
-    requestStop: false,
+    requestStop: "none" as const,
   },
   {
     reason: "manual-cancel" as const,
     cleanupFails: false,
     duringFinalize: true,
-    requestStop: false,
+    requestStop: "none" as const,
   },
   {
     reason: "manual-cancel" as const,
     cleanupFails: false,
     duringFinalize: true,
-    requestStop: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "capture" as const,
+  },
+  {
+    reason: "manual-cancel" as const,
+    cleanupFails: true,
+    duringFinalize: true,
+    requestStop: "direct" as const,
   },
 ])(
-  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop)",
+  "starts and joins targeted sandbox cleanup for $reason (duringFinalize=$duringFinalize, requestStop=$requestStop, cleanupFails=$cleanupFails)",
   async ({ reason, cleanupFails, duringFinalize, requestStop }) => {
     const termination = createDeferred();
     const artifactFinalization = createDeferred();
@@ -154,15 +168,16 @@ it.each([
       runId: "sandbox-request-stop",
       sessionKey: "agent:main:targeted-cleanup",
     };
-    const requestOwner = requestStop
-      ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
-          const owner = captureExecRequestOwners(requestIdentity)?.[0];
-          if (!owner) {
-            throw new Error("Expected the sandbox command's request owner");
-          }
-          return owner;
-        })
-      : undefined;
+    const request =
+      requestStop !== "none"
+        ? await withExecRequestTurn({ identity: requestIdentity }, async () => {
+            const owner = captureExecRequestOwners(requestIdentity)?.[0];
+            if (!owner) {
+              throw new Error("Expected the sandbox command's request owner");
+            }
+            return { owner, cancellation: captureExecRequestCancellation(requestIdentity) };
+          })
+        : undefined;
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "guest",
       scopes: ["operator.write"],
@@ -176,7 +191,7 @@ it.each([
         runTestExecProcess({
           scopeKey: "targeted-cleanup:guest",
           sandbox,
-          requestOwners: requestOwner ? [requestOwner] : undefined,
+          requestOwners: request ? [request.owner] : undefined,
         }),
     );
     const other = await runTestExecProcess({ sandbox: otherSandbox });
@@ -191,8 +206,12 @@ it.each([
       if (duringFinalize) {
         guestExit.resolve(createRunExit());
         await artifactsEntered.promise;
-        if (requestOwner) {
-          cancelExecRequestOwners([requestOwner]);
+        if (request) {
+          if (requestStop === "capture") {
+            expect(request.cancellation.cancel()).toBe(true);
+          } else {
+            cancelExecRequestOwners([request.owner]);
+          }
           expect(originalSource.signal.aborted).toBe(false);
           expect(guest.session.requestCancelled).toBe(true);
         } else {
@@ -232,13 +251,25 @@ it.each([
       }
       termination.resolve();
       const outcome = await joined;
-      expect(outcome.status).toBe(duringFinalize ? "completed" : "failed");
+      expect(outcome.status).toBe(duringFinalize && !cleanupFails ? "completed" : "failed");
       expect(sandbox.terminate).toHaveBeenCalledOnce();
       expect(sandbox.finalizeExec).toHaveBeenCalledOnce();
       expect(releaseSource).toHaveBeenCalledOnce();
       if (cleanupFails) {
         expect(guest.session.finalizationFailed).toBe(true);
         expect(outcome.aggregated).toContain(cleanupError.message);
+      }
+      if (request) {
+        // The command registered after capture; output eviction cannot erase its cleanup verdict.
+        deleteSession(guest.session.id);
+        expect(getFinishedSession(guest.session.id)).toBeUndefined();
+        if (cleanupFails) {
+          await expect(request.cancellation.settle()).rejects.toThrow(
+            "command cleanup could not be confirmed",
+          );
+        } else {
+          await expect(request.cancellation.settle()).resolves.toBeUndefined();
+        }
       }
       expect(other.session.exited).toBe(duringFinalize);
       otherExit.resolve(createRunExit());

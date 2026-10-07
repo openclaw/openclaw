@@ -20,6 +20,7 @@ export type ExecRequestOwner = {
   readonly controller: AbortController;
   readonly signal: AbortSignal;
   readonly pendingProcesses: Set<Promise<void>>;
+  cleanupUncertain: boolean;
 };
 
 type ExecRequestTurn = {
@@ -41,6 +42,7 @@ function createExecRequestOwner(identity: ExecRequestIdentity): ExecRequestOwner
     controller,
     signal: controller.signal,
     pendingProcesses: new Set(),
+    cleanupUncertain: false,
   };
 }
 

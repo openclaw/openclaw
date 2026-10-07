@@ -87,8 +87,17 @@ export function captureExecRequestCancellation(
       ].filter((session) =>
         readExecRequestOwners(session)?.some((owner) => stoppedOwners.has(owner)),
       );
-      await Promise.all(sessions.map(waitForExecSession));
-      if (sessions.some((session) => session.finalizationFailed || session.cleanupUncertain)) {
+      const pending = sessions.map(waitForExecSession);
+      for (const owner of stoppedOwners) {
+        for (const settlement of owner.pendingProcesses) {
+          pending.push(settlement);
+        }
+      }
+      await Promise.all(pending);
+      if (
+        [...stoppedOwners].some((owner) => owner.cleanupUncertain) ||
+        sessions.some((session) => session.finalizationFailed || session.cleanupUncertain)
+      ) {
         throw new Error(
           "Request stopped, but command cleanup could not be confirmed. Inspect its retained process output before retrying.",
         );
