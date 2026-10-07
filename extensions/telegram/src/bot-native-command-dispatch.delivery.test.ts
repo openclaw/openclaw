@@ -337,6 +337,63 @@ describe("Telegram native argument menus", () => {
       );
     },
   );
+
+  it.each([
+    ["a historical topic that last ran on the DM pin", "native-test/plain", "plain"],
+    ["the channel default", "native-test/reasoner", "reasoner"],
+  ] as const)(
+    "uses %s for an unpinned DM-topic keyboard",
+    async (_case, channelModel, expected) => {
+      const base = commandConfig();
+      const cfg = commandConfig({
+        agents: {
+          defaults: {
+            model: "native-test/plain",
+            thinkingDefault: "low",
+            models: { "native-test/reasoner": {} },
+          },
+        },
+        channels: { ...base.channels, modelByChannel: { telegram: { "*": channelModel } } },
+      });
+      await upsertSessionEntry({
+        storePath: cfg.session!.store!,
+        sessionKey: "agent:main:main",
+        entry: {
+          sessionId: "parent",
+          updatedAt: 1,
+          providerOverride: "native-test",
+          modelOverride: "reasoner",
+          modelOverrideSource: "user",
+        },
+      });
+      if (expected === "plain") {
+        await upsertSessionEntry({
+          storePath: cfg.session!.store!,
+          sessionKey: "agent:main:main:thread:42001:77",
+          entry: {
+            sessionId: "historical-topic",
+            updatedAt: 1,
+            modelProvider: "native-test",
+            model: "reasoner",
+          },
+        });
+      }
+      await (
+        await createBot(true, true, cfg, true)
+      ).handleUpdate({
+        update_id: 3102,
+        message: { ...commandMessage("/think"), message_thread_id: 77 },
+      });
+      const choices = sentMenu()
+        .reply_markup.inline_keyboard.flat()
+        .map((choice) => choice.text);
+      if (expected === "plain") {
+        expect(choices).toEqual(["default", "off", "ultra"]);
+      } else {
+        expect(choices).toContain("max");
+      }
+    },
+  );
 });
 
 describe("Telegram registered plugin delivery", () => {
