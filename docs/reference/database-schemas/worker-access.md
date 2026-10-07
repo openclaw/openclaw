@@ -22,6 +22,13 @@ history. Ordered reads still retain the database writer FIFO and revalidate thei
 physical source and current permissions. Transcript payloads keep their history
 worker; schemas, stored data, configuration, and update behavior are unchanged.
 
+Worker read-only agent connections load existing file-bound canonical validation receipts
+at admission, before a read transaction begins. Reopening a reader then validates
+pending keys without repeating a complete session inventory. Copied or replaced
+files still require their own validation; canonical receipts never grant integrity
+proof. Writer FIFO ordering, current-authority checks, schemas, and update behavior
+remain unchanged.
+
 Reply initialization, agent-turn preparation, and status rendering recover missing
 lifecycle timestamps through the transcript reader. Header reads retain their
 physical database owner and accept results under the existing writer FIFO with a
