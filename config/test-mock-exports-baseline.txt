@@ -242,8 +242,6 @@
 ["extensions/browser/src/browser/system-profiles.test.ts","./pw-ai-module.js","7ee9069eb51a50f6529063547e4ff8ca8efd774aa76a5c53391a448edaa9c48f",1]
 ["extensions/browser/src/browser/system-profiles.test.ts","./server-context.js","27734f1f597cc31610a9134fdeac151a8355625761ff0ac25f2d7ee69411093b",1]
 ["extensions/browser/src/browser/trash.test.ts","openclaw/plugin-sdk/text-utility-runtime","bb6783878e922257903de70dbd8057ed020a898a287a65b448ebeadd511ff426",1]
-["extensions/browser/src/cli/browser-cli-cookie-sync.test.ts","../browser/system-chrome-cookies.js","92ed5b09d9e82f9bcba8101e24cd764b7c11dc88224f0dae35635a9bae155981",1]
-["extensions/browser/src/cli/browser-cli-cookie-sync.test.ts","../system-profile-api.js","2ccdfd8d993ea4a668a964bb7a6fd96a3009463316df4f023012093c7d8d013c",1]
 ["extensions/browser/src/cli/browser-cli-extension.posix-upgrade.test.ts","../browser/extension-relay/owner-client.js","e25eef11158eda653db70ff92ae5f3985277254b0da6377d22bd1d789713bfd3",1]
 ["extensions/browser/src/cli/browser-cli-extension.test.ts","../control-service.js","61263b198030dc364824155e3e2882f4bcf8e3336adcd0fb14046f92a4d50bdc",1]
 ["extensions/browser/src/cli/browser-cli-extension.test.ts","openclaw/plugin-sdk/agent-harness-runtime","c1d628162dc69271af2429e635adc8e573b89c516ebedf7c5840372fcff83eac",1]
