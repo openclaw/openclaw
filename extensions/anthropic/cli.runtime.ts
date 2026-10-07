@@ -17,12 +17,6 @@ import { createClaudeCliTransport } from "./cli-transport.js";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1_000;
-// Claude Code emits interim results while these run, then delivers their answers
-// in later results under the same admitted turn.
-const RESULT_HOLDING_TASK_TYPES = new Set(["local_agent", "local_workflow"]);
-// Explicit background commands may never finish. Only Bash tasks that started
-// in the foreground and later entered the background list hold their turn.
-const TIMEOUT_BACKGROUNDED_TASK_TYPE = "local_bash";
 
 function readReplayedTaskId(
   message: Record<string, unknown>,
@@ -68,6 +62,7 @@ type ClaudeCliTurn = {
   foregroundTaskIds: Set<string>;
   foregroundBashToolUseIds: Set<string>;
   pendingBackgroundTaskIds: Set<string>;
+  subagentTaskIds: Set<string>;
   taskNotifications: Map<string, "queued" | "replayed">;
   error?: Error;
 };
@@ -105,8 +100,7 @@ async function authorizeTool(
   signal: AbortSignal,
 ): Promise<CliBackendToolPermissionResult> {
   const turn = activeTurn(session);
-  const input = request.input;
-  const toolName = request.tool_name;
+  const { input, tool_name: toolName } = request;
   if (!turn || signal.aborted || typeof toolName !== "string" || !isRecord(input)) {
     return {
       behavior: "deny",
@@ -266,7 +260,11 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     return;
   }
   if (message.type === "system" && message.subtype === "task_started") {
-    if (typeof message.task_id === "string" && message.task_id) {
+    if (message.owned_by_subagent === true) {
+      if (typeof message.task_id === "string" && message.task_id) {
+        turn.subagentTaskIds.add(message.task_id);
+      }
+    } else if (typeof message.task_id === "string" && message.task_id) {
       // task_type is optional here; the background task list names it later.
       if (message.is_backgrounded === false) {
         turn.foregroundTaskIds.add(message.task_id);
@@ -285,9 +283,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
         continue;
       }
       if (
-        (typeof task.task_type === "string" && RESULT_HOLDING_TASK_TYPES.has(task.task_type)) ||
-        (task.task_type === TIMEOUT_BACKGROUNDED_TASK_TYPE &&
-          turn.foregroundTaskIds.has(task.task_id))
+        task.task_type === "local_agent" ||
+        task.task_type === "local_workflow" ||
+        (task.task_type === "local_bash" && turn.foregroundTaskIds.has(task.task_id))
       ) {
         // Leaving the live task list is not acknowledgement of its queued answer.
         turn.pendingBackgroundTaskIds.add(task.task_id);
@@ -306,7 +304,9 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     message.type === "system" &&
     message.subtype === "task_notification" &&
     typeof message.task_id === "string" &&
-    message.task_id
+    message.task_id &&
+    // Subagent completions have no parent result and must not consume its queue slots.
+    !turn.subagentTaskIds.delete(message.task_id)
   ) {
     // Include non-held tasks: each queued notification has its own ordered result.
     turn.taskNotifications.set(message.task_id, "queued");
@@ -414,6 +414,7 @@ export async function* executeClaudeCli(
     foregroundTaskIds: new Set(),
     foregroundBashToolUseIds: new Set(),
     pendingBackgroundTaskIds: new Set(),
+    subagentTaskIds: new Set(),
     taskNotifications: new Map(),
   };
   session.currentTurn = turn;
