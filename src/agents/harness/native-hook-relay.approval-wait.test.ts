@@ -606,36 +606,45 @@ describe("native hook relay approval wait handling", () => {
     expect(result.stdout).toContain("openclaw mcp configure memory --approval approve");
   });
 
-  it.each(["arguments", "tool"])("scopes MCP allow-always after changed %s", async (change) => {
-    mockCallGatewayTool
-      .mockResolvedValueOnce({ id: "approval-1", decision: "allow-always" })
-      .mockResolvedValueOnce({ id: "approval-2", decision: "deny" });
-    const relay = registerRelay({ ttlMs: 60 * 60_000 });
-    const invoke = (cwd: string, query: string, toolName = "mcp__linear__list_issues") =>
-      invokeNativeHookRelay({
-        provider: "codex",
-        relayId: relay.relayId,
-        event: "permission_request",
-        rawPayload: {
-          hook_event_name: "PermissionRequest",
-          cwd,
-          tool_name: toolName,
-          tool_input: { query },
-        },
-      });
-    await invoke("/repo", "first");
-    const sameTool = change !== "tool";
-    const result = await invoke(
-      sameTool ? "/other-repo" : "/repo",
-      change === "arguments" ? "second" : "first",
-      change === "tool" ? "mcp__linear__get_issue" : undefined,
-    );
+  it.each(["arguments", "tool", "server", "case"])(
+    "scopes MCP allow-always after changed %s",
+    async (change) => {
+      mockCallGatewayTool
+        .mockResolvedValueOnce({ id: "approval-1", decision: "allow-always" })
+        .mockResolvedValueOnce({ id: "approval-2", decision: "deny" });
+      const relay = registerRelay({ ttlMs: 60 * 60_000 });
+      const invoke = (cwd: string, query: string, toolName = "mcp__linear__list_issues") =>
+        invokeNativeHookRelay({
+          provider: "codex",
+          relayId: relay.relayId,
+          event: "permission_request",
+          rawPayload: {
+            hook_event_name: "PermissionRequest",
+            cwd,
+            tool_name: toolName,
+            tool_input: { query },
+          },
+        });
+      await invoke("/repo", "first");
+      const sameTool = change === "arguments";
+      const result = await invoke(
+        sameTool ? "/other-repo" : "/repo",
+        change === "arguments" ? "second" : "first",
+        change === "tool"
+          ? "mcp__linear__get_issue"
+          : change === "server"
+            ? "mcp__other__list_issues"
+            : change === "case"
+              ? "mcp__linear__List_Issues"
+              : undefined,
+      );
 
-    expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe(
-      sameTool ? "allow" : "deny",
-    );
-    expect(mockCallGatewayTool).toHaveBeenCalledTimes(sameTool ? 1 : 2);
-  });
+      expect(JSON.parse(result.stdout).hookSpecificOutput.decision.behavior).toBe(
+        sameTool ? "allow" : "deny",
+      );
+      expect(mockCallGatewayTool).toHaveBeenCalledTimes(sameTool ? 1 : 2);
+    },
+  );
 
   it("forgets MCP allow-always on relay replacement", async () => {
     mockCallGatewayTool
