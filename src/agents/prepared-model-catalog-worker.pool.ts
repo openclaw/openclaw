@@ -12,7 +12,15 @@ export type PreparedModelCatalogWorkerData = {
 
 export const GATEWAY_CATALOG_WORKERS = 1;
 // Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+const DEFAULT_CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+
+/** Reads OPENCLAW_CATALOG_WORKER_HEAP_MB (256-8192); falls back to the default otherwise. */
+export function resolveCatalogWorkerHeapLimitMb(env: NodeJS.ProcessEnv): number {
+  const raw = Number.parseInt(env.OPENCLAW_CATALOG_WORKER_HEAP_MB ?? "", 10);
+  return Number.isInteger(raw) && raw >= 256 && raw <= 8192
+    ? raw
+    : DEFAULT_CATALOG_WORKER_HEAP_LIMIT_MB;
+}
 
 /**
  * Without crash restart, the pool closes itself when its worker fails, exits or times out, even
@@ -29,7 +37,7 @@ export class CatalogWorkerTaskPool<Input, Output> extends WorkerTaskPool<Input, 
   ) {
     super({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: resolveCatalogWorkerHeapLimitMb(env) } },
       maxWorkers: GATEWAY_CATALOG_WORKERS,
       // Only the inventory owner can replace captured code; idle retirement or crash restart
       // would import a different source generation into an existing publication.

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "./worker-heap-flag.mjs"; // must stay first: see openclaw#157575
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { access } from "node:fs/promises";
 import module from "node:module";

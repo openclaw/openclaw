@@ -50,6 +50,7 @@
     "node-host-launcher.mjs",
     "node-compile-cache.mjs",
     "openclaw.mjs",
+    "worker-heap-flag.mjs",
     "pnpm-workspace.yaml",
     "README.md",
     "THIRD_PARTY_NOTICES.md",
