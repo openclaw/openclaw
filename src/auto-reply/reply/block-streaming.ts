@@ -69,6 +69,7 @@ export type BlockStreamingCoalescing = {
 type BlockStreamingChunking = {
   minChars: number;
   maxChars: number;
+  hardMaxChars?: number;
   breakPreference: "paragraph" | "newline" | "sentence";
   flushOnParagraph?: boolean;
 };
@@ -108,10 +109,17 @@ export function resolveEffectiveBlockStreamingConfig(params: {
     min: 1,
     max: Math.max(1, providerContext.textLimit),
   });
+  const hasExplicitMaxChunkChars =
+    typeof params.maxChunkChars === "number" && Number.isFinite(params.maxChunkChars);
+  const defaultHardMax = Math.min(
+    Math.max(1, providerContext.textLimit),
+    Math.max(chunkingDefaults.maxChars, chunkingDefaults.hardMaxChars ?? chunkingDefaults.maxChars),
+  );
   const chunking: BlockStreamingChunking = {
     ...chunkingDefaults,
     minChars: Math.min(chunkingDefaults.minChars, chunkingMax),
     maxChars: chunkingMax,
+    hardMaxChars: hasExplicitMaxChunkChars ? chunkingMax : Math.max(chunkingMax, defaultHardMax),
   };
   const coalescingDefaults = resolveBlockStreamingCoalescing(
     params.cfg,
@@ -149,6 +157,8 @@ export function resolveBlockStreamingChunking(
 
   const maxRequested = Math.max(1, Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX));
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+  const hasConfiguredMaxChars =
+    typeof chunkCfg?.maxChars === "number" && Number.isFinite(chunkCfg.maxChars);
   const minRequested = Math.max(1, Math.floor(chunkCfg?.minChars ?? DEFAULT_BLOCK_STREAM_MIN));
   const minChars = Math.min(minRequested, maxChars);
   const breakPreference =
@@ -158,6 +168,7 @@ export function resolveBlockStreamingChunking(
   return {
     minChars,
     maxChars,
+    hardMaxChars: hasConfiguredMaxChars ? maxChars : textLimit,
     breakPreference,
     flushOnParagraph: chunkMode === "newline",
   };

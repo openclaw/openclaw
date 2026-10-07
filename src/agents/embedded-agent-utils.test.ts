@@ -4,6 +4,9 @@
  */
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
+import { scanFenceSpans } from "../../packages/markdown-core/src/fences.js";
+import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
+import { protectBreakIndex, scanUnbreakableSpans } from "./embedded-agent-link-spans.js";
 import {
   createAssistantVisibleStreamText,
   extractEmbeddedAssistantText,
@@ -596,5 +599,177 @@ describe("empty input handling", () => {
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
+  });
+});
+
+describe("embedded agent link spans", () => {
+  it("keeps a streamed link intact above the preferred size with contiguous source ranges", () => {
+    const target =
+      `https://outlook.office365.com/owa/?itemid=${"A".repeat(120)}` +
+      "%3D%3D&exvsurl=1&path=/calendar/item";
+    const link = `[invite](${target})`;
+    const text = `Purpose: customer context. ${link}\n\nWhat matters`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 20,
+      maxChars: 48,
+      hardMaxChars: 400,
+      breakPreference: "paragraph",
+    });
+    const delivered: Array<{
+      chunk: string;
+      sourceText: string;
+      sourceStart: number;
+      sourceEnd: number;
+    }> = [];
+    const emit = (
+      chunk: string,
+      options?: { sourceText: string; sourceStart: number; sourceEnd: number },
+    ) => {
+      if (!options) {
+        throw new Error("missing source metadata");
+      }
+      delivered.push({ chunk, ...options });
+    };
+
+    for (const character of text) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+
+    expect(delivered.some(({ chunk }) => chunk.includes(link))).toBe(true);
+    expect(delivered.map(({ sourceText }) => sourceText).join("")).toBe(text);
+    expect(delivered.map(({ sourceStart, sourceEnd }) => [sourceStart, sourceEnd])).toEqual(
+      delivered.map(({ sourceText }, index) => {
+        const sourceStart = delivered
+          .slice(0, index)
+          .reduce((length, item) => length + item.sourceText.length, 0);
+        return [sourceStart, sourceStart + sourceText.length];
+      }),
+    );
+  });
+
+  it("protects a streamed Markdown destination before its first character arrives", () => {
+    const text = `[${"a".repeat(30)}](`;
+
+    expect(scanUnbreakableSpans(text, [], 160)).toEqual([
+      { start: 0, end: text.length, complete: false },
+    ]);
+  });
+
+  it("keeps adjacent Markdown destinations as independent spans", () => {
+    const first = "[a](https://a.co)";
+    const second = "[b](https://b.co)";
+    const text = first + second;
+
+    expect(scanUnbreakableSpans(text, [], 30)).toEqual([
+      { start: 0, end: first.length, complete: true },
+      { start: first.length, end: text.length, complete: true },
+    ]);
+  });
+
+  it("merges nested protected spans before resolving a break", () => {
+    const text = "[a[b](y)](z)";
+    const spans = scanUnbreakableSpans(text, scanFenceSpans(text).spans, 30);
+
+    expect(spans).toEqual([{ start: 0, end: text.length, complete: true }]);
+    expect(protectBreakIndex(spans, 5, 0, false)).toBe(text.length);
+  });
+
+  it("does not protect a label that starts inside fenced code", () => {
+    const text = `prose
+\`\`\`
+code [label
+\`\`\`
+](https://example.com/${"a".repeat(40)})`;
+
+    const spans = scanUnbreakableSpans(text, scanFenceSpans(text).spans, 30);
+    expect(spans.every((span) => span.start >= text.indexOf("https://"))).toBe(true);
+  });
+
+  it("does not protect a label that crosses fenced code", () => {
+    const text = `Choose [a
+\`\`\`js
+${"code".repeat(20)}
+\`\`\`
+b](https://example.com/x) tail`;
+
+    const spans = scanUnbreakableSpans(text, scanFenceSpans(text).spans, 30);
+    expect(spans.every((span) => span.start >= text.indexOf("https://"))).toBe(true);
+  });
+
+  it("ignores brackets inside inline code while finding a link label", () => {
+    const text = `See [use \`]\` here](https://example.com/${"a".repeat(40)})`;
+
+    expect(scanUnbreakableSpans(text, [], 30)).toEqual([
+      { start: text.indexOf("["), end: text.length, complete: true },
+    ]);
+  });
+
+  it("recognizes a link after an unmatched backtick", () => {
+    const text = `Unmatched \` then [invite](https://example.com/${"a".repeat(40)})`;
+
+    expect(scanUnbreakableSpans(text, [], 160)).toEqual([
+      { start: text.indexOf("["), end: text.length, complete: true },
+    ]);
+  });
+
+  it("keeps a streamed long link intact after an unmatched backtick", () => {
+    const link = `[invite](https://example.com/${"a".repeat(80)})`;
+    const text = `Unmatched \` before ${link} after`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+
+    for (const character of text) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+  });
+
+  it("keeps a fitting table with nested links whole", () => {
+    const table = [
+      "| Service | Link |",
+      "| --- | --- |",
+      "| Mail | [open](https://mail.example) |",
+      "| Calendar | [open](https://calendar.example) |",
+      "| Notes | plain |",
+    ].join("\n");
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 200,
+      breakPreference: "newline",
+    });
+    const chunks: string[] = [];
+
+    chunker.append(`${table}\n\n${"trailing prose ".repeat(20)}`);
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks[0]?.slice(0, table.length)).toBe(table);
+  });
+
+  it("does not treat a label spanning a blank line as a link", () => {
+    const text = `[label
+
+paragraph](https://example.com/${"a".repeat(40)})`;
+
+    const spans = scanUnbreakableSpans(text, scanFenceSpans(text).spans, 30);
+    expect(spans.every((span) => span.start >= text.indexOf("https://"))).toBe(true);
+  });
+
+  it("does not complete a bare URL merely because the streamed suffix ends in >", () => {
+    const text = `https://example.com/${"a".repeat(40)}>`;
+
+    expect(scanUnbreakableSpans(text, [], 30)).toEqual([
+      { start: 0, end: text.length, complete: false },
+    ]);
   });
 });

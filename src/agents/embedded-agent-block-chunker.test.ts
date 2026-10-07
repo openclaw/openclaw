@@ -255,6 +255,20 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunker.consumedLength).toBe(deltas.join("").length);
   });
 
+  it("keeps indented Unicode source intact when a fenced projection cannot fit", () => {
+    const source = "    😀abc";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 9,
+      hardMaxChars: 40,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(source);
+
+    expect(drainChunks(chunker, true)).toEqual([source]);
+  });
+
   it.each([
     { force: false, body: `${"A".repeat(56)} TAIL_153587` },
     { force: true, body: `${"A".repeat(56)} TAIL_153587` },
@@ -422,6 +436,82 @@ describe("EmbeddedBlockChunker", () => {
       }
     },
   );
+
+  it("does not split a label while a streamed destination is still empty", () => {
+    const link = `[${"a".repeat(30)}](https://example.com/x)`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+    const emit = (chunk: string) => chunks.push(chunk);
+    const emptyDestinationEnd = link.indexOf("(") + 1;
+
+    for (const character of link.slice(0, emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    expect(chunks).toEqual([]);
+
+    for (const character of link.slice(emptyDestinationEnd)) {
+      chunker.append(character);
+      chunker.drain({ force: false, emit });
+    }
+    chunker.drain({ force: true, emit });
+    expect(chunks).toEqual([link]);
+  });
+
+  it("keeps adjacent bounded Markdown links in separate chunks", () => {
+    const first = "[a](https://a.co)";
+    const second = "[b](https://b.co)";
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 1,
+      maxChars: 20,
+      hardMaxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(first + second);
+
+    expect(drainChunks(chunker, true)).toEqual([first, second]);
+  });
+
+  it("hard-splits a link that exceeds the transport ceiling without breaking UTF-16", () => {
+    const link = `[invite](https://example.com/${"a".repeat(40)}😀${"b".repeat(40)})`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 50,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(link);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.join("")).toBe(link);
+    expectChunksWithinLength(chunks, 50);
+    expect(chunks.every((chunk) => chunk.isWellFormed())).toBe(true);
+  });
+
+  it("keeps a link intact after shortening an oversized fence language hint", () => {
+    const link = `[invite](https://example.com/${"a".repeat(80)})`;
+    const text = `\`\`\`${"language".repeat(8)}\ncode\n\`\`\`\nSee ${link} now.`;
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      hardMaxChars: 160,
+      breakPreference: "paragraph",
+    });
+    const chunks: string[] = [];
+
+    chunker.append(text);
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.some((chunk) => chunk.includes(link))).toBe(true);
+    expectChunksWithinLength(chunks, 160);
+  });
 
   it.each([false, true])(
     "reports original source across synthetic wrappers with a preserved break: %s",
@@ -1060,3 +1150,4 @@ describe("EmbeddedBlockChunker", () => {
     });
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

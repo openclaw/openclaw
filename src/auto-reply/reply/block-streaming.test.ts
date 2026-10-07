@@ -7,7 +7,7 @@ import {
 } from "./block-streaming.js";
 
 describe("resolveEffectiveBlockStreamingConfig", () => {
-  it("applies ACP-style overrides while preserving chunk/coalescer bounds", () => {
+  it("keeps ACP-style chunk overrides as hard chunk bounds", () => {
     const cfg = {} as OpenClawConfig;
     const baseChunking = resolveBlockStreamingChunking(cfg, "discord");
     const resolved = resolveEffectiveBlockStreamingConfig({
@@ -19,6 +19,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     expect(baseChunking.maxChars).toBeGreaterThanOrEqual(64);
     expect(resolved.chunking.maxChars).toBe(64);
+    expect(resolved.chunking.hardMaxChars).toBe(64);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.maxChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
     expect(resolved.coalescing.minChars).toBeLessThanOrEqual(resolved.coalescing.maxChars);
@@ -39,6 +40,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     expect(resolved.chunking).toEqual({
       minChars: 10,
       maxChars: 20,
+      hardMaxChars: 20,
       breakPreference: "paragraph",
     });
     expect(resolved.coalescing.maxChars).toBe(20);
@@ -121,7 +123,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     ).toMatchObject({ minChars: 25, maxChars: 80, idleMs: 2 });
   });
 
-  it("allows ACP maxChunkChars overrides above base defaults up to provider text limits", () => {
+  it("allows ACP maxChunkChars above defaults without exceeding that ACP limit", () => {
     const cfg = {
       channels: {
         discord: {
@@ -132,6 +134,7 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
 
     const baseChunking = resolveBlockStreamingChunking(cfg, "discord");
     expect(baseChunking.maxChars).toBeLessThan(1800);
+    expect(baseChunking.hardMaxChars).toBe(4096);
 
     const resolved = resolveEffectiveBlockStreamingConfig({
       cfg,
@@ -140,6 +143,25 @@ describe("resolveEffectiveBlockStreamingConfig", () => {
     });
 
     expect(resolved.chunking.maxChars).toBe(1800);
+    expect(resolved.chunking.hardMaxChars).toBe(1800);
     expect(resolved.chunking.minChars).toBeLessThanOrEqual(resolved.chunking.maxChars);
+  });
+
+  it("keeps an explicitly configured maxChars as the hard chunk bound", () => {
+    const cfg = {
+      channels: { discord: { textChunkLimit: 4096 } },
+      agents: {
+        defaults: {
+          blockStreamingChunk: {
+            minChars: 20,
+            maxChars: 64,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveEffectiveBlockStreamingConfig({ cfg, provider: "discord" });
+
+    expect(resolved.chunking).toMatchObject({ minChars: 20, maxChars: 64, hardMaxChars: 64 });
   });
 });
