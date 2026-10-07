@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
-import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "../server-worker-placement-reclaim.js";
 import { REQUEST, seedActivePlacement } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -126,8 +126,6 @@ describe("worker Gateway move recovery", () => {
     expect(placements.getPlacementMove(active.sessionId)).toBeUndefined();
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
   });
-
-
 
   it.each(["claim-replaced", "policy-activated", "policy-after-prepare"] as const)(
     "preserves the accepted checkpoint when pending Gateway move recovery is %s",
@@ -255,7 +253,7 @@ describe("worker Gateway move recovery", () => {
               owner: placementTurnOwner(active),
             })
           : undefined;
-      placements.beginPlacementMove({
+      await placements.beginPlacementMove({
         sessionId: active.sessionId,
         source: {
           generation: active.generation,
