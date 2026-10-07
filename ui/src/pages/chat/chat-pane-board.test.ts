@@ -407,22 +407,23 @@ describe("chat pane board shell", () => {
   });
 
   it.each(["disabled", "disposed", "enabled", "default"] as const)(
-    "coalesces swarm roster redraws while %s",
+    "keeps generic child roster hydration available while swarm is %s",
     async (mode) => {
+      vi.useFakeTimers();
       swarmModuleImport.release();
       const { SwarmRosterHydrator } = await import("../../lib/sessions/swarm-roster.ts");
       const pane = createTestPane({
         canonicalListRevision: 0,
         list: vi.fn(async () => ({ sessions: [] })),
       } as unknown as SessionCapability);
+      const configSnapshot = {
+        config: mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
+      };
       pane.context = {
         ...pane.context,
         runtimeConfig: {
           state: {
-            configSnapshot: {
-              config:
-                mode === "default" ? {} : { tools: { swarm: { enabled: mode === "enabled" } } },
-            },
+            configSnapshot,
           },
         },
       } as unknown as ApplicationContext;
@@ -443,22 +444,35 @@ describe("chat pane board shell", () => {
 
         expect(requestUpdate).not.toHaveBeenCalled();
         expect(pane.state.requestUpdate).not.toHaveBeenCalled();
-        expect(requestFrame).toHaveBeenCalledTimes(mode === "disabled" ? 0 : 1);
-        if (mode !== "disabled") {
-          frames[0]?.(0);
-          expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
-        }
+        expect(requestFrame).toHaveBeenCalledTimes(1);
+        frames[0]?.(0);
+        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
         if (dispose) {
-          expect(dispose).toHaveBeenCalledOnce();
-          expect(Reflect.get(pane, "swarmHydrator")).toBeNull();
-        } else if (mode === "enabled" || mode === "default") {
-          expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
+          expect(dispose).not.toHaveBeenCalled();
         }
+        expect(Reflect.get(pane, "swarmHydrator")).toBeInstanceOf(SwarmRosterHydrator);
+        expect(Reflect.get(pane, "swarmEnabled")).toBe(mode === "enabled" || mode === "default");
+
+        const hydrator = Reflect.get(pane, "swarmHydrator");
+        const enabled = !Reflect.get(pane, "swarmEnabled");
+        configSnapshot.config = { tools: { swarm: { enabled } } };
+        requestFrame.mockClear();
+        frames.length = 0;
+        vi.mocked(pane.state.requestUpdate).mockClear();
+        pane.refreshSwarmRoster();
+        await vi.dynamicImportSettled();
+
+        expect(Reflect.get(pane, "swarmHydrator")).toBe(hydrator);
+        expect(Reflect.get(pane, "swarmEnabled")).toBe(enabled);
+        expect(requestFrame).toHaveBeenCalledOnce();
+        frames[0]?.(0);
+        expect(pane.state.requestUpdate).toHaveBeenCalledOnce();
       } finally {
         const hydrator = Reflect.get(pane, "swarmHydrator") as InstanceType<
           typeof SwarmRosterHydrator
         > | null;
         hydrator?.dispose();
+        vi.useRealTimers();
       }
     },
   );

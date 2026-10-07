@@ -497,7 +497,7 @@ describe("resolveBuildAllSteps", () => {
         memoryLimit: buildMemoryLimit(5),
         resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
         runStep: (invocation) => ({
-          status: invocation.args.includes("scripts/write-plugin-sdk-entry-dts.ts") ? 23 : 0,
+          status: invocation.args.includes("scripts/write-unified-entry-dts.ts") ? 23 : 0,
         }),
       });
       const labels = result.timings.map((timing) => timing.label);
@@ -509,10 +509,9 @@ describe("resolveBuildAllSteps", () => {
           "tsdown-packages",
           "tsdown-unified",
           "write-unified-entry-dts",
-          "runtime-postbuild",
         ]),
       );
-      expect(labels.at(-1)).toBe("write-plugin-sdk-entry-dts");
+      expect(labels.at(-1)).toBe("write-unified-entry-dts");
       expect(labels).not.toContain("check-plugin-sdk-exports");
       for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
         expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
@@ -623,7 +622,7 @@ describe("resolveBuildAllSteps", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
         }).map((step) => step.label),
       );
-      expect(labels.includes("write-plugin-sdk-entry-dts")).toBe(!runtimeOnly);
+      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
       expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
       expect(labels.includes("clean:dist")).toBe(profile === "package");

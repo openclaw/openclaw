@@ -78,6 +78,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   modelToolsEnabled: boolean;
   skillsPrompt: string;
   codeModeActive?: boolean;
+  webSearchUnconfigured?: () => boolean;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   toolSearchDirectoryEnabled: boolean;
   toolSearchRuntimeConfig: EmbeddedRunAttemptParams["config"];
@@ -307,6 +308,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       reasoningTagHint,
       skillsPrompt: effectiveSkillsPrompt,
       codeModeActive: params.codeModeActive,
+      webSearchUnconfigured: params.webSearchUnconfigured?.(),
       docsPath: openClawReferences.docsPath ?? undefined,
       sourcePath: openClawReferences.sourcePath ?? undefined,
       workspaceNotes: params.bootstrap.workspaceNotes.length
@@ -418,6 +420,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         const embeddedSystemPrompt = {
           ...promptInputs.embeddedSystemPrompt,
           tools,
+          webSearchUnconfigured: params.webSearchUnconfigured?.(),
           capabilityToolNames: capabilities,
           toolSchemaDirectoryPrompt: refreshedToolSchemaDirectoryPrompt,
           sandboxInfo: refreshedSandboxInfo,

@@ -5,7 +5,6 @@ import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import type {
   ControlUiAction,
-  ControlUiSession,
   ControlUiSurface,
   ControlUiSurfaceProps,
   ControlUiView,
@@ -302,7 +301,6 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
     "navigation";
   @property({ attribute: false }) sessionKey = "";
   @property({ attribute: false }) agentId?: string;
-  @property({ attribute: false }) session?: ControlUiSession;
   @property({ attribute: false }) navigationKey = "";
   @property({ attribute: false }) navigationMenus?: SidebarMenusController;
   @property({ type: Boolean }) presented = true;
@@ -499,7 +497,7 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
           renderPluginContribution(
             "accessories",
             entry.key,
-            { sessionKey: this.sessionKey, agentId: this.agentId, session: this.session },
+            { sessionKey: this.sessionKey, agentId: this.agentId },
             this.presented,
           ),
         );

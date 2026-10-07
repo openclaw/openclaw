@@ -1,5 +1,3 @@
-// Gateway pending node-work queue.
-// Stores short-lived per-node prompts until connected nodes drain them.
 import { randomUUID } from "node:crypto";
 import {
   isFutureDateTimestampMs,
@@ -7,10 +5,8 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 
-/** Work item types that connected nodes understand today. */
 export type NodePendingWorkType = "status.request" | "location.request";
 
-/** Priority labels used for pending work drain ordering. */
 export type NodePendingWorkPriority = "default" | "normal" | "high";
 
 type NodePendingWorkItem = {
@@ -130,16 +126,6 @@ function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   );
 }
 
-function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
-  return {
-    id: DEFAULT_STATUS_ITEM_ID,
-    type: "status.request",
-    priority: "default",
-    createdAtMs: nowMs,
-    expiresAtMs: null,
-  };
-}
-
 function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number {
   const ttlMs =
     typeof expiresInMs === "number" && Number.isFinite(expiresInMs)
@@ -251,7 +237,13 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   }
   const baselineIncluded = includeBaseline && items.length < maxItems;
   if (baselineIncluded) {
-    items.push(makeBaselineStatusItem(nowMs));
+    items.push({
+      id: DEFAULT_STATUS_ITEM_ID,
+      type: "status.request",
+      priority: "default",
+      createdAtMs: nowMs,
+      expiresAtMs: null,
+    });
   }
   return {
     revision: state?.revision ?? revision,

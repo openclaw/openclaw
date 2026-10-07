@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { err, ok } from "@openclaw/normalization-core/result";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasPendingFollowupQueueWork } from "../../auto-reply/reply/queue/state.js";
 import {
@@ -216,14 +215,8 @@ export function releaseChatSendCallerAuthority(params: {
 
 /** Observe started work before the retained read releases; consuming still rethrows its error. */
 export function observeChatSendWork<T>(work: Promise<T>): () => Promise<T> {
-  const outcome = work.then(ok<T, unknown>, err<T, unknown>);
-  return async () => {
-    const result = await outcome;
-    if (!result.ok) {
-      throw result.error;
-    }
-    return result.value;
-  };
+  void work.catch(() => {});
+  return () => work;
 }
 
 /** Interrupt the captured run, or competing admissions, without ever targeting this admission. */

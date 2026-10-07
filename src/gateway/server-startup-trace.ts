@@ -56,7 +56,6 @@ export type GatewayStartupTrace = {
   measure: <T>(name: string, run: () => Awaitable<T>) => Promise<T>;
 };
 
-/** Measure a startup step when tracing is active, otherwise run it directly. */
 export async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
   name: string,
