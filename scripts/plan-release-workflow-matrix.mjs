@@ -386,18 +386,6 @@ export function createPackageAcceptanceSelection(options = {}) {
   let scenarios = options.telegramScenarios ?? "";
   const telegramMode = options.telegramMode ?? "none";
   switch (profile) {
-    case "native-cleanup":
-      if (
-        !isBlank(options.dockerLanes) ||
-        telegramMode !== "none" ||
-        !isBlank(scenarios) ||
-        isEnabled(options.prepareOnly)
-      ) {
-        throw new Error(
-          "suite_profile=native-cleanup requires no Docker lanes, Telegram selection, or prepare_only.",
-        );
-      }
-      break;
     case "smoke":
       lanes = "npm-onboard-channel-agent gateway-network config-reload";
       break;

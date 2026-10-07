@@ -10,7 +10,6 @@ import { collectBundledPluginBuildEntries } from "../../scripts/lib/bundled-plug
 import { allReleasePathLanes } from "../../scripts/lib/docker-e2e-scenarios.mts";
 import { createPluginPrereleaseTestPlan } from "../../scripts/lib/plugin-prerelease-test-plan.mts";
 import {
-  createPackageAcceptanceSelection,
   createReleaseSourceSelection,
   createReleaseWorkflowMatrixPlan,
 } from "../../scripts/plan-release-workflow-matrix.mjs";
@@ -18,50 +17,6 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-describe("native cleanup package selection", () => {
-  it("opts in without Docker, live, Telegram, or preparation lanes", () => {
-    expect(createPackageAcceptanceSelection().docker_lanes).toContain("doctor-switch");
-    const selection = createPackageAcceptanceSelection({ suiteProfile: "native-cleanup" });
-    expect(selection).toEqual({
-      docker_lanes: "",
-      include_release_path_suites: false,
-      include_openwebui: false,
-      include_live_suites: false,
-      telegram_enabled: false,
-      telegram_mode: "none",
-      telegram_scenarios: "",
-    });
-    expect(
-      createReleaseSourceSelection({
-        dockerLanes: selection.docker_lanes,
-        includeReleasePathSuites: selection.include_release_path_suites,
-        includeLiveSuites: selection.include_live_suites,
-        includeOpenWebUI: selection.include_openwebui,
-      }),
-    ).toEqual({
-      docker: [],
-      consumers: [],
-      codexSuites: [],
-      fsSafeNative: false,
-      preparationLanes: [],
-    });
-  });
-
-  it.each([
-    { dockerLanes: "doctor-switch" },
-    { telegramMode: "bot" },
-    { telegramScenarios: "one-scenario" },
-    { prepareOnly: true },
-    { prepareOnly: "true" },
-  ])("rejects conflicting selections: %j", (options) => {
-    expect(() =>
-      createPackageAcceptanceSelection({ suiteProfile: "native-cleanup", ...options }),
-    ).toThrow(
-      "suite_profile=native-cleanup requires no Docker lanes, Telegram selection, or prepare_only",
-    );
-  });
-});
 
 function workflow(): WorkflowDocument {
   return parse(

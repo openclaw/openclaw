@@ -7,12 +7,9 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
-  readlinkSync,
-  realpathSync,
   renameSync,
   symlinkSync,
   unlinkSync,
@@ -44,7 +41,6 @@ import {
   releaseWorkflowJobNeeds as jobNeeds,
 } from "../helpers/release-workflow-timeouts.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { evaluateWorkflowExpression, evaluateWorkflowRunner } from "./ci-workflow.test-support.js";
 
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
@@ -738,16 +734,11 @@ function packageToolingCheckoutFixture() {
           }),
       );
     if (identity) {
-      const result = spawnSync(
-        process.platform === "darwin" ? "/bin/bash" : "bash",
-        ["--noprofile", "--norc", "-c", identity.run ?? ""],
-        {
-          cwd: beforeCheckout,
-          encoding: "utf8",
-          timeout: 30_000,
-          env: { ...env, GITHUB_OUTPUT: identityOutput },
-        },
-      );
+      const result = spawnSync("bash", ["--noprofile", "--norc", "-c", identity.run ?? ""], {
+        cwd: beforeCheckout,
+        encoding: "utf8",
+        env: { ...env, GITHUB_OUTPUT: identityOutput },
+      });
       if (result.status !== 0) {
         return {
           result,
@@ -773,12 +764,11 @@ function packageToolingCheckoutFixture() {
     git("checkout", "-q", "--detach", options.wrongCheckout ? advancedSha : selectedRef);
     const sha = git("rev-parse", "HEAD");
     const result = spawnSync(
-      process.platform === "darwin" ? "/bin/bash" : "bash",
+      "bash",
       ["--noprofile", "--norc", "-c", `${validate.run}\nprintf 'installation-reachable\\n'`],
       {
         cwd: repository,
         encoding: "utf8",
-        timeout: 30_000,
         env: {
           ...env,
           EXPECTED_TOOLING_SHA: identityOutputs.sha ?? "",
@@ -2897,19 +2887,6 @@ function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   return step;
 }
 
-function workflowChoiceOptions(input: unknown): string[] {
-  if (
-    input === null ||
-    typeof input !== "object" ||
-    !("options" in input) ||
-    !Array.isArray(input.options) ||
-    !input.options.every((option) => typeof option === "string")
-  ) {
-    throw new Error("Expected workflow choice input with string options");
-  }
-  return input.options;
-}
-
 function releasePublishOrchestration(job: WorkflowJob): WorkflowStep {
   const dispatch = workflowStep(job, "Dispatch publish workflows");
   const phases = job.steps?.filter((step) =>
@@ -3814,8 +3791,6 @@ function runPackageAcceptanceSummary(params: {
   dockerArtifactResult?: string;
   dockerRegistryResult?: string;
   npm12InstallResult?: string;
-  integrityResult?: string;
-  resolveResult?: string;
   suiteProfile?: string;
   telegramEnabled: boolean;
   telegramResult: string;
@@ -3830,11 +3805,11 @@ function runPackageAcceptanceSummary(params: {
     env: {
       DOCKER_ARTIFACT_RESULT: params.dockerArtifactResult ?? "success",
       DOCKER_REGISTRY_RESULT: params.dockerRegistryResult ?? "skipped",
-      PACKAGE_INTEGRITY_RESULT: params.integrityResult ?? "success",
+      PACKAGE_INTEGRITY_RESULT: "success",
       NPM_12_INSTALL_RESULT: params.npm12InstallResult ?? "success",
       PACKAGE_TELEGRAM_RESULT: params.telegramResult,
       PATH: process.env.PATH,
-      RESOLVE_RESULT: params.resolveResult ?? "success",
+      RESOLVE_RESULT: "success",
       SUITE_PROFILE: params.suiteProfile ?? "package",
       TELEGRAM_ENABLED: String(params.telegramEnabled),
     },
@@ -3855,26 +3830,22 @@ function runPackageAcceptanceProfile(params: {
   const workdir = tempDirs.make("package-acceptance-profile-");
   const fixture = frozenToolingFixture(workdir, []);
   const outputPath = resolve(workdir, "github-output");
-  const result = spawnSync(
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-    ["--noprofile", "--norc", "-c", script],
-    {
-      cwd: fixture.tooling,
-      encoding: "utf8",
-      env: {
-        ADMISSION_TOOLING_ROOT: fixture.tooling,
-        ADMISSION_TOOLING_SHA: fixture.toolingSha,
-        CUSTOM_DOCKER_LANES: params.dockerLanes ?? "",
-        GITHUB_OUTPUT: outputPath,
-        PACKAGE_ARTIFACT_NAME: "package-under-test",
-        PATH: process.env.PATH,
-        SOURCE: "ref",
-        SUITE_PROFILE: params.suiteProfile,
-        TELEGRAM_MODE: params.telegramMode ?? "none",
-        TELEGRAM_SCENARIOS: params.telegramScenarios ?? "",
-      },
+  const result = spawnSync("bash", ["--noprofile", "--norc", "-c", script], {
+    cwd: fixture.tooling,
+    encoding: "utf8",
+    env: {
+      ADMISSION_TOOLING_ROOT: fixture.tooling,
+      ADMISSION_TOOLING_SHA: fixture.toolingSha,
+      CUSTOM_DOCKER_LANES: params.dockerLanes ?? "",
+      GITHUB_OUTPUT: outputPath,
+      PACKAGE_ARTIFACT_NAME: "package-under-test",
+      PATH: process.env.PATH,
+      SOURCE: "ref",
+      SUITE_PROFILE: params.suiteProfile,
+      TELEGRAM_MODE: params.telegramMode ?? "none",
+      TELEGRAM_SCENARIOS: params.telegramScenarios ?? "",
     },
-  );
+  });
   const outputs =
     result.status === 0
       ? Object.fromEntries(
@@ -8447,172 +8418,6 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(JSON.stringify(npm12Job)).not.toContain("secrets.");
   });
 
-  it("checks out the defining npm acceptance workflow rather than caller or package refs", () => {
-    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
-    const guard = workflowStep(job, "Verify defining package workflow identity");
-    const consistency = workflowStep(job, "Verify package resolver tooling consistency");
-    const checkout = workflowStep(job, "Checkout package workflow ref");
-    expect(job.steps?.[0]).toBe(guard);
-    expect(job.steps?.[1]).toBe(consistency);
-    expect(job.steps?.[2]).toBe(checkout);
-    expect(guard.id).toBe("defining_workflow");
-    expect(guard.env).toEqual({
-      JOB_CONTEXT: "${{ toJSON(job) }}",
-    });
-    expect(consistency.env).toEqual({
-      DEFINING_WORKFLOW_SHA: "${{ steps.defining_workflow.outputs.workflow_sha }}",
-      RESOLVED_TOOLING_SHA: "${{ needs.resolve_package.outputs.tooling_sha }}",
-    });
-    expect(guard.run).not.toContain("RESOLVED_TOOLING_SHA");
-    expect(consistency.run).not.toContain("GITHUB_OUTPUT");
-    expect(checkout.with).toMatchObject({
-      repository: "openclaw/openclaw",
-      ref: "${{ fromJSON(toJSON(job)).workflow_sha }}",
-      "persist-credentials": false,
-    });
-    const ref = checkout.with?.ref;
-    if (typeof ref !== "string") {
-      throw new Error("Expected defining workflow checkout ref");
-    }
-    const calledSha = "a".repeat(40);
-    expect(
-      runInNewContext(ref.slice(3, -2), {
-        fromJSON: JSON.parse,
-        toJSON: JSON.stringify,
-        job: { workflow_repository: "openclaw/openclaw", workflow_sha: calledSha },
-        steps: { defining_workflow: { outputs: { workflow_sha: "f".repeat(40) } } },
-        github: { sha: "b".repeat(40), workflow_sha: "c".repeat(40) },
-        inputs: { workflow_ref: "refs/heads/main", package_ref: "d".repeat(40) },
-        needs: { resolve_package: { outputs: { tooling_sha: "e".repeat(40) } } },
-      }),
-    ).toBe(calledSha);
-  });
-
-  it.each([
-    [
-      "valid",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
-      "a".repeat(40),
-      0,
-    ],
-    [
-      "foreign repository",
-      JSON.stringify({ workflow_repository: "example/other", workflow_sha: "a".repeat(40) }),
-      "a".repeat(40),
-      1,
-    ],
-    [
-      "missing defining SHA",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw" }),
-      "a".repeat(40),
-      1,
-    ],
-    ["missing repository", JSON.stringify({ workflow_sha: "a".repeat(40) }), "a".repeat(40), 1],
-    [
-      "malformed defining SHA",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "refs/heads/main" }),
-      "refs/heads/main",
-      1,
-    ],
-    [
-      "non-string defining SHA",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: 123 }),
-      "123",
-      1,
-    ],
-    [
-      "resolver mismatch",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
-      "b".repeat(40),
-      0,
-    ],
-    [
-      "missing resolver SHA",
-      JSON.stringify({ workflow_repository: "openclaw/openclaw", workflow_sha: "a".repeat(40) }),
-      "",
-      0,
-    ],
-    ["invalid JSON", "{", "a".repeat(40), 1],
-    ["null", "null", "a".repeat(40), 1],
-    ["array", "[]", "a".repeat(40), 1],
-    ["string", '"workflow"', "a".repeat(40), 1],
-  ])(
-    "validates defining npm workflow identity before checkout: %s",
-    (_, context, resolved, status) => {
-      const step = workflowStep(
-        workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh"),
-        "Verify defining package workflow identity",
-      );
-      const output = join(tempDirs.make("defining-workflow-identity-"), "output");
-      const result = spawnSync(
-        process.platform === "darwin" ? "/bin/bash" : "bash",
-        ["--noprofile", "--norc", "-c", step.run ?? ""],
-        {
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            JOB_CONTEXT: context,
-            RESOLVED_TOOLING_SHA: resolved,
-            GITHUB_OUTPUT: output,
-            GITHUB_SHA: "b".repeat(40),
-            GITHUB_WORKFLOW_SHA: "c".repeat(40),
-          },
-        },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status).toBe(status);
-      if (status === 0) {
-        expect(readFileSync(output, "utf8")).toBe(`workflow_sha=${"a".repeat(40)}\n`);
-      } else {
-        expect(existsSync(output)).toBe(false);
-      }
-    },
-  );
-
-  it.each([
-    ["matched", "a".repeat(40), "a".repeat(40), 0],
-    ["mismatch", "a".repeat(40), "b".repeat(40), 1],
-    ["missing resolver", "a".repeat(40), "", 1],
-    ["missing defining", "", "a".repeat(40), 1],
-    ["malformed defining", "main", "main", 1],
-  ])(
-    "validates defining npm resolver consistency without output: %s",
-    (_, defining, resolved, status) => {
-      const step = workflowStep(
-        workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh"),
-        "Verify package resolver tooling consistency",
-      );
-      const output = join(tempDirs.make("defining-workflow-consistency-"), "output");
-      const result = spawnSync(
-        process.platform === "darwin" ? "/bin/bash" : "bash",
-        ["-c", step.run ?? ""],
-        {
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            DEFINING_WORKFLOW_SHA: defining,
-            RESOLVED_TOOLING_SHA: resolved,
-            GITHUB_OUTPUT: output,
-          },
-        },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(status);
-      expect(existsSync(output)).toBe(false);
-    },
-  );
-
-  it.each([undefined, null, "native-cleanup", {}, { options: null }, { options: [1] }])(
-    "rejects malformed workflow choice options: %j",
-    (input) => {
-      expect(() => workflowChoiceOptions(input)).toThrow(
-        "Expected workflow choice input with string options",
-      );
-    },
-  );
-
   it("checks the installed package tree budget immediately after npm 12 installation", () => {
     const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
     const install = workflowStep(job, "Run install.sh with npm 12");
@@ -8623,656 +8428,6 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(budget.run).toBe(
       'set -euo pipefail\nnode scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"\n',
     );
-  });
-
-  it("runs native cleanup only after installing and checking the resolved package", () => {
-    const job = workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, "npm_12_install_sh");
-    const budget = workflowStep(job, "Check installed package tree budget");
-    const cleanup = workflowStep(job, "Verify retained runtime cleanup on the native host");
-    const steps = job.steps ?? [];
-    expect(steps.indexOf(cleanup)).toBe(steps.indexOf(budget) + 1);
-    expect(cleanup.env).toEqual({
-      EXPECTED_PACKAGE_SOURCE_SHA: "${{ needs.resolve_package.outputs.package_source_sha }}",
-      EXPECTED_PACKAGE_VERSION: "${{ needs.resolve_package.outputs.package_version }}",
-    });
-    expect(cleanup.run).toContain("sudo -n -- /usr/bin/env -i");
-    expect(cleanup.run).toContain(
-      '/bin/bash "$fixture" --isolated-account "$RUNNER_TEMP/openclaw-npm12-prefix"',
-    );
-    expect(cleanup.run).not.toMatch(/sudo -[A-Za-z]*E|preserve-env/u);
-    const profiles = workflowChoiceOptions(
-      readWorkflow(PACKAGE_ACCEPTANCE_WORKFLOW).on?.workflow_dispatch?.inputs?.suite_profile,
-    );
-    for (const profile of profiles) {
-      expect(runInNewContext(cleanup.if ?? "false", { inputs: { suite_profile: profile } })).toBe(
-        profile === "native-cleanup",
-      );
-    }
-    for (const policy of ["no-push-artifact", "existing-only"]) {
-      const context = { inputs: { suite_profile: "native-cleanup", shared_image_policy: policy } };
-      expect(runInNewContext(job.if ?? "false", context)).toBe(true);
-      for (const transport of ["docker_acceptance", "docker_acceptance_registry"]) {
-        expect(
-          runInNewContext(
-            workflowJob(PACKAGE_ACCEPTANCE_WORKFLOW, transport).if ?? "true",
-            context,
-          ),
-        ).toBe(false);
-      }
-    }
-    const profile = runPackageAcceptanceProfile({ suiteProfile: "native-cleanup" });
-    expect(profile.result.status, profile.result.stderr).toBe(0);
-    expect(profile.outputs).toMatchObject({
-      docker_lanes: "",
-      include_live_suites: "false",
-      include_release_path_suites: "false",
-      telegram_enabled: "false",
-    });
-  });
-
-  it.each([
-    ["success", 0, false],
-    ["capability-refusal", 1, false],
-    ["system-temp-policy", 1, false],
-    ["existing-user", 1, false],
-    ["existing-group", 1, false],
-    ["partial-creation", 1, true],
-    ["staging-failure", 1, false],
-    ["inaccessible-parent", 1, false],
-    ["unreadable-fixture", 1, false],
-    ["inaccessible-runtime", 1, false],
-    ["cross-device", 1, false],
-    ["group-lookup-error", 1, true],
-    ["child-failure", 42, false],
-    ["busy-account", 1, true],
-    ["failed-child-busy-account", 42, true],
-    ["scratch-drift", 1, true],
-    ["account-drift", 1, true],
-  ])("owns native cleanup account disposal: %s", (scenario, expectedStatus, retained) => {
-    const root = tempDirs.make("native-cleanup-account-");
-    const bin = join(root, "bin");
-    mkdirSync(bin);
-    const prefix = join(root, "openclaw-npm12-prefix");
-    makeNativeCleanupPrefix(prefix);
-    writeFileSync(join(prefix, "sentinel"), "candidate");
-    const statePath = join(root, "state.json");
-    const account = "occln_123456_1";
-    writeFileSync(statePath, JSON.stringify({ scenario, account, calls: [], runnerUid: 1001 }));
-    const mock = join(bin, "mock");
-    writeFileSync(
-      mock,
-      `#!${process.execPath}\n` +
-        String.raw`
-const fs = require("node:fs"), path = require("node:path"), crypto = require("node:crypto");
-const file = process.env.ISOLATION_TEST_STATE;
-const state = JSON.parse(fs.readFileSync(file, "utf8"));
-const tool = path.basename(process.argv[1]), args = process.argv.slice(2);
-state.calls.push({tool,args});
-const done = (status = 0, output = "") => {fs.writeFileSync(file, JSON.stringify(state)); process.stdout.write(output); process.exit(status);};
-const record = () => state.account + ":x:" + (state.changedAccount ? 42425 : 42424) + ":42424::" + state.scratch + "/home:/usr/sbin/nologin";
-if (tool === "uname") done(0, state.scenario === "capability-refusal" ? "Darwin\n" : "Linux\n");
-if (tool === "grep") done();
-if (tool === "id") done(0,args[0] === "-u" ? "0\n" : "42424\n");
-if (tool === "realpath") done(0,fs.realpathSync(args[0]) + "\n");
-if (tool === "sha256sum") done(0,crypto.createHash("sha256").update(fs.readFileSync(args[0])).digest("hex") + "  " + args[0] + "\n");
-if (tool === "mktemp") {
-  if (args.length !== 2 || args[0] !== "-d" || args[1] !== fs.realpathSync("/tmp") + "/openclaw-native-account-XXXXXX") done(99);
-  state.scratch = fs.mkdtempSync(path.join(path.dirname(file), "openclaw-native-account-"));
-  done(0, state.scratch + "\n");
-}
-if (tool === "stat") {
-  const p = args.at(-1), s = fs.statSync(p), format = args[1];
-  const uid = p.endsWith("/openclaw-npm12-prefix") ? 1001 : 0;
-  const ino = s.ino + (state.drift ? 1 : 0);
-  if (format === "%u:%a") done(0, state.scenario === "system-temp-policy" ? "0:755\n" : "0:1777\n");
-  if (format === "%d") done(0, String(s.dev + (state.scenario === "cross-device" && p === state.scratch ? 1 : 0)) + "\n");
-  done(0,format === "%u" ? uid + "\n" : format === "%d:%i" ? s.dev + ":" + ino + "\n" : s.dev + ":" + ino + ":0:" + (state.chgrp ? 42424 : 0) + "\n");
-}
-if (tool === "getent") {
-  if (args[0] === "group" && state.deletedUser && state.scenario === "group-lookup-error") done(3);
-  if (args[0] === "passwd") done(state.user || state.scenario === "existing-user" ? 0 : 2, state.user ? record() + "\n" : state.scenario === "existing-user" ? "existing\n" : "");
-  if (args[0] === "group") done(state.group || state.scenario === "existing-group" ? 0 : 2, state.group ? state.account + ":x:42424:\n" : state.scenario === "existing-group" ? "existing\n" : "");
-  if (args[0] === "shadow") done(state.user ? 0 : 2, state.account + ":!:::::::\n");
-  done(2);
-}
-if (tool === "useradd") {
-  state.user = state.group = true;
-  state.scratch = path.dirname(args[args.indexOf("--home-dir") + 1]);
-  done(state.scenario === "partial-creation" ? 1 : 0);
-}
-if (tool === "chgrp") {state.chgrp = true; done();}
-if (tool === "install") {
-  if (state.scenario === "staging-failure") done(1);
-  if (args[0] === "-d") {for (const p of args.slice(-2)) fs.mkdirSync(p);}
-  else fs.copyFileSync(args.at(-2), args.at(-1));
-  done();
-}
-if (tool === "runuser") {
-  if (args.includes("/bin/sh")) {
-    state.accessProbe = args;
-    done(["inaccessible-parent", "unreadable-fixture", "inaccessible-runtime"].includes(state.scenario) ? 1 : 0);
-  }
-  state.childSettled = true;
-  state.runuserArgs = args;
-  state.drift = state.scenario === "scratch-drift";
-  state.changedAccount = state.scenario === "account-drift";
-  done(state.scenario.includes("child") ? 42 : 0);
-}
-if (tool === "userdel") {
-  if (args.length !== 1 || args[0] !== state.account) done(99);
-  if (state.scenario.includes("busy-account")) done(8);
-  state.user = false; state.deletedUser = true; done();
-}
-if (tool === "groupdel") {state.group = false; done();}
-if (tool === "rm") {
-  if (state.user || args.at(-1) !== state.scratch) done(99);
-  fs.rmSync(state.scratch,{recursive:true}); state.removed = true; done();
-}
-done(99);
-`,
-    );
-    chmodSync(mock, 0o755);
-    for (const tool of [
-      "uname",
-      "grep",
-      "id",
-      "realpath",
-      "sha256sum",
-      "mktemp",
-      "stat",
-      "getent",
-      "useradd",
-      "chgrp",
-      "install",
-      "runuser",
-      "userdel",
-      "groupdel",
-      "rm",
-    ]) {
-      symlinkSync(mock, join(bin, tool));
-    }
-    const fixture = resolve("scripts/e2e/retained-runtime-cleanup-native.sh");
-    const result = spawnSync("/bin/bash", [fixture, "--isolated-account", prefix], {
-      encoding: "utf8",
-      timeout: 30_000,
-      env: {
-        PATH: bin + ":/usr/bin:/bin",
-        ISOLATION_TEST_STATE: statePath,
-        GITHUB_ACTIONS: "true",
-        RUNNER_OS: "Linux",
-        GITHUB_RUN_ID: "123456",
-        GITHUB_RUN_ATTEMPT: "1",
-        RUNNER_UID: "1001",
-        RUNNER_TEMP: root,
-        NODE_BINARY: process.execPath,
-        EXPECTED_FIXTURE_SHA256: createHash("sha256").update(readFileSync(fixture)).digest("hex"),
-        EXPECTED_PACKAGE_SOURCE_SHA: "a".repeat(40),
-        EXPECTED_PACKAGE_VERSION: "2026.9.8",
-      },
-    });
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(expectedStatus);
-    const state = JSON.parse(readFileSync(statePath, "utf8"));
-    expect(state.scratch ? existsSync(state.scratch) : false, result.stderr).toBe(retained);
-    if (state.runuserArgs) {
-      expect(state.runuserArgs.slice(0, 5)).toEqual(["-u", account, "--", "env", "-i"]);
-      const environment = state.runuserArgs.slice(5, state.runuserArgs.indexOf("/bin/bash"));
-      expect(environment.map((entry: string) => entry.split("=", 1)[0]).toSorted()).toEqual([
-        "EXPECTED_INSPECTOR_UID",
-        "EXPECTED_PACKAGE_SOURCE_SHA",
-        "EXPECTED_PACKAGE_VERSION",
-        "HOME",
-        "ORIGINAL_NPM_PREFIX",
-        "PATH",
-        "RUNNER_TEMP",
-      ]);
-      expect(state.childSettled).toBe(true);
-      expect(state.accessProbe.slice(0, 8)).toEqual([
-        "-u",
-        account,
-        "--",
-        "env",
-        "-i",
-        "PATH=/usr/bin:/bin",
-        "/bin/sh",
-        "-c",
-      ]);
-      expect(state.accessProbe.slice(9)).toEqual([
-        "--",
-        state.scratch,
-        join(state.scratch, "fixture.sh"),
-        realpathSync(process.execPath),
-      ]);
-      expect(state.accessProbe[8]).toContain("scratch-traversal");
-      expect(state.accessProbe[8]).toContain("fixture-readability");
-      expect(state.accessProbe[8]).toContain("selected-runtime-executability");
-    }
-    if (["inaccessible-parent", "unreadable-fixture", "inaccessible-runtime"].includes(scenario)) {
-      expect(state.accessProbe).toBeDefined();
-      expect(state.runuserArgs).toBeUndefined();
-      expect(state.removed).toBe(true);
-    }
-    if (scenario === "cross-device") {
-      expect(state.calls.some((call: { tool: string }) => call.tool === "useradd")).toBe(false);
-      expect(existsSync(join(prefix, "sentinel"))).toBe(true);
-      expect(state.removed).toBe(true);
-    }
-    if (scenario === "group-lookup-error") {
-      expect(state.calls.some((call: { tool: string }) => call.tool === "groupdel")).toBe(false);
-      expect(state.removed).not.toBe(true);
-    }
-    if (retained) {
-      expect(state.removed).not.toBe(true);
-    }
-    if (scenario === "success" || scenario === "child-failure") {
-      expect(state.user).toBe(false);
-      expect(state.group).toBe(false);
-      expect(state.removed).toBe(true);
-    }
-    expect(
-      state.calls
-        .filter((call: { tool: string }) => call.tool === "userdel")
-        .every((call: { args: string[] }) => call.args.length === 1),
-    ).toBe(true);
-  });
-
-  function makeNativeCleanupPrefix(prefix: string) {
-    const packageRoot = join(prefix, "lib/node_modules/openclaw");
-    mkdirSync(join(prefix, "bin"), { recursive: true });
-    mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(
-      join(packageRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.8" }),
-    );
-    writeFileSync(
-      join(packageRoot, "dist/build-info.json"),
-      JSON.stringify({ commit: "a".repeat(40) }),
-    );
-    const launcher = join(packageRoot, "openclaw.mjs");
-    writeFileSync(launcher, "#!/usr/bin/env node\n");
-    chmodSync(launcher, 0o755);
-    symlinkSync(launcher, join(prefix, "bin/openclaw"));
-    return launcher;
-  }
-
-  it.each([
-    "success",
-    "relative",
-    "external",
-    "wrong",
-    "absent",
-    "not-symlink",
-    "dangling",
-    "nonregular",
-    "nonexecutable",
-    "link-drift",
-    "launcher-drift",
-    "mode-drift",
-  ])("relocates only the native cleanup CLI link: %s", (scenario) => {
-    const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
-    const program = source.match(
-      /relocate_cli_link\(\) \{\n {2}python3 - "\$@" <<'PY'\n([\s\S]*?)\nPY\n\}/u,
-    )?.[1];
-    if (!program) {
-      throw new Error("Missing native CLI relocation owner");
-    }
-    const root = tempDirs.make("native-cleanup-link-");
-    const prefix = join(root, "old");
-    const staged = join(root, "new");
-    const launcher = makeNativeCleanupPrefix(prefix);
-    const link = join(prefix, "bin/openclaw");
-    const otherLink = join(prefix, "bin/other");
-    symlinkSync("../lib/node_modules/openclaw/package.json", otherLink);
-    const before = lstatSync(launcher);
-    const beforeOther = lstatSync(otherLink);
-    if (["relative", "external", "wrong", "absent", "not-symlink"].includes(scenario)) {
-      unlinkSync(link);
-      if (scenario === "not-symlink") {
-        writeFileSync(link, "not a link");
-      } else if (scenario !== "absent") {
-        symlinkSync(
-          scenario === "relative"
-            ? "../lib/node_modules/openclaw/openclaw.mjs"
-            : scenario === "external"
-              ? "/external/openclaw.mjs"
-              : join(prefix, "wrong.mjs"),
-          link,
-        );
-      }
-    }
-    if (["dangling", "nonregular"].includes(scenario)) {
-      unlinkSync(launcher);
-      if (scenario === "nonregular") {
-        mkdirSync(launcher);
-      }
-    }
-    if (scenario === "nonexecutable") {
-      chmodSync(launcher, 0o644);
-    }
-    const invoke = (phase: string, binding?: string) =>
-      spawnSync(
-        "python3",
-        ["-c", program, phase, prefix, staged, ...(binding === undefined ? [] : [binding])],
-        {
-          encoding: "utf8",
-          timeout: 5_000,
-          env: {
-            ...process.env,
-            EXPECTED_PACKAGE_SOURCE_SHA: "a".repeat(40),
-            EXPECTED_PACKAGE_VERSION: "2026.9.8",
-          },
-        },
-      );
-    const bound = invoke("bind");
-    expect(bound.error).toBeUndefined();
-    if (!["success", "link-drift", "launcher-drift", "mode-drift"].includes(scenario)) {
-      expect(bound.status).not.toBe(0);
-      expect(bound.stderr).not.toContain(root);
-      expect(existsSync(prefix)).toBe(true);
-      expect(existsSync(staged)).toBe(false);
-      return;
-    }
-    expect(bound.status, bound.stderr).toBe(0);
-    renameSync(prefix, staged);
-    const stagedLink = join(staged, "bin/openclaw");
-    const stagedLauncher = join(staged, "lib/node_modules/openclaw/openclaw.mjs");
-    if (scenario === "link-drift") {
-      renameSync(stagedLink, join(staged, "bin/old-link"));
-      symlinkSync(launcher, stagedLink);
-    }
-    if (scenario === "launcher-drift") {
-      writeFileSync(stagedLauncher, "different launcher\n");
-    }
-    if (scenario === "mode-drift") {
-      chmodSync(stagedLauncher, 0o700);
-    }
-    const published = invoke("publish", bound.stdout.trim());
-    expect(published.error).toBeUndefined();
-    expect(published.stderr).not.toContain(root);
-    if (scenario !== "success") {
-      expect(published.status).not.toBe(0);
-      expect(readlinkSync(stagedLink)).toBe(launcher);
-    } else {
-      expect(published.status, published.stderr).toBe(0);
-      expect(readlinkSync(stagedLink)).toBe(stagedLauncher);
-      const after = lstatSync(stagedLauncher);
-      for (const field of ["dev", "ino", "mode", "uid", "gid", "size"] as const) {
-        expect(after[field]).toBe(before[field]);
-      }
-      expect(readFileSync(stagedLauncher, "utf8")).toBe("#!/usr/bin/env node\n");
-      expect(published.stdout).not.toContain(root);
-    }
-    expect(readlinkSync(join(staged, "bin/other"))).toBe(
-      "../lib/node_modules/openclaw/package.json",
-    );
-    expect(lstatSync(join(staged, "bin/other")).ino).toBe(beforeOther.ino);
-    expect(
-      readdirSync(join(staged, "bin")).some((name) => name.startsWith(".openclaw-link.")),
-    ).toBe(false);
-  });
-
-  it.each(["success", "old-absolute", "inaccessible", "missing-cli", "non-symlink"])(
-    "bounds native cleanup staged access: %s",
-    (scenario) => {
-      const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
-      const program = source.match(/python3 - "\$prefix" <<'PY'\n([\s\S]*?)\nPY/u)?.[1];
-      if (!program) {
-        throw new Error("Missing fixed package access projection");
-      }
-      const root = tempDirs.make("native-cleanup-access-");
-      const old = join(root, "old");
-      const staged = join(root, "new");
-      makeNativeCleanupPrefix(old);
-      renameSync(old, staged);
-      const cli = join(staged, "bin/openclaw");
-      if (scenario !== "old-absolute") {
-        unlinkSync(cli);
-        if (scenario === "non-symlink") {
-          writeFileSync(cli, "not a link");
-        } else if (scenario !== "missing-cli") {
-          symlinkSync(join(staged, "lib/node_modules/openclaw/openclaw.mjs"), cli);
-        }
-      }
-      const result = spawnSync(
-        "python3",
-        [
-          "-c",
-          String.raw`
-import os, pathlib, sys
-program, root, old, scenario = sys.argv[1:]
-access = os.access
-def checked_access(path, mode):
-    if pathlib.Path(path) == pathlib.Path(root) / "bin/openclaw":
-        assert scenario != "old-absolute", "retired target must not be followed"
-        if scenario == "inaccessible":
-            return False
-    return access(path, mode)
-os.access = checked_access
-os.environ["ORIGINAL_NPM_PREFIX"] = old
-sys.argv = ["access", root]
-exec(compile(program, "<fixed-package-access>", "exec"))
-`,
-          program,
-          staged,
-          old,
-          scenario,
-        ],
-        { encoding: "utf8", timeout: 5_000 },
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(scenario === "success" ? 0 : 1);
-      expect(result.stdout + result.stderr).not.toContain(root);
-      expect(result.stderr).not.toContain("retired target must not be followed");
-      const rows = JSON.parse(result.stdout.replace("native-cleanup package access: ", ""));
-      expect(rows).toHaveLength(7);
-      expect(rows.map((row: { component: string }) => row.component)).toEqual([
-        "prefix",
-        "bin",
-        "cli",
-        "lib",
-        "node_modules",
-        "package",
-        "launcher",
-      ]);
-      const observedCli = rows[2];
-      if (scenario === "old-absolute") {
-        expect(observedCli).toMatchObject({
-          linkKind: "old-native-absolute",
-          access: "not-followed",
-        });
-      }
-      if (scenario === "inaccessible") {
-        expect(observedCli).toMatchObject({ readable: false, executable: false });
-      }
-      if (scenario === "missing-cli") {
-        expect(observedCli.error).toBe("absent");
-      }
-      if (scenario === "non-symlink") {
-        expect(observedCli.kind).toBe("regular");
-      }
-    },
-  );
-
-  it("keeps native cleanup ownership locals alive during Bash 5 errexit", () => {
-    const source = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
-    const cleanup = source.match(/ {2}cleanup_account\(\) \{[\s\S]*?\n {2}\}/u)?.[0];
-    const failureTrap = source.match(/^ {2}trap 'exit \$\?' ERR$/mu)?.[0];
-    if (!cleanup || !failureTrap) {
-      throw new Error("Missing scoped native cleanup traps");
-    }
-    const scratch = tempDirs.make("native-cleanup-errexit-");
-    const script = [
-      "set -eu",
-      "stat() { printf 'owned'; }",
-      "rm() { printf 'owned-scratch-cleaned'; }",
-      "run() {",
-      'local creation_uncertain=false runuser_settled=true account_created=false scratch="$1" scratch_identity=owned',
-      cleanup,
-      "trap cleanup_account EXIT",
-      failureTrap,
-      "false",
-      "}",
-      'run "$1"',
-    ].join("\n");
-    expect(script).not.toContain("<<");
-    const result = spawnSync(
-      resolveWorkflowBash(),
-      ["--noprofile", "--norc", "-c", script, "--", scratch],
-      {
-        encoding: "utf8",
-        timeout: 5_000,
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("");
-    expect(result.stdout).toBe("owned-scratch-cleaned");
-  });
-
-  it.each([
-    "none",
-    "multiple",
-    "oversized",
-    "zero-pid",
-    "out-of-range",
-    "malformed-status",
-    "oversized-stat",
-    "oversized-status",
-    "oversized-link",
-    "stable",
-    "foreign",
-    "readable",
-    "raced",
-    "disappeared",
-  ])("bounds the native cleanup failure diagnostic: %s", (scenario) => {
-    const script = readFileSync("scripts/e2e/retained-runtime-cleanup-native.sh", "utf8");
-    const diagnostic = script.match(
-      /diagnose_census_failure\(\) \{[\s\S]*?<<'PY'[^\n]*\n([\s\S]*?)\nPY\n\}/u,
-    )?.[1];
-    if (!diagnostic) {
-      throw new Error("Missing bounded census diagnostic");
-    }
-    const root = tempDirs.make("native-cleanup-diagnostic-");
-    const log = join(root, "removed.log");
-    const failure = (pid: number) =>
-      `Could not classify PID ${pid}: working directory is unavailable\n`;
-    writeFileSync(
-      log,
-      scenario === "none"
-        ? "unrelated failure"
-        : scenario === "multiple"
-          ? failure(1037) + failure(1038)
-          : scenario === "oversized"
-            ? failure(1037) + "x".repeat(65536)
-            : scenario === "zero-pid"
-              ? failure(0)
-              : scenario === "out-of-range"
-                ? failure(2147483648)
-                : failure(1037) + failure(1037),
-    );
-    const result = spawnSync(
-      "python3",
-      [
-        "-c",
-        String.raw`
-import errno, io, os, pathlib, sys
-from unittest.mock import patch
-program, log, scenario = sys.argv[1:]
-boot = "11111111-2222-3333-4444-555555555555"
-sys.argv = ["diagnostic", log, "remove", "/fixture", "/fixture/artifact", "1037", boot + ":100"]
-reads = []
-stat_count = 0
-class BoundedRecord(io.BytesIO):
-    def read(self, size=-1):
-        assert 0 <= size <= 16385
-        return super().read(size)
-def record(text):
-    return BoundedRecord(text.encode())
-def read_proc(path, *args, **kwargs):
-    global stat_count
-    path = str(path)
-    reads.append(path)
-    if path == "/proc/sys/kernel/random/boot_id":
-        return record(boot)
-    if path == "/proc/1037/status":
-        if scenario == "malformed-status":
-            return record("Uid: invalid")
-        if scenario == "oversized-status":
-            return record("x" * 16385)
-        uid = "0" if scenario == "foreign" else "1001"
-        return record("Uid:\t" + "\t".join([uid] * 4) + "\n")
-    if path == "/proc/1037/stat":
-        stat_count += 1
-        if scenario == "oversized-stat":
-            return record("x" * 16385)
-        if scenario == "disappeared" and stat_count == 2:
-            raise FileNotFoundError()
-        start = "101" if scenario == "raced" and stat_count == 2 else "100"
-        return record("1037 (private-command) " + " ".join(["S", "42"] + ["0"] * 17 + [start]))
-    raise AssertionError("Unexpected process read")
-def read_link(path):
-    reads.append(str(path))
-    if str(path) == "/proc/1037/exe":
-        if scenario == "oversized-link":
-            return "x" * 4097
-        return "/private/runtime/node"
-    if str(path) == "/proc/1037/cwd":
-        if scenario == "readable":
-            return "/fixture/artifact/private-directory"
-        raise PermissionError(errno.EACCES, "private-error")
-    raise AssertionError("Unexpected link read")
-with patch.object(pathlib.Path, "open", read_proc), patch.object(os, "readlink", read_link), patch.object(os, "getuid", return_value=1001):
-    try:
-        exec(compile(program, "diagnostic", "exec"))
-    except SystemExit as error:
-        assert error.code == 0
-print("read-count=" + str(len(reads)))
-`,
-        diagnostic,
-        log,
-        scenario,
-      ],
-      { encoding: "utf8", timeout: 5_000 },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).not.toMatch(
-      /private-command|private-directory|private-error|\/private\/runtime/u,
-    );
-    expect(result.stdout).not.toContain("11111111-2222-3333-4444-555555555555");
-    expect(result.stdout).not.toContain('"bootId"');
-    expect(result.stdout).toContain('"inspectorUid": 1001');
-    if (["none", "multiple", "oversized", "zero-pid", "out-of-range"].includes(scenario)) {
-      expect(result.stdout).toContain("read-count=0");
-      expect(result.stdout).toContain('"processObserved": false');
-    } else if (
-      [
-        "raced",
-        "disappeared",
-        "malformed-status",
-        "oversized-stat",
-        "oversized-status",
-        "oversized-link",
-      ].includes(scenario)
-    ) {
-      expect(result.stdout).toContain("unverified");
-      expect(result.stdout).not.toContain('"matchesOriginalHolder": true');
-    } else {
-      expect(result.stdout).toContain('"identityStable": true');
-      expect(result.stdout).toContain('"matchesOriginalHolder": true');
-      expect(result.stdout).toContain('"doctorTimeIdentityProven": false');
-      expect(result.stdout).toContain('"birthPaired": true');
-      expect(result.stdout).toContain(`"allUidsForeign": ${scenario === "foreign"}`);
-      expect(result.stdout).toContain(
-        scenario === "readable" ? '"withinOwnedArtifact": true' : '"errno": 13',
-      );
-    }
-    expect(script.indexOf("    diagnose_census_failure")).toBeLessThan(
-      script.indexOf('    kill -TERM "$holder_pid"'),
-    );
-    expect(script).toContain("timeout --signal=KILL 3s python3");
-    expect(script).toContain('diagnostic_holder_birth="$holder_birth"');
-    expect(script).not.toContain("birth=$holder_birth");
   });
 
   it("binds npm 12 installation to the supplied prerelease dependency artifact", () => {
@@ -9343,9 +8498,8 @@ print("read-count=" + str(len(reads)))
     expect(workflow).toContain("suite_profile:");
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.suite_profile).toMatchObject({
       default: "package",
-      description:
-        "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup",
-      options: ["smoke", "package", "telegram", "product", "full", "custom", "native-cleanup"],
+      description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
+      options: ["smoke", "package", "telegram", "product", "full", "custom"],
     });
     const dispatchInputs = parsedWorkflow.on?.workflow_dispatch?.inputs;
     const callInputs = parsedWorkflow.on?.workflow_call?.inputs;
@@ -9357,8 +8511,7 @@ print("read-count=" + str(len(reads)))
     expect(parsedWorkflow.on?.workflow_dispatch?.inputs?.telegram_advisory).toBeUndefined();
     expect(parsedWorkflow.on?.workflow_call?.inputs?.suite_profile).toMatchObject({
       default: "package",
-      description:
-        "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup",
+      description: "Acceptance profile: smoke, package, telegram, product, full, or custom",
     });
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
@@ -9507,10 +8660,10 @@ print("read-count=" + str(len(reads)))
     );
     expect(npm12Install.if).toBe("inputs.suite_profile != 'telegram'");
     expect(dockerAcceptance.if).toBe(
-      "inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'no-push-artifact'",
+      "inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'no-push-artifact'",
     );
     expect(dockerAcceptanceRegistry.if).toBe(
-      "inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'existing-only'",
+      "inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'existing-only'",
     );
     expect(parsedWorkflow.permissions).toEqual({
       actions: "read",
@@ -14186,38 +13339,6 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(telegramResult.stdout).toContain("::error::package_telegram ended with failure");
     expect(dockerResult.status).toBe(1);
     expect(dockerResult.stdout).toContain("::error::docker_acceptance ended with failure");
-  });
-
-  it("requires native cleanup prerequisites to succeed and unrelated lanes to skip", () => {
-    const valid = {
-      suiteProfile: "native-cleanup",
-      dockerArtifactResult: "skipped",
-      dockerRegistryResult: "skipped",
-      telegramEnabled: false,
-      telegramResult: "skipped",
-    };
-    expect(runPackageAcceptanceSummary(valid).status).toBe(0);
-    for (const key of ["resolveResult", "integrityResult", "npm12InstallResult"]) {
-      for (const result of ["failure", "cancelled", "skipped"]) {
-        const outcome = runPackageAcceptanceSummary({ ...valid, [key]: result });
-        expect(outcome.status, `${key}=${result}`).toBe(1);
-        expect(outcome.stdout).toContain(
-          "requires successful resolution, package integrity, and npm 12 acceptance",
-        );
-      }
-    }
-    for (const conflict of [
-      { dockerArtifactResult: "success" },
-      { dockerRegistryResult: "success" },
-      { telegramEnabled: true },
-      { telegramResult: "success" },
-    ]) {
-      const outcome = runPackageAcceptanceSummary({ ...valid, ...conflict });
-      expect(outcome.status).toBe(1);
-      expect(outcome.stdout).toContain(
-        "requires Docker and Telegram acceptance to remain disabled",
-      );
-    }
   });
 
   it.each(["failure", "skipped"] as const)(

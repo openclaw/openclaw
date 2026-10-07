@@ -98,7 +98,7 @@ on:
         default: package-acceptance
         type: string
       suite_profile:
-        description: "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup"
+        description: "Acceptance profile: smoke, package, telegram, product, full, or custom"
         required: true
         default: package
         type: choice
@@ -109,7 +109,6 @@ on:
           - product
           - full
           - custom
-          - native-cleanup
       docker_lanes:
         description: Comma/space separated Docker lanes when suite_profile=custom
         required: false
@@ -253,7 +252,7 @@ on:
         default: ""
         type: string
       suite_profile:
-        description: "Acceptance profile: smoke, package, telegram, product, full, custom, or native-cleanup"
+        description: "Acceptance profile: smoke, package, telegram, product, full, or custom"
         required: false
         default: package
         type: string
@@ -1232,49 +1231,10 @@ jobs:
       actions: read
       contents: read
     steps:
-      - name: Verify defining package workflow identity
-        id: defining_workflow
-        env:
-          JOB_CONTEXT: ${{ toJSON(job) }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          import fs from "node:fs";
-
-          // Serialize current job fields until actionlint supports their native expressions.
-          const job = JSON.parse(process.env.JOB_CONTEXT ?? "null");
-          if (job === null || typeof job !== "object" || Array.isArray(job) ||
-              job.workflow_repository !== "openclaw/openclaw" ||
-              typeof job.workflow_sha !== "string" || !/^[0-9a-f]{40}$/u.test(job.workflow_sha)) {
-            throw new Error("Package tooling must identify the official defining workflow.");
-          }
-          if (!process.env.GITHUB_OUTPUT) {
-            throw new Error("GITHUB_OUTPUT is required");
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `workflow_sha=${job.workflow_sha}\n`);
-          NODE
-
-      - name: Verify package resolver tooling consistency
-        env:
-          DEFINING_WORKFLOW_SHA: ${{ steps.defining_workflow.outputs.workflow_sha }}
-          RESOLVED_TOOLING_SHA: ${{ needs.resolve_package.outputs.tooling_sha }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --input-type=module <<'NODE'
-          const definingSha = process.env.DEFINING_WORKFLOW_SHA;
-          if (!/^[0-9a-f]{40}$/u.test(definingSha ?? "") ||
-              definingSha !== process.env.RESOLVED_TOOLING_SHA) {
-            throw new Error("Package resolver tooling differs from the defining workflow.");
-          }
-          NODE
-
       - name: Checkout package workflow ref
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: openclaw/openclaw
-          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          ref: ${{ needs.resolve_package.outputs.tooling_sha }}
           fetch-depth: 1
           persist-credentials: false
 
@@ -1360,28 +1320,10 @@ jobs:
           set -euo pipefail
           node scripts/check-openclaw-installed-package-budget.mts "$RUNNER_TEMP/openclaw-npm12-prefix/lib/node_modules/openclaw"
 
-      - name: Verify retained runtime cleanup on the native host
-        if: inputs.suite_profile == 'native-cleanup'
-        env:
-          EXPECTED_PACKAGE_SOURCE_SHA: ${{ needs.resolve_package.outputs.package_source_sha }}
-          EXPECTED_PACKAGE_VERSION: ${{ needs.resolve_package.outputs.package_version }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          fixture="$PWD/scripts/e2e/retained-runtime-cleanup-native.sh"
-          fixture_sha="$(sha256sum "$fixture" | cut -d ' ' -f 1)"
-          sudo -n -- /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin \
-            GITHUB_ACTIONS="$GITHUB_ACTIONS" RUNNER_OS="$RUNNER_OS" \
-            GITHUB_RUN_ID="$GITHUB_RUN_ID" GITHUB_RUN_ATTEMPT="$GITHUB_RUN_ATTEMPT" \
-            RUNNER_UID="$(id -u)" RUNNER_TEMP="$RUNNER_TEMP" NODE_BINARY="$(command -v node)" \
-            EXPECTED_FIXTURE_SHA256="$fixture_sha" \
-            EXPECTED_PACKAGE_SOURCE_SHA="$EXPECTED_PACKAGE_SOURCE_SHA" EXPECTED_PACKAGE_VERSION="$EXPECTED_PACKAGE_VERSION" \
-            /bin/bash "$fixture" --isolated-account "$RUNNER_TEMP/openclaw-npm12-prefix"
-
   docker_acceptance:
     name: Docker product acceptance (artifact-only)
     needs: [resolve_package, package_integrity]
-    if: inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'no-push-artifact'
+    if: inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'no-push-artifact'
     permissions:
       actions: read
       contents: read
@@ -1478,7 +1420,7 @@ jobs:
   docker_acceptance_registry:
     name: Docker product acceptance (existing registry images)
     needs: [resolve_package, package_integrity]
-    if: inputs.suite_profile != 'telegram' && inputs.suite_profile != 'native-cleanup' && inputs.shared_image_policy == 'existing-only'
+    if: inputs.suite_profile != 'telegram' && inputs.shared_image_policy == 'existing-only'
     permissions:
       actions: read
       contents: read
@@ -1553,21 +1495,7 @@ jobs:
           if [[ "$docker_result" == "skipped" ]]; then
             docker_result="$DOCKER_REGISTRY_RESULT"
           fi
-          if [[ "$SUITE_PROFILE" == "native-cleanup" ]]; then
-            if [[ "$RESOLVE_RESULT" != "success" ||
-                  "$PACKAGE_INTEGRITY_RESULT" != "success" ||
-                  "$NPM_12_INSTALL_RESULT" != "success" ]]; then
-              echo "::error::Native cleanup requires successful resolution, package integrity, and npm 12 acceptance."
-              exit 1
-            fi
-            if [[ "$DOCKER_ARTIFACT_RESULT" != "skipped" ||
-                  "$DOCKER_REGISTRY_RESULT" != "skipped" ||
-                  "$PACKAGE_TELEGRAM_RESULT" != "skipped" ||
-                  "$TELEGRAM_ENABLED" != "false" ]]; then
-              echo "::error::Native cleanup requires Docker and Telegram acceptance to remain disabled."
-              exit 1
-            fi
-          elif [[ "$SUITE_PROFILE" == "telegram" ]]; then
+          if [[ "$SUITE_PROFILE" == "telegram" ]]; then
             if [[ "$NPM_12_INSTALL_RESULT" != "skipped" ]]; then
               echo "::error::npm_12_install_sh ran for suite_profile=telegram; expected skipped."
               exit 1
